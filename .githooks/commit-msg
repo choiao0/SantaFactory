@@ -1,0 +1,60 @@
+#!/bin/sh
+# 커밋 메시지 & 브랜치명 컨벤션 검사
+# 참고: Docs/GIT_CONVENTION.md
+# 활성화(팀원별 최초 1회): git config core.hooksPath .githooks
+#
+# 정규식은 commit-convention.sh 하나에서만 관리한다 (CI와 공유, 드리프트 방지).
+
+hook_dir=$(dirname "$0")
+. "$hook_dir/commit-convention.sh"
+
+# merge 커밋(git이 자동 생성한 메시지)은 검사 대상에서 제외
+if git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then
+  exit 0
+fi
+
+commit_msg_file="$1"
+subject=$(head -n1 "$commit_msg_file")
+branch=$(git symbolic-ref --short HEAD 2>/dev/null)
+
+# fixup!/squash! 커밋은 rebase -i --autosquash로 합쳐질 임시 커밋이므로 통과시킨다
+# (push 전 squash를 권장하는 워크플로와 일치). 최종 메시지는 squash 시점에 다시 검사된다.
+case "$subject" in
+  "fixup! "*|"squash! "*) exit 0 ;;
+esac
+
+fail=0
+
+emoji="${subject%% *}"
+rest="${subject#* }"
+
+if ! is_valid_emoji "$emoji" || ! echo "$rest" | grep -qE "$MSG_REST_PATTERN"; then
+  echo "커밋 메시지 형식이 컨벤션을 따르지 않습니다: $subject"
+  echo "  형식: {emoji} {type}(scope): 설명 (S15P21A106-이슈번호)"
+  echo "  예:   ✨ feat(dashboard): 로그인 페이지 추가 (S15P21A106-19)"
+  echo "  WIP/사소한 커밋은 push 전에 rebase -i로 squash 후 다시 커밋하세요."
+  fail=1
+fi
+
+is_static=0
+for b in $STATIC_BRANCHES; do
+  [ "$branch" = "$b" ] && is_static=1
+done
+
+# detached HEAD(rebase -i의 reword/squash 등)에서는 브랜치가 없으므로 브랜치 검사를 생략한다
+[ -z "$branch" ] && is_static=1
+
+if [ "$is_static" -eq 0 ]; then
+  if ! echo "$branch" | grep -qE "$BRANCH_PATTERN" && ! echo "$branch" | grep -qE "$RELEASE_PATTERN"; then
+    echo "브랜치명이 컨벤션을 따르지 않습니다: $branch"
+    echo "  예: feature/S15P21A106-19-로그인-페이지, hotfix/S15P21A106-42-로그인-오류, release/v1.2.0"
+    fail=1
+  fi
+fi
+
+if [ "$fail" -eq 1 ]; then
+  echo "참고: Docs/GIT_CONVENTION.md"
+  exit 1
+fi
+
+exit 0

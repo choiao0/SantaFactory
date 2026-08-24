@@ -1,0 +1,88 @@
+#!/bin/sh
+# 브랜치명에서 Jira 이슈 키를 뽑아 커밋 메시지에 채워 넣는다.
+# `git commit`을 메시지 없이 실행하면(대화형) 커밋 타입/설명을 물어봐서
+# "{emoji} {type}: {설명} (JIRA-KEY)" 형식을 자동 완성해준다.
+# git hook이므로 터미널/VSCode SCM 입력창/어떤 Jira 확장을 쓰든 동일하게 동작한다.
+# (VSCode Git 통합도 내부적으로 git commit을 호출하므로 hook이 그대로 적용된다)
+#
+# 활성화: commit-msg와 동일하게 git config core.hooksPath .githooks 한 번이면 충분하다.
+
+commit_msg_file="$1"
+commit_source="$2"
+
+# 이미 완성된 메시지(merge/squash/amend)는 건드리지 않는다.
+# -m(source=message)은 여기서 제외하지 않는다 — 제목은 이미 채워져 있으니
+# 아래 "제목이 이미 채워진 경우" 분기에서 이슈 키만 보정하고 지나간다.
+case "$commit_source" in
+  merge|squash|commit)
+    exit 0
+    ;;
+esac
+
+hook_dir=$(dirname "$0")
+. "$hook_dir/commit-convention.sh"
+
+branch=$(git symbolic-ref --short HEAD 2>/dev/null)
+jira_key=$(echo "$branch" | grep -oE "$JIRA_KEY_PATTERN" | head -n1)
+
+[ -z "$jira_key" ] && exit 0
+
+subject=$(head -n1 "$commit_msg_file")
+
+# 템플릿 등으로 제목이 이미 채워져 있으면 이슈 키만 보정한다 (기존 동작 유지)
+case "$subject" in
+  ''|\#*) : ;;
+  *)
+    echo "$subject" | grep -q "$jira_key" && exit 0
+    rest=$(tail -n +2 "$commit_msg_file")
+    {
+      printf '%s (%s)\n' "$subject" "$jira_key"
+      printf '%s\n' "$rest"
+    } > "$commit_msg_file"
+    exit 0
+    ;;
+esac
+
+# 여기부터는 제목이 비어 있는 "그냥 git commit" 케이스 — 대화형으로 채운다.
+# commit_source가 비어있지 않다면(template 등) 사람이 의도적으로 다른 입력을
+# 쓴 것이므로 대화형 프롬프트는 건드리지 않는다.
+[ -z "$commit_source" ] || exit 0
+
+# 터미널(tty)이 없으면(-F, CI, VSCode GUI 커밋 등) 건드리지 않고 그대로 둔다.
+# 서브셸에서 먼저 열어보는 이유: exec 리다이렉트가 실패하면 POSIX 규칙상
+# 그 shell 프로세스가 즉시 종료되므로, 본 셸에서 바로 시도하면 훅 자체가
+# non-zero로 죽어 커밋이 막힌다. 서브셸 안에서 실패시키면 실패가 격리된다.
+( exec < /dev/tty ) 2>/dev/null || exit 0
+exec < /dev/tty
+
+echo "커밋 타입을 선택하세요 (issue=$jira_key):"
+echo "  1) ✨ feat"
+echo "  2) 🐛 fix"
+echo "  3) ♻️ refactor"
+echo "  4) 📝 docs"
+echo "  5) ✅ test"
+echo "  6) 🔧 chore"
+echo "  7) 💄 style"
+printf "번호 입력 (그냥 엔터=건너뛰고 직접 작성): "
+read -r choice
+
+case "$choice" in
+  1) emoji="✨"; type="feat" ;;
+  2) emoji="🐛"; type="fix" ;;
+  3) emoji="♻️"; type="refactor" ;;
+  4) emoji="📝"; type="docs" ;;
+  5) emoji="✅"; type="test" ;;
+  6) emoji="🔧"; type="chore" ;;
+  7) emoji="💄"; type="style" ;;
+  *) exit 0 ;;
+esac
+
+printf "설명 입력: "
+read -r desc
+[ -z "$desc" ] && exit 0
+
+rest=$(cat "$commit_msg_file")
+{
+  printf '%s %s: %s (%s)\n' "$emoji" "$type" "$desc" "$jira_key"
+  printf '%s\n' "$rest"
+} > "$commit_msg_file"
