@@ -1,0 +1,59 @@
+# 초기 단계: 컨벤션 자동 검증만 담당한다.
+# 컴포넌트별 build/test/deploy job은 각 파트 개발 시작 후 추가 예정
+# (dashboard: EC2 배포 / infra: infra-deploy 트리거 / integration: RPi+EC2 배포)
+
+stages:
+  - lint
+
+.convention-lint:
+  stage: lint
+  image:
+    name: alpine/git:latest
+    entrypoint: [""]
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+
+commit-lint:
+  extends: .convention-lint
+  script:
+    - git fetch origin "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
+    - . ./.githooks/commit-convention.sh
+    - |
+      fail=0
+      # --no-merges: merge 커밋은 애초에 사람이 컨벤션대로 쓰는 대상이 아니므로 검사에서 제외
+      git log --no-merges --format=%s "origin/${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}..HEAD" > /tmp/subjects.txt
+      while IFS= read -r line; do
+        emoji="${line%% *}"
+        rest="${line#* }"
+        if ! is_valid_emoji "$emoji" || ! echo "$rest" | grep -qE "$MSG_REST_PATTERN"; then
+          echo "커밋 메시지 컨벤션 위반: $line"
+          fail=1
+        fi
+      done < /tmp/subjects.txt
+      if [ "$fail" -eq 1 ]; then
+        echo "형식: {emoji} {type}(scope): 설명 (S15P21A106-이슈번호) — Docs/GIT_CONVENTION.md 참고"
+        echo "WIP/사소한 커밋은 MR 올리기 전에 rebase -i로 squash 하세요."
+        exit 1
+      fi
+
+branch-lint:
+  extends: .convention-lint
+  script:
+    - . ./.githooks/commit-convention.sh
+    - |
+      BRANCH="$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME"
+      for b in $STATIC_BRANCHES; do
+        if [ "$BRANCH" = "$b" ]; then
+          echo "정적 브랜치($BRANCH) - 네이밍 검사 생략"
+          exit 0
+        fi
+      done
+      if echo "$BRANCH" | grep -qE "$BRANCH_PATTERN"; then
+        exit 0
+      fi
+      if echo "$BRANCH" | grep -qE "$RELEASE_PATTERN"; then
+        exit 0
+      fi
+      echo "브랜치명 컨벤션 위반: $BRANCH"
+      echo "형식: feature|hotfix/S15P21A106-{이슈번호}-{설명}, release/v{버전} — Docs/GIT_CONVENTION.md 참고"
+      exit 1
