@@ -4,27 +4,27 @@
 
 →  Idealworks: BMW 그룹의 물류 로보틱스 기업
 
-![스크린샷 2026-08-26 142512.png](%EC%8A%A4%ED%81%AC%EB%A6%B0%EC%83%B7_2026-08-26_142512.png)
+![image1.png](image1.png)
 
 #### AMR 사용 작업
 
-![스크린샷 2026-08-26 142701.png](%EC%8A%A4%ED%81%AC%EB%A6%B0%EC%83%B7_2026-08-26_142701.png)
+![image2.png](image2.png)
 
-![스크린샷 2026-08-26 142718.png](%EC%8A%A4%ED%81%AC%EB%A6%B0%EC%83%B7_2026-08-26_142718.png)
+![image3.png](image3.png)
 
 #### **AMR 사양 및 성능**
 
-![스크린샷 2026-08-26 124330.png](%EC%8A%A4%ED%81%AC%EB%A6%B0%EC%83%B7_2026-08-26_124330.png)
+![스크린샷 2026-08-26 124330.png](image4.png)
 
 #### **AMR 연계 FMS/WMS/ERP/통신 → 기본적으로 VDA 5050을 따름**
 
-![스크린샷 2026-08-26 143619.png](%EC%8A%A4%ED%81%AC%EB%A6%B0%EC%83%B7_2026-08-26_143619.png)
+![스크린샷 2026-08-26 143619.png](image5.png)
 
 실제 벤더 사이트: [https://www.idealworks.com/en/robotics/iw-hub](https://www.idealworks.com/en/robotics/iw-hub)
 
 #### 타 기종과의 비교
 
-![스크린샷 2026-08-26 174345.png](%EC%8A%A4%ED%81%AC%EB%A6%B0%EC%83%B7_2026-08-26_174345.png)
+![스크린샷 2026-08-26 174345.png](image6.png)
 
 #### 선정 근거
 
