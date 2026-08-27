@@ -2,6 +2,14 @@
 # 컴포넌트별 build/test/deploy job은 각 파트 개발 시작 후 추가 예정
 # (dashboard: EC2 배포 / infra: infra-deploy 트리거 / integration: RPi+EC2 배포)
 
+# 아직 프로젝트에 등록된 러너가 없어 파이프라인이 pending으로 쌓이기만 하므로,
+# 러너 구축 전까지 파이프라인 생성을 통째로 끈다. 컨벤션 검사는 로컬 git hook
+# (.githooks/commit-msg)이 동일 규칙으로 수행한다.
+# 러너 등록 후 아래 workflow 블록을 삭제하면 lint job이 다시 활성화된다.
+workflow:
+  rules:
+    - when: never
+
 stages:
   - lint
 
