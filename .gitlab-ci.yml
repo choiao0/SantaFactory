@@ -15,6 +15,9 @@ stages:
 
 variables:
   SONAR_HOST_URL: "http://host.docker.internal:9000"
+  OLLAMA_HOST_URL: "http://host.docker.internal:11434"
+  OLLAMA_MODEL: "qwen2.5-coder:7b"
+  OLLAMA_TIMEOUT: "120"
 
 .convention-lint:
   stage: lint
