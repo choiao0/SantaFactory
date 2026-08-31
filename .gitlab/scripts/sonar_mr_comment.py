@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -43,6 +44,37 @@ def request_json(url, headers=None, data=None, method="GET", timeout=30):
 def sonar_get(base_url, headers, path, params):
     query = urllib.parse.urlencode(params)
     return request_json(f"{base_url}{path}?{query}", headers=headers)
+
+
+def wait_for_analysis(headers, report_path, timeout=300, interval=2):
+    """Wait for the exact SonarQube Compute Engine task from this pipeline."""
+    try:
+        properties = dict(
+            line.split("=", 1)
+            for line in Path(report_path).read_text(encoding="utf-8").splitlines()
+            if "=" in line
+        )
+    except OSError as error:
+        raise RuntimeError(f"Cannot read SonarQube task report: {report_path}") from error
+
+    task_url = properties.get("ceTaskUrl")
+    if not task_url:
+        raise RuntimeError("SonarQube task report does not contain ceTaskUrl")
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        task = request_json(task_url, headers=headers).get("task", {})
+        status = task.get("status", "UNKNOWN")
+        if status == "SUCCESS":
+            analysis_id = task.get("analysisId")
+            if not analysis_id:
+                raise RuntimeError("Completed SonarQube task has no analysisId")
+            return analysis_id
+        if status in {"FAILED", "CANCELED"}:
+            raise RuntimeError(f"SonarQube analysis task ended with status: {status}")
+        time.sleep(interval)
+
+    raise RuntimeError(f"Timed out waiting for SonarQube analysis after {timeout} seconds")
 
 
 def read_code_context(project_root, relative_path, line_number, radius=8):
@@ -155,6 +187,11 @@ def main():
     encoded_token = base64.b64encode(f"{sonar_token}:".encode()).decode()
     sonar_headers = {"Authorization": f"Basic {encoded_token}"}
 
+    wait_for_analysis(
+        sonar_headers,
+        ".scannerwork/report-task.txt",
+    )
+
     metric_keys = [
         "bugs",
         "vulnerabilities",
@@ -175,15 +212,6 @@ def main():
         for item in measure_result.get("component", {}).get("measures", [])
     }
 
-    gate_result = sonar_get(
-        sonar_url,
-        sonar_headers,
-        "/api/qualitygates/project_status",
-        {"projectKey": PROJECT_KEY},
-    )
-    gate_status = gate_result.get("projectStatus", {}).get("status", "UNKNOWN")
-    gate_icon = "✅" if gate_status == "OK" else "❌"
-
     issue_result = sonar_get(
         sonar_url,
         sonar_headers,
@@ -199,7 +227,7 @@ def main():
         MARKER,
         "## 🔍 SonarQube MR 자동 검토",
         "",
-        f"**결과:** {gate_icon} `{gate_status}`",
+        "**분석 상태:** ✅ 완료",
         f"**검사 커밋:** `{commit_sha}`",
         "**분석 범위:** 프로젝트 전체",
         f"**AI 모델:** `{ollama_model}`" if ollama_url else "**AI 검토:** 비활성화",
