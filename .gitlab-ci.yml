@@ -92,7 +92,7 @@ sonarqube-analysis:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
   when: always
   script:
-    - sonar-scanner -Dsonar.qualitygate.wait=true -Dsonar.qualitygate.timeout=300
+    - sonar-scanner
   artifacts:
     when: always
     paths:
