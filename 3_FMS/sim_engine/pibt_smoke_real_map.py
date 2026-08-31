@@ -12,48 +12,22 @@
 #   A) 충전존 홈 10대 -> 스테이션 도킹 칸 (실전과 같은 OD 패턴)
 #   B) 랜덤 OD 30대 스트레스 (시드 고정) — 통로 곳곳에서 교차/정면충돌 유발
 #
-# 맵 로드 규칙은 sim_v1_tasks.py L51-58과 동일 (그쪽은 import 시 실행되는
-# 스크립트라 재사용 불가 — 규칙 변경 시 양쪽 함께 수정할 것).
+# 맵 로드는 map_loader 공용 모듈 사용 (통로차단 ON — fleet_sweep과 동일 방침).
 #
 # 사용: python pibt_smoke_real_map.py
 # ============================================================
-import json
 import os
 import time
 
 import numpy as np
 
+from map_loader import load_map
 from pibt_core import dist_map, run
 from pibt_mvp_demo import check_collisions
 
 OUT = os.path.dirname(os.path.abspath(__file__))
-CELL_M, OFFSET_M = 1.0, 0.4
-K, OX = round(CELL_M / 0.1), round(OFFSET_M / 0.1)
-
-# ---- 맵 로드 + 다운샘플 (sim_v1_tasks.py와 동일 규칙) ----
-grid01 = np.load(os.path.join(OUT, "occupancy_grid.npy"))
-stations = json.load(open(os.path.join(OUT, "stations.json")))
-raw = np.isin(grid01, (1, 2, 5)).astype(np.uint8)
-m2 = np.pad(raw, ((0, 0), (OX, 0)), constant_values=1)
-h, w = m2.shape
-m2 = np.pad(m2, ((0, (-h) % K), (0, (-w) % K)), constant_values=1)
-coarse = m2.reshape(m2.shape[0] // K, K, m2.shape[1] // K, K).max(axis=(1, 3))
-FREE = coarse == 0
-H, W = coarse.shape
-
-# 통로차단 ON (fleet_sweep과 같은 보수적 초기실험 방침)
-for k in range(11):
-    c = int((35.1 + 6 * k + OFFSET_M) / CELL_M)
-    FREE[48:68, c - 1:c + 2] = False
-
-st_cell = {}
-for kind, pts in stations.items():
-    for i, (x, y) in enumerate(pts):
-        r, c = int(y / CELL_M), int((x + OFFSET_M) / CELL_M)
-        for rr, cc in [(r, c), (r - 1, c), (r + 1, c), (r, c - 1), (r, c + 1)]:
-            if 0 <= rr < H and 0 <= cc < W and FREE[rr, cc]:
-                st_cell[f"{kind}[{i}]"] = (rr, cc)
-                break
+FREE, st_cell, stations = load_map(OUT, aisle_block=True)
+H, W = FREE.shape
 print(f"[0] 맵 coarse {H}x{W}, free 칸 {int(FREE.sum())}개, 통로차단 ON")
 
 
