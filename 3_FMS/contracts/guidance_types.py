@@ -1,6 +1,6 @@
 """A안(AI)-B안(PIBT 엔진) 공유 계약.
 
-출처: 7_Docs/AI/AI입출력명세서.md §13. 이 파일을 바꾸려면 양쪽 합의가 먼저다.
+출처: 5_Docs/AI/AI입출력명세서.md §13. 이 파일을 바꾸려면 양쪽 합의가 먼저다.
 """
 
 from dataclasses import dataclass
