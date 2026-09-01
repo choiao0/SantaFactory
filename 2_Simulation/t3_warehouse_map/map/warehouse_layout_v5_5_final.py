@@ -29,7 +29,7 @@
 #   2) 기둥 라인(x, 6m 모듈) 검출 + 기둥 105개 좌표 확정 (라인 x 행 교차 검증)
 #   3) 렉 배치: 세로형, 4.0x1.2m 유닛 스냅, 더블로우, 기둥 기초 회피
 #   4) 문/컨베이어(입고2·출고2 + 패킹→출고 L자 연결)
-#   5) 스테이션: 인계4, 충전6+대기6, 렉통로 입구버퍼11(일방통행 교대),
+#   5) 스테이션: 인계4, 충전6+대기6, 구역버퍼22(v6.0 — 통로 양단, 구역 A~V),
 #      입고버퍼3, 벨트변 검수2, 토트 인덕션2, 주문 합류2, 패킹5, VAS3, 반품2
 #   6) 저장: occupancy_grid / obstacle_mask / rack_units / columns / map.pgm+yaml
 #   7) 시각화: 구역 오버레이(한글 라벨) 포함
@@ -86,12 +86,14 @@ def is_overhead_line(e):
             and any(abs(min(ys) - oy) < OVERHEAD_TOL for oy in OVERHEAD_YS))
 
 # 렉 (Isaac Sim 에셋 실측값으로 교체 가능 — 유닛 정수배 스냅)
-RACK_UNIT_L, RACK_UNIT_D = 4.0, 1.2
+RACK_UNIT_L, RACK_UNIT_D = 3.0, 1.2   # v6.0: 4.0→3.0 — 구역제(반쪽당 3랙) 정합
 DOUBLE_ROW = True
 RACK_W = RACK_UNIT_D * 2 if DOUBLE_ROW else RACK_UNIT_D
 MIN_SEG = RACK_UNIT_L
 CLEAR, THICK_THRESH = 0.5, 5
-RACK_BANKS = [(47, 68)]
+# v6.0 구역제: 통로 반쪽당 정확히 3랙(9.0m). 중앙 기둥 셀 y 56.2~58.5(실측)를
+# 피해 두 밴드를 명시 — 남반 47.0~56.0, 북반 58.7~67.7 (세그먼트가 결정적으로 3유닛)
+RACK_BANKS = [(47.0, 56.0), (58.7, 67.7)]
 STAGE_L, STAGE_R = 30, 102
 
 # AMR (사용자 스펙 1,440 x 641 x 220 mm)
@@ -302,12 +304,19 @@ print(f"[2.7] 사무실 재구축 2개소 (외곽벽+출입구, 회의실 1실�
 # 3) 렉 배치 (세로, 유닛 스냅, 기둥 기초 회피)
 # ------------------------------------------------------------
 clear_cells = int(CLEAR * M)
-rack_units = []                               # (x중심, y시작, 유닛수)
-for x in col_x:
-    if x < STAGE_L or x > STAGE_R:
-        continue
+# v6.0.1: 양끝 열은 1열(통로 쪽 행만) — 끝열 바깥 행이 구역에 안 속하는 고아를
+# 제거해 행 22개 = 22구역×통로쪽 행이 정확히 떨어진다 (전체 132랙 = 22구역×6랙)
+rack_units = []                               # (x중심, y시작, 유닛수, 행수 1|2)
+elig_x = [x for x in col_x if STAGE_L <= x <= STAGE_R]
+for x in elig_x:
+    if x == elig_x[0]:                        # 서쪽 끝 — 동측(통로) 행만
+        n_rows, cx_fp, w_fp = 1, x + RACK_UNIT_D / 2, RACK_UNIT_D
+    elif x == elig_x[-1]:                     # 동쪽 끝 — 서측(통로) 행만
+        n_rows, cx_fp, w_fp = 1, x - RACK_UNIT_D / 2, RACK_UNIT_D
+    else:
+        n_rows, cx_fp, w_fp = 2, x, RACK_W
     for y0, y1 in RACK_BANKS:
-        r, c = rect_slice(x - RACK_W / 2, y0, RACK_W, y1 - y0)
+        r, c = rect_slice(cx_fp - w_fp / 2, y0, w_fp, y1 - y0)
         blocked = (grid[r, c] == 1).sum(axis=1) > THICK_THRESH
         b2 = blocked.copy()
         for i in np.where(blocked)[0]:
@@ -325,19 +334,19 @@ for x in col_x:
                 if n_units >= 1:
                     used = n_units * RACK_UNIT_L
                     ys = y0 + i * CELL / 1000 + (seg_len - used) / 2
-                    rr, cc = rect_slice(x - RACK_W / 2, ys, RACK_W, used)
+                    rr, cc = rect_slice(cx_fp - w_fp / 2, ys, w_fp, used)
                     sub = grid[rr, cc]
                     sub[sub == 0] = 2
-                    rack_units.append((round(x, 2), round(ys, 2), n_units))
+                    rack_units.append((round(cx_fp, 2), round(ys, 2), n_units, n_rows))
                 i = j
             else:
                 i += 1
 
-total_units = sum(n for _, _, n in rack_units)
-assets = total_units * (2 if DOUBLE_ROW else 1)
-pallets = int(total_units * RACK_UNIT_L / PALLET_PITCH) * 2 * RACK_LEVELS
-print(f"[3] 렉 세그먼트 {len(rack_units)}개, 유닛 {total_units} → 에셋 {assets}개, "
-      f"파렛트 약 {pallets:,}개 (통로 {6 - RACK_W:.1f}m)")
+total_units = sum(n for _, _, n, _ in rack_units)
+row_units = sum(n * rw for _, _, n, rw in rack_units)     # 행 단위 랙 칸 수
+pallets = int(row_units * RACK_UNIT_L / PALLET_PITCH) * RACK_LEVELS
+print(f"[3] 렉 세그먼트 {len(rack_units)}개, 유닛 {total_units} → 랙 칸 {row_units}"
+      f"(=22구역x6 검산 {row_units == 132}), 파렛트 약 {pallets:,}개 (통로 {6 - RACK_W:.1f}m)")
 
 # ------------------------------------------------------------
 # 4) 문 / 컨베이어
@@ -353,8 +362,12 @@ for d in DOORS:
 # 5) 스테이션 (총 46개소)
 # ------------------------------------------------------------
 AISLE_CX = [35.1 + 6 * k for k in range(11)]              # 렉 통로 중심 x
-AISLE_BUFFERS = [(x, 45.6 if k % 2 == 0 else 69.4)        # 일방통행: 짝수=북행
-                 for k, x in enumerate(AISLE_CX)]
+# v6.0 구역제: 통로 양단 버퍼 22개 = 구역 A~K(북, y69.4) + L~V(남).
+# 남측 y는 46.0 — 랙 남면 47.0의 팽창역(−0.8m=46.2) 밖 안전 여유 확보
+# (팀 CSV의 46.2는 랙 밴드가 다른 v5.7-A 기준 — 0.2m 파생 편차)
+BUF_Y_N, BUF_Y_S = 69.4, 46.0
+AISLE_BUFFERS = ([(x, BUF_Y_N) for x in AISLE_CX]         # [0..10] = A~K
+                 + [(x, BUF_Y_S) for x in AISLE_CX])      # [11..21] = L~V
 
 STATIONS = {
     "handoff":  [(31.6, 40.8), (31.6, 71.35), (93.6, 43.55), (93.6, 75.55)],
@@ -412,6 +425,23 @@ np.save("columns.npy", columns)
 import json
 json.dump({k: v for k, v in STATIONS.items()}, open("stations.json", "w"), indent=1)
 
+# v6.0 구역 정의(zones.json) — 구역 경계가 더블로우 가운데를 지남: 한 구역 =
+# 통로 반쪽 + 통로를 향한 양쪽 랙 행 3칸씩(총 6랙). A~K 북반, L~V 남반 (총 22).
+ZONES = {}
+for k, ax in enumerate(AISLE_CX):
+    wcol, ecol = ax - 3.0, ax + 3.0                        # 서·동 더블로우 중심
+    for half, base, ys, by in (("N", 0, 58.7, BUF_Y_N), ("S", 11, 47.0, BUF_Y_S)):
+        letter = chr(ord("A") + base + k)
+        racks = []
+        for rx, row in ((wcol + RACK_UNIT_D / 2, "E"), (ecol - RACK_UNIT_D / 2, "W")):
+            for u in range(3):                             # 통로를 향한 행 3랙
+                racks.append({"x": round(rx, 2),
+                              "y": round(ys + RACK_UNIT_L * (u + 0.5), 2), "row": row})
+        ZONES[letter] = {"aisle_x": ax, "half": half, "buffer": [ax, by],
+                         "y_range": [ys, round(ys + 3 * RACK_UNIT_L, 1)], "racks": racks}
+json.dump(ZONES, open("zones.json", "w"), indent=1, ensure_ascii=False)
+print(f"[4.6] 구역 {len(ZONES)}개 (A~V) — 구역당 랙 6칸, zones.json 저장")
+
 # ROS map (건물 범위 크롭, 원점 = 건물 좌하단)
 bx0, bx1, by0, by1 = 14.1, 110.1, 25.5, 89.5
 sub = grid[int(by0 * M):int(by1 * M), int(bx0 * M):int(bx1 * M)]
@@ -420,8 +450,10 @@ h, w = img.shape
 with open("map.pgm", "wb") as f:
     f.write(f"P5\n{w} {h}\n255\n".encode())
     f.write(img.tobytes())
+# origin = 크롭 좌하단(월드 좌표) — [0,0,0]이면 map 프레임이 월드에서 (bx0,by0)만큼
+# 어긋나 AMCL 초기포즈·odom과 불일치 (T3 localization 개통 때 실측)
 open("map.yaml", "w").write(
-    "image: map.pgm\nmode: trinary\nresolution: 0.1\norigin: [0.0, 0.0, 0.0]\n"
+    f"image: map.pgm\nmode: trinary\nresolution: 0.1\norigin: [{bx0}, {by0}, 0.0]\n"
     "negate: 0\noccupied_thresh: 0.65\nfree_thresh: 0.196\n")
 print(f"[5] 저장 완료 (ROS map {w}x{h}px 포함)")
 
@@ -481,7 +513,7 @@ for k in range(11):                          # 분산 피킹 위치 표시
     ax.text(35.1 + 6 * k, 57.3, "P", ha="center", va="center", fontsize=8,
             color="#c0392b", fontweight="bold",
             bbox=dict(boxstyle="circle,pad=0.15", fc="white", ec="#c0392b", lw=1.1))
-ax.set_title(f"3PL Fulfillment Layout v5.8 — {assets} rack assets, "
+ax.set_title(f"3PL Fulfillment Layout v6.0.1 — {row_units} rack slots (22 zones x 6), "
              f"~{pallets:,} pallets, stations {station_ok}/{n_st} "
              f"{'OK' if verify_ok else 'FAIL'}, columns {len(columns)}", fontsize=13)
 ax.set_xlabel("m")

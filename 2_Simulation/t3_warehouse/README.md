@@ -14,6 +14,8 @@
 | `view_scene.py` | WebRTC 스트리밍 뷰어 (헤드리스 서버 관전용) |
 | `http_stream.py` | TCP 전용 HTTP MJPEG 관전 경로 — UDP 차단망(교육장 내부망) 대응 |
 | `export_replay.py` | 맵 → `../isaac_export_t3/` 재생 데이터 생성 (isaac_replay 포맷) |
+| `warehouse_sim.py` | **T3 본편** — 씬 + iw.hub + 물리 라이다, ROS2 개통 (/scan /odom /tf /clock, /cmd_vel 구독) |
+| `ros2/` | localization 스택 — nav2 AMCL + map_server + foxglove_bridge 런치·파라미터 |
 | `out/scene_*.png` | 검수 스크린샷 (외관·트러스·통로·스테이션·사무실 등) |
 
 ## 실행
@@ -68,7 +70,37 @@ cd <isaacsim> && ./python.sh <repo>/2_Simulation/t3_warehouse/build_scene.py
 - `../isaac_export_t3/`는 `export_replay.py` 산출(스테이션 미션 6건, A* 침범 0 자가검증)
 - sim_v1 익스포트를 쓰려면 `--export-dir`만 바꾸면 됨 (포맷 동일)
 
-## 남은 것 (T3 본편)
+## ROS2 — 라이다 · localization (T3 본편 1단계, 개통 완료)
 
-iw.hub + 라이다 투입(warehouse_sim.py), 스테이션 왕복 order 연쇄, 리프트 도킹 1장면,
-사이클 타임 분해 + 도킹 시간 분포 실측(DES 환류).
+AMR 내부 = ROS2 원칙(외부는 VDA5050/MQTT 예정). 물리 레이캐스트 라이다(720빔
+0.5° 0.4~20m — 콜라이더 기준이라 map.pgm과 원천 일치)로 AMCL이 우리 맵 위에서
+실시간 추적한다(개통 검증: 회전·직진 중 오차 0.1~0.4m, 70회 갱신).
+
+```bash
+# 1) 시뮬 (Isaac — ROS2 소싱 필수)
+source /opt/ros/humble/setup.bash
+cd <isaacsim> && ./python.sh <repo>/2_Simulation/t3_warehouse/warehouse_sim.py
+# 2) localization (별도 셸)
+source /opt/ros/humble/setup.bash
+ros2 launch <repo>/2_Simulation/t3_warehouse/ros2/loc.launch.py
+# 3) 조종: ros2 run teleop_twist_keyboard teleop_twist_keyboard
+#    또는 자동 순회 데모: python3 <repo>/2_Simulation/t3_warehouse/ros2/patrol.py
+#    (스테이션 그랜드 투어 A* 무한 순회 + AMCL 오차 로그)
+#    재시드: /initialpose 발행 (Foxglove의 Pose Estimate 버튼도 가능)
+```
+
+시각화(전부 TCP — UDP 차단망 통과):
+- **Foxglove**: https://app.foxglove.dev → Open connection → `ws://<서버IP>:8765`
+  (/map + /scan + /amcl_pose + /particle_cloud + TF 표준 패널)
+- **3D 관전**: 브라우저 `http://<서버IP>:8211/` (MJPEG) 또는 WebRTC 클라이언트
+
+iw.hub 에셋 주의(6.0.1 실측): 섀시·캐스터 Collision 스케일이 ×100 깨져 있어
+warehouse_sim.py가 런타임 수술(깨진 콜리전 비활성 + 자체 하부 재구성)을 한다.
+바퀴 실측 반경 0.08m·트랙 0.58m — T1의 0.115/0.413은 오류였음. 물리 센서는
+반드시 리지드바디 링크(chassis) 밑에 부착(루트 Xform은 시뮬 중 동결).
+
+## 남은 것 (T3 본편 다음 단계)
+
+Nav2 경로 추종(개루프 직진은 슬립 비대칭으로 서서히 휨 — 제어 루프가 흡수),
+스테이션 왕복 order 연쇄, 리프트 도킹 1장면, 사이클 타임 분해 + 도킹 시간 분포
+실측(DES 환류), 오돔 노이즈 주입(현재는 정답 오돔이라 AMCL alpha 최소 설정).
