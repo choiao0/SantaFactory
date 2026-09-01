@@ -12,9 +12,10 @@
 #   --flow=v1compat B-1e 벤치마크 전용. v1과 동일한 3태스크 체인 + rng 소비 순서.
 #
 # 사용: python sim_v2_tasks.py [태그] [로봇수=6] [주문수=40] [시드=42] [통로차단=0|1]
-#                              [--flow=main|v1compat]
-# 환경: SIM_NO_PLOT=1 히트맵 생략, SIM_CHECK=1 매 틱 충돌 전수 검사(느림)
-# 출력: 콘솔 지표 + [SUMMARY] JSON + sim_v2_<태그>_r<대수>[_blk]_heat.png
+#                              [--flow=main|v1compat] [--theta=<θ json 경로>]
+# 환경: SIM_NO_PLOT=1 히트맵 생략, SIM_CHECK=1 매 틱 충돌 전수 검사(느림),
+#       SIM_DIRFLOW=1 방향별 이동 카운트 npz 저장 (B-2 검증용)
+# 출력: 콘솔 지표 + [SUMMARY] JSON + sim_v2_<태그>_r<대수>[_blk]_<flow>[_th]_heat.png
 # ============================================================
 import json
 import os
@@ -33,11 +34,15 @@ N_ORDERS = int(_pos_args[2]) if len(_pos_args) > 2 else 40
 SEED = int(_pos_args[3]) if len(_pos_args) > 3 else 42
 AISLE_BLOCK = bool(int(_pos_args[4])) if len(_pos_args) > 4 else False
 FLOW = "main"
+THETA_PATH = None
 for _f in sys.argv[1:]:
     if _f.startswith("--flow="):
         FLOW = _f.split("=", 1)[1]
+    elif _f.startswith("--theta="):
+        THETA_PATH = _f.split("=", 1)[1]
 assert FLOW in ("main", "v1compat"), f"알 수 없는 flow: {FLOW}"
 CHECK = bool(os.environ.get("SIM_CHECK"))
+DIRFLOW = bool(os.environ.get("SIM_DIRFLOW"))
 
 SPEED = 1.0
 DT = CELL_M / SPEED
@@ -58,9 +63,15 @@ N_PACK = len(stations["packing"])
 N_INB_ST = len(stations["inbound_buf"])
 homes = make_homes(FREE, st_cell, N_ROBOTS)
 
-# 통행 비용 — uniform 1.0. B-2에서 from_theta(θ) 출력으로 교체될 연결 지점.
-edge_cost = np.ones((H, W, 4), dtype=np.float64)
-wait_cost = np.ones((H, W), dtype=np.float64)
+# 통행 비용 — 기본 uniform 1.0. --theta=<json>이면 from_theta(θ) 출력 (B-2).
+if THETA_PATH:
+    from from_theta import extract_topology, from_theta, load_theta
+    _g = from_theta(FREE, extract_topology(FREE, st_cell), load_theta(THETA_PATH))
+    edge_cost = _g.edge_cost.astype(np.float64)
+    wait_cost = _g.wait_cost.astype(np.float64)
+else:
+    edge_cost = np.ones((H, W, 4), dtype=np.float64)
+    wait_cost = np.ones((H, W), dtype=np.float64)
 
 _dist_cache = {}
 
@@ -97,6 +108,7 @@ for rid in range(N_ROBOTS):
                        drive=0, wait=0, pushed=0, svc=0, turns=0, heading=None)
 
 visit_count = np.zeros((H, W), dtype=int)
+dir_flow = np.zeros((H, W, 4), dtype=int)   # 출발칸×방향 이동 수 (NAV만, B-2 계측)
 
 # ------------------------------------------------------------
 # 2) 주문/입고 생성 (rng 소비 순서 = 설계 §6 패리티 규칙)
@@ -273,6 +285,8 @@ while outstanding_orders + outstanding_inbound > 0:
             rb["svc"] += 1
         if moved:
             d = DIRS.index((p1[0] - p0[0], p1[1] - p0[1]))
+            if rb["state"] in NAV:
+                dir_flow[p0[0], p0[1], d] += 1
             if rb["heading"] is not None and d != rb["heading"]:
                 rb["turns"] += 1
             rb["heading"] = d
@@ -350,6 +364,13 @@ print("[SUMMARY] " + json.dumps(dict(
     pushed_steps=int(pushed_tot),
     turns_per_task=round(turns_tot / max(n_tasks, 1), 2))))
 
+_tag = (f"sim_v2_{VARIANT}_r{N_ROBOTS}{'_blk' if AISLE_BLOCK else ''}_{FLOW}"
+        f"{'_th' if THETA_PATH else ''}")
+if DIRFLOW:
+    npz = os.path.join(OUT, "results", _tag + "_dirflow.npz")
+    np.savez_compressed(npz, dir_flow=dir_flow, visit=visit_count)
+    print(f"[DIRFLOW] 저장: {os.path.basename(npz)}")
+
 if os.environ.get("SIM_NO_PLOT"):
     sys.exit(0)
 
@@ -372,7 +393,6 @@ ax.scatter(st_c, st_r, s=8, c="#27ae60", marker="s", alpha=0.6)
 ax.set_title(f"sim_v2 traffic — {VARIANT} ({FLOW}), {N_ROBOTS} robots, "
              f"{N_ORDERS} orders ({n_tasks/sim_hours:.0f} tasks/h)")
 plt.tight_layout()
-png = os.path.join(OUT, "results", f"sim_v2_{VARIANT}_r{N_ROBOTS}"
-                        f"{'_blk' if AISLE_BLOCK else ''}_{FLOW}_heat.png")
+png = os.path.join(OUT, "results", _tag + "_heat.png")
 plt.savefig(png, dpi=110)
 print(f"[4] 저장: {os.path.basename(png)}")
