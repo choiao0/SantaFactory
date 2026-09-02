@@ -1,6 +1,6 @@
 # B-2: from_theta() 배관 설계
 
-작성일: 2026-09-01. 지라: S15P21A106-78 (다중 로봇 충돌·혼잡 회피 구현).
+작성일: 2026-09-01, v2 개정 2026-09-02 (§3·§6). 지라: S15P21A106-78 (다중 로봇 충돌·혼잡 회피 구현).
 브랜치: `feature/S15P21A106-78-fms-fromtheta배관`.
 근거: [B트랙_실행_핸드오프_v2.md](B트랙_실행_핸드오프_v2.md) §3 B-2,
 AI입출력명세서 §11~13 (7_Docs/AI/).
@@ -41,29 +41,64 @@ AI입출력명세서 §11~13 (7_Docs/AI/).
   전용, aisle_alt는 세로(랙 사이) 통로 전용**.
 - r57의 폭 1 가로 컷(랙 중간 크로스컷)은 일반 칸으로 둔다 (특별 취급 없음).
 
-## 3. θ → 비용 규칙 (전부 곱셈, 시작값 1.0, 최종 clip 0.5~5.0)
+## 3. θ → 비용 규칙 — **v2 개정 (2026-09-02, θ스키마 합의안 반영)**
 
-`edge_cost[r,c,d]` = (r,c)에서 방향 d로 **나갈 때** 비용 (명세 §11-5).
-"들어가는 엣지"는 이웃 칸의 해당 방향 엣지를 뜻한다.
+근거: [2026-09-01_θ스키마_합의안.md](2026-09-01_θ스키마_합의안.md) "비용 조립 규칙",
+`contracts/guidance_types.py` v2 (`EDGE_RULE_PRECEDENCE`, `EDGE_RULE_ALWAYS`, `COST_MIN/MAX`).
+`edge_cost[r,c,d]` = (r,c)에서 방향 d로 **나가는** 간선. 아래 "간선 (u→v, d)"는 u에서 d로 v에 도달.
 
-| θ | 적용 규칙 |
-|---|---|
-| `aisle_period`, `aisle_phase` | 그룹 = `(rank // period + phase) % 2` (명세 §12 공식) |
-| `aisle_alt_boost` | 세로 통로 내부 칸의 선호 방향(그룹0=북, 그룹1=남) N/S 엣지 ×boost |
-| `aisle_alt_gain` | 같은 칸의 역방향 엣지 ×gain |
-| `loop_gain`, `loop_dir` | 순환로 칸에서 순방향(loop_dir=0이면 loop_fwd, 1이면 반대)의 **역방향** 엣지 ×gain. 수직 진출입 방향은 불변 |
-| `main_aisle_gain` | main_aisle 칸으로 **들어가는** 엣지 ×gain (간선 위 주행도 자동 포함) |
-| `junction_penalty` | junction 칸으로 **들어가는** 엣지 ×penalty |
-| `station_in` | 스테이션 도킹 칸으로 들어가는 엣지 ×in (접근 할인) |
-| `station_out` | 스테이션 도킹 칸에서 나가는 엣지 ×out (퇴장 벌금 — 명세의 트레이드오프 "세면 빠져나가기 어려움" 그대로) |
-| `wait_cost` | `wait_cost[:,:] = θ.wait_cost` |
+### 3-1. 조립 순서 (배타)
+
+```
+1. 모든 간선 1.0
+2. 간선마다 아래 그룹 중 "가장 먼저 걸리는 하나"만 적용
+     station_spur → loop → intersection_entry → aisle_interior
+3. main_aisle_gain 은 독립 — 양 끝이 main_aisle 인 간선에 항상 곱
+4. 마지막에 한 번만 [COST_MIN, COST_MAX] = [0.5, 5.0] clamp
+```
+v1 구현(모든 규칙 곱셈 중첩)은 `3.5×3.0×1.2 = 12.6`이 5.0으로 잘려 파라미터 식별이 불가했다.
+배타 적용 후 최악 `3.5×1.2 = 4.2 < 5.0` — `max_realizable_edge_cost(θ)`로 데모에서 검산.
+
+### 3-2. 그룹별 간선 조건 (wallA 토폴로지 기준)
+
+| 그룹 | θ | 간선 조건 |
+|---|---|---|
+| station_spur | `station_in` | v가 도킹 칸이고 `d == (entry_dir[v]+2)%4` (통로 쪽에서 station 쪽으로 진입) |
+| station_spur | `station_out` | u가 도킹 칸이고 `d == entry_dir[u]` (진입로를 되짚어 이탈 = 역주행) |
+| loop | `loop_gain` | u, v 모두 순환로 칸이고 `d == (pref(u)+2)%4` (선호 순환방향의 정확한 역방향) |
+| intersection_entry | `junction_penalty` | u는 교차로 아님, v는 교차로 (경계 진입 1회. 내부·이탈 간선 제외) |
+| aisle_interior | `aisle_alt_boost` / `aisle_alt_gain` | u, v의 `aisle_id`가 같고(≥0) d가 통로 축(N/S)에 평행. 선호 방향(그룹0=북, 1=남) boost, 역방향 gain |
+| (항상) | `main_aisle_gain` | u, v 모두 main_aisle (경계 진입 간선 제외) |
+| — | `wait_cost` | `wait_cost[:,:] = θ.wait_cost` |
+
+- 스퍼 길이: wallA의 도킹 칸은 전부 간선 밴드 위/인접이라 스퍼 = 도킹 칸 1개 → 합의안 미합의 항목
+  "스퍼 전체 vs 마지막 간선 1개"가 이 맵에서는 같은 결과. 다른 맵에서 스퍼가 길어지면 재론.
+- `station_out` 예외(walkable 이웃 ≤1인 station 미적용)는 wallA에 해당 없음 — 규칙은 구현해 둠.
+- 대상 station: `st_cell` 중 charger/charge_q 제외 (홈은 작업자리가 아님). entry_dir을 못 정하면 미적용 + 경고.
+
+### 3-3. `station_entry_dir` 추출 규칙 (명세 §6-3 "작업자리에서 가장 가까운 큰 통로 쪽", 코드 규칙)
+
+1. 도킹 칸의 4방향 **인접** 칸에 non-free(벽·구조물)가 있으면 그 **반대** 방향.
+   packing·induction·consol·vas (r40, 남쪽 r39 벽) → **N**. charger (동쪽 벽) → W.
+2. 없으면 도킹 칸이 속한 밴드의 **중심선 쪽**: 남 밴드(r40~47) 중심 43.5 → aisle_buf r46은 **S**,
+   북 밴드(r67~73) 중심 70 → aisle_buf r69는 **N**, 서 밴드(c20~31) 중심 25.5 → inbound_buf c24는 **E**.
+3. 둘 다 아니면 -1 (미적용, 경고).
+
+2026-09-02 실측 표 (규칙 1만으로는 aisle_buf·inbound_buf가 결정 불가 → 규칙 2 추가):
+
+| station | 도킹 칸 | 규칙 | entry_dir | 진입 이동(station_in) | 이탈 역주행(station_out) |
+|---|---|---|---|---|---|
+| aisle_buf[0..10] | (69, c) | 2 | N | S로 (70,c)→(69,c) | (69,c)→N |
+| aisle_buf[11..21] | (46, c) | 2 | S | N로 (45,c)→(46,c) | (46,c)→S |
+| packing / induction / consol / vas | (40, c) | 1 | N | S로 (41,c)→(40,c) | (40,c)→N |
+| inbound_buf[0..2] | (52/58/64, 24) | 2 | E | W로 (r,25)→(r,24) | (r,24)→E |
 
 검산 성질 (데모에서 assert):
-1. **중립 θ** (연속 8개 전부 1.0) → edge_cost/wait_cost 전부 1.0 (uniform과 동일).
-2. 출력 범위 [0.5, 5.0] (명세 §12).
-3. period=1, phase=0일 때 짝수 rank 통로에서 북행 < 남행 비용.
-4. 못 가는 곳은 비용으로 막지 않는다 — free 마스크는 그대로, 비용은 free 칸에만 의미
-   (명세 §12 경고).
+1. **중립 θ** (`GuidanceTheta.neutral()`) → 전부 1.0.
+2. 범위 clamp + **포화 없음**: `edge_cost.max() ≤ max_realizable_edge_cost(θ)` (배타 규칙 증명).
+3. 그룹 방향 부호 (통로 내부 N/S).
+4. 규칙별 단독 검사: loop 역행 간선, 교차로 **진입만**(내부·이탈 1.0), station in/out 간선과 무관 간선 1.0.
+5. **배타**: loop∧교차로진입 겹치는 간선 = `loop_gain` 하나만 (loop가 우선).
 
 ## 4. θ가 경로에 먹히는 방식 — 거리항 (2026-09-02 개정)
 
@@ -94,7 +129,16 @@ PIBT 후보 score = `edge_cost + dist[다음칸]` (pibt_core.candidates).
   DoD의 "회피가 보인다"를 히트맵(방향 무관)보다 정직하게 판정하기 위한 계측.
   이동계층 로직은 불변 (카운터만 추가).
 
-## 6. 검증 계획
+## 6. 검증 — v2 재작업 후 결과 (2026-09-02)
+
+`python from_theta_demo.py` 전부 통과: [1] 중립 θ=uniform, [2] 극단 θ 최대 3.60 ≤ 실현 상한 4.20
+(포화 없음 = 배타 규칙 검산), [3] 통로 내부 방향 부호, [4] 규칙별 단독 간선(loop 역행·교차로 진입만·
+station in/out, 도킹 칸 43개, entry_dir packing N·aisle_buf S/N·inbound E), [5] 배타(loop∧교차로 = loop만)
++ main_aisle_gain 독립 곱, [6~8] 더미 θ(3.5/0.5) 완주·분극 격차 +0.03→+0.98. 헤딩 모델 + θ 조합
+(`--heading --theta`) 10대 SIM_CHECK 완주. `returns[0..1]`은 entry_dir 미결정(밴드 밖·인접 벽 없음,
+흐름 미사용) → 경고 후 미적용.
+
+### 원래 검증 계획
 
 1. `python from_theta_demo.py` (신규) — §3 검산 4종 assert + uniform vs 더미 θ
    (gain 3.5/boost 0.5/period 1/phase 0) sim_v2 2회 실행 — 극단 θ 완주 자체가 라이브니스 회귀, 짝수 통로 북행 점유율이
@@ -104,8 +148,7 @@ PIBT 후보 score = `edge_cost + dist[다음칸]` (pibt_core.candidates).
 
 ## 7. 미결 — A트랙/팀 합의 필요 (θ 스키마 합의 시 같이 볼 것)
 
-- station_in/out의 "줄 정렬" 원 의도는 대기열 방향 개념이 필요 — 현재 구현은
-  도킹 칸 진입 할인/퇴장 벌금으로 단순화. 대기열 설계(서빙 트랙)와 함께 재논의.
 - junction을 목(폭 3×행 1)으로 정의 — 서/동 밴드와 간선의 코너는 미포함.
 - 가로 통로 rank 미사용 결정(§2)은 wallA 한정 — 가로 랙 통로가 있는 맵이 오면 재론.
-- θ json 스키마(필드명/타입)는 이 문서 §5가 임시 기준. A트랙 산출물 형식 확정 시 맞춤.
+- θ json 스키마: `GuidanceTheta` 필드명 그대로, 로드 시 `validate()`로 v2 범위 검사.
+- station_in/out 스퍼 길이·예외, 하한 포화(0.5×0.5), 2칸 폭 통로 aisle_id 등 합의안 미합의 항목은 그쪽 문서 기준으로 추적.
