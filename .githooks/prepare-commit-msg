@@ -58,7 +58,7 @@ exec < /dev/tty
 echo "커밋 타입을 선택하세요 (issue=$jira_key):"
 echo "  1) ✨ feat"
 echo "  2) 🐛 fix"
-echo "  3) ♻️ refactor"
+echo "  3) ♻️  refactor"
 echo "  4) 📝 docs"
 echo "  5) ✅ test"
 echo "  6) 🔧 chore"

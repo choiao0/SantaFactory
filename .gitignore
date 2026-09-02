@@ -1,2 +1,6 @@
 __pycache__/
 *.pyc
+
+4_Web/.env
+
+server-setup/
