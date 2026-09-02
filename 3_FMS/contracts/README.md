@@ -4,7 +4,7 @@ A안(AI)과 B안(PIBT 엔진)이 공유하는 데이터 계약. 여기 정의를
 
 - `guidance_types.py` — `GuidanceInput` / `GuidanceTheta` / `Guidance` dataclass,
   θ 범위·범주, 간선 규칙 배타 순서(`EDGE_RULE_PRECEDENCE`).
-  출처: [`7_Docs/AI/AI입출력명세서.md`](../../7_Docs/AI/AI입출력명세서.md) §13 코드 계약.
+  출처: [`5_Docs/AI/AI입출력명세서.md`](../../5_Docs/AI/AI입출력명세서.md) §13 코드 계약.
 - `tests/` — `3_FMS/`에서 `python contracts/tests/test_guidance_types.py`
 
 θ의 개수·순서·의미가 바뀌면 데이터 버전도 함께 올린다 (명세서 §14-18).

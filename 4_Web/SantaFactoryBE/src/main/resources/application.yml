@@ -2,7 +2,7 @@ spring:
   application:
     name: santafactory-be
   datasource:
-    url: jdbc:postgresql://localhost:5432/${DB_NAME:santafactory}
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/santafactory}
     username: ${DB_USERNAME:postgres}
     password: ${DB_PASSWORD:postgres}
   jpa:
