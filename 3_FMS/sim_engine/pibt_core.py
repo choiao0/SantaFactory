@@ -226,6 +226,8 @@ def wait_bias(stag):
 #   거리장을 다시 계산해 실제 우회로를 준다. 우회로가 없으면 원래 dist로 대기.
 REPLAN_AFTER = 8
 REPLAN_RADIUS = 3
+REPLAN_HOLD = 6       # 재계획 거리장 유지 틱 — 매 틱 재계산하면 두 로봇이 서로를 장애물로
+                      # 동시에 재계획→동시 회전→되돌림의 대칭 진동(주기 4틱, 실측)
 
 
 class Stagnation:
@@ -264,6 +266,29 @@ def stuck_free(free, states, extra, me, radius=REPLAN_RADIUS):
             if max(abs(r - r0), abs(c - c0)) <= radius:
                 f[r, c] = False
     return f
+
+
+class Replanner:
+    """정체 로봇의 거리장 선택: 재계획(주변 로봇 = 장애물) + 히스테리시스(REPLAN_HOLD틱 유지)."""
+
+    def __init__(self, free, edge_cost, turn_cost, hold=REPLAN_HOLD):
+        self.cache = ReplanCache(free, edge_cost, turn_cost)
+        self.hold_len = hold
+        self.hold = {}          # agent -> (dist, 만료 tick, goal)
+
+    def dist_for(self, a, t, states, extra, goal, base, stag):
+        """base: 평소 거리장. 정체(stag > REPLAN_AFTER)면 재계획 거리장을 만들어 hold_len틱
+        유지한다. 유지 중엔 상대가 움직여도 계획을 바꾸지 않는다 (진동 방지)."""
+        h = self.hold.get(a)
+        if h is not None and t < h[1] and h[2] == goal and h[0][states[a]] >= 0:
+            return h[0]
+        if stag > REPLAN_AFTER:
+            dm = self.cache.dist(states, extra, a, goal)
+            if dm[states[a]] >= 0:
+                self.hold[a] = (dm, t + self.hold_len, goal)
+                return dm
+        self.hold.pop(a, None)
+        return base
 
 
 class ReplanCache:
@@ -524,7 +549,7 @@ def run_h(free, starts, goals, edge_cost=None, wait_cost=None, max_steps=200,
     busy = {a: 0 for a in agents}
     swing = {a: set() for a in agents}
     stag = Stagnation()
-    replan = ReplanCache(free, edge_cost, turn_cost)
+    replan = Replanner(free, edge_cost, turn_cost)
     for a in agents:
         stag.update(a, goals[a], dists[a][states[a]])
     age = {a: 0 for a in agents}      # 목표 미도달 연속 틱 — 원 PIBT 우선순위 (단조 증가)
@@ -533,7 +558,7 @@ def run_h(free, starts, goals, edge_cost=None, wait_cost=None, max_steps=200,
     def at_goal(a):
         return states[a][:2] == goals[a]
 
-    for _ in range(max_steps):
+    for t in range(max_steps):
         if all(at_goal(a) for a in agents):
             return history, cells_hist
         # 우선순위는 단조 증가하는 age로 — 정체 카운터(stag)로 매기면 밀린 쪽이 다음 틱에
@@ -544,9 +569,8 @@ def run_h(free, starts, goals, edge_cost=None, wait_cost=None, max_steps=200,
         for a in agents:
             if busy[a] > 0:
                 d_now[a] = stay_map_h(free, states[a])
-            elif stag.get(a) > REPLAN_AFTER and not at_goal(a):
-                alt = replan.dist(states, extra, a, goals[a])
-                d_now[a] = alt if alt[states[a]] >= 0 else dists[a]
+            elif not at_goal(a):
+                d_now[a] = replan.dist_for(a, t, states, extra, goals[a], dists[a], stag.get(a))
             else:
                 d_now[a] = dists[a]
         bias = {a: wait_bias(stag.get(a)) for a in agents}

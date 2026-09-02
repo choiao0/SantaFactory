@@ -9,7 +9,7 @@ PIBT 이동계층 + θ → 통행 비용 변환(`from_theta`) + Fleet 벤치마�
 1. **B-0** 기준선 재확정 — 완료 (SPEED 1.0 m/s, 단일 맵 wallA)
 2. **B-1** 시공간 A* → PIBT 교체 — 완료 (벤치마크: PIBT ≥ A* 전 구간)
 3. **B-2** `from_theta()` 배관 — 완료 (더미 θ 방향 분극 검증 통과, 거리항 가중 다익스트라)
-3b. **PIBT 헤딩 모델** (2026-09-02 결정 ②③④) — 완료, `--heading` opt-in. B0′ 정식 스윕 후 기본값 전환 예정
+3b. **PIBT 헤딩 모델** (2026-09-02 결정 ②③④⑤) — 완료, `--heading` opt-in. B0′ 기준선 측정 완료(무릎 8→10대). Isaac 실측 상수 반영 후 기본값 전환 예정
 4. **B-5** θ 적용 Fleet Sweep 재실측 — A트랙 산출물 대기
 
 상세 코드 지도·검증 커맨드·함정 목록: [`../docs/B트랙_실행_핸드오프_v2.md`](../docs/B트랙_실행_핸드오프_v2.md)
@@ -22,5 +22,5 @@ PIBT 이동계층 + θ → 통행 비용 변환(`from_theta`) + Fleet 벤치마�
 | `sim_v2_tasks.py` | PIBT 틱 시뮬 본체 (`--flow=main\|v1compat`, `--theta=<json>`, `--heading`) |
 | `from_theta.py` | B-2: wallA 토폴로지 추출 + θ→비용 변환 ([설계](../docs/2026-09-01_B2_from_theta_설계.md)) |
 | `pibt_mvp_demo.py`, `pibt_heading_demo.py`, `pibt_smoke_real_map.py`, `from_theta_demo.py` | 회귀 테스트 — 코어/배관 수정 시 재실행 |
-| `fleet_sweep.py`, `fleet_sweep_b1e.py` | v1 스윕 / A* vs PIBT 벤치마크 |
+| `fleet_sweep.py`, `fleet_sweep_b1e.py`, `fleet_sweep_b0h.py` | v1 스윕 / A* vs PIBT 벤치마크(회전 0초, 이력) / **B0′ 기준선**(칸 vs 헤딩) |
 | [`results/`](results/) | 벤치마크·검증 산출물 (csv/png/npz) — 기존 결과 덮어쓰기 금지 |

@@ -27,7 +27,7 @@ import sys
 import numpy as np
 
 from map_loader import load_map, make_homes, CELL_M
-from pibt_core import (DIRS, REPLAN_AFTER, TURN_TICKS, ReplanCache, Stagnation,
+from pibt_core import (DIRS, TURN_TICKS, Replanner, Stagnation,
                        dist_map, dist_map_h, dump_candidates_h, occupied, stay_map_h,
                        step, step_h, swing_cells, valid_state, wait_bias)
 
@@ -92,7 +92,7 @@ def dmap(goal):
 
 _dist_cache_h = {}
 _stag = Stagnation()                         # 헤딩 모델: 거리 개선 없는 연속 틱 (우선순위·대기 상승·재계획)
-_replan = ReplanCache(FREE, edge_cost, float(TURN_TICKS)) if HEADING else None
+_replan = Replanner(FREE, edge_cost, float(TURN_TICKS)) if HEADING else None
 
 
 def dmap_h(goal):
@@ -274,6 +274,9 @@ def _dump_heading_candidates():
                       float(TURN_TICKS), only=only, label=lambda a: f"robot{a}")
 
 
+_trace = []          # STALL 진단용: 최근 틱의 (t, rid -> (상태, busy, 액션)) 링버퍼
+
+
 def tick_heading(t):
     """헤딩 모델 한 틱 (설계 2026-09-02 §7). 서비스 중·회전 중 로봇은 stay 고정,
     회전 중 스윙 칸은 extra 점유로 넘긴다. 지표: 회전 틱은 rot에 (wait와 분리)."""
@@ -293,10 +296,11 @@ def tick_heading(t):
         rb = robots[rid]
         if rb["state"] in (SVC_PICK, SVC_DROP) or rb["busy"] > 0:
             dists[rid] = stay_map_h(FREE, states[rid])
-        elif _stag.get(rid) > REPLAN_AFTER and rb["pos"] != rb["goal"]:
-            alt = _replan.dist(states, extra, rid, rb["goal"])   # 주변 로봇을 장애물로 재계획
-            dists[rid] = alt if alt[states[rid]] >= 0 else dmap_h(rb["goal"])
-            rb["replan"] += 1
+        elif rb["pos"] != rb["goal"]:
+            base = dmap_h(rb["goal"])
+            dists[rid] = _replan.dist_for(rid, t, states, extra, rb["goal"], base, _stag.get(rid))
+            if dists[rid] is not base:
+                rb["replan"] += 1                       # 재계획 거리장 사용 틱
         else:
             dists[rid] = dmap_h(rb["goal"])
     bias = {rid: wait_bias(_stag.get(rid)) for rid in rids}
@@ -310,11 +314,15 @@ def tick_heading(t):
                 assert not (new[a][:2] == states[b][:2] and new[b][:2] == states[a][:2]), \
                     f"t={t} 스왑 {a}<->{b}"
 
+    snap = {}
     for rid in rids:
         rb = robots[rid]
         s0, s1 = states[rid], new[rid]
         p0, p1 = s0[:2], s1[:2]
         moved = p1 != p0
+        snap[rid] = (s0, rb["busy"], "fwd" if moved and (p1[0]-p0[0], p1[1]-p0[1]) == DIRS[s0[2]]
+                     else "rev" if moved else "turn" if s1[2] != s0[2]
+                     else "busy" if rb["busy"] else "wait", rb["state"])
         if not moved and s1[2] != s0[2]:                 # 회전 시작 (첫 틱)
             rb["turns"] += 1
             if rb["state"] not in NAV:
@@ -350,6 +358,12 @@ def tick_heading(t):
         elif rb["state"] in (SVC_PICK, SVC_DROP):
             rb["svc"] += 1
         rb["pos"], rb["h"], rb["heading"] = p1, s1[2], s1[2]
+    _trace.append((t, snap))
+    if len(_trace) > 12:
+        del _trace[0]
+    for rid in rids:
+        rb = robots[rid]
+        s1 = new[rid]
         if rb["state"] in (SVC_PICK, SVC_DROP):
             _stag.update(rid, rb["goal"], 0.0)
         else:
@@ -460,6 +474,10 @@ while outstanding_orders + outstanding_inbound > 0:
                   f"goal={rb['goal']} busy={rb['busy']} stag={_stag.get(rid)}")
         if HEADING:
             _dump_heading_candidates()
+            moving = [rid for rid in rids if robots[rid]["pos"] != robots[rid]["goal"]]
+            print(f"  [최근 {len(_trace)}틱 이력, 미도달 로봇 {moving}]")
+            for tt, snap in _trace:
+                print("   t=%d " % tt + "  ".join(f"r{rid}:{snap[rid][0]} {snap[rid][2]}" for rid in moving))
         raise SystemExit("시뮬 정체 감지")
     assert t < 200_000, "시뮬 정체 (틱 상한 초과)"
 
