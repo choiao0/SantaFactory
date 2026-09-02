@@ -33,10 +33,11 @@ NEUTRAL = dict(aisle_alt_gain=1.0, aisle_alt_boost=1.0, loop_gain=1.0,
                main_aisle_gain=1.0, junction_penalty=1.0, station_in=1.0,
                station_out=1.0, wait_cost=1.0,
                aisle_period=1, aisle_phase=0, loop_dir=0)
-# 더미 θ: 교대 순환만 강하게. 단 라이브니스 제약(설계 §4) 안쪽으로 —
-# gain ≥ wait_cost+1 이면 "비싼 방향 전진"보다 "제자리 대기"가 매 틱 이겨서
-# 영구 정체가 된다 (gain 3.5로 실측 STALL 확인, 2026-09-01).
-DUMMY = dict(NEUTRAL, aisle_alt_gain=1.8, aisle_alt_boost=0.5)
+# 더미 θ: 교대 순환을 범위 극단(gain 3.5, boost 0.5)으로.
+# 비가중 BFS 거리항에서는 gain ≥ wait+1 이라 영구 정체(2026-09-01 실측 STALL)
+# 였던 값 — 가중 다익스트라(2026-09-02 결정)로 정체 없이 완주해야 한다.
+# 즉 이 데모의 sim_v2 θ 실행 성공 자체가 라이브니스 회귀 테스트다.
+DUMMY = dict(NEUTRAL, aisle_alt_gain=3.5, aisle_alt_boost=0.5)
 
 
 def theta_of(d):
@@ -95,6 +96,7 @@ def main():
         assert r.returncode == 0, f"sim_v2 {label} 실행 실패:\n{r.stdout}\n{r.stderr}"
         summary = [ln for ln in r.stdout.splitlines() if "[SUMMARY]" in ln]
         print(f"[5] sim_v2 {label:7s}: {summary[0][:110]}")
+    print("    (극단 θ 3.5에서 STALL 없이 완주 — 가중 거리항 라이브니스 OK)")
 
     def nshare(npz, mask):
         flow = np.load(npz)["dir_flow"]
@@ -127,7 +129,7 @@ def main():
         net = np.where(on, flow[..., 0] - flow[..., 2], 0)
         nets.append(net)
         lim = max(lim, abs(net).max())
-    for ax, net, title in zip(axes, nets, ("uniform", "dummy θ (alt 1.8/0.5)")):
+    for ax, net, title in zip(axes, nets, ("uniform", "dummy θ (alt 3.5/0.5)")):
         ax.imshow(np.where(free, 1.0, 0.25), cmap="gray", vmin=0, vmax=1,
                   origin="lower")
         im = ax.imshow(np.where(on, net, np.nan), cmap="coolwarm",

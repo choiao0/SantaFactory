@@ -77,8 +77,10 @@ _dist_cache = {}
 
 
 def dmap(goal):
+    """목표별 거리장 캐시. --theta면 θ 가중 다익스트라, 아니면 비가중 BFS
+    (기본 경로 불변). θ는 실행 중 고정이라 캐시 무효화 불필요."""
     if goal not in _dist_cache:
-        _dist_cache[goal] = dist_map(FREE, goal)
+        _dist_cache[goal] = dist_map(FREE, goal, edge_cost if THETA_PATH else None)
     return _dist_cache[goal]
 
 

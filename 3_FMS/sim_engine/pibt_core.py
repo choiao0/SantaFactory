@@ -19,29 +19,59 @@
 #   (r, c) = (y, x). r 증가 = 북쪽, c 증가 = 동쪽.
 #   방향 인덱스 0=북(r+1,c) 1=동(r,c+1) 2=남(r-1,c) 3=서(r,c-1), 반대=(방향+2)%4.
 #   edge_cost[r, c, d] = (r,c)에서 방향 d로 나갈 때 비용.
-#   contracts/guidance_types.py의 Guidance와 동일한 shape — 실제 θ가
-#   들어와도 이 모듈은 안 바뀐다 (from_theta 배관은 별도 이슈).
+#   contracts/guidance_types.py의 Guidance와 동일한 shape.
+#
+# 거리항 (docs/2026-09-02_Isaac회전충돌_격자유지_PIBT확장_결정.md §5):
+#   dist_map(edge_cost=None) = 비가중 BFS (v1compat·기존 벤치마크 경로, 불변).
+#   dist_map(edge_cost=...)  = θ 가중 다익스트라. 후보 score = edge + dist가
+#   정합해져 전진(= d)이 대기(= wait + d)를 항상 이김 → 비가중일 때의
+#   영구 정체(gain ≥ wait+1)가 사라지고, 비싼 통로는 dist 자체가 커져
+#   진입 시점부터 우회가 유도된다.
 # ============================================================
 from collections import deque
+from heapq import heappop, heappush
 
 import numpy as np
 
 DIRS = [(1, 0), (0, 1), (-1, 0), (0, -1)]  # 0=N 1=E 2=S 3=W
 
 
-def dist_map(free, goal):
-    """goal까지의 정적 최단거리(BFS, 4-연결). 도달 불가 칸은 -1."""
+def dist_map(free, goal, edge_cost=None):
+    """goal까지의 정적 최단 비용. 도달 불가 칸은 -1.
+    edge_cost=None → 비가중 BFS(int32, 칸 수).
+    edge_cost (H,W,4) → 가중 다익스트라(float64):
+        dist[u] = min_d edge_cost[u, d] + dist[u + DIRS[d]]
+    u에서 '나가는' 엣지 비용으로, goal에서 역방향(선행 칸 방향)으로 완화한다."""
     H, W = free.shape
-    dm = np.full((H, W), -1, dtype=np.int32)
-    dm[goal] = 0
-    q = deque([goal])
-    while q:
-        r, c = q.popleft()
-        for dr, dc in DIRS:
-            rr, cc = r + dr, c + dc
-            if 0 <= rr < H and 0 <= cc < W and free[rr, cc] and dm[rr, cc] < 0:
-                dm[rr, cc] = dm[r, c] + 1
-                q.append((rr, cc))
+    if edge_cost is None:
+        dm = np.full((H, W), -1, dtype=np.int32)
+        dm[goal] = 0
+        q = deque([goal])
+        while q:
+            r, c = q.popleft()
+            for dr, dc in DIRS:
+                rr, cc = r + dr, c + dc
+                if 0 <= rr < H and 0 <= cc < W and free[rr, cc] and dm[rr, cc] < 0:
+                    dm[rr, cc] = dm[r, c] + 1
+                    q.append((rr, cc))
+        return dm
+
+    dm = np.full((H, W), -1.0, dtype=np.float64)
+    done = np.zeros((H, W), dtype=bool)
+    dm[goal] = 0.0
+    pq = [(0.0, goal)]
+    while pq:
+        dv, (r, c) = heappop(pq)
+        if done[r, c]:
+            continue
+        done[r, c] = True
+        for d, (dr, dc) in enumerate(DIRS):
+            ur, uc = r - dr, c - dc                  # u + DIRS[d] == (r, c)
+            if 0 <= ur < H and 0 <= uc < W and free[ur, uc] and not done[ur, uc]:
+                nd = dv + float(edge_cost[ur, uc, d])
+                if dm[ur, uc] < 0 or nd < dm[ur, uc]:
+                    dm[ur, uc] = nd
+                    heappush(pq, (nd, (ur, uc)))
     return dm
 
 
@@ -119,13 +149,15 @@ def run(free, starts, goals, edge_cost=None, wait_cost=None, max_steps=200):
     반환: history — list[dict agent->pos], 인덱스 0이 초기 배치.
     max_steps 안에 전원 도달 못 하면 SystemExit(정체)."""
     H, W = free.shape
+    weighted = edge_cost is not None          # 비용이 주어지면 거리항도 가중
     if edge_cost is None:
         edge_cost = np.ones((H, W, 4), dtype=np.float64)
     if wait_cost is None:
         wait_cost = np.ones((H, W), dtype=np.float64)
     agents = list(starts)
     positions = dict(starts)
-    dists = {a: dist_map(free, goals[a]) for a in agents}
+    dists = {a: dist_map(free, goals[a], edge_cost if weighted else None)
+             for a in agents}
     wait_counter = {a: 0 for a in agents}
     history = [dict(positions)]
 

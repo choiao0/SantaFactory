@@ -5,8 +5,8 @@
 #
 # 토폴로지는 wallA 전용 규칙 기반 추출 (A트랙 topology_tensor 15ch는
 # 스키마 합의 대기 — 여기서는 from_theta에 필요한 최소 필드만).
-# dist_map은 비가중 BFS 그대로 — θ는 PIBT 후보 score의 edge_cost 항으로만
-# 작용한다 (설계 §4: 엣지 비용 차 2 초과 시 우회 강제 가능).
+# 거리항은 sim_v2가 --theta일 때 이 edge_cost로 가중 다익스트라를 돌린다
+# (pibt_core.dist_map, docs/2026-09-02 결정 §5).
 # ============================================================
 import json
 import os
@@ -102,17 +102,15 @@ def from_theta(free, topo, theta):
     ec = np.ones((H, W, 4), dtype=np.float32)
 
     # 1) 세로 통로 교대 순환 (명세 §12 그룹 공식. 그룹0=북 선호, 그룹1=남 선호)
-    #    통로 칸에서 나가는 N/S 엣지 + 통로 칸으로 들어가는 N/S 엣지 모두 적용.
-    #    진입 엣지가 중립이면 PIBT의 국소 score는 통로 안에 들어간 뒤에야
-    #    방향 비용을 보게 되어 진입 시점의 통로 선택 유도가 안 된다 (설계 §4).
+    #    통로 내부 칸에서 나가는 N/S 엣지에만 적용 (θ 합의안: 양 끝 aisle_id 동일).
+    #    진입 시점의 통로 선택 유도는 가중 다익스트라 거리항이 담당한다
+    #    (docs/2026-09-02 결정 §5) — 진입 엣지 확장 꼼수는 제거됨.
     on = topo.v_aisle_rank >= 0
     group = (topo.v_aisle_rank // theta.aisle_period + theta.aisle_phase) % 2
     for g, pref in ((0, 0), (1, 2)):                     # (그룹, 선호 방향)
         cells = on & (group == g)
-        into = _edges_into(cells)
-        anti = (pref + 2) % 4
-        ec[..., pref][cells | into[..., pref]] *= theta.aisle_alt_boost
-        ec[..., anti][cells | into[..., anti]] *= theta.aisle_alt_gain
+        ec[..., pref][cells] *= theta.aisle_alt_boost
+        ec[..., (pref + 2) % 4][cells] *= theta.aisle_alt_gain
 
     # 2) 외곽 순환 — 순방향의 역방향 엣지에 벌금 (수직 진출입은 불변)
     fwd = topo.loop_fwd if theta.loop_dir == 0 else \
