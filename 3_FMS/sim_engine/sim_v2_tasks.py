@@ -12,9 +12,13 @@
 #   --flow=v1compat B-1e 벤치마크 전용. v1과 동일한 3태스크 체인 + rng 소비 순서.
 #
 # 사용: python sim_v2_tasks.py [태그] [로봇수=6] [주문수=40] [시드=42] [통로차단=0|1]
-#                              [--flow=main|v1compat]
-# 환경: SIM_NO_PLOT=1 히트맵 생략, SIM_CHECK=1 매 틱 충돌 전수 검사(느림)
-# 출력: 콘솔 지표 + [SUMMARY] JSON + sim_v2_<태그>_r<대수>[_blk]_heat.png
+#                              [--flow=main|v1compat] [--theta=<θ json 경로>] [--heading]
+#   --heading: 헤딩 모델 (상태 (r,c,h), 자기+뒤 칸 2칸 점유, 90° 회전 = TURN_TICKS 틱,
+#              회전 중 스윙 칸 예약). docs/2026-09-02_PIBT_헤딩_2칸점유_회전예약_설계.md
+#              없으면 기존 칸 모델 그대로 (v1compat·B-1e 결과 불변).
+# 환경: SIM_NO_PLOT=1 히트맵 생략, SIM_CHECK=1 매 틱 충돌 전수 검사(느림),
+#       SIM_DIRFLOW=1 방향별 이동 카운트 npz 저장 (B-2 검증용)
+# 출력: 콘솔 지표 + [SUMMARY] JSON + sim_v2_<태그>_r<대수>[_blk]_<flow>[_th][_h]_heat.png
 # ============================================================
 import json
 import os
@@ -23,7 +27,9 @@ import sys
 import numpy as np
 
 from map_loader import load_map, make_homes, CELL_M
-from pibt_core import DIRS, dist_map, step
+from pibt_core import (DIRS, TURN_TICKS, Replanner, Stagnation,
+                       dist_map, dist_map_h, dump_candidates_h, occupied, stay_map_h,
+                       step, step_h, swing_cells, valid_state, wait_bias)
 
 OUT = os.path.dirname(os.path.abspath(__file__))
 _pos_args = [a for a in sys.argv[1:] if not a.startswith("--")]
@@ -33,11 +39,16 @@ N_ORDERS = int(_pos_args[2]) if len(_pos_args) > 2 else 40
 SEED = int(_pos_args[3]) if len(_pos_args) > 3 else 42
 AISLE_BLOCK = bool(int(_pos_args[4])) if len(_pos_args) > 4 else False
 FLOW = "main"
+THETA_PATH = None
 for _f in sys.argv[1:]:
     if _f.startswith("--flow="):
         FLOW = _f.split("=", 1)[1]
+    elif _f.startswith("--theta="):
+        THETA_PATH = _f.split("=", 1)[1]
+HEADING = "--heading" in sys.argv[1:]
 assert FLOW in ("main", "v1compat"), f"알 수 없는 flow: {FLOW}"
 CHECK = bool(os.environ.get("SIM_CHECK"))
+DIRFLOW = bool(os.environ.get("SIM_DIRFLOW"))
 
 SPEED = 1.0
 DT = CELL_M / SPEED
@@ -58,17 +69,39 @@ N_PACK = len(stations["packing"])
 N_INB_ST = len(stations["inbound_buf"])
 homes = make_homes(FREE, st_cell, N_ROBOTS)
 
-# 통행 비용 — uniform 1.0. B-2에서 from_theta(θ) 출력으로 교체될 연결 지점.
-edge_cost = np.ones((H, W, 4), dtype=np.float64)
-wait_cost = np.ones((H, W), dtype=np.float64)
+# 통행 비용 — 기본 uniform 1.0. --theta=<json>이면 from_theta(θ) 출력 (B-2).
+if THETA_PATH:
+    from from_theta import extract_topology, from_theta, load_theta
+    _g = from_theta(FREE, extract_topology(FREE, st_cell), load_theta(THETA_PATH))
+    edge_cost = _g.edge_cost.astype(np.float64)
+    wait_cost = _g.wait_cost.astype(np.float64)
+else:
+    edge_cost = np.ones((H, W, 4), dtype=np.float64)
+    wait_cost = np.ones((H, W), dtype=np.float64)
 
 _dist_cache = {}
 
 
 def dmap(goal):
+    """목표별 거리장 캐시. --theta면 θ 가중 다익스트라, 아니면 비가중 BFS
+    (기본 경로 불변). θ는 실행 중 고정이라 캐시 무효화 불필요."""
     if goal not in _dist_cache:
-        _dist_cache[goal] = dist_map(FREE, goal)
+        _dist_cache[goal] = dist_map(FREE, goal, edge_cost if THETA_PATH else None)
     return _dist_cache[goal]
+
+
+_dist_cache_h = {}
+_stag = Stagnation()                         # 헤딩 모델: 거리 개선 없는 연속 틱 (우선순위·대기 상승·재계획)
+_replan = Replanner(FREE, edge_cost, float(TURN_TICKS)) if HEADING else None
+
+
+def dmap_h(goal):
+    """헤딩 모델 거리장 (H,W,4): (칸,방향) 그래프 위 가중 다익스트라 (θ 없으면 비용 1.0)."""
+    if goal not in _dist_cache_h:
+        dm = dist_map_h(FREE, goal, edge_cost, float(TURN_TICKS))
+        assert dm.max() >= 0, f"목표 {goal}에 유효한 도착 방향이 없음"
+        _dist_cache_h[goal] = dm
+    return _dist_cache_h[goal]
 
 
 _stay_cache = {}
@@ -94,9 +127,33 @@ robots = {}
 for rid in range(N_ROBOTS):
     robots[rid] = dict(pos=homes[rid], home=homes[rid], state=IDLE,
                        goal=homes[rid], task=None, svc_end=-1, waitc=0,
-                       drive=0, wait=0, pushed=0, svc=0, turns=0, heading=None)
+                       drive=0, wait=0, pushed=0, svc=0, turns=0, heading=None,
+                       h=None, busy=0, swing=set(), rot=0, rev=0, replan=0,
+                       turns_idle=0, goal_prev=None, goal_t=0)
+
+if HEADING:
+    # 초기 방향: 홈에서 valid(뒤 칸 free)하고 타 로봇 점유와 안 겹치는 첫 방향 (결정론적)
+    _taken = set()
+    for rid in range(N_ROBOTS):
+        r0, c0 = homes[rid]
+        for _h in range(4):
+            _s = (r0, c0, _h)
+            if valid_state(FREE, _s) and not (set(occupied(_s)) & _taken):
+                robots[rid]["h"] = _h
+                _taken |= set(occupied(_s))
+                break
+        assert robots[rid]["h"] is not None, f"robot{rid} 홈 {homes[rid]}: 유효한 초기 방향 없음"
+    # 목표(도킹) 칸 간격 점검: 2칸 차체는 목표 칸 간 체비쇼프 거리 < 3이면 도착 자세에
+    # 따라 차체가 겹칠 수 있다(핑퐁 진동 원인). 스테이션은 ≥3 이지만 make_homes의
+    # 추가 홈은 맨해튼 ≥2만 보장하므로 경고로 표시.
+    _goal_cells = list(dict.fromkeys(list(st_cell.values()) + homes))
+    _close = [(a, b) for i, a in enumerate(_goal_cells) for b in _goal_cells[i + 1:]
+              if max(abs(a[0] - b[0]), abs(a[1] - b[1])) < 3]
+    if _close:
+        print(f"[WARN] 헤딩 모델: 목표 칸 간격 <3인 쌍 {len(_close)}개 (차체 겹침 가능) 예: {_close[:3]}")
 
 visit_count = np.zeros((H, W), dtype=int)
+dir_flow = np.zeros((H, W, 4), dtype=int)   # 출발칸×방향 이동 수 (NAV만, B-2 계측)
 
 # ------------------------------------------------------------
 # 2) 주문/입고 생성 (rng 소비 순서 = 설계 §6 패리티 규칙)
@@ -203,6 +260,116 @@ def try_assign_all(t):
                 rb["state"] = IDLE
 
 
+def _dump_heading_candidates():
+    """STALL 진단: 각 로봇의 후보 상태·점유 칸·차단 로봇 (pibt_core.dump_candidates_h)."""
+    states = {rid: (robots[rid]["pos"][0], robots[rid]["pos"][1], robots[rid]["h"])
+              for rid in rids}
+    extra = {rid: robots[rid]["swing"] for rid in rids if robots[rid]["busy"] > 0}
+    dists = {rid: dmap_h(robots[rid]["goal"]) for rid in rids}
+    goals = {rid: robots[rid]["goal"] for rid in rids}
+    bias = {rid: wait_bias(_stag.get(rid)) for rid in rids}
+    only = {rid for rid in rids if robots[rid]["pos"] != robots[rid]["goal"]
+            and robots[rid]["state"] not in (SVC_PICK, SVC_DROP)}
+    dump_candidates_h(states, dists, goals, extra, bias, FREE, edge_cost, wait_cost,
+                      float(TURN_TICKS), only=only, label=lambda a: f"robot{a}")
+
+
+_trace = []          # STALL 진단용: 최근 틱의 (t, rid -> (상태, busy, 액션)) 링버퍼
+
+
+def tick_heading(t):
+    """헤딩 모델 한 틱 (설계 2026-09-02 §7). 서비스 중·회전 중 로봇은 stay 고정,
+    회전 중 스윙 칸은 extra 점유로 넘긴다. 지표: 회전 틱은 rot에 (wait와 분리)."""
+    # 우선순위: 계급 → 현재 목표를 받은 뒤 경과 틱(단조 증가, 원 PIBT 방식) → id.
+    # 정체 카운터(stag)를 쓰면 밀린 쪽이 다음 틱 우선권을 얻어 정면 핑퐁 진동 (실측).
+    for rid in rids:
+        rb = robots[rid]
+        if rb["goal"] != rb["goal_prev"]:
+            rb["goal_prev"], rb["goal_t"] = rb["goal"], t
+    prio = sorted(rids, key=lambda r: (0 if robots[r]["busy"] else RANK[robots[r]["state"]],
+                                       -(t - robots[r]["goal_t"]), r))
+    states = {rid: (robots[rid]["pos"][0], robots[rid]["pos"][1], robots[rid]["h"])
+              for rid in rids}
+    extra = {rid: robots[rid]["swing"] for rid in rids if robots[rid]["busy"] > 0}
+    dists = {}
+    for rid in rids:
+        rb = robots[rid]
+        if rb["state"] in (SVC_PICK, SVC_DROP) or rb["busy"] > 0:
+            dists[rid] = stay_map_h(FREE, states[rid])
+        elif rb["pos"] != rb["goal"]:
+            base = dmap_h(rb["goal"])
+            dists[rid] = _replan.dist_for(rid, t, states, extra, rb["goal"], base, _stag.get(rid))
+            if dists[rid] is not base:
+                rb["replan"] += 1                       # 재계획 거리장 사용 틱
+        else:
+            dists[rid] = dmap_h(rb["goal"])
+    bias = {rid: wait_bias(_stag.get(rid)) for rid in rids}
+    new, cells = step_h(states, dists, edge_cost, wait_cost, FREE, prio,
+                        float(TURN_TICKS), extra, bias)
+
+    if CHECK:
+        for i, a in enumerate(rids):
+            for b in rids[i + 1:]:
+                assert not (cells[a] & cells[b]), f"t={t} 점유 겹침 {a}&{b}: {cells[a] & cells[b]}"
+                assert not (new[a][:2] == states[b][:2] and new[b][:2] == states[a][:2]), \
+                    f"t={t} 스왑 {a}<->{b}"
+
+    snap = {}
+    for rid in rids:
+        rb = robots[rid]
+        s0, s1 = states[rid], new[rid]
+        p0, p1 = s0[:2], s1[:2]
+        moved = p1 != p0
+        snap[rid] = (s0, rb["busy"], "fwd" if moved and (p1[0]-p0[0], p1[1]-p0[1]) == DIRS[s0[2]]
+                     else "rev" if moved else "turn" if s1[2] != s0[2]
+                     else "busy" if rb["busy"] else "wait", rb["state"])
+        if not moved and s1[2] != s0[2]:                 # 회전 시작 (첫 틱)
+            rb["turns"] += 1
+            if rb["state"] not in NAV:
+                rb["turns_idle"] += 1
+            rb["busy"] = TURN_TICKS - 1
+            rb["swing"] = swing_cells(s0[0], s0[1], s0[2], s1[2])
+            rotating = True
+        elif rb["busy"] > 0:                             # 회전 진행 중
+            rb["busy"] -= 1
+            if rb["busy"] == 0:
+                rb["swing"] = set()
+            rotating = True
+        else:
+            rotating = False
+        if rb["state"] in NAV:
+            visit_count[p1] += 1
+            if moved:
+                rb["drive"] += 1
+                rb["waitc"] = 0
+                backward = (p1[0] - p0[0], p1[1] - p0[1]) != DIRS[s0[2]]
+                if backward:
+                    rb["rev"] += 1
+                dir_flow[p0[0], p0[1], (s0[2] + 2) % 4 if backward else s0[2]] += 1
+                gd = dists[rid]
+                if gd[s1] > gd[s0]:
+                    rb["pushed"] += 1
+            elif rotating:
+                rb["rot"] += 1
+                rb["waitc"] = 0
+            else:
+                rb["wait"] += 1
+                rb["waitc"] += 1
+        elif rb["state"] in (SVC_PICK, SVC_DROP):
+            rb["svc"] += 1
+        rb["pos"], rb["h"], rb["heading"] = p1, s1[2], s1[2]
+    _trace.append((t, snap))
+    if len(_trace) > 12:
+        del _trace[0]
+    for rid in rids:
+        rb = robots[rid]
+        s1 = new[rid]
+        if rb["state"] in (SVC_PICK, SVC_DROP):
+            _stag.update(rid, rb["goal"], 0.0)
+        else:
+            _stag.update(rid, rb["goal"], dmap_h(rb["goal"])[s1])
+
+
 # ------------------------------------------------------------
 # 3) 틱 루프 (설계 §3 — pos(t) 기준 처리, step은 pos(t)→pos(t+1))
 # ------------------------------------------------------------
@@ -236,47 +403,52 @@ while outstanding_orders + outstanding_inbound > 0:
         break
 
     # (4) PIBT 한 스텝: pos(t) → pos(t+1)
-    prio = sorted(rids, key=lambda r: (RANK[robots[r]["state"]],
-                                       -robots[r]["waitc"], r))
-    positions = {rid: robots[rid]["pos"] for rid in rids}
-    dists = {}
-    for rid in rids:
-        rb = robots[rid]
-        dists[rid] = staymap(rb["pos"]) if rb["state"] in (SVC_PICK, SVC_DROP) \
-            else dmap(rb["goal"])
-    new_pos = step(positions, dists, edge_cost, wait_cost, FREE, prio)
+    if HEADING:
+        tick_heading(t)
+    else:
+        prio = sorted(rids, key=lambda r: (RANK[robots[r]["state"]],
+                                           -robots[r]["waitc"], r))
+        positions = {rid: robots[rid]["pos"] for rid in rids}
+        dists = {}
+        for rid in rids:
+            rb = robots[rid]
+            dists[rid] = staymap(rb["pos"]) if rb["state"] in (SVC_PICK, SVC_DROP) \
+                else dmap(rb["goal"])
+        new_pos = step(positions, dists, edge_cost, wait_cost, FREE, prio)
 
-    if CHECK:
-        cells = list(new_pos.values())
-        assert len(cells) == len(set(cells)), f"t={t} vertex 충돌"
-        for i, a in enumerate(rids):
-            for b in rids[i + 1:]:
-                assert not (new_pos[a] == positions[b] and
-                            new_pos[b] == positions[a]), f"t={t} 스왑 {a}<->{b}"
+        if CHECK:
+            cells = list(new_pos.values())
+            assert len(cells) == len(set(cells)), f"t={t} vertex 충돌"
+            for i, a in enumerate(rids):
+                for b in rids[i + 1:]:
+                    assert not (new_pos[a] == positions[b] and
+                                new_pos[b] == positions[a]), f"t={t} 스왑 {a}<->{b}"
 
-    for rid in rids:
-        rb = robots[rid]
-        p0, p1 = rb["pos"], new_pos[rid]
-        moved = p1 != p0
-        if rb["state"] in NAV:
-            visit_count[p1] += 1        # v1과 동일: 임무 주행(경로 내 대기 포함)만 집계
+        for rid in rids:
+            rb = robots[rid]
+            p0, p1 = rb["pos"], new_pos[rid]
+            moved = p1 != p0
+            if rb["state"] in NAV:
+                visit_count[p1] += 1        # v1과 동일: 임무 주행(경로 내 대기 포함)만 집계
+                if moved:
+                    rb["drive"] += 1
+                    rb["waitc"] = 0
+                    gd = dists[rid]
+                    if gd[p1] > gd[p0]:
+                        rb["pushed"] += 1
+                else:
+                    rb["wait"] += 1
+                    rb["waitc"] += 1
+            elif rb["state"] in (SVC_PICK, SVC_DROP):
+                rb["svc"] += 1
             if moved:
-                rb["drive"] += 1
-                rb["waitc"] = 0
-                gd = dists[rid]
-                if gd[p1] > gd[p0]:
-                    rb["pushed"] += 1
-            else:
-                rb["wait"] += 1
-                rb["waitc"] += 1
-        elif rb["state"] in (SVC_PICK, SVC_DROP):
-            rb["svc"] += 1
-        if moved:
-            d = DIRS.index((p1[0] - p0[0], p1[1] - p0[1]))
-            if rb["heading"] is not None and d != rb["heading"]:
-                rb["turns"] += 1
-            rb["heading"] = d
-        rb["pos"] = p1
+                d = DIRS.index((p1[0] - p0[0], p1[1] - p0[1]))
+                if rb["state"] in NAV:
+                    dir_flow[p0[0], p0[1], d] += 1
+                if rb["heading"] is not None and d != rb["heading"]:
+                    rb["turns"] += 1
+                rb["heading"] = d
+            rb["pos"] = p1
     t += 1
 
     # (5) 도착 감지 — pos(t+1) 기준 (이 시점의 시각 = 갱신된 t)
@@ -298,8 +470,14 @@ while outstanding_orders + outstanding_inbound > 0:
         print(f"[STALL] t={t}, done={len(tasks_done)}/{task_seq}, "
               f"waiting={len(waiting)}")
         for rid, rb in robots.items():
-            print(f"  robot{rid} pos={rb['pos']} state={rb['state']} "
-                  f"goal={rb['goal']}")
+            print(f"  robot{rid} pos={rb['pos']} h={rb['h']} state={rb['state']} "
+                  f"goal={rb['goal']} busy={rb['busy']} stag={_stag.get(rid)}")
+        if HEADING:
+            _dump_heading_candidates()
+            moving = [rid for rid in rids if robots[rid]["pos"] != robots[rid]["goal"]]
+            print(f"  [최근 {len(_trace)}틱 이력, 미도달 로봇 {moving}]")
+            for tt, snap in _trace:
+                print("   t=%d " % tt + "  ".join(f"r{rid}:{snap[rid][0]} {snap[rid][2]}" for rid in moving))
         raise SystemExit("시뮬 정체 감지")
     assert t < 200_000, "시뮬 정체 (틱 상한 초과)"
 
@@ -317,15 +495,20 @@ wait_tot = sum(rb["wait"] for rb in robots.values())
 svc_tot = sum(rb["svc"] for rb in robots.values())
 pushed_tot = sum(rb["pushed"] for rb in robots.values())
 turns_tot = sum(rb["turns"] for rb in robots.values())
+rot_tot = sum(rb["rot"] for rb in robots.values())   # 회전 소모 틱 (헤딩 모델만 > 0)
+rev_tot = sum(rb["rev"] for rb in robots.values())   # 후진 칸 수 (헤딩 모델만 > 0)
+replan_tot = sum(rb["replan"] for rb in robots.values())   # 정체 재계획 틱 수
+turns_idle_tot = sum(rb["turns_idle"] for rb in robots.values())   # 비임무(IDLE/FREED) 중 회전
 busy_v1 = drive_tot + 2 * wait_tot                # v1 호환 (대기 이중계산, 서비스 제외)
 util = busy_v1 / (N_ROBOTS * T_END)
-util_incl = (drive_tot + wait_tot + svc_tot) / (N_ROBOTS * T_END)
+util_incl = (drive_tot + wait_tot + svc_tot + rot_tot) / (N_ROBOTS * T_END)
 conflict_wait = wait_tot / max(busy_v1, 1)
 orders_ph = N_ORDERS / sim_hours
 
 print(f"[1] 맵={VARIANT}, {H}x{W}, 로봇 {N_ROBOTS}대, 주문 {N_ORDERS}건"
       + (f" + 입고 {N_INBOUND}건" if FLOW == "main" else "")
-      + f", seed={SEED}, flow={FLOW}, 통로차단={'ON' if AISLE_BLOCK else 'OFF'}")
+      + f", seed={SEED}, flow={FLOW}, 통로차단={'ON' if AISLE_BLOCK else 'OFF'}"
+      + (f", 헤딩 모델(회전 {TURN_TICKS}틱)" if HEADING else ""))
 print(f"[2] 완료: 태스크 {n_tasks}개, makespan {T_END}틱 = {T_END*DT/60:.1f}분")
 print(f"[3] 처리량: {n_tasks/sim_hours:.0f} 태스크/시간 ({orders_ph:.0f} 주문/시간)")
 print(f"    대기(생성→배차): 평균 {lat_queue.mean():6.1f}s / p90 {np.percentile(lat_queue, 90):6.1f}s")
@@ -333,7 +516,9 @@ print(f"    주행(배차→완료): 평균 {lat_drive.mean():6.1f}s / p90 {np.p
 print(f"    총 리드타임    : 평균 {lat_total.mean():6.1f}s / p90 {np.percentile(lat_total, 90):6.1f}s")
 print(f"    가동률(v1호환) {util*100:.0f}% (서비스 포함 {util_incl*100:.0f}%) / "
       f"충돌대기 {conflict_wait*100:.1f}% / 밀림 {pushed_tot}틱 / "
-      f"태스크당 회전 {turns_tot/max(n_tasks,1):.1f}회")
+      f"태스크당 회전 {turns_tot/max(n_tasks,1):.1f}회"
+      + (f" / 회전 소모 {rot_tot}틱 (비임무 회전 {turns_idle_tot}회) / 후진 {rev_tot}칸 / 재계획 {replan_tot}틱"
+         if HEADING else ""))
 
 print("[SUMMARY] " + json.dumps(dict(
     variant=VARIANT, n_robots=N_ROBOTS, n_orders=N_ORDERS, seed=SEED,
@@ -348,7 +533,16 @@ print("[SUMMARY] " + json.dumps(dict(
     util_incl_service=round(float(util_incl), 3),
     conflict_wait=round(float(conflict_wait), 4),
     pushed_steps=int(pushed_tot),
-    turns_per_task=round(turns_tot / max(n_tasks, 1), 2))))
+    turns_per_task=round(turns_tot / max(n_tasks, 1), 2),
+    **(dict(heading=1, rot_steps=int(rot_tot), rev_steps=int(rev_tot),
+            replan_steps=int(replan_tot)) if HEADING else {}))))   # 기본 경로 SUMMARY 불변
+
+_tag = (f"sim_v2_{VARIANT}_r{N_ROBOTS}{'_blk' if AISLE_BLOCK else ''}_{FLOW}"
+        f"{'_th' if THETA_PATH else ''}{'_h' if HEADING else ''}")
+if DIRFLOW:
+    npz = os.path.join(OUT, "results", _tag + "_dirflow.npz")
+    np.savez_compressed(npz, dir_flow=dir_flow, visit=visit_count)
+    print(f"[DIRFLOW] 저장: {os.path.basename(npz)}")
 
 if os.environ.get("SIM_NO_PLOT"):
     sys.exit(0)
@@ -372,7 +566,6 @@ ax.scatter(st_c, st_r, s=8, c="#27ae60", marker="s", alpha=0.6)
 ax.set_title(f"sim_v2 traffic — {VARIANT} ({FLOW}), {N_ROBOTS} robots, "
              f"{N_ORDERS} orders ({n_tasks/sim_hours:.0f} tasks/h)")
 plt.tight_layout()
-png = os.path.join(OUT, "results", f"sim_v2_{VARIANT}_r{N_ROBOTS}"
-                        f"{'_blk' if AISLE_BLOCK else ''}_{FLOW}_heat.png")
+png = os.path.join(OUT, "results", _tag + "_heat.png")
 plt.savefig(png, dpi=110)
 print(f"[4] 저장: {os.path.basename(png)}")
