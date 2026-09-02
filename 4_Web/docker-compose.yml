@@ -24,7 +24,7 @@ services:
   backend:
     build: ./SantaFactoryBE
     image: santafactory-be:latest
-    container_name: santafactory-be
+    container_name: backend
     restart: unless-stopped
     environment:
       DB_URL: jdbc:postgresql://db:5432/${DB_NAME}

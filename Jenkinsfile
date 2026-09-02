@@ -77,7 +77,7 @@ pipeline {
                     '''
                 }
                 sh '''
-                    for i in $(seq 1 30); do
+                    for i in $(seq 1 75); do
                         code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8080/ || true)
                         if [ "$code" != "000" ]; then
                             echo "backend 기동 확인 (HTTP $code)"
@@ -85,8 +85,8 @@ pipeline {
                         fi
                         sleep 2
                     done
-                    echo "backend 가 60초 안에 응답하지 않음"
-                    docker logs --tail 100 santafactory-be || true
+                    echo "backend 가 150초 안에 응답하지 않음"
+                    docker logs --tail 100 backend || true
                     exit 1
                 '''
             }
