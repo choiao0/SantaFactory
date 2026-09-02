@@ -76,13 +76,8 @@ def scenario_random_stress(n_agents=30, seed=42):
     report(f"[B] 랜덤 OD 스트레스(seed={seed})", history, n_agents, elapsed)
 
 
-def scenario_heading_stress(n_agents=30, seed=42):
-    """헤딩 모델: 시작 상태는 서로 점유가 안 겹치게 greedy 샘플, 목표는 도달 가능 칸."""
-    rng = np.random.default_rng(seed)
-    ref = dist_map(FREE, st_cell["induction[0]"])
-    cells = [rc for rc in zip(*np.nonzero(FREE)) if ref[rc] >= 0]
-    order = rng.permutation(len(cells))
-    ref_h = dist_map_h(FREE, st_cell["induction[0]"])   # 기준 목표로 갈 수 있는 상태만 시작으로
+def _sample_heading_starts(order, cells, ref_h, n_agents):
+    """시작 상태: 기준 목표로 갈 수 있고 서로 점유(자기+뒤 칸)가 안 겹치는 (칸, 방향) greedy 샘플."""
     starts, taken = {}, set()
     for idx in order:
         if len(starts) == n_agents:
@@ -94,9 +89,21 @@ def scenario_heading_stress(n_agents=30, seed=42):
                 starts[len(starts)] = s
                 taken |= set(occupied(s))
                 break
-    # 목표는 서로 체비쇼프 거리 ≥ 3 — 2칸 차체가 어떤 방향으로 도착해도 목표 차체가
-    # 겹치지 않게. 1m 간격 도킹점 두 개에 1.44m 로봇 둘은 물리적으로 양립 불가
-    # (seed 123: 목표 칸이 이웃의 주차 차체 안에 있어 영구 핑퐁 — 배치 문제).
+    return starts, taken
+
+
+def _goal_ok(rc, used, taken, goals):
+    """목표 칸 조건: 미사용, 시작 점유와 겹치지 않음, 다른 목표와 체비쇼프 거리 ≥ 3."""
+    if rc in used or rc in taken:
+        return False
+    return all(max(abs(rc[0] - g[0]), abs(rc[1] - g[1])) >= 3 for g in goals.values())
+
+
+def _sample_heading_goals(order, cells, taken, starts, n_agents):
+    """목표: order를 뒤에서부터 소비. 서로 체비쇼프 거리 ≥ 3 — 2칸 차체가 어떤 방향으로
+    도착해도 목표 차체가 겹치지 않게. 1m 간격 도킹점 두 개에 1.44m 로봇 둘은 물리적으로
+    양립 불가 (seed 123: 목표 칸이 이웃의 주차 차체 안에 있어 영구 핑퐁 — 배치 문제).
+    각 agent의 시작 상태에서 도달 가능한 칸만 채택."""
     goals, used, gi = {}, set(), 0
     rev = list(order[::-1])
     for a in range(n_agents):
@@ -104,14 +111,22 @@ def scenario_heading_stress(n_agents=30, seed=42):
             assert gi < len(rev), f"agent{a}: 도달 가능한 목표 후보 소진"
             rc = (int(cells[rev[gi]][0]), int(cells[rev[gi]][1]))
             gi += 1
-            if rc in used or rc in taken:
-                continue
-            if any(max(abs(rc[0] - g[0]), abs(rc[1] - g[1])) < 3 for g in goals.values()):
-                continue
-            if dist_map_h(FREE, rc)[starts[a]] >= 0:
+            if _goal_ok(rc, used, taken, goals) and dist_map_h(FREE, rc)[starts[a]] >= 0:
                 goals[a] = rc
                 used.add(rc)
                 break
+    return goals
+
+
+def scenario_heading_stress(n_agents=30, seed=42):
+    """헤딩 모델 랜덤 OD 스트레스: 샘플링은 위 두 헬퍼, 여기서는 실행·검사만."""
+    rng = np.random.default_rng(seed)
+    ref = dist_map(FREE, st_cell["induction[0]"])
+    cells = [rc for rc in zip(*np.nonzero(FREE)) if ref[rc] >= 0]
+    order = rng.permutation(len(cells))
+    ref_h = dist_map_h(FREE, st_cell["induction[0]"])   # 기준 목표로 갈 수 있는 상태만 시작으로
+    starts, taken = _sample_heading_starts(order, cells, ref_h, n_agents)
+    goals = _sample_heading_goals(order, cells, taken, starts, n_agents)
     t0 = time.perf_counter()
     history, cells_hist = run_h(FREE, starts, goals, max_steps=1500)
     elapsed = time.perf_counter() - t0

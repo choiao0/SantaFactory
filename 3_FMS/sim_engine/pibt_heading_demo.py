@@ -22,33 +22,45 @@ import numpy as np
 from pibt_core import DIRS, TURN_TICKS, run_h, valid_state
 
 
+def _check_occupancy(t, cells, free):
+    """한 틱: 전 로봇 점유 칸(자기+뒤+스윙)이 free이고 서로 겹치지 않는다."""
+    agents = list(cells)
+    for i, a in enumerate(agents):
+        for cell in cells[a]:
+            assert free[cell], f"t={t} agent{a} 통행 불가 칸 점유: {cell}"
+        for b in agents[i + 1:]:
+            ov = cells[a] & cells[b]
+            assert not ov, f"t={t} 점유 겹침 agent{a}&{b}: {ov}"
+
+
+def _check_transition(t, a, s0, s1, free):
+    """한 로봇의 상태 전이: 이동은 헤딩 축(전진/후진)으로 1칸, 회전은 제자리 ±90°."""
+    assert valid_state(free, s1), f"t={t} agent{a} invalid 상태 {s1}"
+    if s1[:2] != s0[:2]:
+        assert s1[2] == s0[2], f"t={t} agent{a} 이동 중 회전: {s0}->{s1}"
+        dr, dc = s1[0] - s0[0], s1[1] - s0[1]
+        fwd = DIRS[s0[2]]
+        assert (dr, dc) in (fwd, (-fwd[0], -fwd[1])),             f"t={t} agent{a} 헤딩 축 외 이동: {s0}->{s1}"
+    elif s1[2] != s0[2]:
+        assert (s1[2] - s0[2]) % 4 in (1, 3), f"t={t} agent{a} 90° 아닌 회전: {s0}->{s1}"
+
+
+def _check_no_swap(t, prev, cur):
+    """두 로봇이 위치를 맞바꾸며 서로를 통과하지 않는다."""
+    agents = list(prev)
+    for i, a in enumerate(agents):
+        for b in agents[i + 1:]:
+            assert not (cur[a][:2] == prev[b][:2] and cur[b][:2] == prev[a][:2]),                 f"t={t} agent{a}<->{b} 스왑"
+
+
 def check_collisions_h(history, cells_hist, free):
     """점유 집합 disjoint / free 칸만 / 이동 1칸·헤딩 방향 / 회전은 제자리 ±90° / 스왑 없음."""
     for t, cells in enumerate(cells_hist):
-        agents = list(cells)
-        for i, a in enumerate(agents):
-            for cell in cells[a]:
-                assert free[cell], f"t={t} agent{a} 통행 불가 칸 점유: {cell}"
-            for b in agents[i + 1:]:
-                ov = cells[a] & cells[b]
-                assert not ov, f"t={t} 점유 겹침 agent{a}&{b}: {ov}"
+        _check_occupancy(t, cells, free)
     for t, (prev, cur) in enumerate(zip(history, history[1:]), start=1):
         for a, s0 in prev.items():
-            s1 = cur[a]
-            assert valid_state(free, s1), f"t={t} agent{a} invalid 상태 {s1}"
-            if s1[:2] != s0[:2]:
-                assert s1[2] == s0[2], f"t={t} agent{a} 이동 중 회전: {s0}->{s1}"
-                dr, dc = s1[0] - s0[0], s1[1] - s0[1]
-                fwd = DIRS[s0[2]]
-                assert (dr, dc) in (fwd, (-fwd[0], -fwd[1])), \
-                    f"t={t} agent{a} 헤딩 축 외 이동: {s0}->{s1}"
-            elif s1[2] != s0[2]:
-                assert (s1[2] - s0[2]) % 4 in (1, 3), f"t={t} agent{a} 90° 아닌 회전: {s0}->{s1}"
-        agents = list(prev)
-        for i, a in enumerate(agents):
-            for b in agents[i + 1:]:
-                assert not (cur[a][:2] == prev[b][:2] and cur[b][:2] == prev[a][:2]), \
-                    f"t={t} agent{a}<->{b} 스왑"
+            _check_transition(t, a, s0, cur[a], free)
+        _check_no_swap(t, prev, cur)
 
 
 def n_turns(history, a):
