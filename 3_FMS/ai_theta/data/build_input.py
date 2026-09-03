@@ -23,7 +23,6 @@
 # (S15P21A106-128)과 함께 다뤄야 한다. README '한계' 참고.
 # ============================================================
 from collections import deque
-import json
 import os
 import sys
 
@@ -37,7 +36,7 @@ for _p in (_FMS_ROOT, _SIM_ENGINE):
 
 from contracts.guidance_types import GuidanceInput  # noqa: E402
 from from_theta import extract_topology  # noqa: E402
-from map_loader import CELL_M, OFFSET_M, load_map  # noqa: E402
+from map_loader import load_charge_zone, load_map  # noqa: E402
 
 # 방향 규약 — 명세 §3-2 (북0 동1 남2 서3), §14-1 (y가 커지면 북쪽)
 DIR_N, DIR_E, DIR_S, DIR_W = 0, 1, 2, 3
@@ -327,34 +326,13 @@ def build_scenario(free, n_agents, order_rate,
     ], dtype=np.float32)
 
 
-def load_charge_zone(free, map_dir):
-    """3_FMS/map/charge_zone.json 의 사각형을 1 m 격자 마스크로. 없으면 None.
-
-    좌표 규약은 charge_zone.json meta 그대로 — 칸 c ↔ x ∈ [c-0.4, c+0.6),
-    행 r ↔ y ∈ [r, r+1). map_loader 의 변환과 동일하다.
-    """
-    path = os.path.join(map_dir, "charge_zone.json")
-    if not os.path.exists(path):
-        return None
-    with open(path, encoding="utf-8") as f:
-        spec = json.load(f)
-    H, W = free.shape
-    mask = np.zeros((H, W), dtype=bool)
-    for z in spec.get("charge_zone", ()):
-        r0 = int(z["y0"] / CELL_M)
-        r1 = int(z["y1"] / CELL_M)
-        c0 = int((z["x0"] + OFFSET_M) / CELL_M)
-        c1 = int((z["x1"] + OFFSET_M) / CELL_M)
-        mask[max(r0, 0):min(r1, H), max(c0, 0):min(c1, W)] = True
-    return mask
-
-
 def build_guidance_input(n_agents, order_rate, sim_engine_dir=_SIM_ENGINE,
                          map_dir=None, aisle_block=False, **amr):
     """창고 + 운영조건 → GuidanceInput (명세 §8 순서: 생김새 → 짐 흐름 → 통로 구조).
 
-    맵은 map_loader.load_map 을 그대로 쓴다. 시뮬과 다른 로더를 두면 격자가
-    어긋난다 (docs/2026-09-03_맵버전_동기화_결정.md 의 결정 5).
+    맵은 map_loader.load_map 을, 충전 존은 map_loader.load_charge_zone 을 그대로
+    쓴다. 시뮬과 다른 로더를 두면 격자가 어긋난다
+    (docs/2026-09-03_맵버전_동기화_결정.md 의 결정 5).
     """
     free, st_cell, _ = load_map(sim_engine_dir, aisle_block)
     topo = extract_topology(free, st_cell)

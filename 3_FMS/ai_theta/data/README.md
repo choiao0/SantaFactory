@@ -48,7 +48,7 @@ run length로 통로 축 판정 → 연결성분으로 묶기 → 폭 임계로 
 | 4 intersection | `topo.junction` | 통로 목 66칸 |
 | 5 station | `topo.station` | 충전기·충전대기열 **제외** (§4 "작업하는 자리") |
 | 6~12 zone_* | 스테이션 종류 매핑 `ZONE_STATION_KINDS` | ⚠️ 아래 |
-| 12 zone_charging | + `3_FMS/map/charge_zone.json` 사각형 | 130 결정 반영 |
+| 12 zone_charging | + `map_loader.load_charge_zone` (`3_FMS/map/charge_zone.json` 사각형) | 130 결정 반영. 시뮬과 같은 로더 (135) |
 | 13 degree | free 이웃 수 ÷ 4 | |
 | 14~17 dist_* | BFS ÷ 창고 대각선 (§9) | 도달 불가·비통행 = 1.0 |
 | 18~19 pickup / dropoff | `od_distribution` | 합 1 |

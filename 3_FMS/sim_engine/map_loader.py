@@ -14,6 +14,10 @@ import numpy as np
 CELL_M, OFFSET_M = 1.0, 0.4
 K, OX = round(CELL_M / 0.1), round(OFFSET_M / 0.1)
 
+# 공식 맵 폴더 (3_FMS/map). charge_zone.json 이 여기 있고, 맵 세트 수신 후에는
+# occupancy_grid/stations 도 여기서 읽는다 (docs/2026-09-03_맵버전_동기화_결정.md).
+MAP_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "map")
+
 
 def load_map(base_dir, aisle_block=False):
     """0.1m 원본을 1.0m coarse로 다운샘플(max pooling, 보수적).
@@ -43,6 +47,34 @@ def load_map(base_dir, aisle_block=False):
                     st_cell[f"{kind}[{i}]"] = (rr, cc)
                     break
     return free, st_cell, stations
+
+
+def load_charge_zone(free, map_dir=None):
+    """`<map_dir>/charge_zone.json` 의 사각형(m)을 1 m 격자 bool 마스크로. 없으면 None.
+
+    시뮬(존 내 복귀)과 A트랙 입력 텐서(zone_charging 채널)가 같은 존을 보도록
+    여기 한 곳에만 둔다 — 두 곳에 두면 규약이 갈릴 때 AI가 배운 존과 시뮬이
+    쓰는 존이 어긋난다. 좌표 규약은 load_map 의 스테이션 변환과 동일:
+    칸 c ↔ x ∈ [c−OFFSET_M, c+1−OFFSET_M), 행 r ↔ y ∈ [r, r+1).
+    반환 마스크는 사각형 그대로(장애물 포함) — 통행 가능 존 칸은 `mask & free`.
+    `free` 는 격자 크기(H, W) 기준으로만 쓴다.
+    """
+    if map_dir is None:
+        map_dir = MAP_DIR
+    path = os.path.join(map_dir, "charge_zone.json")
+    if not os.path.exists(path):
+        return None
+    with open(path, encoding="utf-8") as f:
+        spec = json.load(f)
+    H, W = free.shape
+    mask = np.zeros((H, W), dtype=bool)
+    for z in spec.get("charge_zone", ()):
+        r0 = int(z["y0"] / CELL_M)
+        r1 = int(z["y1"] / CELL_M)
+        c0 = int((z["x0"] + OFFSET_M) / CELL_M)
+        c1 = int((z["x1"] + OFFSET_M) / CELL_M)
+        mask[max(r0, 0):min(r1, H), max(c0, 0):min(c1, W)] = True
+    return mask
 
 
 def make_homes(free, st_cell, n_robots):
