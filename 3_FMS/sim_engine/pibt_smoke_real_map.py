@@ -12,6 +12,7 @@
 #   A) 충전존 홈 10대 -> 스테이션 도킹 칸 (실전과 같은 OD 패턴)
 #   B) 랜덤 OD 30대 스트레스 (시드 고정) — 통로 곳곳에서 교차/정면충돌 유발
 #   C) 헤딩 모델(2칸 점유·회전 예약) 랜덤 OD 스트레스 — 2026-09-02 설계 §8-6
+#   D) 헤딩 모델 충전 존 출발·복귀 — 2026-09-03 충전존 구현 설계 §5
 #
 # 맵 로드는 map_loader 공용 모듈 사용 (통로차단 ON — fleet_sweep과 동일 방침).
 #
@@ -22,7 +23,7 @@ import time
 
 import numpy as np
 
-from map_loader import load_map
+from map_loader import load_charge_zone, load_map, make_homes_zone, zone_cells
 from pibt_core import dist_map, dist_map_h, occupied, run, run_h, valid_state
 from pibt_heading_demo import check_collisions_h
 from pibt_mvp_demo import check_collisions
@@ -138,6 +139,69 @@ def scenario_heading_stress(n_agents=30, seed=42):
     report(f"[C] 헤딩 모델 랜덤 OD(seed={seed}, 회전 {turns}회)", history, n_agents, elapsed)
 
 
+def _zone_starts(homes):
+    """sim_v2 초기화와 같은 규칙: 홈에서 valid(뒤 칸 free)하고 타 로봇과 안 겹치는 첫 방향."""
+    starts, taken = {}, set()
+    for a, (r, c) in enumerate(homes):
+        for h in range(4):
+            s = (r, c, h)
+            if valid_state(FREE, s) and not (set(occupied(s)) & taken):
+                starts[a] = s
+                taken |= set(occupied(s))
+                break
+        assert a in starts, f"홈 {(r, c)}: 유효한 초기 방향 없음"
+    return starts, taken
+
+
+def _zone_return_goals(states, zcells):
+    """구현 설계 §3 규칙의 정적 판: id 순으로 존 free 칸 − (앞서 고른 목표의 체비쇼프<2 이웃
+    ∪ 타 로봇 몸) 중 맨해튼 최근접."""
+    goals, reserved = {}, set()
+    for a, s in states.items():
+        bodies = {rc for b, sb in states.items() if b != a for rc in occupied(sb)}
+        cand = [rc for rc in zcells if rc not in reserved and rc not in bodies]
+        assert cand, f"agent{a}: 존 복귀 후보 없음"
+        g = min(cand, key=lambda rc: (abs(rc[0] - s[0]) + abs(rc[1] - s[1]), rc[1], rc[0]))
+        goals[a] = g
+        reserved.update((g[0] + dr, g[1] + dc) for dr in (-1, 0, 1) for dc in (-1, 0, 1))
+    return goals
+
+
+def scenario_zone_heading(n_agents=20, seed=42):
+    """[D] 충전 존 출발(존 → 창고 곳곳) 후 복귀(→ 존 내 최근접 빈 칸). 헤딩 모델.
+    전원 도달·점유 겹침 0 이 곧 라이브니스 검사 (존 안 갇힘 = 결정 §4 ①)."""
+    zmask = load_charge_zone(FREE)
+    assert zmask is not None, "3_FMS/map/charge_zone.json 없음"
+    zmask &= FREE
+    zcells = zone_cells(FREE, zmask)
+    homes = make_homes_zone(FREE, zmask, n_agents)
+    starts, taken = _zone_starts(homes)
+
+    rng = np.random.default_rng(seed)
+    ref = dist_map(FREE, st_cell["induction[0]"])
+    cells = [rc for rc in zip(*np.nonzero(FREE)) if ref[rc] >= 0 and not zmask[rc]]
+    order = rng.permutation(len(cells))
+    goals = _sample_heading_goals(order, cells, taken, starts, n_agents)
+    t0 = time.perf_counter()
+    hist1, cells1 = run_h(FREE, starts, goals, max_steps=1500)
+    e1 = time.perf_counter() - t0
+    check_collisions_h(hist1, cells1, FREE)
+    for a, g in goals.items():
+        assert hist1[-1][a][:2] == g, f"[출발] agent{a} 미도달: {hist1[-1][a]} != {g}"
+    report(f"[D1] 충전 존 출발(seed={seed}, {len(zcells)}칸 존)", hist1, n_agents, e1)
+
+    states2 = dict(hist1[-1])
+    goals2 = _zone_return_goals(states2, zcells)
+    t0 = time.perf_counter()
+    hist2, cells2 = run_h(FREE, states2, goals2, max_steps=1500)
+    e2 = time.perf_counter() - t0
+    check_collisions_h(hist2, cells2, FREE)
+    for a, g in goals2.items():
+        assert hist2[-1][a][:2] == g, f"[복귀] agent{a} 미도달: {hist2[-1][a]} != {g}"
+    assert all(zmask[hist2[-1][a][:2]] for a in goals2), "복귀 목표가 존 밖"
+    report(f"[D2] 충전 존 복귀(seed={seed})", hist2, n_agents, e2)
+
+
 if __name__ == "__main__":
     scenario_stations()
     for seed in [42, 7, 11, 123, 999, 2026]:
@@ -146,4 +210,6 @@ if __name__ == "__main__":
         scenario_random_stress(n_agents=60, seed=seed)
     for seed in [42, 7, 11]:
         scenario_heading_stress(n_agents=30, seed=seed)
+    for seed in [42, 7]:
+        scenario_zone_heading(n_agents=20, seed=seed)
     print("[DONE] 실제 창고 맵 PIBT 스모크 테스트 통과")

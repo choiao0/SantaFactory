@@ -80,6 +80,28 @@ def load_charge_zone(free, map_dir=None):
     return mask
 
 
+def zone_cells(free, zone_mask):
+    """존 안 통행 가능 칸을 열 오름차순(통로 쪽 c103부터) → 행 오름차순으로.
+    make_homes_zone 의 채움 순서이자 sim_v2 zone_goal 의 후보 순서(동률 결정론)."""
+    rs, cs = np.nonzero(zone_mask & free)
+    return sorted(zip(rs.tolist(), cs.tolist()), key=lambda rc: (rc[1], rc[0]))
+
+
+def make_homes_zone(free, zone_mask, n_robots, spacing=2):
+    """충전 존 초기 배치 (충전존_결정 §2 '통로 쪽부터, 몸 겹침 없이').
+    zone_cells 순서로 훑으며 기존 홈과 체비쇼프 거리 ≥ spacing 인 칸을 채택.
+    spacing=2: 2칸 차체가 어느 방향으로 서도 앞축 칸이 겹치지 않고 뒤 칸은 헤딩
+    초기화가 골라 피한다 (간격 3은 용량 1/9 — 구현 설계 §3). 부족하면 assert."""
+    homes = []
+    for rc in zone_cells(free, zone_mask):
+        if len(homes) >= n_robots:
+            break
+        if all(max(abs(rc[0] - hr), abs(rc[1] - hc)) >= spacing for hr, hc in homes):
+            homes.append(rc)
+    assert len(homes) >= n_robots, f"충전 존 용량 부족: {len(homes)}칸(간격 {spacing}) < {n_robots}대"
+    return homes
+
+
 def make_homes(free, st_cell, n_robots):
     """로봇 홈 = 충전기/대기열 셀, 12대 초과분은 충전존 인근 여유 칸 (v1 동일)."""
     H, W = free.shape

@@ -12,10 +12,13 @@
 #   --flow=v1compat B-1e 벤치마크 전용. v1과 동일한 3태스크 체인 + rng 소비 순서.
 #
 # 사용: python sim_v2_tasks.py [태그] [로봇수=6] [주문수=40] [시드=42] [통로차단=0|1]
-#                              [--flow=main|v1compat] [--theta=<θ json 경로>] [--heading]
+#                              [--flow=main|v1compat] [--theta=<θ json 경로>] [--heading] [--fixed-homes]
 #   --heading: 헤딩 모델 (상태 (r,c,h), 자기+뒤 칸 2칸 점유, 90° 회전 = TURN_TICKS 틱,
 #              회전 중 스윙 칸 예약). docs/2026-09-02_PIBT_헤딩_2칸점유_회전예약_설계.md
-#              없으면 기존 칸 모델 그대로 (v1compat·B-1e 결과 불변).
+#              없으면 기존 칸 모델 그대로.
+#   충전 존(main 기본): 초기 배치·복귀 = 3_FMS/map/charge_zone.json 존 안 최근접 빈 칸.
+#              docs/2026-09-03_충전존_구현_설계.md. --fixed-homes 면 기존 charger 12칸 홈
+#              (B-1e pibt_main 재현). v1compat 은 항상 고정 홈(패리티).
 # 환경: SIM_NO_PLOT=1 히트맵 생략, SIM_CHECK=1 매 틱 충돌 전수 검사(느림),
 #       SIM_DIRFLOW=1 방향별 이동 카운트 npz 저장 (B-2 검증용)
 # 출력: 콘솔 지표 + [SUMMARY] JSON + sim_v2_<태그>_r<대수>[_blk]_<flow>[_th][_h]_heat.png
@@ -26,7 +29,8 @@ import sys
 
 import numpy as np
 
-from map_loader import load_map, make_homes, CELL_M
+from map_loader import (load_map, make_homes, CELL_M, load_charge_zone, make_homes_zone,
+                        zone_cells)
 from pibt_core import (DIRS, TURN_TICKS, Replanner, Stagnation,
                        dist_map, dist_map_h, dump_candidates_h, occupied, stay_map_h,
                        step, step_h, swing_cells, valid_state, wait_bias)
@@ -46,7 +50,12 @@ for _f in sys.argv[1:]:
     elif _f.startswith("--theta="):
         THETA_PATH = _f.split("=", 1)[1]
 HEADING = "--heading" in sys.argv[1:]
+# 충전 존 복귀 = main 흐름 기본값 (2026-09-03 결정, 구현 설계 §1). 기존 고정 홈 12칸은
+# --fixed-homes opt-in. v1compat 은 패리티 때문에 항상 고정 홈. (--zone 은 호환용 무시)
+ZONE = "--fixed-homes" not in sys.argv[1:]
 assert FLOW in ("main", "v1compat"), f"알 수 없는 flow: {FLOW}"
+if FLOW == "v1compat":
+    ZONE = False
 CHECK = bool(os.environ.get("SIM_CHECK"))
 DIRFLOW = bool(os.environ.get("SIM_DIRFLOW"))
 
@@ -68,6 +77,19 @@ N_AISLE = len(stations["aisle_buf"])
 N_PACK = len(stations["packing"])
 N_INB_ST = len(stations["inbound_buf"])
 homes = make_homes(FREE, st_cell, N_ROBOTS)
+
+# 충전 존 (--zone): 초기 배치·복귀 목표를 존 안 칸으로. 없으면 위 고정 홈 폴백.
+ZONE_MASK, ZONE_CELLS = None, []
+if ZONE:
+    _zm = load_charge_zone(FREE)
+    if _zm is None:
+        print("[WARN] 충전 존: 3_FMS/map/charge_zone.json 없음 → 고정 홈 폴백")
+        ZONE = False
+    else:
+        ZONE_MASK = _zm & FREE
+        ZONE_CELLS = zone_cells(FREE, ZONE_MASK)
+        homes = make_homes_zone(FREE, ZONE_MASK, N_ROBOTS)
+_zone = dict(wait=0, retargets=0, degraded=0, peak=0)   # 구현 설계 §4 지표
 
 # 통행 비용 — 기본 uniform 1.0. --theta=<json>이면 from_theta(θ) 출력 (B-2).
 if THETA_PATH:
@@ -129,7 +151,7 @@ for rid in range(N_ROBOTS):
                        goal=homes[rid], task=None, svc_end=-1, waitc=0,
                        drive=0, wait=0, pushed=0, svc=0, turns=0, heading=None,
                        h=None, busy=0, swing=set(), rot=0, rev=0, replan=0,
-                       turns_idle=0, goal_prev=None, goal_t=0)
+                       turns_idle=0, goal_prev=None, goal_t=0, idle_moves=0)
 
 if HEADING:
     # 초기 방향: 홈에서 valid(뒤 칸 free)하고 타 로봇 점유와 안 겹치는 첫 방향 (결정론적)
@@ -146,7 +168,8 @@ if HEADING:
     # 목표(도킹) 칸 간격 점검: 2칸 차체는 목표 칸 간 체비쇼프 거리 < 3이면 도착 자세에
     # 따라 차체가 겹칠 수 있다(핑퐁 진동 원인). 스테이션은 ≥3 이지만 make_homes의
     # 추가 홈은 맨해튼 ≥2만 보장하므로 경고로 표시.
-    _goal_cells = list(dict.fromkeys(list(st_cell.values()) + homes))
+    # --zone 이면 홈은 설계상 간격 2(동적 목표)라 점검에서 제외.
+    _goal_cells = list(dict.fromkeys(list(st_cell.values()) + ([] if ZONE else homes)))
     _close = [(a, b) for i, a in enumerate(_goal_cells) for b in _goal_cells[i + 1:]
               if max(abs(a[0] - b[0]), abs(a[1] - b[1])) < 3]
     if _close:
@@ -237,8 +260,40 @@ def begin_service(rb, t, kind):
     rb["goal"] = rb["pos"]
 
 
+def _body_cells(rb):
+    """로봇이 지금 점유한 칸: 헤딩 모델은 앞축+뒤 칸, 칸 모델은 한 칸."""
+    if HEADING and rb["h"] is not None:
+        return occupied((rb["pos"][0], rb["pos"][1], rb["h"]))
+    return (rb["pos"],)
+
+
+def zone_goal(rid):
+    """충전 존 복귀 목표 (구현 설계 §3): 존 free 칸 − 예약 칸 중 맨해튼 최근접.
+    예약 = 타 로봇의 존 안 목표(TO_HOME·IDLE)와 그 체비쇼프<2 이웃 + 존 안 타 로봇 몸.
+    후보 없음 → 예약 무시(degraded) → 그래도 없으면 고정 홈."""
+    rb = robots[rid]
+    reserved, bodies = set(), set()
+    for o, ob in robots.items():
+        if o == rid:
+            continue
+        if ob["state"] in (TO_HOME, IDLE) and ZONE_MASK[ob["goal"]]:
+            gr, gc = ob["goal"]
+            reserved.update((gr + dr, gc + dc) for dr in (-1, 0, 1) for dc in (-1, 0, 1))
+        bodies.update(_body_cells(ob))
+    pr, pc = rb["pos"]
+    key = lambda rc: (abs(rc[0] - pr) + abs(rc[1] - pc), rc[1], rc[0])
+    cand = [rc for rc in ZONE_CELLS if rc not in reserved and rc not in bodies]
+    if not cand:
+        _zone["degraded"] += 1
+        cand = [rc for rc in ZONE_CELLS if rc not in bodies]
+        if not cand:
+            return rb["home"]
+    return min(cand, key=key)
+
+
 def try_assign_all(t):
-    """설계 §7: waiting FIFO × (IDLE ∪ FREED) 최근접 배차. 남은 FREED는 홈으로."""
+    """설계 §7: waiting FIFO × (IDLE ∪ FREED) 최근접 배차. 남은 FREED는 홈으로
+    (--zone: 존 내 최근접 빈 칸, 도착하면 그 칸이 새 홈)."""
     eligible = [rid for rid, rb in robots.items() if rb["state"] in (IDLE, FREED)]
     for task in list(waiting):
         if not eligible:
@@ -255,7 +310,10 @@ def try_assign_all(t):
             begin_service(rb, t, "pick")
     for rid, rb in robots.items():
         if rb["state"] == FREED:
-            rb["state"], rb["goal"] = TO_HOME, rb["home"]
+            rb["state"] = TO_HOME
+            rb["goal"] = zone_goal(rid) if ZONE else rb["home"]
+            if ZONE:
+                rb["home"] = rb["goal"]
             if rb["pos"] == rb["goal"]:
                 rb["state"] = IDLE
 
@@ -403,6 +461,8 @@ while outstanding_orders + outstanding_inbound > 0:
         break
 
     # (4) PIBT 한 스텝: pos(t) → pos(t+1)
+    if ZONE:
+        _before = {rid: (robots[rid]["pos"], robots[rid]["h"]) for rid in rids}
     if HEADING:
         tick_heading(t)
     else:
@@ -450,6 +510,28 @@ while outstanding_orders + outstanding_inbound > 0:
                 rb["heading"] = d
             rb["pos"] = p1
     t += 1
+
+    if ZONE:
+        # 지표 (구현 설계 §4): 존 안 복귀 대기 / 비임무 밀림 이동 / 동시 주차 피크
+        for rid in rids:
+            rb = robots[rid]
+            p0, h0 = _before[rid]
+            if rb["state"] == TO_HOME and rb["pos"] == p0 and rb["h"] == h0 and ZONE_MASK[p0]:
+                _zone["wait"] += 1
+            elif rb["state"] in (IDLE, FREED) and rb["pos"] != p0:
+                rb["idle_moves"] += 1
+        _zone["peak"] = max(_zone["peak"], sum(1 for rb in robots.values() if ZONE_MASK[rb["pos"]]))
+        # 재선택 (구현 설계 §3): 목표 칸에 다른 로봇이 IDLE로 주차했으면 다시 고른다
+        parked = {}
+        for o, ob in robots.items():
+            if ob["state"] == IDLE:
+                for rc in _body_cells(ob):
+                    parked[rc] = o
+        for rid in rids:
+            rb = robots[rid]
+            if rb["state"] == TO_HOME and rb["pos"] != rb["goal"] and parked.get(rb["goal"], rid) != rid:
+                rb["goal"] = rb["home"] = zone_goal(rid)
+                _zone["retargets"] += 1
 
     # (5) 도착 감지 — pos(t+1) 기준 (이 시점의 시각 = 갱신된 t)
     for rid in rids:
@@ -508,7 +590,8 @@ orders_ph = N_ORDERS / sim_hours
 print(f"[1] 맵={VARIANT}, {H}x{W}, 로봇 {N_ROBOTS}대, 주문 {N_ORDERS}건"
       + (f" + 입고 {N_INBOUND}건" if FLOW == "main" else "")
       + f", seed={SEED}, flow={FLOW}, 통로차단={'ON' if AISLE_BLOCK else 'OFF'}"
-      + (f", 헤딩 모델(회전 {TURN_TICKS}틱)" if HEADING else ""))
+      + (f", 헤딩 모델(회전 {TURN_TICKS}틱)" if HEADING else "")
+      + (f", 충전 존({len(ZONE_CELLS)}칸, 홈 간격≥2)" if ZONE else ", 고정 홈 12칸"))
 print(f"[2] 완료: 태스크 {n_tasks}개, makespan {T_END}틱 = {T_END*DT/60:.1f}분")
 print(f"[3] 처리량: {n_tasks/sim_hours:.0f} 태스크/시간 ({orders_ph:.0f} 주문/시간)")
 print(f"    대기(생성→배차): 평균 {lat_queue.mean():6.1f}s / p90 {np.percentile(lat_queue, 90):6.1f}s")
@@ -519,6 +602,10 @@ print(f"    가동률(v1호환) {util*100:.0f}% (서비스 포함 {util_incl*100
       f"태스크당 회전 {turns_tot/max(n_tasks,1):.1f}회"
       + (f" / 회전 소모 {rot_tot}틱 (비임무 회전 {turns_idle_tot}회) / 후진 {rev_tot}칸 / 재계획 {replan_tot}틱"
          if HEADING else ""))
+if ZONE:
+    idle_moves_tot = sum(rb["idle_moves"] for rb in robots.values())
+    print(f"    충전 존: 존 안 복귀 대기 {_zone['wait']}틱 / 재선택 {_zone['retargets']}회 / "
+          f"예약 무시 {_zone['degraded']}회 / 동시 주차 최대 {_zone['peak']}대 / 비임무 밀림 이동 {idle_moves_tot}칸")
 
 print("[SUMMARY] " + json.dumps(dict(
     variant=VARIANT, n_robots=N_ROBOTS, n_orders=N_ORDERS, seed=SEED,
@@ -535,10 +622,14 @@ print("[SUMMARY] " + json.dumps(dict(
     pushed_steps=int(pushed_tot),
     turns_per_task=round(turns_tot / max(n_tasks, 1), 2),
     **(dict(heading=1, rot_steps=int(rot_tot), rev_steps=int(rev_tot),
-            replan_steps=int(replan_tot)) if HEADING else {}))))   # 기본 경로 SUMMARY 불변
+            replan_steps=int(replan_tot)) if HEADING else {}),
+    **(dict(zone=1, zone_wait_steps=int(_zone["wait"]), zone_retargets=int(_zone["retargets"]),
+            zone_degraded=int(_zone["degraded"]), zone_peak=int(_zone["peak"]),
+            idle_moves=int(idle_moves_tot)) if ZONE else {}))))   # v1compat SUMMARY 불변
 
 _tag = (f"sim_v2_{VARIANT}_r{N_ROBOTS}{'_blk' if AISLE_BLOCK else ''}_{FLOW}"
-        f"{'_th' if THETA_PATH else ''}{'_h' if HEADING else ''}")
+        f"{'_th' if THETA_PATH else ''}{'_h' if HEADING else ''}"
+        f"{'_fh' if (FLOW == 'main' and not ZONE) else ''}")
 if DIRFLOW:
     npz = os.path.join(OUT, "results", _tag + "_dirflow.npz")
     np.savez_compressed(npz, dir_flow=dir_flow, visit=visit_count)
