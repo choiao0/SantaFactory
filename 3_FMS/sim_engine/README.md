@@ -17,7 +17,7 @@ PIBT 이동계층 + θ → 통행 비용 변환(`from_theta`) + Fleet 벤치마�
 | 파일 | 내용 |
 |---|---|
 | `pibt_core.py` | PIBT 코어 — 칸 모델(`dist_map/step/run`, 가중 다익스트라) + 헤딩 모델(`*_h`: (칸,방향) 상태, 2칸 점유, 회전·후진, 스윙 예약, 대기 상승·재계획) |
-| `map_loader.py` | 맵 로드/1.0m 다운샘플/스테이션 (v1과 규칙 동기 유지) |
+| `map_loader.py` | 맵 로드/1.0m 다운샘플/스테이션 (v1과 규칙 동기 유지) + 충전 존 로드 `load_charge_zone` (A트랙 `ai_theta/data/build_input.py`도 이걸 import — 존 규약의 단일 소스) |
 | `sim_v1_tasks.py` | A* 기준선 — **이동계층 수정 금지** |
 | `sim_v2_tasks.py` | PIBT 틱 시뮬 본체 (`--flow=main\|v1compat`, `--theta=<json>`, `--heading`) |
 | `from_theta.py` | B-2: wallA 토폴로지 추출 + θ→비용 변환, 스키마 v2 배타 조립 ([설계](../docs/2026-09-01_B2_from_theta_설계.md)) |
