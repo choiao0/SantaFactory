@@ -215,30 +215,39 @@ def accumulate_flow(free, dist, start, prob, out):
     참고 — 방향별 **총합**은 어느 경로를 골라도 같다. 격자 최단경로는 북·동
     걸음 수가 OD 의 변위로 정해지기 때문이다. 이 함수가 바꾸는 건 공간 분포다.
     """
-    H, W = free.shape
     d0 = int(dist[start])
     if d0 < 0:
         return
     buckets = {d0: {start: prob}}
     for level in range(d0, 0, -1):
         layer = buckets.pop(level, None)
-        if not layer:
+        if layer:
+            _push_layer(free, dist, level, layer, buckets, out)
+
+
+def _descending_neighbours(free, dist, cell, level):
+    """cell 에서 목표에 한 칸 더 가까운 이웃들 — 최단경로의 다음 걸음 후보."""
+    H, W = free.shape
+    r, c = cell
+    found = []
+    for d, (dr, dc) in enumerate(DELTAS):
+        rr, cc = r + dr, c + dc
+        if 0 <= rr < H and 0 <= cc < W and free[rr, cc] and dist[rr, cc] == level - 1:
+            found.append((d, rr, cc))
+    return found
+
+
+def _push_layer(free, dist, level, layer, buckets, out):
+    """거리 level 인 칸들의 질량을 다음 층으로 균등 분배한다."""
+    nxt = buckets.setdefault(level - 1, {})
+    for cell, mass in layer.items():
+        nbrs = _descending_neighbours(free, dist, cell, level)
+        if not nbrs:
             continue
-        for (r, c), mass in layer.items():
-            nbrs = []
-            for d in range(DIR_COUNT):
-                dr, dc = DELTAS[d]
-                rr, cc = r + dr, c + dc
-                if 0 <= rr < H and 0 <= cc < W and free[rr, cc] \
-                        and dist[rr, cc] == level - 1:
-                    nbrs.append((d, rr, cc))
-            if not nbrs:
-                continue
-            share = mass / len(nbrs)
-            nxt = buckets.setdefault(level - 1, {})
-            for d, rr, cc in nbrs:
-                out[d][r, c] += share
-                nxt[(rr, cc)] = nxt.get((rr, cc), 0.0) + share
+        share = mass / len(nbrs)
+        for d, rr, cc in nbrs:
+            out[d][cell] += share
+            nxt[(rr, cc)] = nxt.get((rr, cc), 0.0) + share
 
 
 def build_task_profile(free, st_cell):
