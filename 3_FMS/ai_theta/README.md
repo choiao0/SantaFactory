@@ -9,7 +9,7 @@
 |---|---|---|
 | [`theta_fixtures.py`](theta_fixtures.py) | 규칙별 θ 검증 세트 + 기대 히트맵 (`from_theta` 배관 확인용) | 세트 10개 |
 | [`tests/`](tests/) | 세트를 실제 `from_theta` 출력과 대조 | 테스트 10개 |
-| [`data/`](data/) | 39채널 학습 텐서 생성·저장 | 비어있음 |
+| [`data/`](data/) | 창고 + 운영조건 → `GuidanceInput` (39채널 + 운영조건 9) | `build_input.py`, 테스트 22개 |
 | [`train/`](train/) | θ 회귀(연속 8) + 분류(범주형 3) 학습 스크립트 | 비어있음 |
 
 ## theta_fixtures.py
