@@ -49,7 +49,7 @@ K, OX = round(CELL_M / 0.1), round(OFFSET_M / 0.1)
 # ------------------------------------------------------------
 grid01 = np.load(os.path.join(OUT, GRID_FILE))
 stations = json.load(open(os.path.join(OUT, ST_FILE)))
-raw = np.isin(grid01, (1, 2, 5)).astype(np.uint8)
+raw = np.isin(grid01, (1, 2, 5, 6)).astype(np.uint8)   # map_loader.OBSTACLE_VALUES 와 동일 유지 (6=바닥 파렛트)
 m2 = np.pad(raw, ((0, 0), (OX, 0)), constant_values=1)
 h, w = m2.shape
 m2 = np.pad(m2, ((0, (-h) % K), (0, (-w) % K)), constant_values=1)

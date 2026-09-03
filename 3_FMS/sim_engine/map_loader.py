@@ -13,6 +13,8 @@ import numpy as np
 
 CELL_M, OFFSET_M = 1.0, 0.4
 K, OX = round(CELL_M / 0.1), round(OFFSET_M / 0.1)
+# 0.1 m 원본 셀값 중 장애물. sim_v1_tasks.py 의 동일 튜플과 함께 고칠 것.
+OBSTACLE_VALUES = (1, 2, 5, 6)
 
 # 공식 맵 폴더 (3_FMS/map). charge_zone.json 이 여기 있고, 맵 세트 수신 후에는
 # occupancy_grid/stations 도 여기서 읽는다 (docs/2026-09-03_맵버전_동기화_결정.md).
@@ -24,7 +26,8 @@ def load_map(base_dir, aisle_block=False):
     반환: (free (H,W) bool, st_cell {"kind[i]": (r,c)}, stations 원본 dict)"""
     grid01 = np.load(os.path.join(base_dir, "occupancy_grid.npy"))
     stations = json.load(open(os.path.join(base_dir, "stations.json")))
-    raw = np.isin(grid01, (1, 2, 5)).astype(np.uint8)   # 1=구조물 2=랙 5=컨베이어
+    # 1=구조물 2=랙 5=컨베이어 6=바닥 파렛트 블록 (v5.8, 맵 세트 수신 후 등장 — 빠지면 그 위를 지나감)
+    raw = np.isin(grid01, OBSTACLE_VALUES).astype(np.uint8)
     m2 = np.pad(raw, ((0, 0), (OX, 0)), constant_values=1)
     h, w = m2.shape
     m2 = np.pad(m2, ((0, (-h) % K), (0, (-w) % K)), constant_values=1)
