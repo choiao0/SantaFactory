@@ -32,6 +32,11 @@ OUT = os.path.dirname(os.path.abspath(__file__))
 RES = os.path.join(OUT, "results")
 N, E, S, W = 0, 1, 2, 3
 
+
+def _eq(a, b, tol=1e-6):
+    """부동소수점 근사 동등 (SonarQube S1244: float `==` 금지). 비용은 float32 곱이라 tol 1e-6."""
+    return bool(np.isclose(a, b, rtol=0.0, atol=tol))
+
 NEUTRAL = asdict(GuidanceTheta.neutral())
 # 더미 θ: 교대 순환을 범위 극단(gain 3.5, boost 0.5)으로.
 # 비가중 BFS 거리항에서는 gain ≥ wait+1 이라 영구 정체(2026-09-01 실측 STALL)
@@ -52,7 +57,7 @@ def main():
 
     # ── 1부: 검산 ──────────────────────────────────────────
     g = from_theta(free, topo, theta_of(NEUTRAL))
-    assert np.all(g.edge_cost == 1.0) and np.all(g.wait_cost == 1.0), "중립 θ가 uniform이 아니다"
+    assert np.allclose(g.edge_cost, 1.0) and np.allclose(g.wait_cost, 1.0), "중립 θ가 uniform이 아니다"
     print("[1] 중립 θ (GuidanceTheta.neutral) → uniform 1.0 : OK")
 
     extreme = theta_of(dict(NEUTRAL, aisle_alt_gain=3.5, aisle_alt_boost=0.5, loop_gain=3.0,
@@ -77,29 +82,29 @@ def main():
 
     # [4] 규칙별 단독 검사 — 알려진 간선으로
     ec = from_theta(free, topo, theta_of(dict(NEUTRAL, loop_gain=2.0))).edge_cost
-    assert ec[44, 60, E] == 2.0 and ec[44, 60, W] == 1.0, "남 밴드 순방향=서, 역행=동"
-    assert ec[70, 60, W] == 2.0 and ec[70, 60, E] == 1.0, "북 밴드 순방향=동, 역행=서"
+    assert _eq(ec[44, 60, E], 2.0) and _eq(ec[44, 60, W], 1.0), "남 밴드 순방향=서, 역행=동"
+    assert _eq(ec[70, 60, W], 2.0) and _eq(ec[70, 60, E], 1.0), "북 밴드 순방향=동, 역행=서"
     ec = from_theta(free, topo, theta_of(dict(NEUTRAL, junction_penalty=3.0))).edge_cost
-    assert ec[46, 70, N] == 3.0, "교차로 경계 진입 (46,70)→(47,70)"
-    assert ec[47, 70, E] == 1.0 and ec[47, 70, S] == 1.0, "교차로 내부·이탈 간선은 1.0"
+    assert _eq(ec[46, 70, N], 3.0), "교차로 경계 진입 (46,70)→(47,70)"
+    assert _eq(ec[47, 70, E], 1.0) and _eq(ec[47, 70, S], 1.0), "교차로 내부·이탈 간선은 1.0"
     ec = from_theta(free, topo, theta_of(dict(NEUTRAL, station_in=0.5, station_out=3.0))).edge_cost
     pk = st_cell["packing[0]"]                           # (40,64), entry_dir=N
     assert topo.station_dir[pk] == N
-    assert ec[pk[0] + 1, pk[1], S] == 0.5, "packing 진입 (41,64)→S"
-    assert ec[pk][N] == 3.0 and ec[pk][E] == 1.0, "packing 이탈 역주행 N만 벌금"
+    assert _eq(ec[pk[0] + 1, pk[1], S], 0.5), "packing 진입 (41,64)→S"
+    assert _eq(ec[pk][N], 3.0) and _eq(ec[pk][E], 1.0), "packing 이탈 역주행 N만 벌금"
     ab = st_cell["aisle_buf[11]"]                        # (46,35), entry_dir=S (규칙 2)
-    assert topo.station_dir[ab] == S and ec[ab[0] - 1, ab[1], N] == 0.5 and ec[ab][S] == 3.0
+    assert topo.station_dir[ab] == S and _eq(ec[ab[0] - 1, ab[1], N], 0.5) and _eq(ec[ab][S], 3.0)
     ib = st_cell["inbound_buf[0]"]                       # (52,24), entry_dir=E (규칙 2)
-    assert topo.station_dir[ib] == E and ec[ib[0], ib[1] + 1, W] == 0.5 and ec[ib][E] == 3.0
+    assert topo.station_dir[ib] == E and _eq(ec[ib[0], ib[1] + 1, W], 0.5) and _eq(ec[ib][E], 3.0)
     n_dock = int((topo.station_dir >= 0).sum())
     print(f"[4] 규칙별 단독: loop 역행 / 교차로 진입만 / station in·out (도킹 칸 {n_dock}개, "
           f"packing N · aisle_buf S/N · inbound E) : OK")
 
     # [5] 배타: (47,69)→E 는 남 밴드 역행(loop) 이자 교차로(47,70..72) 진입
     ec = from_theta(free, topo, theta_of(dict(NEUTRAL, loop_gain=2.0, junction_penalty=3.0))).edge_cost
-    assert ec[47, 69, E] == 2.0, f"배타 위반: loop∧교차로 간선 = {ec[47, 69, E]} (기대 loop_gain 2.0)"
+    assert _eq(ec[47, 69, E], 2.0), f"배타 위반: loop∧교차로 간선 = {ec[47, 69, E]} (기대 loop_gain 2.0)"
     ec2 = from_theta(free, topo, theta_of(dict(NEUTRAL, loop_gain=2.0, main_aisle_gain=1.2))).edge_cost
-    assert abs(ec2[44, 60, E] - 2.4) < 1e-6, "main_aisle_gain은 독립으로 항상 곱"
+    assert _eq(ec2[44, 60, E], 2.4), "main_aisle_gain은 독립으로 항상 곱"
     print("[5] 배타 규칙 (loop > 교차로) + main_aisle_gain 독립 곱 : OK")
 
     # ── 2부: 더미 θ 회피 (DoD) ─────────────────────────────
