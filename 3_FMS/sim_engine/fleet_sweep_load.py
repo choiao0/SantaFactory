@@ -8,7 +8,7 @@
 #   부하 L1: 80주문, 간격 25틱  (수요 ≈ 144 주문/h ≈ B0″ 포화점 62의 2.3배)
 #   부하 L2: 120주문, 간격 15틱 (수요 ≈ 240 주문/h)
 # 로봇 {8,12,16,20,24,28} — 28 = 충전 존 간격-2 배치 용량 상한(make_homes_zone). 시드 {42, 7}.
-# 두 계열: cell / heading (둘 다 충전 존 기본, 동기화 맵, TURN_TICKS=1).
+# 두 계열: cell(--cell) / heading(기본, --heading 은 호환 표기) — 둘 다 충전 존 기본, 동기화 맵, TURN_TICKS=1.
 # 지표: 처리량·리드타임 + 존 지표(복귀 대기, 재선택, 예약 무시, 체류 평균/p90, 비임무 밀림).
 # 산출: results/load_sweep.csv, load_throughput.png, load_zone.png
 # 사용: python fleet_sweep_load.py                 (헤딩 28대·L2 가 실행당 1~2분, 전체 30분 안팎)
@@ -31,7 +31,7 @@ AISLE_BLOCK = 1
 LOADS = {"L1": (80, 25), "L2": (120, 15)}          # name -> (n_orders, order_gap)
 if os.environ.get("SWEEP_LOADS"):
     LOADS = {k: v for k, v in LOADS.items() if k in os.environ["SWEEP_LOADS"].split(",")}
-SERIES = [("cell", ("--flow=main",)), ("heading", ("--flow=main", "--heading"))]
+SERIES = [("cell", ("--flow=main", "--cell")), ("heading", ("--flow=main", "--heading"))]
 env = dict(os.environ, SIM_NO_PLOT="1", PYTHONIOENCODING="utf-8")
 
 

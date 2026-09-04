@@ -7,8 +7,8 @@
 #   로봇 {2,3,4,6,8,10,12,16} × 시드 {42, 7}, 40주문(+입고 40), 통로차단 ON, main 흐름,
 #   uniform cost (θ 미적용).
 # 두 계열:
-#   cell    = sim_v2 --flow=main            (칸 모델, 회전 0초) — 존 기본
-#   heading = sim_v2 --flow=main --heading  (2칸 차체, 90° 회전 1틱, 후진, 스윙 예약) — 존 기본
+#   cell    = sim_v2 --flow=main --cell     (칸 모델, 회전 0초) — 존 기본. 계약 v2부터 --cell 이 opt-in
+#   heading = sim_v2 --flow=main --heading  (2칸 차체, 90° 회전 1틱, 후진, 스윙 예약) — 존 기본, 계약 v2 기본 모델
 # 그래프에는 B0′ CSV(results/b0h_sweep.csv)가 있으면 점선으로 겹쳐 그린다:
 #   cell 계열의 차이 = 존 효과(홈 위치만 다름), heading 계열의 차이 = 존 + 회전 2틱→1틱.
 # 산출: results/b0z_sweep.csv, b0z_cell_vs_heading.png, b0z_zone_metrics.png
@@ -30,7 +30,7 @@ ROBOTS = [2, 3, 4, 6, 8, 10, 12, 16]
 SEEDS = [42, 7]
 N_ORDERS, AISLE_BLOCK = 40, 1
 env = dict(os.environ, SIM_NO_PLOT="1", PYTHONIOENCODING="utf-8")
-SERIES = [("cell", ("--flow=main",)), ("heading", ("--flow=main", "--heading"))]
+SERIES = [("cell", ("--flow=main", "--cell")), ("heading", ("--flow=main", "--heading"))]
 # zone_peak 는 2026-09-04 zone_occ_mean/p90(존 체류 분포)으로 교체됨 — CSV 이력 호환을 위해 둘 다 허용
 OCC_KEY = "zone_occ_mean"
 

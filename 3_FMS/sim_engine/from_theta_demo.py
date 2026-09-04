@@ -115,8 +115,14 @@ def main():
         json.dump(DUMMY, f, indent=1)
 
     env = dict(os.environ, SIM_DIRFLOW="1", PYTHONIOENCODING="utf-8")
+    # 계약 v2(2026-09-04)부터 sim_v2 기본 = 헤딩. 이 데모는 B-2 당시의 칸 모델 픽스처(분극 임계 0.15)이므로
+    # --cell 을 명시한다. npz 이름은 모델에 따라 "_h" 가 붙으므로 플래그에서 파생 — 옛 파일을 몰래 읽지 않게.
+    MODEL = "--cell"
+    sfx = "" if MODEL == "--cell" else "_h"
     base_args = [sys.executable, "sim_v2_tasks.py", "b2demo", "10", "40", "42",
-                 "0", "--flow=main"]
+                 "0", "--flow=main", MODEL]
+    import time
+    t_run0 = time.time() - 1.0
     for label, extra in (("uniform", []), ("theta", [f"--theta={dummy_path}"])):
         r = subprocess.run(base_args + extra, cwd=OUT, env=env,
                            capture_output=True, text=True, encoding="utf-8")
@@ -130,8 +136,10 @@ def main():
         n, s = flow[..., 0][mask].sum(), flow[..., 2][mask].sum()
         return n / max(n + s, 1), int(n + s)
 
-    f_uni = os.path.join(RES, "sim_v2_b2demo_r10_main_dirflow.npz")
-    f_th = os.path.join(RES, "sim_v2_b2demo_r10_main_th_dirflow.npz")
+    f_uni = os.path.join(RES, f"sim_v2_b2demo_r10_main{sfx}_dirflow.npz")
+    f_th = os.path.join(RES, f"sim_v2_b2demo_r10_main_th{sfx}_dirflow.npz")
+    for f in (f_uni, f_th):                       # 방금 실행이 만든 파일인지 (stale 방지)
+        assert os.path.getmtime(f) > t_run0, f"{os.path.basename(f)} 가 이번 실행에서 갱신되지 않음"
     (e_uni, ne_u), (o_uni, no_u) = nshare(f_uni, even), nshare(f_uni, odd)
     (e_th, ne_t), (o_th, no_t) = nshare(f_th, even), nshare(f_th, odd)
     print(f"[7] 짝수 통로 북행 점유율: uniform {e_uni:.2f} (n={ne_u}) → θ {e_th:.2f} (n={ne_t})")

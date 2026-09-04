@@ -12,11 +12,12 @@
 #   --flow=v1compat B-1e 벤치마크 전용. v1과 동일한 3태스크 체인 + rng 소비 순서.
 #
 # 사용: python sim_v2_tasks.py [태그] [로봇수=6] [주문수=40] [시드=42] [통로차단=0|1]
-#                              [--flow=main|v1compat] [--theta=<θ json 경로>] [--heading] [--fixed-homes]
+#                              [--flow=main|v1compat] [--theta=<θ json 경로>] [--cell] [--fixed-homes]
 #                              [--order-gap=<틱>]  (주문·입고 도착 간격 평균, 기본 50 — 고부하 스윕용)
-#   --heading: 헤딩 모델 (상태 (r,c,h), 자기+뒤 칸 2칸 점유, 90° 회전 = TURN_TICKS 틱,
-#              회전 중 스윙 칸 예약). docs/2026-09-02_PIBT_헤딩_2칸점유_회전예약_설계.md
-#              없으면 기존 칸 모델 그대로.
+#   기본 = 헤딩 모델 (상태 (r,c,h), 자기+뒤 칸 2칸 점유, 90° 회전 = TURN_TICKS 틱, 회전 중 스윙 칸
+#              예약, 라이브니스 장치 5종). docs/2026-09-02_PIBT_헤딩_2칸점유_회전예약_설계.md
+#   --cell:    칸 모델(점로봇) opt-in — 기준선 CSV 재현·A/B 비교축. (--heading 은 호환용, 무시)
+#              v1compat 은 항상 칸 모델 (패리티).
 #   충전 존(main 기본): 초기 배치·복귀 = 3_FMS/map/charge_zone.json 존 안 최근접 빈 칸.
 #              docs/2026-09-03_충전존_구현_설계.md. --fixed-homes 면 기존 charger 12칸 홈
 #              (B-1e pibt_main 재현). v1compat 은 항상 고정 홈(패리티).
@@ -30,8 +31,8 @@ import sys
 
 import numpy as np
 
-from map_loader import (load_map, make_homes, CELL_M, load_charge_zone, make_homes_zone,
-                        zone_cells)
+from map_loader import (load_map, make_homes, CELL_M, OFFSET_M, MAP_DIR, load_charge_zone,
+                        make_homes_zone, zone_cells)
 from pibt_core import (DIRS, TURN_TICKS, Replanner, Stagnation,
                        dist_map, dist_map_h, dump_candidates_h, occupied, stay_map_h,
                        step, step_h, swing_cells, valid_state, wait_bias)
@@ -50,7 +51,13 @@ for _f in sys.argv[1:]:
         FLOW = _f.split("=", 1)[1]
     elif _f.startswith("--theta="):
         THETA_PATH = _f.split("=", 1)[1]
-HEADING = "--heading" in sys.argv[1:]
+# 헤딩 모델 = 기본값 (2026-09-04 결정, docs/2026-09-04_헤딩기본값_Isaac내보내기_설계.md §1, 계약 v2).
+# 칸 모델(점로봇)은 --cell opt-in. --heading 은 호환용으로 받되 무시. v1compat 은 패리티 때문에 항상 칸.
+HEADING = "--cell" not in sys.argv[1:]
+if FLOW == "v1compat" and HEADING:
+    if "--heading" in sys.argv[1:]:
+        print("[WARN] --heading 은 v1compat 에서 무시 (패리티: 항상 칸 모델)")
+    HEADING = False
 # 충전 존 복귀 = main 흐름 기본값 (2026-09-03 결정, 구현 설계 §1). 기존 고정 홈 12칸은
 # --fixed-homes opt-in. v1compat 은 패리티 때문에 항상 고정 홈. (--zone 은 호환용 무시)
 ZONE = "--fixed-homes" not in sys.argv[1:]
@@ -59,6 +66,10 @@ if FLOW == "v1compat":
     ZONE = False
 CHECK = bool(os.environ.get("SIM_CHECK"))
 DIRFLOW = bool(os.environ.get("SIM_DIRFLOW"))
+# Isaac 리플레이 내보내기 (2_Simulation/isaac_replay.py 포맷 + headings/actions 키 — -143 설계 §3).
+# 켜져 있을 때만 틱별 (t, r, c, h, action) 을 기록한다. 결과·SUMMARY 불변.
+EXPORT = bool(os.environ.get("SIM_EXPORT_ISAAC"))
+_export_log = {}
 
 SPEED = 1.0
 DT = CELL_M / SPEED
@@ -451,6 +462,13 @@ def tick_heading(t):
     _trace.append((t, snap))
     if len(_trace) > 12:
         del _trace[0]
+    if EXPORT:
+        # snap 액션: fwd/rev/turn/busy/wait → 리플레이 actions 어휘 (fwd 는 이동이라 actions 에 안 실림)
+        _act = {"fwd": "move", "rev": "reverse", "turn": "rotate", "busy": "rotate", "wait": "wait"}
+        for rid in rids:
+            rb = robots[rid]
+            a = "service" if rb["state"] in (SVC_PICK, SVC_DROP) else _act[snap[rid][2]]
+            _export_log[rid].append((t + 1, rb["pos"][0], rb["pos"][1], rb["h"], a))
     for rid in rids:
         rb = robots[rid]
         s1 = new[rid]
@@ -467,6 +485,10 @@ order_i = inbound_i = 0
 t = 0
 _progress = [0, 0]
 rids = list(robots)
+if EXPORT:
+    for rid in rids:                                   # t=0 초기 자세
+        rb = robots[rid]
+        _export_log[rid] = [(0, rb["pos"][0], rb["pos"][1], rb["h"], "wait")]
 
 while outstanding_orders + outstanding_inbound > 0:
     # (1) 주문/입고 도착 — 동일 틱은 주문(oid순) 먼저, 그다음 입고
@@ -541,6 +563,9 @@ while outstanding_orders + outstanding_inbound > 0:
                     rb["turns"] += 1
                 rb["heading"] = d
             rb["pos"] = p1
+            if EXPORT:
+                a = "move" if moved else "service" if rb["state"] in (SVC_PICK, SVC_DROP) else "wait"
+                _export_log[rid].append((t + 1, p1[0], p1[1], rb["heading"], a))
     t += 1
 
     if ZONE:
@@ -673,6 +698,95 @@ if DIRFLOW:
     npz = os.path.join(OUT, "results", _tag + "_dirflow.npz")
     np.savez_compressed(npz, dir_flow=dir_flow, visit=visit_count)
     print(f"[DIRFLOW] 저장: {os.path.basename(npz)}")
+
+if EXPORT:
+    # ------------------------------------------------------------
+    # Isaac 리플레이 내보내기 — sim_v1 포맷(scene.json + trajectories.json, 크롭 기준 m, z-up) 유지 +
+    # headings(틱별 yaw)·actions(이동 외 틱)·model·zones 추가 키. 2_Simulation/isaac_replay.py 는 robots 의
+    # [t, x, y] 3원소만 읽으므로 그대로 재생되고, yaw 사용은 Isaac 파트가 headings 를 읽도록 한 줄 추가.
+    # 좌표: x = (c+0.5)·CELL_M − OFFSET_M, y = (r+0.5)·CELL_M (load_map 스테이션 변환의 역). 헤딩 모델의
+    # pos 는 앞축 칸 → x, y 는 앞축 중심 (구동축까지 0.39 m — 리플레이 쪽 오프셋 선택). (설계 -143 §3)
+    # ------------------------------------------------------------
+    import math
+
+    exp_dir = os.path.join(OUT, f"isaac_export_{VARIANT}")
+    os.makedirs(exp_dir, exist_ok=True)
+    grid01 = np.load(os.path.join(MAP_DIR, "occupancy_grid.npy"))
+
+    def _rects_from_mask(mask, cell=0.1, min_area=0.04):
+        """0.1 m 마스크 → 축 정렬 사각형 (x, y, w, h)[m], 그리디 병합 (sim_v1 과 동일)."""
+        m = mask.copy()
+        hh, ww = m.shape
+        out = []
+        for r in range(hh):
+            c = 0
+            while c < ww:
+                if m[r, c]:
+                    c2 = c
+                    while c2 < ww and m[r, c2]:
+                        c2 += 1
+                    r2 = r + 1
+                    while r2 < hh and m[r2, c:c2].all() \
+                            and (c == 0 or not m[r2, c - 1]) \
+                            and (c2 == ww or not m[r2, c2]):
+                        r2 += 1
+                    m[r:r2, c:c2] = False
+                    w_m, h_m = (c2 - c) * cell, (r2 - r) * cell
+                    if w_m * h_m >= min_area:
+                        out.append((round(c * cell, 2), round(r * cell, 2), round(w_m, 2), round(h_m, 2)))
+                    c = c2
+                else:
+                    c += 1
+        return out
+
+    def _xy(r, c):
+        return round((c + 0.5) * CELL_M - OFFSET_M, 2), round((r + 0.5) * CELL_M, 2)
+
+    def _yaw(h):
+        """방향 인덱스 → yaw[rad], x축(동, 열 증가) 기준 반시계. y 는 행 증가 방향 (리플레이 atan2 규약과 동일)."""
+        if h is None:
+            return 0.0
+        dr, dc = DIRS[h]
+        return round(math.atan2(dr, dc), 4)
+
+    _zones = []
+    _zpath = os.path.join(MAP_DIR, "charge_zone.json")
+    if os.path.exists(_zpath):
+        with open(_zpath, encoding="utf-8") as _f:
+            for z in json.load(_f).get("charge_zone", ()):
+                _zones.append(dict(id=z.get("id", ""), rect=[z["x0"], z["y0"],
+                                                             round(z["x1"] - z["x0"], 2), round(z["y1"] - z["y0"], 2)]))
+    scene = {
+        "meta": dict(variant=VARIANT, source="sim_v2_tasks.py", model="heading" if HEADING else "cell",
+                     cell_fine_m=0.1, coordinate="crop-relative meters, z-up",
+                     robot_dim_m=[1.44, 0.641, 0.22], speed_mps=SPEED, dt_s=DT, turn_ticks=TURN_TICKS,
+                     pose_ref="front-axle cell center (drive axle is 0.39 m behind the front end)"),
+        "obstacles": {
+            "structure":      dict(height=4.0, rects=_rects_from_mask(grid01 == 1)),
+            "racks":          dict(height=6.0, rects=_rects_from_mask(grid01 == 2)),
+            "conveyor_table": dict(height=0.9, rects=_rects_from_mask(grid01 == 5)),
+            "floor_pallets":  dict(height=1.2, rects=_rects_from_mask(grid01 == 6)),
+        },
+        "zones": _zones,
+        "stations": {k: v for k, v in stations.items() if k != "charge_zone"},
+        "nodes": [list(_xy(r, c)) for r, c in zip(*np.nonzero(FREE))],
+    }
+    with open(os.path.join(exp_dir, "scene.json"), "w", encoding="utf-8") as _f:
+        json.dump(scene, _f, indent=1)
+
+    trajs, heads, acts = {}, {}, {}
+    for rid, log in _export_log.items():
+        trajs[str(rid)] = [[round(tt * DT, 3), *_xy(r, c)] for tt, r, c, h, a in log]
+        heads[str(rid)] = [[round(tt * DT, 3), _yaw(h)] for tt, r, c, h, a in log]
+        acts[str(rid)] = [[round(tt * DT, 3), a] for tt, r, c, h, a in log if a != "move"]
+    with open(os.path.join(exp_dir, "trajectories.json"), "w", encoding="utf-8") as _f:
+        json.dump(dict(dt_s=DT, model="heading" if HEADING else "cell", robots=trajs, headings=heads,
+                       actions=acts, tasks=[{k: v for k, v in tk.items()} for tk in tasks_done]),
+                  _f, indent=1)
+    n_rect = sum(len(v["rects"]) for v in scene["obstacles"].values())
+    n_pt = sum(len(v) for v in trajs.values())
+    print(f"[EXPORT] {os.path.relpath(exp_dir, OUT)}: 장애물 박스 {n_rect}개, 존 {len(_zones)}개, "
+          f"로봇 {len(trajs)}대 × 궤적 {n_pt}점 (headings·actions 포함)")
 
 if os.environ.get("SIM_NO_PLOT"):
     sys.exit(0)

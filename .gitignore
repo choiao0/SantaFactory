@@ -5,3 +5,6 @@ __pycache__/
 3_FMS/infra/.env
 
 server-setup/
+
+# sim_v2 Isaac 리플레이 내보내기 산출물 (SIM_EXPORT_ISAAC=1) — 재생성 가능, 커밋하지 않음
+3_FMS/sim_engine/isaac_export_*/
