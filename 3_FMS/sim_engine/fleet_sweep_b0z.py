@@ -31,7 +31,8 @@ SEEDS = [42, 7]
 N_ORDERS, AISLE_BLOCK = 40, 1
 env = dict(os.environ, SIM_NO_PLOT="1", PYTHONIOENCODING="utf-8")
 SERIES = [("cell", ("--flow=main",)), ("heading", ("--flow=main", "--heading"))]
-ZONE_KEYS = ("zone_wait_steps", "zone_retargets", "zone_degraded", "zone_peak", "idle_moves")
+# zone_peak 는 2026-09-04 zone_occ_mean/p90(존 체류 분포)으로 교체됨 — CSV 이력 호환을 위해 둘 다 허용
+OCC_KEY = "zone_occ_mean"
 
 
 def run_one(n, seed, extra):
@@ -74,7 +75,7 @@ else:
                 print(f"  {engine:8s} r={n:2d} seed={seed:2d}: {rec['tasks_per_h']:6.1f} tasks/h, "
                       f"makespan {rec['makespan_steps']:5d}, lead {rec['lead_mean_s']:6.1f}s, "
                       f"util {rec['util']*100:3.0f}%, zone wait {rec['zone_wait_steps']:4d} "
-                      f"retarget {rec['zone_retargets']:2d} peak {rec['zone_peak']:2d}"
+                      f"retarget {rec['zone_retargets']:2d} occ {rec.get(OCC_KEY, rec.get('zone_peak', 0)):4.1f}"
                       f"{more} ({rec['wall_s']}s)", flush=True)
     fields = sorted({k for r in rows for k in r})
     with open(CSV_PATH, "w", newline="", encoding="utf-8") as f:
@@ -129,10 +130,12 @@ fig, axes = plt.subplots(1, 4, figsize=(18, 4.4))
 for ax, (key, label) in zip(axes, [("zone_wait_steps", "존 안 복귀 대기 [틱]"),
                                    ("zone_retargets", "복귀 목표 재선택 [회]"),
                                    ("idle_moves", "비임무 밀림 이동 [칸]"),
-                                   ("zone_peak", "동시 주차 최대 [대]")]):
+                                   (OCC_KEY, "존 체류 평균 [대]")]):
+    if key == OCC_KEY and not any(OCC_KEY in r for r in rows):   # 구 CSV(zone_peak)면 그 열로 대체
+        key, label = "zone_peak", "동시 주차 최대 [대] (구 지표)"
     for engine, (color, name) in STYLE.items():
         ax.plot(ROBOTS, series(rows, engine, key), "o-", color=color, label=name, lw=2)
-    if key == "zone_peak":
+    if key in (OCC_KEY, "zone_peak"):
         ax.plot(ROBOTS, ROBOTS, ":", color="k", alpha=0.4, label="= n_robots")
     ax.set_xlabel("n_robots")
     ax.set_title(label)
