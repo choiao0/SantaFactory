@@ -21,3 +21,10 @@ ai:
   connect-timeout: 3s
   read-timeout: 10s
   callback-token: ${AI_CALLBACK_TOKEN:change-me}
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+    operations-sorter: method
+  api-docs:
+    path: /v3/api-docs
