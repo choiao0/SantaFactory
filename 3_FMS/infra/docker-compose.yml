@@ -1,0 +1,115 @@
+# ============================================================
+# θ 탐색 스택 (S15P21A106-127)
+#
+# 3_FMS/ 를 /work 로 마운트한다. 컨테이너 안팎이 같은 소스를 보므로
+# sim_engine 을 고쳐도 다시 빌드하지 않는다.
+#
+#   cd 3_FMS/infra
+#   cp .env.example .env        # POSTGRES_PASSWORD 를 채운다 (한 번만)
+#   docker compose up -d postgres dashboard
+#   docker compose run --rm worker \
+#       python /opt/worker/run_study.py --study wallA_r24_g15 \
+#           --robots 24 --orders 120 --trials 100 --out /work/infra/out
+#
+# 조건 기본값(헤딩 · order_gap 15 · aisle_block 1)은 SIM_RUN_CONTRACT §5 의
+# θ 탐색 권장 조건이라 따로 적지 않는다. 예산은 docs/2026-09-04_θ탐색_예산_측정.md.
+#
+# 워커를 늘릴 때 (같은 study 에 붙어 병렬 탐색):
+#   docker compose up -d --scale worker=4 worker
+#
+# .env 는 compose 파일이 있는 디렉토리에서 읽으므로 cd 후 실행할 것.
+#
+# 규모 참고 — 헤딩 모델 실측(컨테이너 1 CPU, 2026-09-04): 시뮬 1회 24대 34 s /
+# 28대 39 s. 시드 3 이면 trial 당 100~116 s 이므로 study 하나(100 trial)가
+# 워커 1개로 약 3시간, 워커 4개로 45분이다. 09-03 의 "1 trial 1.8초"는 칸
+# 모델 수치라 더 이상 예산 근거가 아니다 (docs/2026-09-04_θ탐색_예산_측정.md).
+#
+# Postgres 를 두는 목적은 재시작 복구가 아니라 **재현성**이다. study 가 남아야
+# "왜 그 θ 인지" 나중에 추적된다.
+# ============================================================
+name: fms-theta
+
+# 자격증명은 .env 에서 읽는다 (.env.example 참고, .gitignore 등록됨).
+# POSTGRES_PASSWORD 에 기본값을 두지 않는다 — 두면 그게 그대로 쓰이면서
+# 저장소에 비밀번호가 남는 것과 같아진다. 비어 있으면 compose 가 멈춘다.
+x-storage-url: &storage-url
+  OPTUNA_STORAGE: postgresql://${POSTGRES_USER:-optuna}:${POSTGRES_PASSWORD:?.env 에 POSTGRES_PASSWORD 를 설정하세요}@postgres:5432/${POSTGRES_DB:-optuna}
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-optuna}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?.env 에 POSTGRES_PASSWORD 를 설정하세요}
+      POSTGRES_DB: ${POSTGRES_DB:-optuna}
+    volumes:
+      - optuna-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-optuna} -d ${POSTGRES_DB:-optuna}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    # 호스트 포트는 열지 않는다. dashboard·worker 만 붙으면 된다.
+
+  # dashboard 는 Optuna 스키마를 만들지 않는다. 빈 DB 에 붙으면
+  # `relation "version_info" does not exist` 로 죽는다 (2026-09-03 실측).
+  # RDBStorage 를 한 번 열어 테이블을 만들어두고 끝나는 일회성 서비스.
+  db-init:
+    image: fms-sim:local
+    build:
+      context: .
+      dockerfile: sim.Dockerfile
+    environment: *storage-url
+    entrypoint:
+      - python
+      - -c
+      - |
+        import os, optuna
+        optuna.storages.RDBStorage(os.environ["OPTUNA_STORAGE"])
+        print("optuna 스키마 준비 완료")
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  dashboard:
+    image: ghcr.io/optuna/optuna-dashboard:v0.20.0   # 2026-09-03 latest. 태그는 v 접두사
+    environment: *storage-url
+    # URL 을 인자로 적으면 compose 파일에 자격증명이 남는다. 환경변수를 읽게 한다.
+    # 이미지 기본 entrypoint 의 플래그(--port 8080 --host 0.0.0.0 --server gunicorn)를 유지.
+    entrypoint: ["/bin/sh", "-c",
+                 "optuna-dashboard --port 8080 --host 0.0.0.0 --server gunicorn \"$$OPTUNA_STORAGE\""]
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+
+  worker:
+    build:
+      context: .
+      dockerfile: sim.Dockerfile
+    image: fms-sim:local
+    environment:
+      <<: *storage-url
+      SIM_NO_PLOT: "1"
+      # 워커 1개 = 1코어. 이미지 ENV 에도 있지만 여기서 다시 못 박는다 —
+      # 빼면 워커 N개 × BLAS 스레드 N개로 처리율이 떨어진다.
+      OMP_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+    volumes:
+      - ../:/work
+    working_dir: /work
+    depends_on:
+      postgres:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 2G
+    # 기본 CMD 는 버전 출력. 실제 탐색은 run 으로 명령을 준다.
+
+volumes:
+  optuna-db:
