@@ -39,8 +39,11 @@ QUICK = {(B0Z_CSV, "cell", 6, 42), (B0Z_CSV, "cell", 16, 7),
 def run_row(row):
     args = [PY, os.path.join(OUT, "sim_v2_tasks.py"), row["variant"], row["n_robots"], row["n_orders"],
             row["seed"], row["aisle_block"], f"--flow={row['flow']}"]
+    # 계약 v2: 기본 = 헤딩. CSV 의 heading 열이 비어 있으면 칸 모델 행 → --cell 로 재현.
     if row.get("heading") not in ("", None):
         args.append("--heading")
+    else:
+        args.append("--cell")
     if row.get("order_gap") not in ("", None):
         args.append(f"--order-gap={float(row['order_gap']):g}")
     if row.get("zone") in ("", None) and row["flow"] == "main":

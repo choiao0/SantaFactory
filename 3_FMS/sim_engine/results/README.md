@@ -11,4 +11,5 @@ Fleet sweep 벤치마크·검증 산출물 (csv/png/npz). **기존 파일은 덮
 | `b1e_sweep.csv`, `b1e_astar_vs_pibt.png`, `fleet_sweep_v2_main.png` | B-1e — A*(sim_v1) vs PIBT(v1compat) + main 흐름, 8/31 맵 (`fleet_sweep_b1e.py`, pibt_main은 `--fixed-homes`) | 이력 (A* 비교) |
 | `fleet_sweep_results.csv`, `fleet_sweep.png` | B-0 — sim_v1 단독 fleet 곡선 (`fleet_sweep.py`) | 이력 |
 | `b2_from_theta_dirflow.png`, `sim_v2_b2demo_*` , `theta_b2_dummy.json` | B-2 from_theta 검증 산출물 (`from_theta_demo.py`가 매번 재생성) | 검증 |
-| `sim_v2_*_heat.png`, `map_overview.png`, `pibt_viewer.html` | 개별 실행 히트맵·맵 그림·뷰어 | 보조 |
+| **`fleet_replay.html`** | **범용 리플레이 플레이어** — 브라우저로 열고 `isaac_export_<tag>/scene.json`·`trajectories.json`(`SIM_EXPORT_ISAAC=1`)을 선택/드래그하면 1 m 격자 위에서 틱 단위 재생(2칸 차체·방향·동작색·존·스테이션·완료 태스크 피드). 서버·파이썬 불필요, 데이터 미내장 | 도구 (-144) |
+| `sim_v2_*_heat.png`, `map_overview.png`, `pibt_viewer.html` | 개별 실행 히트맵·맵 그림·MVP 데모 뷰어(8/31, 데이터 내장) | 보조 |
