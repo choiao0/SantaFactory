@@ -2,5 +2,6 @@ __pycache__/
 *.pyc
 
 4_Web/.env
+3_FMS/infra/.env
 
 server-setup/
