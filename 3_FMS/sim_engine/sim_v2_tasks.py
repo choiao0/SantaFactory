@@ -289,6 +289,13 @@ def export_isaac(a, kernel, ctx):
             for z in json.load(f).get("charge_zone", ()):
                 zones.append(dict(id=z.get("id", ""), rect=[z["x0"], z["y0"],
                                                             round(z["x1"] - z["x0"], 2), round(z["y1"] - z["y0"], 2)]))
+    # 1 m 격자 행 문자열 (results/fleet_replay.html 범용 플레이어용, 추가 키 — isaac_replay.py 는 무시):
+    #   '#' 장애물 · '.' 통행 가능 · 'a' 랙 사이 통로(aisle_block 으로 막힌 피커 전용 칸) · 'z' 충전 존 칸
+    free0 = load_map(aisle_block=False)[0]
+    zmask = load_charge_zone(ctx.free)
+    zmask = (zmask & ctx.free) if zmask is not None else np.zeros_like(ctx.free)
+    grid_rows = ["".join("z" if zmask[r, c] else "." if ctx.free[r, c] else "a" if free0[r, c] else "#"
+                         for c in range(ctx.W)) for r in range(ctx.H)]
     scene = {
         "meta": dict(variant=a.variant, source="sim_v2_tasks.py", model=model,
                      cell_fine_m=0.1, coordinate="crop-relative meters, z-up",
@@ -302,6 +309,8 @@ def export_isaac(a, kernel, ctx):
         },
         "zones": zones,
         "stations": {k: v for k, v in ctx.stations.items() if k != "charge_zone"},
+        "station_cells": {k: list(v) for k, v in ctx.st_cell.items()},      # 격자 (r, c) — 플레이어용
+        "grid": grid_rows,
         "nodes": [list(xy(r, c)) for r, c in zip(*np.nonzero(ctx.free))],
     }
     with open(os.path.join(exp_dir, "scene.json"), "w", encoding="utf-8") as f:
