@@ -44,7 +44,7 @@ run length로 통로 축 판정 → 연결성분으로 묶기 → 폭 임계로 
 |---|---|---|
 | 0~1 obstacle / walkable | `map_loader.load_map` | 합 = 전체 칸 |
 | 2 main_aisle | `topo.main_aisle` | 남·북 밴드 (from_theta 정의) |
-| 3 sub_aisle | 세로 통로 ∧ ¬main | 랙 사이 11개 × 57칸 |
+| 3 sub_aisle | 세로 통로 ∧ ¬main | 랙 사이 11개 × 63칸 (2026-09-03 맵 동기화로 랙 1 m 연장, 구 57칸) |
 | 4 intersection | `topo.junction` | 통로 목 66칸 |
 | 5 station | `topo.station` | 충전기·충전대기열 **제외** (§4 "작업하는 자리") |
 | 6~12 zone_* | 스테이션 종류 매핑 `ZONE_STATION_KINDS` | ⚠️ 아래 |

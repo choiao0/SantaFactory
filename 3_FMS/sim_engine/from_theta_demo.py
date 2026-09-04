@@ -23,7 +23,7 @@ from dataclasses import asdict
 
 import numpy as np
 
-from from_theta import extract_topology, from_theta, load_theta
+from from_theta import JUNCTION_ROWS, VA_ROWS, extract_topology, from_theta, load_theta
 from map_loader import load_map
 from contracts.guidance_types import (COST_MAX, COST_MIN, GuidanceTheta,
                                       max_realizable_edge_cost)
@@ -52,7 +52,7 @@ def theta_of(d):
 
 
 def main():
-    free, st_cell, _ = load_map(OUT)
+    free, st_cell, _ = load_map()
     topo = extract_topology(free, st_cell, verbose=True)
 
     # ── 1부: 검산 ──────────────────────────────────────────
@@ -75,7 +75,7 @@ def main():
     even = on & (topo.v_aisle_rank % 2 == 0)
     odd = on & (topo.v_aisle_rank % 2 == 1)
     inner = np.zeros_like(on)
-    inner[49:66] = True                                  # 통로 내부 간선(양 끝 같은 통로)
+    inner[VA_ROWS[0] + 1:VA_ROWS[1] - 1] = True           # 통로 내부 간선(양 끝 같은 통로)
     assert np.all(g.edge_cost[..., N][even & inner] < g.edge_cost[..., S][even & inner])
     assert np.all(g.edge_cost[..., S][odd & inner] < g.edge_cost[..., N][odd & inner])
     print("[3] 통로 내부 그룹 방향 부호 (짝수=북, 홀수=남) : OK")
@@ -85,8 +85,10 @@ def main():
     assert _eq(ec[44, 60, E], 2.0) and _eq(ec[44, 60, W], 1.0), "남 밴드 순방향=서, 역행=동"
     assert _eq(ec[70, 60, W], 2.0) and _eq(ec[70, 60, E], 1.0), "북 밴드 순방향=동, 역행=서"
     ec = from_theta(free, topo, theta_of(dict(NEUTRAL, junction_penalty=3.0))).edge_cost
-    assert _eq(ec[46, 70, N], 3.0), "교차로 경계 진입 (46,70)→(47,70)"
-    assert _eq(ec[47, 70, E], 1.0) and _eq(ec[47, 70, S], 1.0), "교차로 내부·이탈 간선은 1.0"
+    # 2026-09-03 맵 동기화: 남쪽 교차로 목 행 47 → 46 (JUNCTION_ROWS[0])
+    jr = JUNCTION_ROWS[0]
+    assert _eq(ec[jr - 1, 70, N], 3.0), f"교차로 경계 진입 ({jr-1},70)→({jr},70)"
+    assert _eq(ec[jr, 70, E], 1.0) and _eq(ec[jr, 70, S], 1.0), "교차로 내부·이탈 간선은 1.0"
     ec = from_theta(free, topo, theta_of(dict(NEUTRAL, station_in=0.5, station_out=3.0))).edge_cost
     pk = st_cell["packing[0]"]                           # (40,64), entry_dir=N
     assert topo.station_dir[pk] == N
@@ -100,9 +102,9 @@ def main():
     print(f"[4] 규칙별 단독: loop 역행 / 교차로 진입만 / station in·out (도킹 칸 {n_dock}개, "
           f"packing N · aisle_buf S/N · inbound E) : OK")
 
-    # [5] 배타: (47,69)→E 는 남 밴드 역행(loop) 이자 교차로(47,70..72) 진입
+    # [5] 배타: (jr,69)→E 는 남 밴드 역행(loop) 이자 교차로(jr,70..72) 진입 (jr = 남쪽 목 행)
     ec = from_theta(free, topo, theta_of(dict(NEUTRAL, loop_gain=2.0, junction_penalty=3.0))).edge_cost
-    assert _eq(ec[47, 69, E], 2.0), f"배타 위반: loop∧교차로 간선 = {ec[47, 69, E]} (기대 loop_gain 2.0)"
+    assert _eq(ec[jr, 69, E], 2.0), f"배타 위반: loop∧교차로 간선 = {ec[jr, 69, E]} (기대 loop_gain 2.0)"
     ec2 = from_theta(free, topo, theta_of(dict(NEUTRAL, loop_gain=2.0, main_aisle_gain=1.2))).edge_cost
     assert _eq(ec2[44, 60, E], 2.4), "main_aisle_gain은 독립으로 항상 곱"
     print("[5] 배타 규칙 (loop > 교차로) + main_aisle_gain 독립 곱 : OK")

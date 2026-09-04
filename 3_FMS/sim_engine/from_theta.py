@@ -31,13 +31,14 @@ from map_loader import CELL_M, OFFSET_M  # noqa: E402
 from pibt_core import DIRS  # noqa: E402  (0=북 1=동 2=남 3=서)
 
 # wallA 좌표 상수 (설계 §2, 2026-09-01 실측)
-VA_ROWS = (48, 67)                     # 세로 통로 행 [48, 67) — 랙 내부
+# 2026-09-03 맵 동기화(벽있음 ∪ v5.8, 랙 양 끝 1 m 연장)로 재산출: 랙 행 48~66 → 47~67.
+VA_ROWS = (47, 68)                     # 세로 통로 행 [47, 68) — 랙 내부 (= map_loader.AISLE_ROWS)
 VA_XS_M = [35.1 + 6 * k for k in range(11)]   # 통로 중심 x (m), 서쪽부터
-BAND_S_ROWS = (40, 48)                 # 남쪽 가로 간선 [40, 48)
-BAND_N_ROWS = (67, 74)                 # 북쪽 가로 간선 [67, 74)
+BAND_S_ROWS = (40, 47)                 # 남쪽 가로 간선 [40, 47)
+BAND_N_ROWS = (68, 74)                 # 북쪽 가로 간선 [68, 74)
 BAND_W_COLS = (20, 32)                 # 서쪽 연결 통로 [20, 32)
-BAND_E_COLS = (99, 109)                # 동쪽 연결 통로 [99, 109)
-JUNCTION_ROWS = (47, 67)               # 통로가 간선에 접속하는 목
+BAND_E_COLS = (99, 109)                # 동쪽 연결 통로 [99, 109) — 충전 존(c103~108)이 이 안에 있음
+JUNCTION_ROWS = (46, 68)               # 통로가 간선에 접속하는 목 (랙 바로 바깥 행)
 HOME_PREFIXES = ("charger", "charge_q")   # 홈은 작업자리가 아님 → station 규칙 미적용
 
 

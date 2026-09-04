@@ -198,8 +198,8 @@ def run(free, starts, goals, edge_cost=None, wait_cost=None, max_steps=200):
 # 위의 칸 모델(dist_map/step/run)은 그대로 두고(v1compat·B-1e 보존), 헤딩
 # 모델은 *_h 함수로 병행 제공한다. sim_v2는 --heading 플래그로 선택.
 # ============================================================
-REAR_CELLS = 1      # 설계 §1: 뒤 차체 1.24m → 뒤 칸 1개 (앞축 위치 실측 후 확정)
-TURN_TICKS = 2      # 설계 §1: 90° ≈ 1.75s @0.9rad/s → 2틱 (각속도 실측 후 확정)
+REAR_CELLS = 1      # 설계 §1: Isaac 실측 구동축 뒤 차체 1.03 m → 뒤 칸 1개 (2026-09-03 확정)
+TURN_TICKS = 1      # 설계 §1: Isaac 실측 90° 회전 0.76 s → 1틱 (2026-09-03 확정, 이전 가정 2틱)
 REVERSE_FACTOR = 3.0  # 후진 1칸 비용 배율 — 느리고 시야 없는 동작이라 마지막 수단 (3점 회전용)
 
 # 대기 상승(escalation) — 라이브니스 장치 (설계 §6, 2026-09-02 실측 근거):
