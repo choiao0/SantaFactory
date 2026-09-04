@@ -2,7 +2,8 @@
 
 PIBT 이동계층 + θ → 통행 비용 변환(`from_theta`) + Fleet 벤치마크.
 
-입출력 계약: [`../contracts/guidance_types.py`](../contracts/guidance_types.py) (`GuidanceTheta` → `Guidance`)
+입출력 계약: [`../contracts/guidance_types.py`](../contracts/guidance_types.py) (`GuidanceTheta` → `Guidance`) ·
+실행 계약: [`../contracts/SIM_RUN_CONTRACT.md`](../contracts/SIM_RUN_CONTRACT.md) (sim_v2 CLI·SUMMARY·종료 코드 — 외부 호출자는 이것만 의존)
 
 ## 진행 상태
 

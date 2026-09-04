@@ -6,6 +6,9 @@ A안(AI)과 B안(PIBT 엔진)이 공유하는 데이터 계약. 여기 정의를
   θ 범위·범주, 간선 규칙 배타 순서(`EDGE_RULE_PRECEDENCE`).
   출처: [`5_Docs/AI/AI입출력명세서.md`](../../5_Docs/AI/AI입출력명세서.md) §13 코드 계약.
 - `tests/` — `3_FMS/`에서 `python contracts/tests/test_guidance_types.py`
+- **`SIM_RUN_CONTRACT.md`** — 시뮬 실행 계약 v1 (2026-09-04). `sim_engine/sim_v2_tasks.py`를 프로세스로 부르는 쪽
+  (A트랙 θ 탐색 워커 `infra/worker/objective.py`, 견적 엔진 배치 워커)이 의존하는 CLI·플래그·환경변수·`[SUMMARY]` 키·종료 코드·
+  실행 시간·재현성 기준값. 여기 없는 인자·키에 의존하지 말고, 바꿀 때는 B트랙이 문서 버전을 올린다.
 
 θ의 개수·순서·의미가 바뀌면 데이터 버전도 함께 올린다 (명세서 §14-18).
 **각 θ가 적용되는 간선의 정의가 바뀌는 것도 스키마 변경으로 취급한다** — 값이 같아도
