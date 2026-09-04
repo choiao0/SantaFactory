@@ -13,12 +13,14 @@ import org.springframework.stereotype.Service;
 @RequiredArgsConstructor
 public class SimulationService {
 
+    private static final String STATUS_QUEUED = "queued";
+
     private final SimulationClient simulationClient;
 
     public SimulationAcceptedResponse requestSimulation(SimulationRequest request) {
-        SimulationAcceptedResponse accepted = simulationClient.requestSimulation(request);
-        log.info("시뮬레이션 요청 접수: runId={}, status={}", accepted.runId(), accepted.status());
-        return accepted;
+        simulationClient.publish(request);
+        log.info("시뮬레이션 요청 발행: runId={}", request.runId());
+        return new SimulationAcceptedResponse(request.runId(), STATUS_QUEUED);
     }
 
     public void applyResult(SimulationResponse response) {

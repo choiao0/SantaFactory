@@ -14,9 +14,7 @@ public enum ErrorCode {
     INTERNAL_SERVER_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "COMMON500", "서버 내부 오류가 발생했습니다."),
 
     // Sim
-    SIM_SERVER_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "SIM503", "시뮬 엔진에 연결할 수 없습니다."),
-    SIM_SERVER_ERROR(HttpStatus.BAD_GATEWAY, "SIM502", "시뮬 엔진 처리 중 오류가 발생했습니다."),
-    SIM_CALLBACK_UNAUTHORIZED(HttpStatus.UNAUTHORIZED, "SIM401", "시뮬 엔진 콜백 토큰이 올바르지 않습니다."),
+    SIM_QUEUE_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "SIM503", "시뮬레이션 요청 큐에 연결할 수 없습니다."),
     ;
 
     private final HttpStatus httpStatus;

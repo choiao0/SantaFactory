@@ -26,12 +26,11 @@ public class SimulationController {
 
     @Operation(
             summary = "시뮬레이션 실행 요청",
-            description = "요청 본문을 시뮬 엔진으로 전달하고 접수 응답(run_id, status)을 반환한다. 결과는 시뮬 엔진 콜백으로 수신한다.")
+            description = "요청 본문을 시뮬레이션 요청 큐(sim.request)에 발행하고 접수 응답(run_id, status)을 반환한다. 결과는 결과 큐(sim.result)로 수신한다.")
     @ApiResponses({
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "202", description = "시뮬 엔진 접수 완료"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "202", description = "요청 큐 발행 완료"),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "요청 값 검증 실패 (COMMON400)"),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "502", description = "시뮬 엔진 응답 오류 (SIM502)"),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "503", description = "시뮬 엔진 연결 실패 (SIM503)")
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "503", description = "요청 큐 연결 실패 (SIM503)")
     })
     @PostMapping
     public ResponseEntity<ApiResponse<SimulationAcceptedResponse>> request(

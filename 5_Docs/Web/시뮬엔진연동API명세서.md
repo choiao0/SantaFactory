@@ -1,56 +1,53 @@
 # 시뮬 엔진 연동 API 명세서
 
-**버전** v0.1 · **대상** 웹 백엔드 / 시뮬 엔진(B트랙) 파트 · **작성일** 2026-09-04
+**버전** v0.2 · **대상** 웹 백엔드 / 시뮬 엔진(B트랙) 파트 · **갱신일** 2026-09-04
 
-> 시뮬레이션 요청·응답 DTO는 기존 것을 그대로 쓴다.
-> 원래 한 번의 요청/응답으로 처리하려던 것을 **요청(백엔드→시뮬 엔진)** 과 **결과 콜백(시뮬 엔진→백엔드)** 으로 분리했다.
-> DTO 필드는 추가·수정·삭제하지 않았다.
+> v0.2: 백엔드 ↔ 시뮬 엔진 구간을 HTTP + 콜백에서 **RabbitMQ 큐**로 변경. 시뮬 요청·응답 DTO 필드는 그대로.
+> 프론트 ↔ 백엔드 구간(§3)은 HTTP 유지.
 
 ---
 
 ## 0. 전체 흐름
 
 ```
-프론트                 백엔드                          시뮬 엔진
-  │                      │                               │
-  │ POST /estimates      │                               │
-  │─────────────────────▶│  견적 생성, AMR 대수별 run 생성  │
-  │                      │                               │
-  │                      │  POST /simulations  (run마다)  │
-  │                      │──────────────────────────────▶│  ① 요청
-  │                      │◀──────────────────────────────│     202 { run_id } 즉시 응답
-  │ 202 { estimateId }   │                               │
-  │◀─────────────────────│                               │
-  │                      │                    (수 분 계산) │
-  │ GET /estimates/{id}  │                               │
-  │  (폴링 또는 SSE)      │                               │
-  │─────────────────────▶│                               │
-  │                      │  POST /api/sim/results        │
-  │                      │◀──────────────────────────────│  ② 결과 콜백
-  │                      │  run 상태 DONE, KPI 저장        │
-  │                      │──────────────────────────────▶│     200
-  │                      │                               │
-  │ GET /estimates/{id}  │  모든 run 완료 → 견적 DONE       │
-  │◀─────────────────────│                               │
+프론트                 백엔드                     RabbitMQ                시뮬 엔진 워커
+  │                      │                          │                        │
+  │ POST /api/simulations│                          │                        │
+  │─────────────────────▶│  run_id 생성              │                        │
+  │                      │  sim.request 큐에 발행    │                        │
+  │                      │─────────────────────────▶│                        │
+  │ 202 { run_id,        │                          │   큐에서 1건 꺼냄        │
+  │       status:queued }│                          │◀───────────────────────│
+  │◀─────────────────────│                          │                        │
+  │                      │                          │        (수 분 계산)      │
+  │ GET (폴링 또는 SSE)   │                          │                        │
+  │─────────────────────▶│                          │   sim.result 큐에 발행   │
+  │                      │                          │◀───────────────────────│
+  │                      │  sim.result 구독, KPI 저장 │                        │
+  │                      │◀─────────────────────────│                        │
+  │◀─────────────────────│                          │                        │
 ```
 
 - **견적(estimate)** 1건 = AMR 대수를 바꿔가며 돌리는 **run 여러 개**
 - `run_id` 는 백엔드가 만든다. 형식 `est_{estimateId}_n{amrCount}` (예: `est_77_n3`)
-- 시뮬 엔진 호출은 run 하나당 한 번. AI는 `run_id` 를 그대로 에코한다.
+- run 하나 = 요청 메시지 1건 = 결과 메시지 1건. 시뮬 엔진은 `run_id` 를 그대로 에코한다.
 
 ---
 
-## 1. 백엔드 → 시뮬 엔진 (시뮬 엔진가 제공)
+## 1. 메시지 큐 계약 (백엔드 ↔ 시뮬 엔진)
 
-Base URL: `${SIM_BASE_URL}` (예: `http://sim:8000`)
+| 항목 | 값 |
+|---|---|
+| 브로커 | RabbitMQ (`4_Web/docker-compose.yml` 의 `rabbitmq` 서비스, 컨테이너 `a106-rabbitmq`) |
+| 접속 | `amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672/` (compose 내부), 로컬은 `localhost:5672` |
+| 관리 UI | `http://localhost:15672` |
+| 익스체인지 | 기본 익스체인지(이름 없음). 라우팅 키 = 큐 이름 |
+| 요청 큐 | `sim.request` (durable). 백엔드가 발행, 시뮬 엔진이 소비 |
+| 결과 큐 | `sim.result` (durable). 시뮬 엔진이 발행, 백엔드가 소비 |
+| 큐 선언 | 백엔드가 기동 시 두 큐를 선언한다. 시뮬 엔진은 선언 없이 소비·발행만 해도 된다 |
+| 본문 | JSON (`content_type: application/json`), 필드는 `snake_case` |
 
-| 메서드 | URL | 용도 | 성공 응답 |
-|---|---|---|---|
-| POST | `/simulations` | 시뮬레이션 실행 요청. 즉시 접수 응답만 반환 | `202 Accepted` |
-| GET | `/simulations/{run_id}` | 상태 조회. 콜백 유실 시 백엔드가 보조로 사용 | `200 OK` |
-| DELETE | `/simulations/{run_id}` | 실행 취소 (선택 구현) | `204 No Content` |
-
-### 1-1. `POST /simulations` 요청 본문 — 기존 요청 DTO 그대로
+### 1-1. 요청 메시지 (`sim.request`) — 기존 요청 DTO 그대로
 
 ```json
 {
@@ -98,36 +95,7 @@ Base URL: `${SIM_BASE_URL}` (예: `http://sim:8000`)
 }
 ```
 
-### 1-2. `POST /simulations` 즉시 응답 (신규, 최소 필드)
-
-```json
-{
-  "run_id": "est_77_n3",
-  "status": "queued"
-}
-```
-
-| 상태 코드 | 의미 |
-|---|---|
-| 202 | 접수됨. 결과는 콜백으로 전달 |
-| 400 | 요청 본문 검증 실패 |
-| 409 | 같은 `run_id` 가 이미 실행 중 |
-
-### 1-3. `GET /simulations/{run_id}` 응답
-
-콜백 본문(2-1)과 같은 형태. 아직 끝나지 않았으면 `status` 가 `queued` 또는 `running` 이고 `kpi` 는 `null`.
-
----
-
-## 2. 시뮬 엔진 → 백엔드 콜백 (백엔드가 제공)
-
-Base URL: `${BACKEND_BASE_URL}` (compose 내부: `http://backend:8080`)
-
-| 메서드 | URL | 용도 | 성공 응답 |
-|---|---|---|---|
-| POST | `/api/sim/results` | 시뮬레이션 결과 전달 | `200 OK` |
-
-### 2-1. 요청 본문 — 기존 응답 DTO 그대로
+### 1-2. 결과 메시지 (`sim.result`) — 기존 응답 DTO 그대로
 
 ```json
 {
@@ -157,30 +125,26 @@ Base URL: `${BACKEND_BASE_URL}` (compose 내부: `http://backend:8080`)
 }
 ```
 
-`status` 가 `failed` 면 `error` 에 사유 문자열, `kpi` 는 `null`.
+`status` 가 `failed` 면 `error` 에 사유 문자열, `kpi` 는 `null`. 실패도 결과 큐에 정상 발행한다.
 
-### 2-2. 헤더
+### 1-3. 시뮬 엔진 워커 규칙
 
-| 헤더 | 값 | 설명 |
-|---|---|---|
-| `Content-Type` | `application/json` | |
-| `X-Sim-Callback-Token` | `${SIM_CALLBACK_TOKEN}` | 공유 시크릿. 불일치 시 401 |
+- **ack 는 결과 발행 후.** 꺼낸 즉시 ack 하면 계산 중 워커가 죽을 때 run 이 사라진다.
+- **prefetch 1.** 시뮬 1회가 60~90초라 미리 여러 건 가져가면 다른 워커가 놀게 된다.
+- **같은 `run_id` 가 두 번 올 수 있다** (재전달). 시뮬은 결정론이라 결과가 같으니 그대로 다시 돌려도 된다. 중복 처리는 백엔드가 한다.
+- 모르는 필드는 무시한다.
 
-### 2-3. 백엔드 응답
+### 1-4. 백엔드 규칙
 
-백엔드 공통 포맷 `ApiResponse` 로 내려간다.
+- 발행 실패(브로커 연결 불가) 시 프론트에 `503 SIM503` 반환.
+- 같은 `run_id` 결과가 두 번 오면 두 번째는 무시한다.
+- `RUNNING` 상태로 **30분** 을 넘긴 run 은 `TIMEOUT` 처리한다 (워커가 전부 죽어 있을 때 대비).
 
-| 상태 코드 | 코드 | 의미 |
-|---|---|---|
-| 200 | `COMMON200` | 정상 반영 |
-| 200 | `COMMON200` | 이미 `DONE` 인 run 에 중복 콜백 → 무시하고 200 (멱등) |
-| 401 | `SIM401` | 콜백 토큰 불일치 |
-| 404 | `COMMON404` | 알 수 없는 `run_id` |
+### 1-5. 추후 항목 (지금은 미구현)
 
-### 2-4. 재시도 규칙
-
-- 백엔드가 5xx 를 주거나 연결 실패 시 시뮬 엔진은 **최대 3회, 10초 간격**으로 재시도한다.
-- 백엔드는 run 이 `RUNNING` 상태로 **30분**을 넘기면 `GET /simulations/{run_id}` 로 상태를 확인하고, 그래도 미완료면 `TIMEOUT` 처리한다.
+- dead-letter 큐 (`sim.request.dlq`) 와 재전달 상한
+- 결과 메시지 중복 수신 방지의 영구 저장(DB) 기반 구현
+- RabbitMQ 데이터 볼륨 (배포 전 추가)
 
 ---
 
@@ -195,14 +159,14 @@ Base URL: `/api`
 | POST | `/estimates` | 견적 요청 생성. 창고 조건 + AMR 사양 + 대수 범위를 받아 run 을 만들고 시뮬 엔진에 전부 요청 | `202 Accepted` |
 | GET | `/estimates` | 견적 목록 (최근순, 페이지네이션) | `200 OK` |
 | GET | `/estimates/{estimateId}` | 견적 상태 + run 별 결과표(대수·가동률·처리량·비용) | `200 OK` |
-| DELETE | `/estimates/{estimateId}` | 견적 취소. 미완료 run 에 대해 시뮬 엔진으로 `DELETE /simulations/{run_id}` 전파 | `204 No Content` |
+| DELETE | `/estimates/{estimateId}` | 견적 취소. 이미 큐에 들어간 run 은 결과가 와도 무시 | `204 No Content` |
 
 ### 3-2. run (견적 하위)
 
 | 메서드 | URL | 용도 | 성공 응답 |
 |---|---|---|---|
 | GET | `/estimates/{estimateId}/runs` | run 목록 (run_id, amr_count, status) | `200 OK` |
-| GET | `/estimates/{estimateId}/runs/{runId}` | run 하나의 KPI 전체 (2-1 의 `kpi` 그대로) | `200 OK` |
+| GET | `/estimates/{estimateId}/runs/{runId}` | run 하나의 KPI 전체 (1-2 의 `kpi` 그대로) | `200 OK` |
 | POST | `/estimates/{estimateId}/runs/{runId}/retry` | 실패·타임아웃 run 재실행 | `202 Accepted` |
 
 ### 3-3. 진행 알림
@@ -219,11 +183,11 @@ SSE 대신 `GET /estimates/{estimateId}` 폴링(5초 간격)으로 시작해도 
 
 | 값 | 의미 | 전이 |
 |---|---|---|
-| `QUEUED` | 시뮬 엔진에 요청 보냄, 접수 응답 받음 | → RUNNING / FAILED |
-| `RUNNING` | 시뮬 엔진이 계산 중 | → DONE / FAILED / TIMEOUT |
-| `DONE` | 콜백 `status: done` 수신 | 종료 |
-| `FAILED` | 콜백 `status: failed` 수신, 또는 요청 자체 실패 | → QUEUED (retry) |
-| `TIMEOUT` | 30분 내 콜백 없음 | → QUEUED (retry) |
+| `QUEUED` | 요청 큐에 발행됨 | → RUNNING / FAILED |
+| `RUNNING` | 워커가 꺼내서 계산 중 (현재는 QUEUED 와 구분 없이 처리) | → DONE / FAILED / TIMEOUT |
+| `DONE` | 결과 메시지 `status: done` 수신 | 종료 |
+| `FAILED` | 결과 메시지 `status: failed` 수신, 또는 발행 실패 | → QUEUED (retry) |
+| `TIMEOUT` | 30분 내 결과 없음 | → QUEUED (retry) |
 
 **견적 상태**
 
@@ -241,7 +205,7 @@ SSE 대신 `GET /estimates/{estimateId}` 폴링(5초 간격)으로 시작해도 
 | 항목 | 규칙 |
 |---|---|
 | URL | 소문자, 복수형 명사, 단어 구분은 `-` |
-| 백엔드 ↔ 시뮬 엔진 JSON 필드 | `snake_case` (시뮬 엔진이 Python 이므로 DTO 기준 유지) |
+| 백엔드 ↔ 시뮬 엔진 메시지 필드 | `snake_case` (시뮬 엔진이 Python 이므로 DTO 기준 유지) |
 | 백엔드 ↔ 프론트 JSON 필드 | `camelCase` (`ApiResponse` 규칙과 통일) |
 | 프리픽스 | 백엔드 API 는 `/api` 프리픽스, 버전 없음. 시뮬 엔진는 프리픽스 없음 |
 | 식별자 | 견적은 숫자 `estimateId`, run 은 문자열 `run_id` (`est_{estimateId}_n{amrCount}`) |
@@ -252,6 +216,6 @@ SSE 대신 `GET /estimates/{estimateId}` 폴링(5초 간격)으로 시작해도 
 
 | 변수 | 사용처 | 예시 |
 |---|---|---|
-| `SIM_BASE_URL` | 백엔드 | `http://sim:8000` |
-| `SIM_CALLBACK_TOKEN` | 백엔드·시뮬 엔진 공통 | 랜덤 문자열 |
-| `BACKEND_BASE_URL` | 시뮬 엔진 | `http://backend:8080` |
+| `RABBITMQ_USER` / `RABBITMQ_PASSWORD` | RabbitMQ 컨테이너, 백엔드, 시뮬 엔진 워커 공통 | `4_Web/.env` |
+| `RABBITMQ_HOST` | 백엔드 (compose 는 `rabbitmq` 고정, 로컬은 `localhost`) | |
+| `sim.request-queue` / `sim.result-queue` | 백엔드 `application.yml` | `sim.request` / `sim.result` |

@@ -12,15 +12,18 @@ spring:
     properties:
       hibernate:
         format_sql: true
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: 5672
+    username: ${RABBITMQ_USER:guest}
+    password: ${RABBITMQ_PASSWORD:guest}
 
 server:
   port: 8080
 
 sim:
-  base-url: ${SIM_BASE_URL:http://localhost:8000}
-  connect-timeout: 3s
-  read-timeout: 10s
-  callback-token: ${SIM_CALLBACK_TOKEN:change-me}
+  request-queue: sim.request
+  result-queue: sim.result
 
 springdoc:
   swagger-ui:
