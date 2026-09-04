@@ -3,7 +3,7 @@ name: santafactory
 services:
   db:
     image: postgres:16-alpine
-    container_name: db
+    container_name: a106-db
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${DB_NAME}
@@ -24,12 +24,14 @@ services:
   backend:
     build: ./SantaFactoryBE
     image: santafactory-be:latest
-    container_name: backend
+    container_name: a106-backend
     restart: unless-stopped
     environment:
       DB_URL: jdbc:postgresql://db:5432/${DB_NAME}
       DB_USERNAME: ${DB_USERNAME}
       DB_PASSWORD: ${DB_PASSWORD}
+      AI_BASE_URL: ${AI_BASE_URL}
+      AI_CALLBACK_TOKEN: ${AI_CALLBACK_TOKEN}
     ports:
       - "127.0.0.1:8080:8080"
     depends_on:
@@ -38,7 +40,7 @@ services:
 
   sonarqube:
     image: sonarqube:community
-    container_name: sonarqube
+    container_name: a106-sonarqube
     restart: unless-stopped
     environment:
       SONAR_JDBC_URL: jdbc:postgresql://db:5432/sonarqube

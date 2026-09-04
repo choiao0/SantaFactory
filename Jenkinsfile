@@ -86,7 +86,7 @@ pipeline {
                         sleep 2
                     done
                     echo "backend 가 150초 안에 응답하지 않음"
-                    docker logs --tail 100 backend || true
+                    docker logs --tail 100 a106-backend || true
                     exit 1
                 '''
             }

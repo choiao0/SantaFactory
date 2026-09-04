@@ -2,5 +2,6 @@ __pycache__/
 *.pyc
 
 4_Web/.env
+4_Web/SantaFactoryBE/.env
 
 server-setup/
