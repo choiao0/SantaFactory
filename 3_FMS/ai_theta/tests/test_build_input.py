@@ -95,7 +95,7 @@ class GuidanceInputOnRealMapTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.inp = build_guidance_input(n_agents=N_AGENTS, order_rate=ORDER_RATE)
-        cls.free, cls.st_cell, _ = load_map(str(SIM_ENGINE))
+        cls.free, cls.st_cell, _ = load_map()                 # 공식 맵 3_FMS/map
         cls.topo = extract_topology(cls.free, cls.st_cell)
         cls.H, cls.W = cls.free.shape
 
@@ -133,8 +133,8 @@ class GuidanceInputOnRealMapTest(unittest.TestCase):
         self.assertTrue(np.array_equal(main, self.topo.main_aisle & self.free))
         self.assertTrue(np.array_equal(sm[4].astype(bool), self.topo.junction & self.free))
         self.assertTrue(np.array_equal(sm[5].astype(bool), self.topo.station & self.free))
-        # 작은 통로 = 랙 사이 세로 통로 = 11개 × 57칸
-        self.assertEqual(int(sub.sum()), 11 * 57)
+        # 작은 통로 = 랙 사이 세로 통로 = 11개 × (21행 × 3열). 2026-09-03 맵 동기화로 랙 1 m 연장(19행 → 21행)
+        self.assertEqual(int(sub.sum()), 11 * 63)
 
     def test_zone_channels_are_one_hot(self):
         # 명세 §4 "구역은 반드시 채널을 나눠서" — 한 칸이 두 구역에 속하지 않는다

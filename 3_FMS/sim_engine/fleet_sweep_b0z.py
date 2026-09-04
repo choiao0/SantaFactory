@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 # ============================================================
-# B0″ 기준선 — 충전 존(기본) + TURN_TICKS=1, 칸 모델 vs 헤딩 모델 fleet 곡선
-# (결정: docs/2026-09-03_충전존_결정.md, 구현: docs/2026-09-03_충전존_구현_설계.md)
+# B0″ 기준선 — 동기화 맵(3_FMS/map, 벽있음 ∪ v5.8) + 충전 존(기본) + TURN_TICKS=1, 칸 vs 헤딩 fleet 곡선
+# (결정: docs/2026-09-03_충전존_결정.md, 구현: docs/2026-09-03_충전존_구현_설계.md, 결과: docs/2026-09-03_B0z_충전존_기준선.md)
 #
-# B0′(fleet_sweep_b0h: 고정 홈 12칸, 회전 2틱)를 대체한다. 조건은 B-1e/B0′와 동일:
+# B0′(fleet_sweep_b0h: 8/31 맵, 고정 홈 12칸, 회전 2틱)를 대체한다. 조건은 B-1e/B0′와 동일:
 #   로봇 {2,3,4,6,8,10,12,16} × 시드 {42, 7}, 40주문(+입고 40), 통로차단 ON, main 흐름,
 #   uniform cost (θ 미적용).
 # 두 계열:
@@ -120,8 +120,8 @@ for ax, (key, label) in zip(axes, [("tasks_per_h", "throughput [tasks/h]"),
     ax.set_title(label)
     ax.grid(alpha=0.3)
     ax.legend(fontsize=7)
-fig.suptitle("B0″ — 충전 존 기본, 칸 vs 헤딩, main 흐름 (40 orders, aisle-block ON, "
-             "uniform cost, mean of 2 seeds). 점선 = B0′(고정 홈 12칸, 회전 2틱)", fontsize=10)
+fig.suptitle("B0″ — 동기화 맵(벽있음 ∪ v5.8) + 충전 존 기본, 칸 vs 헤딩, main 흐름 (40 orders, aisle-block ON, "
+             "uniform cost, mean of 2 seeds). 점선 = B0′(8/31 맵, 고정 홈 12칸, 회전 2틱)", fontsize=10)
 plt.tight_layout()
 plt.savefig(os.path.join(RES, "b0z_cell_vs_heading.png"), dpi=115)
 

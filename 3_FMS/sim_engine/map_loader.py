@@ -15,17 +15,23 @@ CELL_M, OFFSET_M = 1.0, 0.4
 K, OX = round(CELL_M / 0.1), round(OFFSET_M / 0.1)
 # 0.1 m 원본 셀값 중 장애물. sim_v1_tasks.py 의 동일 튜플과 함께 고칠 것.
 OBSTACLE_VALUES = (1, 2, 5, 6)
+# 랙 사이 세로 통로의 행 범위 [47, 68) — 통로차단(aisle_block) 구간이자 from_theta.VA_ROWS.
+# 2026-09-03 맵 동기화 실측(랙 c±2 막힘 행 47~67). sim_v1_tasks.py 의 동일 슬라이스와 함께 고칠 것.
+AISLE_ROWS = (47, 68)
 
 # 공식 맵 폴더 (3_FMS/map). charge_zone.json 이 여기 있고, 맵 세트 수신 후에는
 # occupancy_grid/stations 도 여기서 읽는다 (docs/2026-09-03_맵버전_동기화_결정.md).
 MAP_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "map")
 
 
-def load_map(base_dir, aisle_block=False):
+def load_map(base_dir=None, aisle_block=False):
     """0.1m 원본을 1.0m coarse로 다운샘플(max pooling, 보수적).
+    base_dir 생략 = 공식 맵 폴더 MAP_DIR (3_FMS/map, build_fms_map.py 산출물).
     반환: (free (H,W) bool, st_cell {"kind[i]": (r,c)}, stations 원본 dict)"""
+    if base_dir is None:
+        base_dir = MAP_DIR
     grid01 = np.load(os.path.join(base_dir, "occupancy_grid.npy"))
-    stations = json.load(open(os.path.join(base_dir, "stations.json")))
+    stations = json.load(open(os.path.join(base_dir, "stations.json"), encoding="utf-8"))
     # 1=구조물 2=랙 5=컨베이어 6=바닥 파렛트 블록 (v5.8, 맵 세트 수신 후 등장 — 빠지면 그 위를 지나감)
     raw = np.isin(grid01, OBSTACLE_VALUES).astype(np.uint8)
     m2 = np.pad(raw, ((0, 0), (OX, 0)), constant_values=1)
@@ -36,13 +42,16 @@ def load_map(base_dir, aisle_block=False):
     H, W = coarse.shape
 
     if aisle_block:
-        # 렉 통로 내부(y48~67) = 피커 전용 구역, 로봇 통행 금지
+        # 렉 사이 통로 내부 = 피커 전용 구역, 로봇 통행 금지. 행 범위 = 랙 행(AISLE_ROWS).
+        # 2026-09-03 맵 동기화: 랙 1 m 연장으로 [48,68) → [47,68) (실측 c±2 막힘 행 47~67)
         for k in range(11):
             c = int((35.1 + 6 * k + OFFSET_M) / CELL_M)
-            free[48:68, c - 1:c + 2] = False
+            free[AISLE_ROWS[0]:AISLE_ROWS[1], c - 1:c + 2] = False
 
     st_cell = {}
     for kind, pts in stations.items():
+        if kind == "charge_zone":            # 사각형 목록(m) — 스테이션 점이 아님, load_charge_zone 이 읽음
+            continue
         for i, (x, y) in enumerate(pts):
             r, c = int(y / CELL_M), int((x + OFFSET_M) / CELL_M)
             for rr, cc in [(r, c), (r - 1, c), (r + 1, c), (r, c - 1), (r, c + 1)]:

@@ -29,7 +29,7 @@ from pibt_heading_demo import check_collisions_h
 from pibt_mvp_demo import check_collisions
 
 OUT = os.path.dirname(os.path.abspath(__file__))
-FREE, st_cell, stations = load_map(OUT, aisle_block=True)
+FREE, st_cell, stations = load_map(aisle_block=True)             # 공식 맵 3_FMS/map
 H, W = FREE.shape
 print(f"[0] 맵 coarse {H}x{W}, free 칸 {int(FREE.sum())}개, 통로차단 ON")
 

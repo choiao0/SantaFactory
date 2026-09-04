@@ -71,7 +71,7 @@ K_LINE_P = [0.5, 0.3, 0.2]          # 주문당 상품 라인 수 {1,2,3} 분포
 # ------------------------------------------------------------
 # 1) 맵/로봇/비용 초기화
 # ------------------------------------------------------------
-FREE, st_cell, stations = load_map(OUT, AISLE_BLOCK)
+FREE, st_cell, stations = load_map(aisle_block=AISLE_BLOCK)      # 공식 맵 3_FMS/map
 H, W = FREE.shape
 N_AISLE = len(stations["aisle_buf"])
 N_PACK = len(stations["packing"])

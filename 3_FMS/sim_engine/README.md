@@ -21,16 +21,17 @@ python pibt_mvp_demo.py            # 코어 4종
 python pibt_heading_demo.py        # 헤딩 6종
 python pibt_smoke_real_map.py      # 실맵: 칸 60대 + 헤딩 30대×3시드 + 충전 존 20대×2시드
 python from_theta_demo.py          # θ v2 검산 + 더미 θ 분극 (~1분)
-SIM_CHECK=1 SIM_NO_PLOT=1 python sim_v2_tasks.py base 6 40 42 1 --flow=v1compat        # 패리티: 2311틱, 186.9 tasks/h
+SIM_CHECK=1 SIM_NO_PLOT=1 python sim_v2_tasks.py base 6 40 42 1 --flow=v1compat        # 패리티: 2317틱, 186.4 tasks/h (맵 동기화 전 2311/186.9)
 SIM_CHECK=1 SIM_NO_PLOT=1 python sim_v2_tasks.py base 12 40 42 1 --heading             # 존(기본) 엔드투엔드 완주·겹침 0
-SIM_NO_PLOT=1 python sim_v2_tasks.py base 6 40 42 1 --fixed-homes                       # 고정 홈: 2797틱, 135.1 tasks/h (B-1e pibt_main)
+SIM_NO_PLOT=1 python sim_v2_tasks.py base 6 40 42 1 --fixed-homes                       # 고정 홈: 2970틱, 127.3 tasks/h (동기화 전 2797/135.1 = B-1e)
+SIM_NO_PLOT=1 python sim_v1_tasks.py base 6 40 42 1                                     # A* 기준선: 2384틱, 181.2 tasks/h (동기화 전 2378/181.7)
 python -m pytest ../ai_theta/tests -q                                                   # A트랙 (map_loader·from_theta 를 import)
 ```
 
 | 파일 | 내용 |
 |---|---|
 | `pibt_core.py` | PIBT 코어 — 칸 모델(`dist_map/step/run`, 가중 다익스트라) + 헤딩 모델(`*_h`: (칸,방향) 상태, 2칸 점유, 회전·후진, 스윙 예약, 대기 상승·재계획) |
-| `map_loader.py` | 맵 로드/1.0m 다운샘플/스테이션 (v1과 규칙 동기 유지) + 충전 존 로드 `load_charge_zone` (A트랙 `ai_theta/data/build_input.py`도 이걸 import — 존 규약의 단일 소스) |
+| `map_loader.py` | 맵 로드(**`3_FMS/map` 공식 맵**, 2026-09-03 동기화)/1.0m 다운샘플/스테이션 (v1과 규칙 동기 유지: `OBSTACLE_VALUES`, `AISLE_ROWS`) + 충전 존 `load_charge_zone`·`make_homes_zone` (A트랙 `build_input.py`도 import — 단일 소스) |
 | `sim_v1_tasks.py` | A* 기준선 — **이동계층 수정 금지** |
 | `sim_v2_tasks.py` | PIBT 틱 시뮬 본체 (`--flow=main\|v1compat`, `--theta=<json>`, `--heading`, `--fixed-homes`) |
 | `from_theta.py` | B-2: wallA 토폴로지 추출 + θ→비용 변환, 스키마 v2 배타 조립 ([설계](../docs/2026-09-01_B2_from_theta_설계.md)) |

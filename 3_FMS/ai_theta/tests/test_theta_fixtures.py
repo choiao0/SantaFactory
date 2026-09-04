@@ -36,9 +36,10 @@ from ai_theta.theta_fixtures import (  # noqa: E402
     by_name,
 )
 
-# 통로 내부 간선만 보는 행 구간. from_theta.VA_ROWS = (48, 67) 이므로 양 끝 행을
+# 통로 내부 간선만 보는 행 구간. from_theta.VA_ROWS = (47, 68) 이므로 양 끝 행을
 # 제외해야 "양 끝이 같은 aisle_id"인 간선만 남는다 (from_theta_demo 와 동일 구간).
-AISLE_INNER_ROWS = slice(49, 66)
+# 2026-09-03 맵 동기화(랙 1 m 연장)로 (49, 66) → (48, 67).
+AISLE_INNER_ROWS = slice(48, 67)
 
 # 링 위의 알려진 셀 — from_theta_demo [4]가 쓰는 좌표.
 SOUTH_BAND_CELL = (44, 60)   # 남 밴드: 시계 순방향 = 서
@@ -130,7 +131,7 @@ class FromThetaAgainstFixturesTest(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        free, st_cell, _ = load_map(str(SIM_ENGINE))
+        free, st_cell, _ = load_map()                         # 공식 맵 3_FMS/map
         cls.free = free
         cls.topo = extract_topology(free, st_cell)
 
