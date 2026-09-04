@@ -17,23 +17,23 @@ import org.springframework.web.client.RestClientResponseException;
 @RequiredArgsConstructor
 public class SimulationClient {
 
-    private final RestClient aiRestClient;
+    private final RestClient simRestClient;
 
     public SimulationAcceptedResponse requestSimulation(SimulationRequest request) {
         try {
-            return aiRestClient.post()
+            return simRestClient.post()
                     .uri("/simulations")
                     .contentType(MediaType.APPLICATION_JSON)
                     .body(request)
                     .retrieve()
                     .body(SimulationAcceptedResponse.class);
         } catch (ResourceAccessException e) {
-            log.error("AI 서버 연결 실패: runId={}", request.runId(), e);
-            throw new GlobalException(ErrorCode.AI_SERVER_UNAVAILABLE);
+            log.error("시뮬 엔진 연결 실패: runId={}", request.runId(), e);
+            throw new GlobalException(ErrorCode.SIM_SERVER_UNAVAILABLE);
         } catch (RestClientResponseException e) {
-            log.error("AI 서버 응답 오류: runId={}, status={}, body={}",
+            log.error("시뮬 엔진 응답 오류: runId={}, status={}, body={}",
                     request.runId(), e.getStatusCode(), e.getResponseBodyAsString());
-            throw new GlobalException(ErrorCode.AI_SERVER_ERROR);
+            throw new GlobalException(ErrorCode.SIM_SERVER_ERROR);
         }
     }
 }

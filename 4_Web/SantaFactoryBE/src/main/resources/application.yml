@@ -16,11 +16,11 @@ spring:
 server:
   port: 8080
 
-ai:
-  base-url: ${AI_BASE_URL:http://localhost:8000}
+sim:
+  base-url: ${SIM_BASE_URL:http://localhost:8000}
   connect-timeout: 3s
   read-timeout: 10s
-  callback-token: ${AI_CALLBACK_TOKEN:change-me}
+  callback-token: ${SIM_CALLBACK_TOKEN:change-me}
 
 springdoc:
   swagger-ui:

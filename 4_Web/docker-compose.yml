@@ -30,8 +30,8 @@ services:
       DB_URL: jdbc:postgresql://db:5432/${DB_NAME}
       DB_USERNAME: ${DB_USERNAME}
       DB_PASSWORD: ${DB_PASSWORD}
-      AI_BASE_URL: ${AI_BASE_URL}
-      AI_CALLBACK_TOKEN: ${AI_CALLBACK_TOKEN}
+      SIM_BASE_URL: ${SIM_BASE_URL}
+      SIM_CALLBACK_TOKEN: ${SIM_CALLBACK_TOKEN}
     ports:
       - "127.0.0.1:8080:8080"
     depends_on:

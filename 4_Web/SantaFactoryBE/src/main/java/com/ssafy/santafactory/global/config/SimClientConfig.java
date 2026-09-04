@@ -7,11 +7,11 @@ import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.web.client.RestClient;
 
 @Configuration
-@EnableConfigurationProperties(AiProperties.class)
-public class AiClientConfig {
+@EnableConfigurationProperties(SimProperties.class)
+public class SimClientConfig {
 
     @Bean
-    public RestClient aiRestClient(AiProperties props) {
+    public RestClient simRestClient(SimProperties props) {
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
         factory.setConnectTimeout(props.connectTimeout());
         factory.setReadTimeout(props.readTimeout());

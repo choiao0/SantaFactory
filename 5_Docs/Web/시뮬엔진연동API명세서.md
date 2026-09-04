@@ -1,9 +1,9 @@
-# AI 연동 API 명세서
+# 시뮬 엔진 연동 API 명세서
 
-**버전** v0.1 · **대상** 웹 백엔드 / AI(시뮬레이션) 파트 · **작성일** 2026-09-04
+**버전** v0.1 · **대상** 웹 백엔드 / 시뮬 엔진(B트랙) 파트 · **작성일** 2026-09-04
 
 > 시뮬레이션 요청·응답 DTO는 기존 것을 그대로 쓴다.
-> 원래 한 번의 요청/응답으로 처리하려던 것을 **요청(백엔드→AI)** 과 **결과 콜백(AI→백엔드)** 으로 분리했다.
+> 원래 한 번의 요청/응답으로 처리하려던 것을 **요청(백엔드→시뮬 엔진)** 과 **결과 콜백(시뮬 엔진→백엔드)** 으로 분리했다.
 > DTO 필드는 추가·수정·삭제하지 않았다.
 
 ---
@@ -11,7 +11,7 @@
 ## 0. 전체 흐름
 
 ```
-프론트                 백엔드                          AI 서버
+프론트                 백엔드                          시뮬 엔진
   │                      │                               │
   │ POST /estimates      │                               │
   │─────────────────────▶│  견적 생성, AMR 대수별 run 생성  │
@@ -25,7 +25,7 @@
   │ GET /estimates/{id}  │                               │
   │  (폴링 또는 SSE)      │                               │
   │─────────────────────▶│                               │
-  │                      │  POST /api/ai/simulations     │
+  │                      │  POST /api/sim/results        │
   │                      │◀──────────────────────────────│  ② 결과 콜백
   │                      │  run 상태 DONE, KPI 저장        │
   │                      │──────────────────────────────▶│     200
@@ -36,13 +36,13 @@
 
 - **견적(estimate)** 1건 = AMR 대수를 바꿔가며 돌리는 **run 여러 개**
 - `run_id` 는 백엔드가 만든다. 형식 `est_{estimateId}_n{amrCount}` (예: `est_77_n3`)
-- AI 호출은 run 하나당 한 번. AI는 `run_id` 를 그대로 에코한다.
+- 시뮬 엔진 호출은 run 하나당 한 번. AI는 `run_id` 를 그대로 에코한다.
 
 ---
 
-## 1. 백엔드 → AI (AI 서버가 제공)
+## 1. 백엔드 → 시뮬 엔진 (시뮬 엔진가 제공)
 
-Base URL: `${AI_BASE_URL}` (예: `http://ai:8000`)
+Base URL: `${SIM_BASE_URL}` (예: `http://sim:8000`)
 
 | 메서드 | URL | 용도 | 성공 응답 |
 |---|---|---|---|
@@ -119,13 +119,13 @@ Base URL: `${AI_BASE_URL}` (예: `http://ai:8000`)
 
 ---
 
-## 2. AI → 백엔드 콜백 (백엔드가 제공)
+## 2. 시뮬 엔진 → 백엔드 콜백 (백엔드가 제공)
 
 Base URL: `${BACKEND_BASE_URL}` (compose 내부: `http://backend:8080`)
 
 | 메서드 | URL | 용도 | 성공 응답 |
 |---|---|---|---|
-| POST | `/api/ai/simulations` | 시뮬레이션 결과 전달 | `200 OK` |
+| POST | `/api/sim/results` | 시뮬레이션 결과 전달 | `200 OK` |
 
 ### 2-1. 요청 본문 — 기존 응답 DTO 그대로
 
@@ -164,7 +164,7 @@ Base URL: `${BACKEND_BASE_URL}` (compose 내부: `http://backend:8080`)
 | 헤더 | 값 | 설명 |
 |---|---|---|
 | `Content-Type` | `application/json` | |
-| `X-AI-Callback-Token` | `${AI_CALLBACK_TOKEN}` | 공유 시크릿. 불일치 시 401 |
+| `X-Sim-Callback-Token` | `${SIM_CALLBACK_TOKEN}` | 공유 시크릿. 불일치 시 401 |
 
 ### 2-3. 백엔드 응답
 
@@ -174,12 +174,12 @@ Base URL: `${BACKEND_BASE_URL}` (compose 내부: `http://backend:8080`)
 |---|---|---|
 | 200 | `COMMON200` | 정상 반영 |
 | 200 | `COMMON200` | 이미 `DONE` 인 run 에 중복 콜백 → 무시하고 200 (멱등) |
-| 401 | `AI401` | 콜백 토큰 불일치 |
+| 401 | `SIM401` | 콜백 토큰 불일치 |
 | 404 | `COMMON404` | 알 수 없는 `run_id` |
 
 ### 2-4. 재시도 규칙
 
-- 백엔드가 5xx 를 주거나 연결 실패 시 AI 는 **최대 3회, 10초 간격**으로 재시도한다.
+- 백엔드가 5xx 를 주거나 연결 실패 시 시뮬 엔진은 **최대 3회, 10초 간격**으로 재시도한다.
 - 백엔드는 run 이 `RUNNING` 상태로 **30분**을 넘기면 `GET /simulations/{run_id}` 로 상태를 확인하고, 그래도 미완료면 `TIMEOUT` 처리한다.
 
 ---
@@ -192,10 +192,10 @@ Base URL: `/api`
 
 | 메서드 | URL | 용도 | 성공 응답 |
 |---|---|---|---|
-| POST | `/estimates` | 견적 요청 생성. 창고 조건 + AMR 사양 + 대수 범위를 받아 run 을 만들고 AI 에 전부 요청 | `202 Accepted` |
+| POST | `/estimates` | 견적 요청 생성. 창고 조건 + AMR 사양 + 대수 범위를 받아 run 을 만들고 시뮬 엔진에 전부 요청 | `202 Accepted` |
 | GET | `/estimates` | 견적 목록 (최근순, 페이지네이션) | `200 OK` |
 | GET | `/estimates/{estimateId}` | 견적 상태 + run 별 결과표(대수·가동률·처리량·비용) | `200 OK` |
-| DELETE | `/estimates/{estimateId}` | 견적 취소. 미완료 run 에 대해 AI 로 `DELETE /simulations/{run_id}` 전파 | `204 No Content` |
+| DELETE | `/estimates/{estimateId}` | 견적 취소. 미완료 run 에 대해 시뮬 엔진으로 `DELETE /simulations/{run_id}` 전파 | `204 No Content` |
 
 ### 3-2. run (견적 하위)
 
@@ -219,8 +219,8 @@ SSE 대신 `GET /estimates/{estimateId}` 폴링(5초 간격)으로 시작해도 
 
 | 값 | 의미 | 전이 |
 |---|---|---|
-| `QUEUED` | AI 에 요청 보냄, 접수 응답 받음 | → RUNNING / FAILED |
-| `RUNNING` | AI 가 계산 중 | → DONE / FAILED / TIMEOUT |
+| `QUEUED` | 시뮬 엔진에 요청 보냄, 접수 응답 받음 | → RUNNING / FAILED |
+| `RUNNING` | 시뮬 엔진이 계산 중 | → DONE / FAILED / TIMEOUT |
 | `DONE` | 콜백 `status: done` 수신 | 종료 |
 | `FAILED` | 콜백 `status: failed` 수신, 또는 요청 자체 실패 | → QUEUED (retry) |
 | `TIMEOUT` | 30분 내 콜백 없음 | → QUEUED (retry) |
@@ -241,9 +241,9 @@ SSE 대신 `GET /estimates/{estimateId}` 폴링(5초 간격)으로 시작해도 
 | 항목 | 규칙 |
 |---|---|
 | URL | 소문자, 복수형 명사, 단어 구분은 `-` |
-| 백엔드 ↔ AI JSON 필드 | `snake_case` (AI 가 Python 이므로 DTO 기준 유지) |
+| 백엔드 ↔ 시뮬 엔진 JSON 필드 | `snake_case` (시뮬 엔진이 Python 이므로 DTO 기준 유지) |
 | 백엔드 ↔ 프론트 JSON 필드 | `camelCase` (`ApiResponse` 규칙과 통일) |
-| 프리픽스 | 백엔드 API 는 `/api` 프리픽스, 버전 없음. AI 서버는 프리픽스 없음 |
+| 프리픽스 | 백엔드 API 는 `/api` 프리픽스, 버전 없음. 시뮬 엔진는 프리픽스 없음 |
 | 식별자 | 견적은 숫자 `estimateId`, run 은 문자열 `run_id` (`est_{estimateId}_n{amrCount}`) |
 
 ---
@@ -252,6 +252,6 @@ SSE 대신 `GET /estimates/{estimateId}` 폴링(5초 간격)으로 시작해도 
 
 | 변수 | 사용처 | 예시 |
 |---|---|---|
-| `AI_BASE_URL` | 백엔드 | `http://ai:8000` |
-| `AI_CALLBACK_TOKEN` | 백엔드·AI 공통 | 랜덤 문자열 |
-| `BACKEND_BASE_URL` | AI | `http://backend:8080` |
+| `SIM_BASE_URL` | 백엔드 | `http://sim:8000` |
+| `SIM_CALLBACK_TOKEN` | 백엔드·시뮬 엔진 공통 | 랜덤 문자열 |
+| `BACKEND_BASE_URL` | 시뮬 엔진 | `http://backend:8080` |
