@@ -120,6 +120,7 @@ SIM_NO_PLOT=1 PYTHONIOENCODING=utf-8 python sim_v2_tasks.py bo17 24 120 42 1 --o
 | v1 | 2026-09-04 | 최초. `--heading`·`--fixed-homes`·`--order-gap`, 존 키, 장치 ⑤, 동기화 맵 경로 반영 |
 | v1.1 | 2026-09-04 | §4 실행 시간 표를 성능 최적화(-136) 후 값으로 갱신 (호출 규약·출력 불변) |
 | **v2** | 2026-09-04 | **비호환**: 기본 모델 = 헤딩, `--cell` 신설, `--heading` 호환 무시(-143). §5 헤딩 기본 기준값 2850/132.6 등재. `n_robots` 상한 28의 의미(견적 제약) 명시. 환경변수 `SIM_EXPORT_ISAAC=1`(리플레이 내보내기, 출력 불변) |
+| v2.1 | 2026-09-04 | 호환: 시뮬 본체가 `fms_kernel.FmsKernel` + `order_stream.OrderStream` 라이브러리로 분리(-144). **CLI·SUMMARY·종료 코드 불변**(기준값 3개·CSV 80행 비트 동일). 프로세스 대신 in-process 로 부르려면 `sim_v2_tasks.parse_args/build/run_ticks/report` 를 import (simpy_harness.py 가 예) |
 
 관련: [고부하_무릎_판정](../docs/2026-09-04_고부하_무릎_판정.md), [θ_실험_로드맵](../docs/2026-09-04_θ_실험_로드맵_AB공동.md),
 [시스템아키텍처_검토](../docs/2026-09-04_시스템아키텍처_검토_B트랙관점.md) §2-4, A트랙 워커 `../infra/worker/objective.py`.
