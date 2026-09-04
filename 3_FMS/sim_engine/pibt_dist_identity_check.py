@@ -23,7 +23,8 @@ free_cells = list(zip(*np.nonzero(FREE)))
 
 
 def same_arrays(a, b, tol=0.0):
-    if tol == 0.0:
+    # tol <= 0 = 비트 동일 요구(의도적 — 이 검사의 목적). allclose 류로 바꾸지 말 것.
+    if tol <= 0.0:
         return np.array_equal(a, b)
     ok = (a < 0) == (b < 0)
     return bool(ok.all()) and bool(np.all(np.abs(a[a >= 0] - b[b >= 0]) <= tol))
