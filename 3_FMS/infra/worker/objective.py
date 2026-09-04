@@ -47,7 +47,11 @@ def run_once(sim_engine_dir, theta_path, n_robots, n_orders, seed,
     """
     cmd = [sys.executable, "sim_v2_tasks.py", tag,
            str(n_robots), str(n_orders), str(seed), str(aisle_block),
-           f"--flow={flow}", f"--theta={theta_path}"]
+           f"--flow={flow}"]
+    # theta_path=None 이면 --theta 를 붙이지 않는다 = uniform 비용(기준선).
+    # 중립 θ 가 기준선을 재현하는지 확인하려면 두 실행이 모두 필요하다.
+    if theta_path is not None:
+        cmd.append(f"--theta={theta_path}")
     if heading:
         cmd.append("--heading")
     if order_gap is not None:
