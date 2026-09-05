@@ -3,7 +3,7 @@ name: santafactory
 services:
   db:
     image: postgres:16-alpine
-    container_name: santafactory-db
+    container_name: a106-db
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${DB_NAME}
@@ -24,21 +24,42 @@ services:
   backend:
     build: ./SantaFactoryBE
     image: santafactory-be:latest
-    container_name: santafactory-be
+    container_name: a106-backend
     restart: unless-stopped
     environment:
       DB_URL: jdbc:postgresql://db:5432/${DB_NAME}
       DB_USERNAME: ${DB_USERNAME}
       DB_PASSWORD: ${DB_PASSWORD}
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_USER: ${RABBITMQ_USER}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
     ports:
       - "127.0.0.1:8080:8080"
     depends_on:
       db:
         condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: a106-rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
+    ports:
+      - "127.0.0.1:5672:5672"
+      - "127.0.0.1:15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
   sonarqube:
     image: sonarqube:community
-    container_name: santafactory-sonar
+    container_name: a106-sonarqube
     restart: unless-stopped
     environment:
       SONAR_JDBC_URL: jdbc:postgresql://db:5432/sonarqube

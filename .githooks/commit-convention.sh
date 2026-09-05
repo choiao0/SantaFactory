@@ -25,7 +25,7 @@ JIRA_KEY_PATTERN='S15P21A106-[0-9]+'
 # 나머지는 "${subject#* }" 등으로 첫 단어를 잘라낸 뒤 이 패턴으로 검사한다.
 MSG_REST_PATTERN='^(feat|fix|refactor|docs|test|chore|style)(\([a-z0-9_-]+\))?: .+ \('"$JIRA_KEY_PATTERN"'\)$'
 
-STATIC_BRANCHES="main develop"
+STATIC_BRANCHES="main develop release"
 # 설명 부분은 한글/영문/숫자/하이픈을 허용한다 (한글 음절 U+AC00~U+D7A3는
 # 3바이트 UTF-8이라 위 이모지 astral 버그와 무관하게 grep -E에서 정상 매칭된다).
 BRANCH_PATTERN='^(feature|hotfix)/S15P21A106-[0-9]+-[a-zA-Z0-9가-힣-]+$'
