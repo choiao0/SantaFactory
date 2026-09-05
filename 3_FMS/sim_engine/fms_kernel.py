@@ -54,7 +54,7 @@ class KernelConfig:
     turn_ticks: int = TURN_TICKS  # 90° 회전 틱
     dock_clear: int = 3           # 장치 ⑤ 유지 거리 (체비쇼프, 로봇 길이)
     stall_ticks: int = 1500       # 워치독: 이 틱 동안 완료 태스크 수 무변화 → StallError
-    stall_warn_only: bool = False # 지평 실행: 무진전은 기록하고 계속 (유한 모드는 기존 StallError)
+    stall_warn_only: bool = False # 고정 시간 실행: 무진전은 기록하고 계속 (유한 모드는 기존 StallError)
     trace_len: int = 12           # STALL 덤프용 최근 틱 이력 길이
     # 배터리·충전 도크 (-145 §2-1). battery=False 면 아래는 전부 무시.
     battery: bool = False
@@ -103,7 +103,7 @@ class FmsKernel:
         self._stag = Stagnation()               # 헤딩: 거리 개선 없는 연속 틱 (우선순위·대기 상승·재계획)
         self._replan = Replanner(free, edge_cost, self.turn_cost) if self.heading else None
         self._trace = []                        # STALL 진단용 링버퍼 (t, rid -> (상태, busy, 액션))
-        self.stall_warning_ticks = []            # 지평 모드 무진전 경고 시각(계속 실행)
+        self.stall_warning_ticks = []            # 고정 시간 모드 무진전 경고 시각(계속 실행)
 
         # 로봇
         self.robots = {}
@@ -423,7 +423,7 @@ class FmsKernel:
                 rb["state"] = CHARGING
 
         # 워치독 (v1 STALL 동일 기준: stall_ticks 무진전). 대기 큐가 비고 임무 중 로봇이 없으면 할 일이 없는 것이므로
-        # 진전으로 본다 (-145 §2-7: 지평 모드의 한가한 구간·집단 충전). 유한 모드에서는 outstanding > 0 인 동안
+        # 진전으로 본다 (-145 §2-7: 고정 시간 모드의 한가한 구간·집단 충전). 유한 모드에서는 outstanding > 0 인 동안
         # 대기 또는 임무 중 태스크가 항상 있어 이 조건이 참이 되지 않는다.
         if len(self.tasks_done) != self._progress[0] or \
                 (not self.waiting and not any(rb["state"] in ON_TASK for rb in robots.values())):

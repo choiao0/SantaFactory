@@ -12,7 +12,7 @@
 #   spawn_order(main):     choice([1,2,3]) → integers(N_AISLE) × k → integers(N_PACK)
 #   spawn_inbound:         integers(N_INB_ST) → integers(N_AISLE)
 #
-# 지평 모드 (horizon 지정, -145 설계 §1): 유한 건수 대신 "T 안에서 생기는 만큼". 교대(shifts)로 T 를 k 등분해
+# 고정 시간 모드 (horizon 지정, -145 설계 §1): 유한 건수 대신 "T 안에서 생기는 만큼". 교대(shifts)로 T 를 k 등분해
 # 각 창에는 그 종류(in=입고 / out=출고)의 도착만 생긴다 — 입고·출고가 시간상 겹치지 않는다. 창 밖에 그 종류의
 # 도착은 0 건이고 큐에 미루는 것도 아니다. rng 는 출고 창 전부 → 입고 창 전부 순으로 소비.
 # ============================================================
@@ -59,7 +59,7 @@ class OrderStream:
             else:
                 self.inbound_times = np.array([], dtype=int)
         else:
-            assert flow == "main", "지평 모드는 main 흐름만 (v1compat 은 패리티 전용)"
+            assert flow == "main", "고정 시간 모드는 main 흐름만 (v1compat 은 패리티 전용)"
             self.windows = shift_windows(horizon, tuple(shifts))
             self.order_times = np.concatenate([self._window_times(s, e, order_gap)
                                                for kind, s, e in self.windows if kind == "out"] or [np.array([], dtype=int)])
@@ -93,7 +93,7 @@ class OrderStream:
         return sorted(set(self.order_times.tolist()) | set(self.inbound_times.tolist()))
 
     def window_of(self, t):
-        """지평 모드: 틱 t 가 속한 교대 종류 ('in'|'out'). 유한 모드는 None."""
+        """고정 시간 모드: 틱 t 가 속한 교대 종류 ('in'|'out'). 유한 모드는 None."""
         if self.windows is None:
             return None
         for kind, s, e in self.windows:
