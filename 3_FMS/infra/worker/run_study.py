@@ -12,8 +12,8 @@
 # 접속 URL 은 compose 가 넣어주는 OPTUNA_STORAGE 환경변수에서 읽는다. 자격증명을
 # 인자나 소스에 적지 않는다 (.env 로 관리 — infra/.env.example 참고).
 #
-# 시뮬 호출 규약은 contracts/SIM_RUN_CONTRACT.md v1 이 단일 출처다. 기본값은
-# 그 문서 §5 "θ 탐색 권장 조건"(헤딩 모델 · order_gap 15 · aisle_block 1)에
+# 시뮬 호출 규약은 contracts/SIM_RUN_CONTRACT.md v2 가 단일 출처다. 기본값은
+# 그 문서 §5 "θ 탐색 권장 조건"(헤딩 = v2 기본 · order_gap 15 · aisle_block 1)에
 # 맞춰 두었다 — 조건을 매번 손으로 적다가 빠뜨리면 기준선과 비교가 안 된다.
 #
 # 사용 (컨테이너 안, /work 마운트 기준):
@@ -47,31 +47,44 @@ MAX_ROBOTS = 28
 
 
 def load_theta_space(fms_root):
-    """계약에서 θ 탐색 범위를 읽어온다."""
+    """계약에서 θ 탐색 범위와 중립값을 읽어온다."""
     if fms_root not in sys.path:
         sys.path.insert(0, fms_root)
-    from contracts.guidance_types import (THETA_CATEGORICAL_VALUES,
+    from contracts.guidance_types import (GuidanceTheta,
+                                          THETA_CATEGORICAL_VALUES,
                                           THETA_CONTINUOUS_RANGES,
                                           THETA_SCHEMA_VERSION)
-    return THETA_CONTINUOUS_RANGES, THETA_CATEGORICAL_VALUES, THETA_SCHEMA_VERSION
+    neutral = GuidanceTheta.neutral()
+    neutral_values = {n: getattr(neutral, n) for n in
+                      list(THETA_CONTINUOUS_RANGES) + list(THETA_CATEGORICAL_VALUES)}
+    return (THETA_CONTINUOUS_RANGES, THETA_CATEGORICAL_VALUES,
+            THETA_SCHEMA_VERSION, neutral_values)
 
 
-def suggest_theta(trial, continuous, categorical):
-    theta = {name: trial.suggest_float(name, lo, hi)
+def suggest_theta(trial, continuous, categorical, pinned):
+    """θ 11개. pinned 에 있는 이름은 제안하지 않고 그 값으로 고정한다.
+
+    θ 스키마는 11개를 다 요구하므로(계약 guidance_types) 제외한 파라미터도
+    값은 있어야 한다. 중립값으로 고정해 "탐색하지 않음"과 "없음"을 구분한다 —
+    Optuna 에 제안시키면 평평한 축을 헤매고, 빼 버리면 θ json 이 스키마를 어긴다.
+    """
+    theta = {name: pinned[name] if name in pinned
+             else trial.suggest_float(name, lo, hi)
              for name, (lo, hi) in continuous.items()}
-    theta.update({name: trial.suggest_categorical(name, list(values))
+    theta.update({name: pinned[name] if name in pinned
+                  else trial.suggest_categorical(name, list(values))
                   for name, values in categorical.items()})
     return theta
 
 
 def make_objective(args, continuous, categorical):
     def objective(trial):
-        theta = suggest_theta(trial, continuous, categorical)
+        theta = suggest_theta(trial, continuous, categorical, args.pinned)
         try:
             result = evaluate(theta, args.sim_engine, args.robots, args.orders,
                               args.seeds, timeout_s=args.timeout,
                               aisle_block=args.aisle_block, flow=FLOW,
-                              heading=args.heading, order_gap=args.order_gap,
+                              cell=args.cell, order_gap=args.order_gap,
                               tag=f"bo{trial.number}")
         except SimFailed as exc:
             # 시뮬이 못 끝나는 θ 도 정보다 — 버리지 말고 기록하고 가지치기한다.
@@ -96,12 +109,13 @@ def make_objective(args, continuous, categorical):
     return objective
 
 
-def dump_best(study, args, schema_version):
+def dump_best(study, args, schema_version, neutral_names):
     """최적 θ 를 sim_v2 --theta 가 바로 읽는 형태로 저장한다."""
     if not args.out:
         return None
     os.makedirs(args.out, exist_ok=True)
-    theta = dict(study.best_trial.params)
+    # best_trial.params 에는 고정한 θ 가 없다. 스키마 11개를 채워야 한다.
+    theta = {**args.pinned, **study.best_trial.params}
     for name in ("aisle_period", "aisle_phase", "loop_dir"):
         if name in theta:
             theta[name] = int(theta[name])
@@ -117,9 +131,13 @@ def dump_best(study, args, schema_version):
         # 그대로 복원할 수 있어야 한다.
         "condition": {"robots": args.robots, "orders": args.orders,
                       "seeds": args.seeds, "aisle_block": args.aisle_block,
-                      "flow": FLOW, "heading": args.heading,
+                      "flow": FLOW, "cell": args.cell,
                       "order_gap": args.order_gap},
-        "sim_run_contract": "v1",
+        # 어떤 축을 탐색했는지 남긴다. 고정한 θ 도 값은 theta json 에 들어가므로
+        # 이 목록이 없으면 "탐색해서 중립이 나온 것"과 구분되지 않는다.
+        "search_space": {"pinned_neutral": sorted(args.pinned),
+                         "searched": sorted(set(neutral_names) - set(args.pinned))},
+        "sim_run_contract": "v2",
         "objective": {"metric": args.metric, "direction": args.direction,
                       "value": study.best_value},
         "n_trials": len(study.trials),
@@ -148,10 +166,16 @@ def parse_args(argv=None):
     # 계약 §1: aisle_block=1(랙 사이 통로 = 피커 전용)이 기준선이다.
     p.add_argument("--aisle-block", type=int, default=1, choices=(0, 1),
                    dest="aisle_block", help="1=랙 통로 로봇 통행 금지(기준선)")
-    # 계약 §5 권장 탐색 조건. --no-heading 은 감도 실험 예비 조사처럼
-    # 값이 싼 실행이 필요할 때만 쓴다 — 본 탐색은 헤딩으로 한다.
-    p.add_argument("--heading", action=argparse.BooleanOptionalAction, default=True,
-                   help="헤딩 PIBT(2칸 차체·회전·후진). 기본 켜짐")
+    # 계약 v2: 헤딩이 기본이고 칸 모델이 --cell opt-in 이다. --cell 은 예비
+    # 조사처럼 값이 싼 실행에만 쓴다 — 본 탐색은 헤딩으로 한다(계약 §5).
+    p.add_argument("--cell", action="store_true",
+                   help="칸 모델(점로봇). 기본은 헤딩 PIBT")
+    # 138 감도 실험: aisle 계열 4개는 aisle_block=1 에서 비트 단위로 무효다
+    # (from_theta 의 통로 rank 구간이 통로차단 구간과 같다). 탐색 축으로 두면
+    # 100% 낭비이므로 중립 고정이 기본이다. 통로를 여는 실험에서는 비운다.
+    p.add_argument("--exclude", default="aisle_alt_gain,aisle_alt_boost,"
+                                        "aisle_period,aisle_phase",
+                   help="탐색에서 빼고 중립값으로 고정할 θ 이름(쉼표). 빈 문자열이면 전부 탐색")
     p.add_argument("--order-gap", type=float, default=15.0, dest="order_gap",
                    help="주문 도착 간격 평균[틱]. 기본 15(고부하) — "
                         "50은 수요 제약이라 θ 효과가 seed 산포에 묻힌다")
@@ -173,18 +197,27 @@ def parse_args(argv=None):
         p.error("--seeds 가 비었다. 시뮬은 확률적이라 시드 3개 이상을 권장한다")
     if args.robots > MAX_ROBOTS:
         p.error(f"--robots {args.robots} > 충전 존 용량 {MAX_ROBOTS} (계약 §1)")
+    args.exclude = [n.strip() for n in args.exclude.split(",") if n.strip()]
     return args
 
 
 def main(argv=None):
     args = parse_args(argv)
-    continuous, categorical, schema_version = load_theta_space(args.fms_root)
+    continuous, categorical, schema_version, neutral = load_theta_space(args.fms_root)
+    unknown = [n for n in args.exclude if n not in neutral]
+    if unknown:
+        raise SystemExit(f"--exclude 에 스키마에 없는 이름: {unknown}")
+    args.pinned = {n: neutral[n] for n in args.exclude}
+    n_search = len(neutral) - len(args.pinned)
     print(f"θ 스키마 v{schema_version} — 연속 {len(continuous)} + 범주 {len(categorical)}")
+    if args.pinned:
+        print(f"탐색 {n_search}차원 / 중립 고정 {len(args.pinned)}개: "
+              f"{', '.join(sorted(args.pinned))}")
     print(f"study {args.study} / 로봇 {args.robots} · 주문 {args.orders} · "
           f"seed {args.seeds} / 목적 {args.direction} {args.metric}")
     print(f"조건 flow={FLOW} · aisle_block={args.aisle_block} · "
-          f"{'헤딩' if args.heading else '칸'} 모델 · order_gap={args.order_gap} "
-          f"(SIM_RUN_CONTRACT v1)")
+          f"{'칸' if args.cell else '헤딩'} 모델 · order_gap={args.order_gap} "
+          f"(SIM_RUN_CONTRACT v2)")
 
     study = optuna.create_study(
         study_name=args.study,
@@ -198,7 +231,7 @@ def main(argv=None):
 
     print(f"\n완료 trial {len(study.trials)}개 / "
           f"최적 {args.metric} {study.best_value:.4f} (trial {study.best_trial.number})")
-    path = dump_best(study, args, schema_version)
+    path = dump_best(study, args, schema_version, list(neutral))
     if path:
         print(f"최적 θ → {path}")
     return 0
