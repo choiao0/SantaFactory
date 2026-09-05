@@ -11,6 +11,8 @@
 | [`tests/`](tests/) | 세트를 실제 `from_theta` 출력과 대조 | 테스트 10개 |
 | [`data/`](data/) | 창고 + 운영조건 → `GuidanceInput` (39채널 + 운영조건 9) | `build_input.py`, 테스트 22개 |
 | [`train/`](train/) | θ 회귀(연속 8) + 분류(범주형 3) 학습 스크립트 | 비어있음 |
+| [`experiments/`](experiments/) | θ 감도 실험 — 실효 파라미터 식별 (`theta_sensitivity.py`). `--from-csv` 로 시뮬 없이 재판정 | 케이스 17개 |
+| [`results/`](results/) | 실험 산출물 CSV (기존 결과 덮어쓰기 금지) | |
 
 ## theta_fixtures.py
 
