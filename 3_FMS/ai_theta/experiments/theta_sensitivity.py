@@ -321,32 +321,39 @@ def load_rows(path):
     시뮬을 다시 돌리지 않고 판정 기준만 바꿔 볼 수 있어야 한다 — 실제로 판정을
     한 번 고쳐 결론이 뒤집혔고(문서 §1), 그때 원자료가 없었다면 27분을 다시 썼다.
     """
-    rows = []
     with open(path, encoding="utf-8", newline="") as f:
-        for raw in csv.DictReader(f):
-            n_ok = int(raw.get("n_ok") or 0)
-            row = {"case": raw["case"], "base": raw.get("base") or "neutral",
-                   "param": raw.get("param", "-"), "n_ok": n_ok}
-            if not n_ok:
-                rows.append(row)
-                continue
-            ids = [s for s in (raw.get("seed_ids") or "").split("|") if s]
-            if len(ids) != n_ok:
-                # 구 CSV 에는 seed_ids 가 없다. 순서로 맞추는데, 실패한 시드가 있는
-                # 케이스는 짝이 어긋날 수 있다 (n_ok 가 다른 행을 볼 것).
-                ids = [str(i) for i in range(n_ok)]
-            per_seed = {sid: {} for sid in ids}
-            for key in METRICS:
-                cell = raw.get(f"seeds_{key}")
-                if not cell:
-                    continue
-                for sid, value in zip(ids, cell.split("|")):
-                    per_seed[sid][key] = float(value)
-                row[f"mean_{key}"] = float(raw[f"mean_{key}"])
-                row[f"spread_{key}"] = float(raw[f"spread_{key}"])
-            row["_per_seed"] = per_seed
-            rows.append(row)
-    return rows
+        return [row_from_csv(raw) for raw in csv.DictReader(f)]
+
+
+def seed_ids_of(raw, n_ok):
+    """CSV 행의 시드 id 목록. 구 CSV 에는 seed_ids 컬럼이 없다.
+
+    없으면 순서로 맞춘다 — 전 케이스가 같은 시드를 다 돌았다면 정확하지만,
+    실패한 시드가 있는 케이스(n_ok 가 다른 행)는 짝이 어긋날 수 있다.
+    """
+    ids = [s for s in (raw.get("seed_ids") or "").split("|") if s]
+    return ids if len(ids) == n_ok else [str(i) for i in range(n_ok)]
+
+
+def row_from_csv(raw):
+    """CSV 행 하나 → rows 원소. seeds_* 를 풀어 _per_seed 를 복원한다."""
+    n_ok = int(raw.get("n_ok") or 0)
+    row = {"case": raw["case"], "base": raw.get("base") or "neutral",
+           "param": raw.get("param", "-"), "n_ok": n_ok}
+    if not n_ok:
+        return row
+    ids = seed_ids_of(raw, n_ok)
+    per_seed = {sid: {} for sid in ids}
+    for key in METRICS:
+        cell = raw.get(f"seeds_{key}")
+        if not cell:
+            continue
+        for sid, value in zip(ids, cell.split("|")):
+            per_seed[sid][key] = float(value)
+        row[f"mean_{key}"] = float(raw[f"mean_{key}"])
+        row[f"spread_{key}"] = float(raw[f"spread_{key}"])
+    row["_per_seed"] = per_seed
+    return row
 
 
 def save_csv(rows, args, seeds):
