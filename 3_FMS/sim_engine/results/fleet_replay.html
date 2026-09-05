@@ -12,7 +12,7 @@
     color-scheme: dark;
     --bg: #0f1720; --panel: #16202b; --edge: #24303d; --floor: #1c2733; --wall: #2a3644; --picker: #223041;
     --zone: #1f3a33; --zone-edge: #2f6b5a; --text: #e3eaf2; --muted: #8a9bb0; --station: #35c98e;
-    --act-move: #f5b641; --act-wait: #6b7c90; --act-rot: #4dc3e8; --act-rev: #ef7ab0; --act-svc: #35c98e;
+    --act-move: #f5b641; --act-wait: #6b7c90; --act-rot: #4dc3e8; --act-rev: #ef7ab0; --act-svc: #35c98e; --act-chg: #a78bfa;
     --robot-rear: rgba(255,255,255,0.10); --grid-line: rgba(255,255,255,0.035); --drop: rgba(245,182,65,0.12);
     --sans: "IBM Plex Sans KR", "Malgun Gothic", "Apple SD Gothic Neo", sans-serif;
     --mono: "IBM Plex Mono", Consolas, "D2Coding", monospace;
@@ -22,7 +22,7 @@
       color-scheme: light;
       --bg: #f2f4f7; --panel: #ffffff; --edge: #d7dee6; --floor: #e6ebf0; --wall: #b3bec9; --picker: #d5dde6;
       --zone: #cfe9df; --zone-edge: #6fbf9f; --text: #16212c; --muted: #5d6c7d; --station: #1f9d6a;
-      --act-move: #d9930a; --act-wait: #8a99a9; --act-rot: #1a99bf; --act-rev: #d1478a; --act-svc: #1f9d6a;
+      --act-move: #d9930a; --act-wait: #8a99a9; --act-rot: #1a99bf; --act-rev: #d1478a; --act-svc: #1f9d6a; --act-chg: #7c4dff;
       --robot-rear: rgba(0,0,0,0.12); --grid-line: rgba(0,0,0,0.05); --drop: rgba(217,147,10,0.12);
     }
   }
@@ -30,7 +30,7 @@
     color-scheme: light;
     --bg: #f2f4f7; --panel: #ffffff; --edge: #d7dee6; --floor: #e6ebf0; --wall: #b3bec9; --picker: #d5dde6;
     --zone: #cfe9df; --zone-edge: #6fbf9f; --text: #16212c; --muted: #5d6c7d; --station: #1f9d6a;
-    --act-move: #d9930a; --act-wait: #8a99a9; --act-rot: #1a99bf; --act-rev: #d1478a; --act-svc: #1f9d6a;
+    --act-move: #d9930a; --act-wait: #8a99a9; --act-rot: #1a99bf; --act-rev: #d1478a; --act-svc: #1f9d6a; --act-chg: #7c4dff;
     --robot-rear: rgba(0,0,0,0.12); --grid-line: rgba(0,0,0,0.05); --drop: rgba(217,147,10,0.12);
   }
   * { box-sizing: border-box; }
@@ -148,9 +148,9 @@
 // 데이터 적재 — Isaac 내보내기 포맷 → 내부 프레임
 // ============================================================
 const DIRS = [[1, 0], [0, 1], [-1, 0], [0, -1]];        // 0=N 1=E 2=S 3=W (행 증가 = 북)
-const ACT_NAMES = ["주행", "대기", "회전", "후진", "서비스(도킹)"];
-const ACT_VARS = ["--act-move", "--act-wait", "--act-rot", "--act-rev", "--act-svc"];
-const ACT_CODE = { move: 0, wait: 1, rotate: 2, reverse: 3, service: 4 };
+const ACT_NAMES = ["주행", "대기", "회전", "후진", "서비스(도킹)", "충전"];
+const ACT_VARS = ["--act-move", "--act-wait", "--act-rot", "--act-rev", "--act-svc", "--act-chg"];
+const ACT_CODE = { move: 0, wait: 1, rotate: 2, reverse: 3, service: 4, charge: 5 };   // charge: -145 배터리 모드
 const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 const toRC = (x, y) => [Math.round(y - 0.5), Math.round(x - 0.1)];
 const yawToH = yaw => { const k = [1, 0, 3, 2];                       // atan2(dr,dc): E=0 → 1, N=π/2 → 0, W=π → 3, S=−π/2 → 2
@@ -253,7 +253,7 @@ function draw() {
     }
     ctx.globalAlpha = 1;
   }
-  const counts = [0, 0, 0, 0, 0];
+  const counts = [0, 0, 0, 0, 0, 0];
   for (const rid of RIDS) {
     const p = pose(rid, t); counts[p.a]++;
     const [dr, dc] = DIRS[p.h];
