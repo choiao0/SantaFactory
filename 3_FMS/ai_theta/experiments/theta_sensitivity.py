@@ -38,6 +38,8 @@
 #       python /work/ai_theta/experiments/theta_sensitivity.py --out /work/ai_theta/results
 # 빠른 예비 조사(칸 모델, 40배 빠름 — 결론용 아님):
 #   ... theta_sensitivity.py --no-heading --orders 40 --seeds 42,43
+# 시뮬 없이 기존 CSV 재판정(판정 기준을 바꿔 볼 때):
+#   ... theta_sensitivity.py --from-csv ai_theta/results/<파일>.csv
 # ============================================================
 import argparse
 import csv
@@ -142,7 +144,8 @@ def evaluate_case(theta, args, seeds):
             os.unlink(path)
     if not per_seed:
         return None, failures
-    stats = {"n_ok": len(per_seed), "_per_seed": per_seed}
+    stats = {"n_ok": len(per_seed), "_per_seed": per_seed,
+             "seed_ids": "|".join(str(s) for s in per_seed)}
     for key in METRICS:
         values = [r[key] for r in per_seed.values() if key in r]
         if not values:
@@ -164,7 +167,12 @@ def main(argv=None):
     p.add_argument("--seeds", default="42,43,44")
     p.add_argument("--timeout", type=int, default=600)
     p.add_argument("--out", default="", help="CSV 저장 디렉토리")
+    p.add_argument("--from-csv", default="", dest="from_csv",
+                   help="시뮬을 돌리지 않고 기존 CSV 를 다시 판정한다")
     args = p.parse_args(argv)
+    if args.from_csv:
+        report(load_rows(args.from_csv))
+        return 0
     seeds = [int(s) for s in args.seeds.split(",") if s.strip()]
 
     cases = build_cases()
@@ -188,82 +196,157 @@ def main(argv=None):
               + (f"  ⚠ {len(failures)}개 실패" if failures else ""))
         rows.append({**common, **stats})
 
-    report(rows, seeds, args)
+    report(rows)
     if args.out:
         save_csv(rows, args, seeds)
     return 0
 
 
-def report(rows, seeds, args):
-    """Δ(각자의 베이스 대비)를 시드 산포와 나란히 놓고 실효/무효를 가른다."""
-    print("\n" + "=" * 100)
+def paired_diffs(by_case, row, key=PRIMARY):
+    """베이스와 **같은 시드끼리** 뺀 차이 목록. 없으면 None.
+
+    시드가 만든 변동은 케이스와 베이스에 똑같이 실리므로 빼면 상쇄되고,
+    파라미터가 만든 차이만 남는다.
+    """
+    base = by_case.get(row.get("base", "neutral"))
+    if base is None or "_per_seed" not in base or "_per_seed" not in row:
+        return None
+    shared = sorted(set(base["_per_seed"]) & set(row["_per_seed"]))
+    if not shared:
+        return None
+    return [row["_per_seed"][s][key] - base["_per_seed"][s][key] for s in shared]
+
+
+def classify(diffs):
+    """차이 목록 → (판정, 실효 여부).
+
+    부호가 갈리면 시드 운이다. 부호가 같아도 평균이 시드별 차이의 폭보다 작으면
+    방향만 일관할 뿐 크기를 신뢰할 수 없다.
+    """
+    if not (all(d > 0 for d in diffs) or all(d < 0 for d in diffs)):
+        return "잡음", False
+    if abs(statistics.fmean(diffs)) <= max(diffs) - min(diffs):
+        return "방향만 일관", False
+    return "실효", True
+
+
+def verdicts(rows):
+    """rows → 케이스별 판정 목록(|Δ| 큰 순).
+
+    출력과 분리된 순수 계산이다. CSV 재분석(--from-csv)이 같은 함수를 쓰므로
+    판정 기준을 바꿔도 시뮬을 다시 돌릴 필요가 없다.
+    """
+    by_case = {r["case"]: r for r in rows if r.get("n_ok")}
+    out = []
+    for r in rows:
+        if not r.get("n_ok") or r["case"] == "neutral":
+            continue
+        diffs = paired_diffs(by_case, r)
+        if diffs is None:
+            continue
+        verdict, signal = classify(diffs)
+        base_mean = by_case[r.get("base", "neutral")][f"mean_{PRIMARY}"]
+        mean_d = statistics.fmean(diffs)
+        lead = paired_diffs(by_case, r, "lead_mean_s") or [0.0]
+        out.append({
+            "case": r["case"], "base": r.get("base", "-"), "param": r["param"],
+            "mean_d": mean_d, "spread_d": max(diffs) - min(diffs),
+            "pct": mean_d / base_mean * 100,
+            "lead_d": statistics.fmean(lead),
+            "verdict": verdict, "signal": signal,
+        })
+    out.sort(key=lambda v: -abs(v["mean_d"]))
+    return out
+
+
+def print_table(vs):
+    print(f"{'케이스':<28}{'base':<14}{'Δ tasks/h':>11}{'Δ%':>8}"
+          f"{'Δ폭':>8}{'Δ 리드평균':>12}  판정")
+    print("-" * 100)
+    for v in vs:
+        print(f"{v['case']:<28}{v['base']:<14}{v['mean_d']:>+11.1f}"
+              f"{v['pct']:>+7.1f}%{v['spread_d']:>8.1f}"
+              f"{v['lead_d']:>+12.1f}  {v['verdict']}")
+
+
+def print_summary(vs, by_case, ref):
+    uni = by_case.get("uniform")
+    if uni:
+        gap = uni[f"mean_{PRIMARY}"] - ref
+        verdict = "일치 ✅" if abs(gap) < 1e-9 else "★불일치 — θ 스키마 합의안 §중립 θ 위반"
+        print()
+        print(f"중립 θ vs uniform 차이 {gap:+.1f} — {verdict}")
+
+    names = sorted({v["param"] for v in vs if v["signal"] and v["case"] != "uniform"})
+    dead = sorted((set(THETA_CONTINUOUS_RANGES) | set(THETA_CATEGORICAL_VALUES))
+                  - set(names))
+    print()
+    print(f"실효 θ {len(names)}개: {', '.join(names) if names else '없음'}")
+    print(f"잡음 이하 {len(dead)}개: {', '.join(dead) if dead else '없음'}")
+    print()
+    print("※ 잡음 이하 = 이 조건에서 1차 효과가 안 보인다는 뜻이지 "
+          "'빼도 된다'가 아니다 (배타 선점·상호작용). 축소는 BO 결과와 함께 판단.")
+    if not names:
+        print("→ 이 조건에서는 θ 가 처리량을 움직이지 않는다. 부하·목적함수를 "
+              "다시 잡아야 한다 (order_gap 25·28대, 리드타임 계열 지표).")
+
+
+def report(rows):
+    """헤더 → 표 → 요약. 계산은 verdicts() 가 하고 여기서는 찍기만 한다."""
+    print()
+    print("=" * 100)
     by_case = {r["case"]: r for r in rows if r.get("n_ok")}
     neutral = by_case.get("neutral")
     if neutral is None:
         print("중립 θ 실행이 실패해 비교 기준이 없다.")
         return
     ref = neutral[f"mean_{PRIMARY}"]
-    # 참고값으로만 남긴다. 판정은 짝지은 차이로 하므로 이 값은 쓰지 않는다 —
-    # 케이스 전체의 최대 산포를 문턱으로 쓰면 다른 케이스의 시드 운이 이 케이스의
-    # 판정을 깎는다(실측에서 wait_cost Δ+47.7 이 station_in 의 산포 49.4 에 밀렸다).
+    # 참고값으로만 남긴다. 케이스 전체의 최대 산포를 문턱으로 쓰면 다른 케이스의
+    # 시드 운이 이 케이스의 판정을 깎는다(실측에서 wait_cost Δ+47.7 이
+    # station_in 의 산포 49.4 에 밀렸다). 판정은 짝지은 차이로 한다.
     noise = max(r.get(f"spread_{PRIMARY}", 0.0) for r in rows if r.get("n_ok"))
     print(f"기준: 중립 θ {PRIMARY} = {ref:.1f} (참고: 케이스 최대 시드 산포 {noise:.1f})")
     print("판정: 같은 시드끼리 짝지어 뺀 차이가 시드마다 부호가 같고, "
           "그 평균이 시드별 차이의 폭보다 크면 실효")
-    print("범주형은 자기를 켜 주는 연속 θ 를 깐 베이스와 비교한다 (base 열)\n")
-    print(f"{'케이스':<28}{'base':<14}{'Δ tasks/h':>11}{'Δ%':>8}"
-          f"{'Δ폭':>8}{'Δ 리드평균':>12}  판정")
-    print("-" * 100)
+    print("범주형은 자기를 켜 주는 연속 θ 를 깐 베이스와 비교한다 (base 열)")
+    print()
+    vs = verdicts(rows)
+    print_table(vs)
+    print_summary(vs, by_case, ref)
 
-    def paired(r, key=PRIMARY):
-        """베이스와 같은 시드끼리 뺀 차이 목록. 시드 변동이 상쇄된다."""
-        base = by_case.get(r.get("base", "neutral"))
-        if base is None or "_per_seed" not in base or "_per_seed" not in r:
-            return None
-        shared = sorted(set(base["_per_seed"]) & set(r["_per_seed"]))
-        if not shared:
-            return None
-        return [r["_per_seed"][s][key] - base["_per_seed"][s][key] for s in shared]
 
-    effective = []
-    ranked = [r for r in rows if r.get("n_ok") and r["case"] != "neutral"]
-    ranked.sort(key=lambda r: -abs(statistics.fmean(paired(r) or [0.0])))
-    for r in ranked:
-        diffs = paired(r)
-        if diffs is None:
-            continue
-        mean_d = statistics.fmean(diffs)
-        spread_d = max(diffs) - min(diffs)
-        lead_d = statistics.fmean(paired(r, "lead_mean_s") or [0.0])
-        base_mean = by_case[r.get("base", "neutral")][f"mean_{PRIMARY}"]
-        # 판정: 시드마다 부호가 같고(일관된 방향), 평균 차이가 시드별 차이의
-        # 폭보다 크면 파라미터가 만든 것으로 본다. 부호가 갈리면 시드 운이다.
-        same_sign = all(d > 0 for d in diffs) or all(d < 0 for d in diffs)
-        signal = same_sign and abs(mean_d) > spread_d
-        if signal and r["case"] != "uniform":
-            effective.append(r["param"])
-        verdict = "실효" if signal else ("방향만 일관" if same_sign else "잡음")
-        print(f"{r['case']:<28}{r.get('base', '-'):<14}{mean_d:>+11.1f}"
-              f"{mean_d / base_mean * 100:>+7.1f}%{spread_d:>8.1f}"
-              f"{lead_d:>+12.1f}  {verdict}")
+def load_rows(path):
+    """CSV → rows. seeds_* 컬럼에서 _per_seed 를 복원해 재분석을 가능하게 한다.
 
-    uni = by_case.get("uniform")
-    if uni:
-        gap = uni[f"mean_{PRIMARY}"] - ref
-        ok = abs(gap) < 1e-9
-        print(f"\n중립 θ vs uniform 차이 {gap:+.1f} — "
-              f"{'일치 ✅' if ok else '★불일치 — θ 스키마 합의안 §중립 θ 위반'}")
-
-    names = sorted(set(effective))
-    print(f"\n실효 θ {len(names)}개: {', '.join(names) if names else '없음'}")
-    all_theta = set(THETA_CONTINUOUS_RANGES) | set(THETA_CATEGORICAL_VALUES)
-    dead = sorted(all_theta - set(names))
-    print(f"잡음 이하 {len(dead)}개: {', '.join(dead) if dead else '없음'}")
-    print("\n※ 잡음 이하 = 이 조건에서 1차 효과가 안 보인다는 뜻이지 "
-          "'빼도 된다'가 아니다 (배타 선점·상호작용). 축소는 BO 결과와 함께 판단.")
-    if not names:
-        print("→ 이 조건에서는 θ 가 처리량을 움직이지 않는다. 부하·목적함수를 "
-              "다시 잡아야 한다 (order_gap 25·28대, 리드타임 계열 지표).")
+    시뮬을 다시 돌리지 않고 판정 기준만 바꿔 볼 수 있어야 한다 — 실제로 판정을
+    한 번 고쳐 결론이 뒤집혔고(문서 §1), 그때 원자료가 없었다면 27분을 다시 썼다.
+    """
+    rows = []
+    with open(path, encoding="utf-8", newline="") as f:
+        for raw in csv.DictReader(f):
+            n_ok = int(raw.get("n_ok") or 0)
+            row = {"case": raw["case"], "base": raw.get("base") or "neutral",
+                   "param": raw.get("param", "-"), "n_ok": n_ok}
+            if not n_ok:
+                rows.append(row)
+                continue
+            ids = [s for s in (raw.get("seed_ids") or "").split("|") if s]
+            if len(ids) != n_ok:
+                # 구 CSV 에는 seed_ids 가 없다. 순서로 맞추는데, 실패한 시드가 있는
+                # 케이스는 짝이 어긋날 수 있다 (n_ok 가 다른 행을 볼 것).
+                ids = [str(i) for i in range(n_ok)]
+            per_seed = {sid: {} for sid in ids}
+            for key in METRICS:
+                cell = raw.get(f"seeds_{key}")
+                if not cell:
+                    continue
+                for sid, value in zip(ids, cell.split("|")):
+                    per_seed[sid][key] = float(value)
+                row[f"mean_{key}"] = float(raw[f"mean_{key}"])
+                row[f"spread_{key}"] = float(raw[f"spread_{key}"])
+            row["_per_seed"] = per_seed
+            rows.append(row)
+    return rows
 
 
 def save_csv(rows, args, seeds):
