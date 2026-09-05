@@ -37,7 +37,7 @@
 #   docker compose run --rm worker \
 #       python /work/ai_theta/experiments/theta_sensitivity.py --out /work/ai_theta/results
 # 빠른 예비 조사(칸 모델, 40배 빠름 — 결론용 아님):
-#   ... theta_sensitivity.py --no-heading --orders 40 --seeds 42,43
+#   ... theta_sensitivity.py --cell --orders 40 --seeds 42,43
 # 시뮬 없이 기존 CSV 재판정(판정 기준을 바꿔 볼 때):
 #   ... theta_sensitivity.py --from-csv ai_theta/results/<파일>.csv
 # ============================================================
@@ -134,7 +134,7 @@ def evaluate_case(theta, args, seeds):
                 per_seed[seed] = run_once(args.sim_engine, path, args.robots,
                                           args.orders, seed, tag="sens",
                                           aisle_block=args.aisle_block,
-                                          heading=args.heading,
+                                          cell=args.cell,
                                           order_gap=args.order_gap,
                                           timeout_s=args.timeout)
             except SimFailed as exc:
@@ -163,7 +163,9 @@ def main(argv=None):
     p.add_argument("--orders", type=int, default=120)
     p.add_argument("--order-gap", type=float, default=15.0, dest="order_gap")
     p.add_argument("--aisle-block", type=int, default=1, dest="aisle_block")
-    p.add_argument("--heading", action=argparse.BooleanOptionalAction, default=True)
+    # 계약 v2: 헤딩이 기본, 칸 모델이 --cell opt-in. 칸 모델 결과로는
+    # 결론을 내지 않는다 — 헤딩과 θ 반응이 전혀 다르다(문서 §7).
+    p.add_argument("--cell", action="store_true", help="칸 모델(점로봇)")
     p.add_argument("--seeds", default="42,43,44")
     p.add_argument("--timeout", type=int, default=600)
     p.add_argument("--out", default="", help="CSV 저장 디렉토리")
@@ -176,7 +178,7 @@ def main(argv=None):
     seeds = [int(s) for s in args.seeds.split(",") if s.strip()]
 
     cases = build_cases()
-    model = "헤딩" if args.heading else "칸"
+    model = "칸" if args.cell else "헤딩"
     print(f"θ 감도 실험 — {model} 모델 · 로봇 {args.robots} · 주문 {args.orders} · "
           f"간격 {args.order_gap} · aisle_block {args.aisle_block} · 시드 {seeds}")
     print(f"케이스 {len(cases)}개 × 시드 {len(seeds)}개 = {len(cases) * len(seeds)} 런\n")
@@ -361,7 +363,7 @@ def save_csv(rows, args, seeds):
     # aisle_block 을 빼면 조건이 다른 실행이 같은 파일을 덮어쓴다 (실측 사고).
     name = (f"theta_sensitivity_r{args.robots}_o{args.orders}"
             f"_g{args.order_gap:g}_blk{args.aisle_block}"
-            f"{'_h' if args.heading else '_cell'}.csv")
+            f"{'_cell' if args.cell else '_h'}.csv")
     path = os.path.join(args.out, name)
     # seeds_* 는 시드별 원값(| 구분). 짝지은 재분석을 CSV 만으로 다시 할 수 있게
     # 남긴다 — 평균만 남기면 판정 기준을 바꿀 때마다 시뮬을 다시 돌려야 한다.
