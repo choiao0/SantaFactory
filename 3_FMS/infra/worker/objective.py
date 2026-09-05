@@ -13,7 +13,7 @@
 # 방해하지 않기 때문이다. 그 병목은 --order-gap 으로 풀렸고(SIM_RUN_CONTRACT
 # §1·§5), 목적함수 확정은 θ 감도 실험(S15P21A106-138)에서 한다.
 #
-# 호출 규약의 단일 출처: 3_FMS/contracts/SIM_RUN_CONTRACT.md (v1).
+# 호출 규약의 단일 출처: 3_FMS/contracts/SIM_RUN_CONTRACT.md (v2).
 # 여기 없는 인자·SUMMARY 키에 의존하지 않는다.
 # ============================================================
 import json
@@ -27,8 +27,8 @@ import tempfile
 # 프로세스가 안 죽는 경우를 대비한 바깥 울타리.
 DEFAULT_TIMEOUT_S = 300
 
-# 시뮬 1회 실측은 SIM_RUN_CONTRACT §4 표를 볼 것. 헤딩 모델이 칸 모델보다
-# 50~100배 느리므로(28대 57~86 s) 탐색 예산은 반드시 헤딩 기준으로 잡는다.
+# 시뮬 1회 실측은 SIM_RUN_CONTRACT §4 표를 볼 것. 성능 최적화(-136) 후
+# 24대·120주문·간격15 가 7.6 s 다(최적화 전 46 s). 예산은 헤딩 기준으로 잡는다.
 SUMMARY_MARK = "[SUMMARY]"
 
 
@@ -38,11 +38,11 @@ class SimFailed(RuntimeError):
 
 def run_once(sim_engine_dir, theta_path, n_robots, n_orders, seed,
              aisle_block=1, flow="main", tag="bo", timeout_s=DEFAULT_TIMEOUT_S,
-             heading=True, order_gap=None, extra_args=()):
+             cell=False, order_gap=None, extra_args=()):
     """sim_v2 를 한 번 돌리고 [SUMMARY] dict 를 돌려준다.
 
-    인자·플래그는 SIM_RUN_CONTRACT.md v1 §1 을 따른다. 기본값은 같은 문서
-    §5 의 "θ 탐색 권장 조건"(헤딩 모델, aisle_block=1)에 맞춰 두었다 —
+    인자·플래그는 SIM_RUN_CONTRACT.md v2 §1 을 따른다. 기본값은 같은 문서
+    §5 의 "θ 탐색 권장 조건"(헤딩 = v2 기본, aisle_block=1)에 맞춰 두었다 —
     호출자가 아무것도 지정하지 않아도 계약이 권장하는 조건이 나온다.
     """
     cmd = [sys.executable, "sim_v2_tasks.py", tag,
@@ -52,8 +52,11 @@ def run_once(sim_engine_dir, theta_path, n_robots, n_orders, seed,
     # 중립 θ 가 기준선을 재현하는지 확인하려면 두 실행이 모두 필요하다.
     if theta_path is not None:
         cmd.append(f"--theta={theta_path}")
-    if heading:
-        cmd.append("--heading")
+    # 계약 v2: 헤딩이 기본이고 칸 모델이 --cell opt-in 이다. v1 의 --heading 은
+    # 무시되므로 "안 넘기면 칸"이 아니다 — 넘기지 않는 것으로 칸을 얻던 v1 호출은
+    # 조용히 헤딩으로 돌아간다. 그래서 플래그를 heading 이 아니라 cell 로 뒤집었다.
+    if cell:
+        cmd.append("--cell")
     if order_gap is not None:
         cmd.append(f"--order-gap={order_gap}")
     cmd.extend(extra_args)
