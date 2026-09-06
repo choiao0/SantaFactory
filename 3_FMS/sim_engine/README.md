@@ -52,7 +52,7 @@ python check_results_identity.py --quick                                        
 | **`order_stream.py`** | 주문·입고 스트림 `OrderStream` (02 시뮬 WMS 역할, 커널 밖) — 도착 시각표, 주문→태스크 분해(라인 1~3, 통로별 토트), v1compat 체인, 주문 완료 카운터. rng 는 여기만. **고정 시간 모드**(`horizon`, `shifts`): 교대 창 안에서만 그 종류의 도착, `shift_windows()`·`arrival_ticks()` |
 | `sim_v2_tasks.py` | **CLI 셸** (`parse_args`/`build`/`run_ticks`/`report`/`export_isaac`/`plot_heat`) — 인자·맵·비용·홈 준비, 틱 루프, [SUMMARY]·히트맵·DIRFLOW·Isaac 내보내기. 기본 헤딩 모델 (`--flow=main\|v1compat`, `--theta=<json>`, `--cell`, `--fixed-homes`, `--order-gap=<틱>`, `--inbound-gap`, `--horizon`, `--shifts`, `--battery`·`--chargers`·`--runtime-h`·`--charge-h`·`--soc`; `SIM_NO_DOCK_PRIO=1`, `SIM_EXPORT_ISAAC=1`) |
 | `simpy_harness.py` | **SimPy 셸**(선택) — 같은 커널·스트림을 SimPy 시계로: 도착 프로세스(URGENT, 같은 시각 틱보다 먼저) + 틱 프로세스, 고정 시간 실행은 `env.run(until=T)`. `import simpy` 지연, 없으면 종료 코드 2. SUMMARY 가 CLI 와 동일해야 함 |
-| `fleet_sweep_b0z.py`, `fleet_sweep_load.py` | **B0″ 기준선**(40주문) / **고부하**(80·120주문, 8~28대) — 칸 vs 헤딩, 존 지표. `SWEEP_PLOT_ONLY=1`로 그래프만 |
+| `fleet_sweep_b0z.py`, `fleet_sweep_load.py` | **B0″ 기준선**(40주문) / **고부하**(80·120주문, 8~28대) — 칸 vs 헤딩, 존 지표. `SWEEP_PLOT_ONLY=1`로 그래프만. 고부하는 `SWEEP_SEEDS=101,102,103 SWEEP_OUT=load_sweep_eval.csv`로 **다른 시드 집합을 별도 CSV/PNG**로(기준 `load_sweep.csv` 불변, 평가 시드 후보용 [문서](../docs/2026-09-06_평가시드_후보_기준선.md)); STALL 런은 죽이지 않고 `stall=1` 행 + `results/stall_load_*.txt` 덤프 |
 | `from_theta.py` | B-2: wallA 토폴로지 추출 + θ→비용 변환, 스키마 v2 배타 조립 ([설계](../docs/2026-09-01_B2_from_theta_설계.md)) |
 | `pibt_mvp_demo.py`, `pibt_heading_demo.py`, `pibt_smoke_real_map.py`, `from_theta_demo.py` | 회귀 테스트 — 코어/배관 수정 시 재실행 |
 | `fleet_sweep.py`, `fleet_sweep_b1e.py`, `fleet_sweep_b0h.py` | v1 스윕 / A* vs PIBT 벤치마크(회전 0초, 이력) / **B0′ 기준선**(칸 vs 헤딩) |
