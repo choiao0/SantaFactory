@@ -51,7 +51,12 @@ class OrderStream:
         if horizon is None:
             self.windows = None
             self.n_orders = n_orders
-            self.n_inbound = (n_orders if n_inbound is None else n_inbound) if flow == "main" else 0
+            if flow != "main":
+                self.n_inbound = 0                       # v1compat: 입고 없음
+            elif n_inbound is None:
+                self.n_inbound = n_orders                # main 기본: 입고 = 주문 수
+            else:
+                self.n_inbound = n_inbound
             # 도착 시각표 (지수분포 간격, 틱). 주문 → 입고 순으로 뽑는다 (rng 순서 고정).
             self.order_times = np.cumsum(rng.exponential(order_gap, n_orders)).astype(int) + 1
             if flow == "main":

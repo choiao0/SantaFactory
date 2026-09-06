@@ -69,12 +69,40 @@ def check_shift_windows():
     print(f"[2] 교대 창: 창 밖 도착 0건, 병합 규칙 3건, 스트림 {n_checked}벌 : OK")
 
 
+def _assert_no_low_soc_dispatch(kernel, prev_task, t):
+    """배차 직후: soc < low 인 로봇이 이번 틱에 새 태스크를 받지 않았는가 (배차 제외 규칙). prev_task 를 갱신한다."""
+    low = kernel.cfg.soc_low
+    for rid in kernel.rids:
+        rb = kernel.robots[rid]
+        task = rb["task"]
+        fresh = task is not None and task is not prev_task[rid] and rb["state"] == TO_PICK and task["assigned"] == t
+        assert not fresh or rb["soc"] >= low, f"t={t} robot{rid} soc={rb['soc']:.3f} < low 인데 배차"
+        prev_task[rid] = task
+
+
+def _assert_dock_invariants(kernel, docks, t):
+    """이동 직후: 0 ≤ SoC ≤ 1, 동시 CHARGING ≤ 도크 수, 도크당 소유자 1, 충전 중·충전 가는 로봇과 도크 소유 관계 일관."""
+    charging = [rid for rid in kernel.rids if kernel.robots[rid]["state"] == CHARGING]
+    assert len(charging) <= len(docks), f"t={t} 동시 충전 {len(charging)} > 도크 {len(docks)}"
+    owners = [o for o in kernel.dock_owner.values() if o is not None]
+    assert len(owners) == len(set(owners)), f"t={t} 도크 소유자 중복"
+    for rid in kernel.rids:
+        rb = kernel.robots[rid]
+        assert 0.0 <= rb["soc"] <= 1.0, f"t={t} robot{rid} soc={rb['soc']}"
+        cell = {CHARGING: rb["pos"], TO_CHARGE: rb["goal"]}.get(rb["state"])
+        if cell is not None:
+            assert cell in docks and kernel.dock_owner[cell] == rid, f"t={t} robot{rid} {rb['state']} 도크 {cell} 소유 불일치"
+    for d, o in kernel.dock_owner.items():
+        if o is not None:
+            assert kernel.robots[o]["state"] in (TO_CHARGE, CHARGING) and kernel.robots[o]["goal"] == d, f"t={t} 도크 {d} 소유자 {o} 상태 불일치"
+
+
 def check_battery_invariants():
     # 12대·1.5 h·간격 7.5(항상 바쁨 → 기회 충전 거의 없음)·도크 2·강제선 40 % → 강제 충전·퇴거·도크 대기가 실제로 일어난다
     argv = ["chk", "12", "0", "42", "1", "--horizon=5400", "--order-gap=7.5", "--battery", "--chargers=2", "--soc=40,80,95"]
     a = parse_args(argv)
     kernel, stream, ctx = build(a)
-    docks, cfg = set(kernel.docks), kernel.cfg
+    docks = set(kernel.docks)
     initial_min = min(rb["soc"] for rb in kernel.robots.values())
     assert kernel.battery_summary()["soc_min"] == initial_min, "soc_min 에 초기 SoC 최솟값이 포함되지 않음"
     prev_task = {rid: None for rid in kernel.rids}
@@ -82,27 +110,9 @@ def check_battery_invariants():
         for task in stream.arrivals(t):
             kernel.submit_task(task)
         kernel.dispatch(t)
-        # soc < low 인 로봇이 이번 틱에 새 태스크를 받았는가 (배차 제외 규칙)
-        for rid in kernel.rids:
-            rb = kernel.robots[rid]
-            if rb["task"] is not None and rb["task"] is not prev_task[rid] and rb["state"] == TO_PICK and rb["task"]["assigned"] == t:
-                assert rb["soc"] >= cfg.soc_low, f"t={t} robot{rid} soc={rb['soc']:.3f} < low 인데 배차"
-            prev_task[rid] = rb["task"]
+        _assert_no_low_soc_dispatch(kernel, prev_task, t)
         kernel.move(t)
-        charging = [rid for rid in kernel.rids if kernel.robots[rid]["state"] == CHARGING]
-        assert len(charging) <= len(docks), f"t={t} 동시 충전 {len(charging)} > 도크 {len(docks)}"
-        owners = [o for o in kernel.dock_owner.values() if o is not None]
-        assert len(owners) == len(set(owners)), f"t={t} 도크 소유자 중복"
-        for rid in kernel.rids:
-            rb = kernel.robots[rid]
-            assert 0.0 <= rb["soc"] <= 1.0, f"t={t} robot{rid} soc={rb['soc']}"
-            if rb["state"] == CHARGING:
-                assert rb["pos"] in docks and kernel.dock_owner[rb["pos"]] == rid, f"t={t} robot{rid} 충전 위치/소유 불일치"
-            if rb["state"] == TO_CHARGE:
-                assert rb["goal"] in docks and kernel.dock_owner[rb["goal"]] == rid, f"t={t} robot{rid} 충전 목표 도크 미소유"
-        for d, o in kernel.dock_owner.items():
-            if o is not None:
-                assert kernel.robots[o]["state"] in (TO_CHARGE, CHARGING) and kernel.robots[o]["goal"] == d, f"t={t} 도크 {d} 소유자 {o} 상태 불일치"
+        _assert_dock_invariants(kernel, docks, t)
     b = kernel.battery_summary()
     assert b["charge_events"] > 0 and b["charge_evictions"] > 0, f"강제 충전·퇴거가 안 일어남: {b}"
     assert b["soc_empty_steps"] == 0, f"0 % 도달 {b['soc_empty_steps']}틱 (12대·도크 2·1.5 h 에선 없어야 함)"
