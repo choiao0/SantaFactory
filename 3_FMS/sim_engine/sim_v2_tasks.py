@@ -114,7 +114,7 @@ def parse_args(argv):
     shifts_arg = opt("shifts", str)
     a.shifts = tuple(s.strip() for s in shifts_arg.split(",")) if shifts_arg else ("in", "out", "out")
     if a.horizon is not None:
-        assert a.horizon > 0, f"--horizon 은 양의 틱 수: {a.horizon}"
+        assert 0 < a.horizon < 200_000, f"--horizon 은 1~199,999 틱 (커널 틱 상한 200,000): {a.horizon}"
         assert a.flow == "main", "--horizon 은 main 흐름 전용 (v1compat 은 패리티 전용)"
         assert all(s in ("in", "out") for s in a.shifts), f"--shifts 토큰은 in|out: {a.shifts}"
         if len(pos) > 2 and int(pos[2]) != 0:          # 0 은 "자리만 채움" — 경고 없음
@@ -128,6 +128,9 @@ def parse_args(argv):
     a.charge_h = opt("charge-h", float, 1.5)
     soc = opt("soc", str, "20,80,95")
     a.soc = tuple(float(x) / 100 for x in soc.split(","))
+    bat_only = [f.split("=", 1)[0] for f in argv if f.split("=", 1)[0] in ("--chargers", "--runtime-h", "--charge-h", "--soc")]
+    if bat_only and not a.battery:
+        a.warnings.append(f"[WARN] {' '.join(bat_only)} 은 --battery 없이는 무시")
     if a.battery:
         assert a.zone, "--battery 는 충전 존 기본값에서만 (v1compat·--fixed-homes 와 함께 못 씀)"
         assert 1 <= a.chargers <= 6, f"--chargers 는 1~6 (stations.json charger 칸 수): {a.chargers}"
@@ -169,12 +172,13 @@ def build(a):
                          k_line_p=K_LINE_P, horizon=a.horizon, shifts=a.shifts)
     if a.horizon is not None:
         a.n_orders = stream.n_orders                # 고정 시간 모드: 실제 생성된 주문 수 (SUMMARY 에코)
-    # 배터리 (-145 §2-1): 초기 SoC 난수는 도착 시각표를 다 뽑은 **뒤** — 기존 rng 순서 불변.
+    # 배터리 (-145 §2-1): 초기 SoC 는 **별도 rng**(시드 [seed, 0x145])로 뽑는다 — 주문 구성 난수는 도착 틱마다 실행 중에
+    # 소비되므로 스트림 rng 를 건드리면 배터리 on/off 가 같은 시드에서 다른 주문을 받게 된다 (2026-09-06 검토).
     # 주행 1틱 소모 = 1/(가동 틱 × (0.7 + 0.3×0.25)) : "주행 70 %·유휴 30 % 혼합에서 runtime_h" 정규화, 정지 = 1/4.
     bat = {}
     if a.battery:
         docks = tuple(st_cell[f"charger[{i}]"] for i in range(a.chargers))
-        soc_init = tuple(float(x) for x in rng.uniform(0.3, 1.0, a.n_robots))
+        soc_init = tuple(float(x) for x in np.random.default_rng([a.seed, 0x145]).uniform(0.3, 1.0, a.n_robots))
         drain_drive = 1.0 / (a.runtime_h * 3600 / DT * (0.7 + 0.3 * 0.25))
         bat = dict(battery=True, dock_cells=docks, soc_init=soc_init, drain_drive=drain_drive,
                    drain_idle=0.25 * drain_drive, charge_rate=1.0 / (a.charge_h * 3600 / DT),

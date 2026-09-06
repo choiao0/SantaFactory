@@ -301,6 +301,19 @@ class FmsKernel:
                 self.bat_stats["evictions"] += 1
             self._go_charge(rid, dock)
 
+    def _unpark_docks(self):
+        """도크 위/도크 목표로 주차한(홈이 도크인 초기 배치, -145 §2-5) 로봇을 그 도크를 다른 로봇이 예약한 순간 존 빈 칸으로
+        재선택. 없으면 밀려난 뒤에도 goal=home=도크라 첫 태스크까지 도크 옆을 맴돈다 (2026-09-06 검토)."""
+        for rid in self.rids:
+            rb = self.robots[rid]
+            if rb["state"] in (IDLE, TO_HOME) and rb["goal"] in self.dock_owner \
+                    and self.dock_owner[rb["goal"]] not in (None, rid):
+                rb["state"] = TO_HOME
+                rb["goal"] = rb["home"] = self.zone_goal(rid)
+                self.zone_stats["retargets"] += 1
+                if rb["pos"] == rb["goal"]:
+                    rb["state"] = IDLE
+
     def _charge_opportunistic(self):
         """기회 충전: 배차 뒤에도 태스크가 없는 로봇 중 SoC < soc_go 를 (SoC 오름차순) 빈 도크가 있는 만큼."""
         robots, cfg = self.robots, self.cfg
@@ -366,6 +379,7 @@ class FmsKernel:
         if self.battery:
             self._charge_release()
             self._charge_forced()
+            self._unpark_docks()
         self._try_assign_all(t)
         if self.battery:
             self._charge_opportunistic()
@@ -422,11 +436,13 @@ class FmsKernel:
             elif rb["state"] == TO_CHARGE:
                 rb["state"] = CHARGING
 
-        # 워치독 (v1 STALL 동일 기준: stall_ticks 무진전). 대기 큐가 비고 임무 중 로봇이 없으면 할 일이 없는 것이므로
-        # 진전으로 본다 (-145 §2-7: 고정 시간 모드의 한가한 구간·집단 충전). 유한 모드에서는 outstanding > 0 인 동안
-        # 대기 또는 임무 중 태스크가 항상 있어 이 조건이 참이 되지 않는다.
+        # 워치독 (v1 STALL 동일 기준: stall_ticks 무진전). 고정 시간 모드(stall_warn_only)에서만 "대기 큐가 비고 임무 중
+        # 로봇이 없으면 할 일이 없는 것"을 진전으로 본다 (-145 §2-7: 한가한 구간·집단 충전). 유한 모드는 옛 규칙 그대로 —
+        # 이 조건은 유한 모드에서도 첫 도착 전(도착 틱 ≥ 1)에 참이 되므로 게이트 없이 두면 한가한 부하(간격 ≥ 1000)의
+        # STALL 시각·유무가 v2.1 과 달라진다 (2026-09-06 검토에서 재현).
         if len(self.tasks_done) != self._progress[0] or \
-                (not self.waiting and not any(rb["state"] in ON_TASK for rb in robots.values())):
+                (self.cfg.stall_warn_only and not self.waiting
+                 and not any(rb["state"] in ON_TASK for rb in robots.values())):
             self._progress[0], self._progress[1] = len(self.tasks_done), t1
         elif t1 - self._progress[1] > self.cfg.stall_ticks:
             if self.cfg.stall_warn_only:
