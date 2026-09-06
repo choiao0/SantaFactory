@@ -34,7 +34,7 @@ SIM_NO_PLOT=1 python sim_v2_tasks.py base 6 40 42 1 --cell --fixed-homes        
 SIM_EXPORT_ISAAC=1 SIM_NO_PLOT=1 python sim_v2_tasks.py base 12 40 42 1                # Isaac 리플레이용 isaac_export_base/ 생성
 SIM_NO_PLOT=1 python simpy_harness.py base 6 40 42 1                                    # (simpy 설치 시) SUMMARY 가 위 CLI 와 비트 동일해야 함
 SIM_CHECK=1 SIM_NO_PLOT=1 python sim_v2_tasks.py hz 24 0 42 1 --horizon=21600 --order-gap=15 --battery   # 고정 시간 6h·교대·배터리 (-145) — [5] 배터리 줄
-python check_lifelong_battery.py                                                        # 고정 시간·교대·배터리 불변 검사 5항목 (~15초)
+python check_lifelong_battery.py                                                        # 고정 시간·교대·배터리 불변 검사 7항목 (~20초)
 SIM_NO_PLOT=1 python sim_v1_tasks.py base 6 40 42 1                                     # A* 기준선: 2384틱, 181.2 tasks/h (동기화 전 2378/181.7)
 python -m pytest ../ai_theta/tests -q                                                   # A트랙 (map_loader·from_theta 를 import)
 python pibt_dist_identity_check.py                                                      # 거리장 vs 참조 구현 비트 동일 (~1분)
