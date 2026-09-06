@@ -1,0 +1,13 @@
+{
+ "aisle_alt_gain": 1.0,
+ "aisle_alt_boost": 1.0,
+ "aisle_period": 1,
+ "aisle_phase": 0,
+ "loop_gain": 1.434079894330566,
+ "main_aisle_gain": 1.116801831318854,
+ "junction_penalty": 2.6013329176440596,
+ "station_in": 0.9446213536341191,
+ "station_out": 1.1548765768622702,
+ "wait_cost": 2.529297176311963,
+ "loop_dir": 0
+}

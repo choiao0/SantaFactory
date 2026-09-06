@@ -3,6 +3,7 @@
 # θ 탐색 예산 측정 (S15P21A106-137)
 #
 # SIM_RUN_CONTRACT §4 실행 시간 표는 B트랙 로컬(py 3.14 / numpy 2.5.1) 실측이다.
+# v2·성능 최적화(-136) 이후 값으로 갱신되었으므로 컨테이너에서 다시 잰다.
 # 탐색 예산은 **워커가 실제로 도는 환경**에서 재야 하므로(컨테이너: py 3.11.9 /
 # numpy 2.4.6) 같은 조건을 여기서 다시 잰다. 두 값이 다르면 계약 표가 틀린 게
 # 아니라 환경이 다른 것이다 — 어느 쪽 숫자로 예산을 잡을지가 요점.
@@ -42,7 +43,7 @@ NEUTRAL = {
 }
 
 
-def measure(sim_engine, robots, orders, order_gap, seeds, heading, timeout_s):
+def measure(sim_engine, robots, orders, order_gap, seeds, cell, timeout_s):
     """조건 하나를 seed 별로 돌려 (초 리스트, KPI 리스트) 를 돌려준다."""
     path = write_theta(NEUTRAL)
     secs, kpis = [], []
@@ -52,7 +53,7 @@ def measure(sim_engine, robots, orders, order_gap, seeds, heading, timeout_s):
             try:
                 summary = run_once(sim_engine, path, robots, orders, seed,
                                    aisle_block=1, tag="measure",
-                                   heading=heading, order_gap=order_gap,
+                                   cell=cell, order_gap=order_gap,
                                    timeout_s=timeout_s)
             except SimFailed as exc:
                 secs.append(time.perf_counter() - t0)
@@ -77,7 +78,8 @@ def main(argv=None):
     p = argparse.ArgumentParser(description="θ 탐색 예산 측정")
     p.add_argument("--sim-engine", default="/work/sim_engine", dest="sim_engine")
     p.add_argument("--seeds", default="42,43", help="쉼표 구분")
-    p.add_argument("--heading", action=argparse.BooleanOptionalAction, default=True)
+    # 계약 v2: 헤딩이 기본, 칸 모델이 --cell opt-in
+    p.add_argument("--cell", action="store_true", help="칸 모델(점로봇)")
     p.add_argument("--timeout", type=int, default=600)
     p.add_argument("--trials", type=int, default=100, help="예산 환산에 쓸 trial 수")
     p.add_argument("--budget-seeds", type=int, default=3, dest="budget_seeds",
@@ -85,7 +87,7 @@ def main(argv=None):
     args = p.parse_args(argv)
     seeds = [int(s) for s in args.seeds.split(",") if s.strip()]
 
-    model = "헤딩" if args.heading else "칸"
+    model = "칸" if args.cell else "헤딩"
     import numpy
     print(f"환경: python {sys.version.split()[0]} / numpy {numpy.__version__}")
     print(f"모델: {model} · aisle_block=1 · flow=main · 중립 θ · 측정 시드 {seeds}\n")
@@ -96,7 +98,7 @@ def main(argv=None):
     rows = []
     for robots, orders, gap in GRID:
         secs, kpis = measure(args.sim_engine, robots, orders, gap, seeds,
-                             args.heading, args.timeout)
+                             args.cell, args.timeout)
         ok = [k for k in kpis if k is not None]
         mean_s = statistics.fmean(secs)
         kpi_txt = f"{statistics.fmean(ok):.1f}" if ok else "실패"
