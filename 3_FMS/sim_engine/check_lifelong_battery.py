@@ -8,8 +8,10 @@
 #     TO_CHARGE 로봇의 목표 도크는 자기 소유, soc < low 인 로봇은 새 태스크를 받지 않음. 강제 충전·퇴거가 실제로 일어나는 조건으로 돈다
 # [4] CLI 셸 vs SimPy 하네스 SUMMARY 동일 (고정 시간 + 배터리) — simpy 가 없으면 건너뜀(종료 코드 2)
 # [5] 0 간격 입력 거부 + 고정 시간 워치독은 경고를 기록하고 T까지 계속
+# [6] 유한 모드 워치독은 옛 규칙 그대로 (첫 완료 전 타임스탬프 [0,0], 간격 1500 → [STALL] t=1501)
+# [7] --battery 유무가 주문 스트림을 바꾸지 않음 (초기 SoC 별도 rng)
 #
-# 사용 (3_FMS/sim_engine):  python check_lifelong_battery.py        (~1분)
+# 사용 (3_FMS/sim_engine):  python check_lifelong_battery.py        (~20초)
 # 종료 코드 0 = 전부 통과.
 # ============================================================
 import json
@@ -68,8 +70,8 @@ def check_shift_windows():
 
 
 def check_battery_invariants():
-    # 12대·1.5 h·간격 7.5(항상 바쁨 → 기회 충전 거의 없음)·도크 2 → 강제 충전과 퇴거가 실제로 일어난다
-    argv = ["chk", "12", "0", "42", "1", "--horizon=5400", "--order-gap=7.5", "--battery", "--chargers=2"]
+    # 12대·1.5 h·간격 7.5(항상 바쁨 → 기회 충전 거의 없음)·도크 2·강제선 40 % → 강제 충전·퇴거·도크 대기가 실제로 일어난다
+    argv = ["chk", "12", "0", "42", "1", "--horizon=5400", "--order-gap=7.5", "--battery", "--chargers=2", "--soc=40,80,95"]
     a = parse_args(argv)
     kernel, stream, ctx = build(a)
     docks, cfg = set(kernel.docks), kernel.cfg
@@ -104,8 +106,8 @@ def check_battery_invariants():
     b = kernel.battery_summary()
     assert b["charge_events"] > 0 and b["charge_evictions"] > 0, f"강제 충전·퇴거가 안 일어남: {b}"
     assert b["soc_empty_steps"] == 0, f"0 % 도달 {b['soc_empty_steps']}틱 (12대·도크 2·1.5 h 에선 없어야 함)"
-    print(f"[3] 배터리 불변 (12대·1.5 h·도크 2·간격 7.5, 매 틱): 충전 진입 {b['charge_events']}회·퇴거 {b['charge_evictions']}회, "
-          f"SoC 최저 {b['soc_min']*100:.1f}%, 완료 {len(kernel.tasks_done)} : OK")
+    print(f"[3] 배터리 불변 (12대·1.5 h·도크 2·간격 7.5·SoC 40/80/95, 매 틱): 충전 진입 {b['charge_events']}회·퇴거 {b['charge_evictions']}회·"
+          f"도크 대기 {b['dock_wait_steps']}틱, SoC 최저 {b['soc_min']*100:.1f}%, 완료 {len(kernel.tasks_done)} : OK")
 
 
 def check_harness_parity():
@@ -141,10 +143,42 @@ def check_validation_and_watchdog():
     print(f"[5] 입력·워치독: 0 간격 거부, 고정 시간 무진전 {len(kernel.stall_warning_ticks)}회 기록 후 완주 : OK")
 
 
+def check_finite_watchdog_unchanged():
+    """유한 모드 워치독은 옛 규칙 그대로여야 한다 (2026-09-06 검토): '할 일 없음 = 진전' 조건은 고정 시간 모드 전용.
+    (a) 플래그 없는 커널: 첫 완료 전에는 _progress 타임스탬프가 0 에 머문다. (b) 간격 1500 → v2.1 과 같이 t=1501 에 STALL."""
+    a = parse_args(["base", "6", "40", "42", "1"])
+    kernel, stream, _ = build(a)
+    for t in range(80):                      # 첫 도착(틱 67) 을 지나도록
+        for task in stream.arrivals(t):
+            kernel.submit_task(task)
+        kernel.dispatch(t)
+        kernel.move(t)
+    assert kernel._progress == [0, 0], f"유한 모드 워치독 타임스탬프가 움직임: {kernel._progress} (옛 규칙은 첫 완료까지 [0, 0])"
+    r = subprocess.run([PY, os.path.join(OUT, "sim_v2_tasks.py"), "base", "6", "40", "42", "1", "--order-gap=1500"],
+                       capture_output=True, text=True, encoding="utf-8", env=ENV, cwd=OUT)
+    assert r.returncode == 1 and "[STALL] t=1501," in r.stdout, f"간격 1500 유한 모드: rc={r.returncode}, v2.1 은 [STALL] t=1501"
+    print("[6] 유한 모드 워치독 불변: 첫 완료 전 타임스탬프 [0, 0], 간격 1500 → [STALL] t=1501 (v2.1 동일) : OK")
+
+
+def check_battery_same_orders():
+    """--battery 유무가 주문 스트림(도착 시각·구성)을 바꾸지 않는다 — 초기 SoC 는 별도 rng (2026-09-06 검토)."""
+    base = ["hz", "12", "0", "42", "1", "--horizon=3600", "--order-gap=15"]
+    tasks = []
+    for extra in ([], ["--battery"]):
+        a = parse_args(base + extra)
+        kernel, stream, _ = build(a)
+        seq = [(tk["created"], tk["kind"], tk["frm_name"], tk["to_name"]) for t in range(a.horizon) for tk in stream.arrivals(t)]
+        tasks.append(seq)
+    assert tasks[0] == tasks[1] and len(tasks[0]) > 50, "배터리 on/off 에서 주문 스트림이 다름"
+    print(f"[7] 배터리 on/off 주문 스트림 동일 ({len(tasks[0])} 태스크, 도착·종류·출발·도착지 전부 일치) : OK")
+
+
 if __name__ == "__main__":
     check_finite_times()
     check_shift_windows()
     check_battery_invariants()
     check_harness_parity()
     check_validation_and_watchdog()
+    check_finite_watchdog_unchanged()
+    check_battery_same_orders()
     print("[PASS] 고정 시간·교대·배터리 불변 검사 통과")
