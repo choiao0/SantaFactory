@@ -14,6 +14,9 @@
 # 사용: python fleet_sweep_load.py                 (헤딩 28대·L2 가 실행당 1~2분, 전체 30분 안팎)
 #       SWEEP_PLOT_ONLY=1 python fleet_sweep_load.py
 #       SWEEP_LOADS=L1 python fleet_sweep_load.py   (부하 하나만)
+#       SWEEP_SEEDS=101,102,103 SWEEP_OUT=load_sweep_eval.csv python fleet_sweep_load.py
+#           — 다른 시드 집합을 **별도 CSV/PNG** 로 (기본 load_sweep.csv 는 동일성 검사 기준이라 덮어쓰지 않는다).
+#             θ 평가 시드 후보 기준선용 (2026-09-06, -145 후속; θ감도 실험 §6-3 미합의 항목). PNG 는 load_throughput<접미>.png 식.
 # ============================================================
 import csv
 import json
@@ -26,7 +29,7 @@ PY = sys.executable
 OUT = os.path.dirname(os.path.abspath(__file__))
 RES = os.path.join(OUT, "results")
 ROBOTS = [8, 12, 16, 20, 24, 28]
-SEEDS = [42, 7]
+SEEDS = [int(x) for x in os.environ["SWEEP_SEEDS"].split(",")] if os.environ.get("SWEEP_SEEDS") else [42, 7]
 AISLE_BLOCK = 1
 LOADS = {"L1": (80, 25), "L2": (120, 15)}          # name -> (n_orders, order_gap)
 if os.environ.get("SWEEP_LOADS"):
@@ -41,7 +44,17 @@ def run_one(n, n_orders, gap, seed, extra):
                         str(seed), str(AISLE_BLOCK), f"--order-gap={gap}", *extra],
                        capture_output=True, text=True, encoding="utf-8", env=env)
     line = next((ln for ln in r.stdout.splitlines() if ln.startswith("[SUMMARY]")), None)
-    assert line, f"실행 실패 r{n} o{n_orders} g{gap} s{seed} {extra}:\n{r.stdout[-3000:]}\n{r.stderr[-2000:]}"
+    if line is None:
+        # STALL(계약 §3, exit 1) 은 정보다 — 스윕을 죽이지 말고 행에 stall=1 로 남기고 덤프는 results/stall_<...>.txt 에 보관 (2026-09-06).
+        stall = next((ln for ln in r.stdout.splitlines() if ln.startswith("[STALL]")), None)
+        assert stall, f"실행 실패 r{n} o{n_orders} g{gap} s{seed} {extra}:\n{r.stdout[-3000:]}\n{r.stderr[-2000:]}"
+        dump = os.path.join(RES, f"stall_load_r{n}_o{n_orders}_g{gap:g}_s{seed}_{'cell' if '--cell' in extra else 'heading'}.txt")
+        with open(dump, "w", encoding="utf-8") as f:
+            f.write(r.stdout + r.stderr)
+        print(f"  [STALL] r={n} seed={seed} gap={gap}: {stall[:60]} → {os.path.basename(dump)}", flush=True)
+        return dict(variant="load", n_robots=n, n_orders=n_orders, seed=seed, aisle_block=AISLE_BLOCK, flow="main",
+                    order_gap=float(gap), stall=1, stall_t=int(stall.split("t=")[1].split(",")[0]),
+                    wall_s=round(time.perf_counter() - t0, 1))
     rec = json.loads(line[len("[SUMMARY] "):])
     rec["wall_s"] = round(time.perf_counter() - t0, 1)
     return rec
@@ -58,7 +71,10 @@ def read_csv(path):
     return rows
 
 
-CSV_PATH = os.path.join(RES, "load_sweep.csv")
+CSV_NAME = os.environ.get("SWEEP_OUT", "load_sweep.csv")
+STEM = os.path.splitext(os.path.basename(CSV_NAME))[0]
+TAG = STEM[len("load_sweep"):] if STEM.startswith("load_sweep") else "_" + STEM     # load_sweep_eval → "_eval"
+CSV_PATH = os.path.join(RES, os.path.basename(CSV_NAME))
 if os.environ.get("SWEEP_PLOT_ONLY") and os.path.exists(CSV_PATH):
     rows = read_csv(CSV_PATH)
 else:
@@ -70,6 +86,8 @@ else:
                     rec = run_one(n, n_orders, gap, seed, extra)
                     rec["engine"], rec["load"] = engine, load
                     rows.append(rec)
+                    if rec.get("stall"):
+                        continue
                     more = (f", rot {rec['rot_steps']}, rev {rec['rev_steps']}, replan {rec['replan_steps']}"
                             if engine == "heading" else "")
                     print(f"  {load} {engine:8s} r={n:2d} seed={seed:2d}: {rec['tasks_per_h']:6.1f} tasks/h "
@@ -95,6 +113,7 @@ import matplotlib.pyplot as plt
 plt.rcParams["font.family"] = "Malgun Gothic"
 plt.rcParams["axes.unicode_minus"] = False
 loads = [k for k in LOADS if any(r["load"] == k for r in rows)]
+N_STALL = sum(1 for r in rows if str(r.get("stall", "")) not in ("", "0", "0.0"))
 
 
 def series(load, engine, key):
@@ -118,10 +137,11 @@ for ax, (key, label) in zip(axes, [("tasks_per_h", "throughput [tasks/h]"),
     ax.set_title(label)
     ax.grid(alpha=0.3)
     ax.legend(fontsize=7)
-fig.suptitle("고부하 스윕 — 동기화 맵, 충전 존 기본, TURN_TICKS=1, aisle-block ON, uniform cost (mean of 2 seeds)",
+SEED_NOTE = f"mean of {len(SEEDS)} seeds" + ("" if SEEDS == [42, 7] else f" {SEEDS}") + (f", STALL {N_STALL}런 제외" if N_STALL else "")
+fig.suptitle(f"고부하 스윕 — 동기화 맵, 충전 존 기본, TURN_TICKS=1, aisle-block ON, uniform cost ({SEED_NOTE})",
              fontsize=10)
 plt.tight_layout()
-plt.savefig(os.path.join(RES, "load_throughput.png"), dpi=115)
+plt.savefig(os.path.join(RES, f"load_throughput{TAG}.png"), dpi=115)
 
 fig, axes = plt.subplots(1, 4, figsize=(19, 4.5))
 for ax, (key, label) in zip(axes, [("zone_wait_steps", "존 안 복귀 대기 [틱]"),
@@ -138,7 +158,7 @@ for ax, (key, label) in zip(axes, [("zone_wait_steps", "존 안 복귀 대기 [�
     ax.set_title(label)
     ax.grid(alpha=0.3)
     ax.legend(fontsize=7)
-fig.suptitle("고부하 스윕 — 충전 존 지표 (mean of 2 seeds)", fontsize=11)
+fig.suptitle(f"고부하 스윕 — 충전 존 지표 ({SEED_NOTE})", fontsize=11)
 plt.tight_layout()
-plt.savefig(os.path.join(RES, "load_zone.png"), dpi=115)
-print("저장: results/load_sweep.csv, load_throughput.png, load_zone.png")
+plt.savefig(os.path.join(RES, f"load_zone{TAG}.png"), dpi=115)
+print(f"저장: results/{os.path.basename(CSV_PATH)}, load_throughput{TAG}.png, load_zone{TAG}.png")
