@@ -7,8 +7,8 @@ PIBT 이동계층 + θ → 통행 비용 변환(`from_theta`) + Fleet 벤치마�
 
 ## 진행 상태
 
-1. **B-0** 기준선 재확정 — 완료 (SPEED 1.0 m/s, 단일 맵 wallA)
-2. **B-1** 시공간 A* → PIBT 교체 — 완료 (벤치마크: PIBT ≥ A* 전 구간)
+1. **B-0** 기준선 재확정 — 완료 (SPEED 1.0 m/s, 단일 맵 wallA). A* 기준선 `sim_v1_tasks.py`는 2026-09-07 레거시 정리(-152)로 삭제 — 패리티 2384틱/181.2 tasks/h(동기화 전 2378/181.7)는 기록만
+2. **B-1** 시공간 A* → PIBT 교체 — 완료 (벤치마크: PIBT ≥ A* 전 구간, [B1e 결과](../docs/2026-08-31_B1e_벤치마크_결과.md); 스크립트·CSV는 `results/archive/`)
 3. **B-2** `from_theta()` 배관 — 완료 (스키마 v2 배타 규칙, 더미 θ 방향 분극 검증 통과, 거리항 가중 다익스트라)
 3b. **PIBT 헤딩 모델** (2026-09-02 결정 ②③④⑤) — 완료. B0′ 기준선(무릎 8→10대, `TURN_TICKS=2`) → Isaac 실측 반영(`TURN_TICKS=1`, 2026-09-03) → B0″ 재실측 → **2026-09-04 기본값 전환(-143, 계약 v2)**: 칸 모델은 `--cell` opt-in, `--heading` 은 호환용 무시
 3c. **충전 존** (2026-09-03 결정) — 완료, **main 흐름 기본값** (`--fixed-homes`로 기존 고정 홈 12칸). 존 내 최근접 빈 칸 복귀·초기 배치, 지표(복귀 대기·재선택·예약 무시·체류 평균/p90·비임무 밀림), 스모크 [D]. B-1e CSV 원칙 종료 → 기준선 B0″(`fleet_sweep_b0z.py`, 동기화 맵)
@@ -35,7 +35,6 @@ SIM_EXPORT_ISAAC=1 SIM_NO_PLOT=1 python sim_v2_tasks.py base 12 40 42 1         
 SIM_NO_PLOT=1 python simpy_harness.py base 6 40 42 1                                    # (simpy 설치 시) SUMMARY 가 위 CLI 와 비트 동일해야 함
 SIM_CHECK=1 SIM_NO_PLOT=1 python sim_v2_tasks.py hz 24 0 42 1 --horizon=21600 --order-gap=15 --battery   # 고정 시간 6h·교대·배터리 (-145) — [5] 배터리 줄
 python check_lifelong_battery.py                                                        # 고정 시간·교대·배터리 불변 검사 7항목 (~20초)
-SIM_NO_PLOT=1 python sim_v1_tasks.py base 6 40 42 1                                     # A* 기준선: 2384틱, 181.2 tasks/h (동기화 전 2378/181.7)
 python -m pytest ../ai_theta/tests -q                                                   # A트랙 (map_loader·from_theta 를 import)
 python pibt_dist_identity_check.py                                                      # 거리장 vs 참조 구현 비트 동일 (~1분)
 python check_results_identity.py --quick                                                # 기준선 CSV 대표 12행 재실행 동일 (~2분; 전수는 옵션 없이)
@@ -46,8 +45,7 @@ python check_results_identity.py --quick                                        
 | `pibt_core.py` | PIBT 코어 — 칸 모델(`dist_map/step/run`, 가중 다익스트라) + 헤딩 모델(`*_h`: (칸,방향) 상태, 2칸 점유, 회전·후진, 스윙 예약, 대기 상승·재계획). 거리장은 `HGraph`(정적 테이블·목표별 캐시·재계획 증분 복구), 참조 구현 `_dist_map_h_ref` 보존 |
 | `pibt_dist_identity_check.py`, `check_results_identity.py` | **결과 동일성 검사** — 거리장 vs 참조 구현(비트 동일) / 기준선 CSV(b0z·load) 재실행 비교. 코어·거리장 수정 시 필수 |
 | `check_lifelong_battery.py` | **고정 시간·교대·배터리 불변 검사** (-145) — 유한 모드 시각표 불변, 교대 창 밖 도착 0, 배터리 매 틱 불변(SoC 범위·도크 소유·배차 제외), CLI vs 하네스 패리티, 0 간격 거부·고정 시간 워치독 계속 실행 |
-| `map_loader.py` | 맵 로드(**`3_FMS/map` 공식 맵**, 2026-09-03 동기화)/1.0m 다운샘플/스테이션 (v1과 규칙 동기 유지: `OBSTACLE_VALUES`, `AISLE_ROWS`) + 충전 존 `load_charge_zone`·`make_homes_zone` (A트랙 `build_input.py`도 import — 단일 소스) |
-| `sim_v1_tasks.py` | A* 기준선 — **이동계층 수정 금지** |
+| `map_loader.py` | 맵 로드(**`3_FMS/map` 공식 맵**, 2026-09-03 동기화)/1.0m 다운샘플/스테이션 (**로드 규칙 단일 소스**: `OBSTACLE_VALUES`, `AISLE_ROWS`) + 충전 존 `load_charge_zone`·`make_homes_zone` (A트랙 `build_input.py`도 import — 단일 소스) |
 | **`fms_kernel.py`** | **FMS 결정 커널** `FmsKernel` — 로봇 상태머신·배차(FIFO×최근접)·PIBT 이동(헤딩/칸)·충전 존 복귀·서비스·지표 카운터·워치독(`StallError`). 시계·난수·I/O 없음. 셸이 `submit_task` → `dispatch(t)` → [종료 판단] → `move(t)` 순으로 부른다. `KernelConfig`로 헤딩/존/θ/검사/내보내기/**배터리**(도크·SoC 틱 소모/충전·강제/기회 충전·퇴거, 상태 `TO_CHARGE`/`CHARGING`) 선택 |
 | **`order_stream.py`** | 주문·입고 스트림 `OrderStream` (02 시뮬 WMS 역할, 커널 밖) — 도착 시각표, 주문→태스크 분해(라인 1~3, 통로별 토트), v1compat 체인, 주문 완료 카운터. rng 는 여기만. **고정 시간 모드**(`horizon`, `shifts`): 교대 창 안에서만 그 종류의 도착, `shift_windows()`·`arrival_ticks()` |
 | `sim_v2_tasks.py` | **CLI 셸** (`parse_args`/`build`/`run_ticks`/`report`/`export_isaac`/`plot_heat`) — 인자·맵·비용·홈 준비, 틱 루프, [SUMMARY]·히트맵·DIRFLOW·Isaac 내보내기. 기본 헤딩 모델 (`--flow=main\|v1compat`, `--theta=<json>`, `--cell`, `--fixed-homes`, `--order-gap=<틱>`, `--inbound-gap`, `--horizon`, `--shifts`, `--battery`·`--chargers`·`--runtime-h`·`--charge-h`·`--soc`; `SIM_NO_DOCK_PRIO=1`, `SIM_EXPORT_ISAAC=1`) |
@@ -57,5 +55,4 @@ python check_results_identity.py --quick                                        
 | `fleet_sweep_b0z.py`, `fleet_sweep_load.py` | **B0″ 기준선**(40주문) / **고부하**(80·120주문, 8~28대) — 칸 vs 헤딩, 존 지표. `SWEEP_PLOT_ONLY=1`로 그래프만. 고부하는 `SWEEP_SEEDS=101,102,103 SWEEP_OUT=load_sweep_eval.csv`로 **다른 시드 집합을 별도 CSV/PNG**로(기준 `load_sweep.csv` 불변, 평가 시드 후보용 [문서](../docs/2026-09-06_평가시드_후보_기준선.md)); STALL 런은 죽이지 않고 `stall=1` 행 + `results/stall_load_*.txt` 덤프 |
 | `from_theta.py` | B-2: wallA 토폴로지 추출 + θ→비용 변환, 스키마 v2 배타 조립 ([설계](../docs/2026-09-01_B2_from_theta_설계.md)) |
 | `pibt_mvp_demo.py`, `pibt_heading_demo.py`, `pibt_smoke_real_map.py`, `from_theta_demo.py` | 회귀 테스트 — 코어/배관 수정 시 재실행 |
-| `fleet_sweep.py`, `fleet_sweep_b1e.py`, `fleet_sweep_b0h.py` | v1 스윕 / A* vs PIBT 벤치마크(회전 0초, 이력) / **B0′ 기준선**(칸 vs 헤딩) |
-| [`results/`](results/) | 벤치마크·검증 산출물 (csv/png/npz) — 기존 결과 덮어쓰기 금지 |
+| [`results/`](results/) | 벤치마크·검증 산출물 (csv/png/npz) — 기존 결과 덮어쓰기 금지. 대체된 기준선·초기 산출물은 `results/archive/` |

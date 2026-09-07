@@ -1,6 +1,6 @@
 # 3_FMS/map — FMS 공식 맵 (벽있음 ∪ v5.8 장애물) + 충전 존 (2026-09-03, S15P21A106-135)
 
-FMS 시뮬 엔진(3_FMS)이 읽는 **단일 맵 위치**입니다. `map_loader.load_map()`·`sim_v1_tasks.py`·A트랙 `build_input.py`
+FMS 시뮬 엔진(3_FMS)이 읽는 **단일 맵 위치**입니다. `map_loader.load_map()`(단일 소스)·A트랙 `build_input.py`
 전부 이 폴더의 `occupancy_grid.npy`·`stations.json`을 읽습니다 (엔진 폴더 복사본은 2026-09-03 삭제).
 
 ## 경위

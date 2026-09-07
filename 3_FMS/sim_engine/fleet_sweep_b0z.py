@@ -3,13 +3,13 @@
 # B0″ 기준선 — 동기화 맵(3_FMS/map, 벽있음 ∪ v5.8) + 충전 존(기본) + TURN_TICKS=1, 칸 vs 헤딩 fleet 곡선
 # (결정: docs/2026-09-03_충전존_결정.md, 구현: docs/2026-09-03_충전존_구현_설계.md, 결과: docs/2026-09-03_B0z_충전존_기준선.md)
 #
-# B0′(fleet_sweep_b0h: 8/31 맵, 고정 홈 12칸, 회전 2틱)를 대체한다. 조건은 B-1e/B0′와 동일:
+# B0′(fleet_sweep_b0h — -152에서 삭제, CSV는 results/archive/: 8/31 맵, 고정 홈 12칸, 회전 2틱)를 대체한다. 조건은 B-1e/B0′와 동일:
 #   로봇 {2,3,4,6,8,10,12,16} × 시드 {42, 7}, 40주문(+입고 40), 통로차단 ON, main 흐름,
 #   uniform cost (θ 미적용).
 # 두 계열:
 #   cell    = sim_v2 --flow=main --cell     (칸 모델, 회전 0초) — 존 기본. 계약 v2부터 --cell 이 opt-in
 #   heading = sim_v2 --flow=main --heading  (2칸 차체, 90° 회전 1틱, 후진, 스윙 예약) — 존 기본, 계약 v2 기본 모델
-# 그래프에는 B0′ CSV(results/b0h_sweep.csv)가 있으면 점선으로 겹쳐 그린다:
+# 그래프에는 B0′ CSV(results/archive/b0h_sweep.csv, 레거시 정리 -152로 이동)가 있으면 점선으로 겹쳐 그린다:
 #   cell 계열의 차이 = 존 효과(홈 위치만 다름), heading 계열의 차이 = 존 + 회전 2틱→1틱.
 # 산출: results/b0z_sweep.csv, b0z_cell_vs_heading.png, b0z_zone_metrics.png
 # 기존 결과 파일은 건드리지 않는다 (이력 보존).
@@ -83,7 +83,7 @@ else:
         w.writeheader()
         w.writerows(rows)
 
-B0H_PATH = os.path.join(RES, "b0h_sweep.csv")
+B0H_PATH = os.path.join(RES, "archive", "b0h_sweep.csv")
 ref_rows = read_csv(B0H_PATH) if os.path.exists(B0H_PATH) else []
 
 # ------------------------------------------------------------
