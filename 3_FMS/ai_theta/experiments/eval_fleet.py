@@ -122,7 +122,11 @@ def main(argv=None):
         os.makedirs(args.out, exist_ok=True)
         fields = ["robots", "neutral_eval", "theta_eval", "delta", "pct_eval",
                   "pct_train", "per_seed", "note"]
-        dst = os.path.join(args.out, f"theta_fleet_g{args.order_gap:g}.csv")
+        # 평가 시드를 파일명에 넣는다. 빼면 시드가 다른 실행이 같은 파일을
+        # 덮어써서 "어느 시드로 잰 값인지" 파일만 보고는 알 수 없다
+        # (감도 실험에서 aisle_block 을 빼고 같은 사고를 한 적이 있다).
+        tag = "-".join(str(s) for s in evals)
+        dst = os.path.join(args.out, f"theta_fleet_g{args.order_gap:g}_s{tag}.csv")
         with open(dst, "w", encoding="utf-8", newline="") as f:
             w = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
             w.writeheader()
