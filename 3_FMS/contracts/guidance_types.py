@@ -51,7 +51,7 @@ THETA_FIELD_ORDER = tuple(THETA_CONTINUOUS_RANGES) + tuple(THETA_CATEGORICAL_VAL
 # main_aisle_gain 은 "큰 통로 내부 주행 배율"로 위 그룹과 독립이며, 양 끝 셀이 모두
 # main_aisle 인 간선에 항상 함께 곱한다.
 #
-# 각 그룹의 정확한 간선 조건은 docs/2026-09-01_θ스키마_합의안.md 의
+# 각 그룹의 정확한 간선 조건은 docs/θ_경로_기준선.md#비용-규약과-주의점 의
 # "연속 파라미터 8개" 표에 있다.
 # ─────────────────────────────────────────────────────────────────────────────
 EDGE_RULE_PRECEDENCE = (
@@ -160,7 +160,7 @@ def min_realizable_edge_cost(theta):
     하한 포화는 아직 남아 있다. 큰 통로 내부 순방향 간선은
     aisle_alt_boost * main_aisle_gain = 0.5 * 0.5 = 0.25 로 clamp 하한에 걸린다.
     실제 발생 빈도를 계측한 뒤 범위를 조이거나 clamp 하한을 내리는 것이 순서다
-    (docs/2026-09-01_θ스키마_합의안.md 의 "미합의 / 후속").
+    (docs/θ_경로_기준선.md#비용-규약과-주의점).
     """
     weakest = min([COST_NEUTRAL] + _rule_multipliers(theta))
     return max(COST_MIN, weakest * min(COST_NEUTRAL, theta.main_aisle_gain))

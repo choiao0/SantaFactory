@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # ============================================================
 # 틱 시뮬레이터 v2 — CLI 셸 (커널: fms_kernel.FmsKernel, 주문: order_stream.OrderStream)
-# (설계: docs/2026-08-31_sim_v2_틱루프_설계.md, 라이브러리화: docs/2026-09-04_커널_라이브러리화_SimPy하네스_설계.md)
+# (설계·라이브러리화: docs/커널_시뮬_구조.md#틱-루프)
 #
 # 매 틱 전 로봇이 PIBT로 한 칸씩 움직인다. 예약 장부/대기슬롯/재시도 알람 없음 — 충돌·대기는 PIBT가 해소.
 # 이 파일은 인자 파싱 → 맵·비용·홈 준비 → 틱 루프(arrivals → dispatch → 종료 판단 → move) → 지표 출력만 한다.
@@ -20,16 +20,16 @@
 #                              [--horizon=<틱>] [--shifts=in,out,out]                     (고정 시간·교대, -145 §1)
 #                              [--battery] [--chargers=6] [--runtime-h=8] [--charge-h=1.5] [--soc=20,80,95]  (배터리, -145 §2)
 #   기본 = 헤딩 모델 (상태 (r,c,h), 자기+뒤 칸 2칸 점유, 90° 회전 = TURN_TICKS 틱, 회전 중 스윙 칸
-#              예약, 라이브니스 장치 5종). docs/2026-09-02_PIBT_헤딩_2칸점유_회전예약_설계.md
+#              예약, 라이브니스 장치 5종). docs/이동계층_PIBT.md#라이브니스-장치-5종
 #   --cell:    칸 모델(점로봇) opt-in — 기준선 CSV 재현·A/B 비교축. (--heading 은 호환용, 무시)
 #              v1compat 은 항상 칸 모델 (패리티).
 #   충전 존(main 기본): 초기 배치·복귀 = 3_FMS/map/charge_zone.json 존 안 최근접 빈 칸.
-#              docs/2026-09-03_충전존_구현_설계.md. --fixed-homes 면 기존 charger 12칸 홈
+#              docs/맵_충전존.md#구현-규칙. --fixed-homes 면 기존 charger 12칸 홈
 #              (B-1e pibt_main 재현). v1compat 은 항상 고정 홈(패리티).
 #   --horizon: 고정 시간 실행 — 유한 주문 대신 T 틱까지 돌리고 T 안의 완료 수로 처리량 (Lifelong). 주문수 인자는 무시.
 #              --shifts 로 T 를 등분해 창마다 in(입고)/out(출고) 한 종류만 도착 (기본 in,out,out = 앞 1/3 입고, 뒤 2/3 출고).
 #   --battery: SoC 틱 모델 + 충전 도크(charger[0..k) 칸). 임무 없는 로봇이 soc<low 면 강제, soc<go 면 기회 충전.
-#              main + 존 전용 (--fixed-homes·v1compat 과 함께 못 씀). docs/2026-09-05_SimPy사건층_배터리_교대_설계.md
+#              main + 존 전용 (--fixed-homes·v1compat 과 함께 못 씀). docs/커널_시뮬_구조.md#배터리와-충전-도크
 # 환경: SIM_NO_PLOT=1 히트맵 생략, SIM_CHECK=1 매 틱 충돌 전수 검사(느림),
 #       SIM_DIRFLOW=1 방향별 이동 카운트 npz 저장 (B-2 검증용), SIM_NO_DOCK_PRIO=1 장치 ⑤ 끄기,
 #       SIM_EXPORT_ISAAC=1 Isaac 리플레이 내보내기 (isaac_export_<태그>/)
@@ -53,7 +53,7 @@ from map_loader import (load_map, make_homes, CELL_M, OFFSET_M, MAP_DIR, load_ch
 from order_stream import OrderStream
 from pibt_core import DIRS, TURN_TICKS
 
-SERVICE_TIME_S = 40 / 11            # v1과 동일 (docs/B0 기준선 문서 참고)
+SERVICE_TIME_S = 40 / 11            # v1과 동일 (docs/θ_경로_기준선.md#기준선-계보)
 SERVICE_STEPS = round(SERVICE_TIME_S / DT)
 K_LINE_P = [0.5, 0.3, 0.2]          # 주문당 상품 라인 수 {1,2,3} 분포
 
@@ -86,7 +86,7 @@ def _parse_positional(argv):
 
 def _parse_model(a, argv):
     """이동 모델·홈·주문 간격 — v1compat 패리티 규칙 포함."""
-    # 헤딩 모델 = 기본값 (2026-09-04 결정, docs/2026-09-04_헤딩기본값_Isaac내보내기_설계.md §1, 계약 v2).
+    # 헤딩 모델 = 기본값 (docs/이동계층_PIBT.md#현재-결론, 계약 v2).
     # 칸 모델(점로봇)은 --cell opt-in. --heading 은 호환용으로 받되 무시. v1compat 은 패리티 때문에 항상 칸.
     a.heading = "--cell" not in argv
     if a.flow == "v1compat" and a.heading:
@@ -97,7 +97,7 @@ def _parse_model(a, argv):
     # v1compat 은 패리티 때문에 항상 고정 홈. (--zone 은 호환용 무시)
     a.zone = "--fixed-homes" not in argv and a.flow != "v1compat"
     # 주문 도착 간격 평균 [틱] (지수분포). 기본 50 = B-0 이후 전 기준선. --order-gap=<틱> 으로 부하 조절
-    # (고부하 스윕, docs/2026-09-04_고부하_무릎_판정.md). v1compat 은 패리티 때문에 항상 50.
+    # (고부하 스윕, docs/θ_경로_기준선.md#고부하-l1l2). v1compat 은 패리티 때문에 항상 50.
     a.order_gap_arg = next((float(f.split("=", 1)[1]) for f in argv if f.startswith("--order-gap=")), None)
     if a.order_gap_arg is not None and a.flow == "v1compat":
         a.warnings.append("[WARN] --order-gap 은 v1compat 에서 무시 (패리티)")

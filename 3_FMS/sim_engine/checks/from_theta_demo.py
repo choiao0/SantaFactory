@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # ============================================================
 # B-2 검증 데모 — from_theta() v2 검산 + 더미 θ 회피 확인 (DoD)
-# (설계: docs/2026-09-01_B2_from_theta_설계.md §3 v2 개정·§6)
+# (설계: docs/θ_경로_기준선.md#from_theta-조립-규칙)
 #
 # 1부: from_theta 성질 검산 (assert)
 #   [1] 중립 θ(GuidanceTheta.neutral()) → uniform 1.0
