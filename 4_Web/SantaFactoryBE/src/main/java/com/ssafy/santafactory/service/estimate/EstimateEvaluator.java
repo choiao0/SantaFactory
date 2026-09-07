@@ -30,6 +30,10 @@ public class EstimateEvaluator {
                 .toList();
         Integer knee = findKnee(sorted);
 
+        if (notDiscriminating(sorted)) {
+            return EstimateVerdict.none(ReasonCode.LOAD_TOO_LOW, knee);
+        }
+
         Optional<RunResult> recommended = sorted.stream()
                 .filter(run -> satisfies(run, goal))
                 .findFirst();
@@ -37,6 +41,15 @@ public class EstimateEvaluator {
         return recommended
                 .map(run -> EstimateVerdict.of(run.amrCount(), knee))
                 .orElseGet(() -> EstimateVerdict.none(reasonFor(sorted, goal), knee));
+    }
+
+    /**
+     * 대수를 둘 이상 재봤는데 전부 처리율 100 % 인가 — 처리율로 대수를 구분할 수 없는 상태다.
+     * 이대로 판정하면 가동률이 가장 높은 최소 대수가 뽑혀 "1대 권장" 이 나온다.
+     */
+    private boolean notDiscriminating(List<RunResult> sorted) {
+        return sorted.size() >= 2
+                && sorted.stream().allMatch(run -> run.throughputPercent() >= 100.0);
     }
 
     /** 처리율 ≥ 목표 · 가동률 ≥ 목표 · 비용 ≤ 예산. */
