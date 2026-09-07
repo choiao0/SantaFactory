@@ -33,6 +33,10 @@ public class SimulationService {
             simulationClient.publish(new SimulationRequest(
                     runId,
                     base.seed(),
+                    base.horizonS(),
+                    base.shifts(),
+                    base.inboundGapS(),
+                    base.outboundGapS(),
                     base.warehouse(),
                     new SimulationRequest.Amr(amrCount, amr.speedEmpty(), amr.speedLoaded(), amr.consumption(),
                             amr.battery(), amr.chargeTime(), amr.chargeThreshold(), amr.capacity()),
