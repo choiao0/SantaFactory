@@ -7,6 +7,7 @@ import com.ssafy.santafactory.dto.estimate.EstimateSummaryResponse;
 import com.ssafy.santafactory.dto.simulation.SimulationRequest;
 import com.ssafy.santafactory.dto.simulation.SimulationResponse;
 import com.ssafy.santafactory.entity.estimate.Estimate;
+import com.ssafy.santafactory.entity.estimate.RunStatus;
 import com.ssafy.santafactory.entity.simulation.SimScenario;
 import com.ssafy.santafactory.entity.warehouse.Warehouse;
 import com.ssafy.santafactory.global.exception.ErrorCode;
@@ -19,12 +20,14 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.IntStream;
 
 /**
@@ -45,12 +48,16 @@ public class EstimateService {
     /** 시뮬은 결정론이라 시드를 고정해 두면 같은 견적이 같은 결과를 낸다. 시드 개수는 미확정. */
     private static final long FIXED_SEED = 42L;
 
+    /** 아직 결과를 기다리는 상태 — TIMEOUT 스윕 대상. */
+    private static final List<RunStatus> PENDING = List.of(RunStatus.QUEUED, RunStatus.RUNNING);
+
     private final EstimateRepository estimateRepository;
     private final SimScenarioRepository scenarioRepository;
     private final WarehouseRepository warehouseRepository;
     private final SimulationService simulationService;
     private final CostCalculator costCalculator;
     private final EstimateEvaluator evaluator;
+    private final EstimateProperties properties;
 
     // ── 생성 ─────────────────────────────────────────────────────────────────
 
@@ -153,6 +160,33 @@ public class EstimateService {
         }
 
         finalizeIfComplete(run.getEstimate());
+    }
+
+    /**
+     * 결과가 오지 않는 run 을 TIMEOUT 으로 정리한다.
+     *
+     * <p>이게 없으면 워커가 죽거나 발행 메시지가 유실될 때 그 run 이 QUEUED 에 갇히고, 견적이 영원히
+     * RUNNING 으로 남는다. 발행은 트랜잭션 커밋보다 먼저 일어나므로(생성 참고) 아주 빠른 워커가
+     * 커밋 전에 응답해 결과가 버려지는 경우도 여기서 회수된다.
+     *
+     * @return TIMEOUT 처리한 run 수
+     */
+    @Scheduled(fixedDelayString = "${estimate.timeout-sweep-interval:60}", timeUnit = TimeUnit.SECONDS)
+    @Transactional
+    public int sweepTimeouts() {
+        LocalDateTime threshold = LocalDateTime.now().minus(properties.runTimeout());
+        List<SimScenario> stuck = scenarioRepository.findByStatusInAndPublishedAtBefore(PENDING, threshold);
+        if (stuck.isEmpty()) {
+            return 0;
+        }
+
+        stuck.forEach(SimScenario::markTimeout);
+        // 같은 견적의 run 들은 한 영속성 컨텍스트에서 같은 인스턴스라 distinct 로 중복 판정을 막는다
+        stuck.stream().map(SimScenario::getEstimate).distinct().forEach(this::finalizeIfComplete);
+
+        log.warn("결과가 오지 않은 run {}건 TIMEOUT 처리: 기준 시각={}, runIds={}",
+                stuck.size(), threshold, stuck.stream().map(SimScenario::getRunId).toList());
+        return stuck.size();
     }
 
     private boolean isFailure(SimulationResponse response) {
