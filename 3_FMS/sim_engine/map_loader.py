@@ -48,6 +48,12 @@ def load_map(base_dir=None, aisle_block=False):
             c = int((35.1 + 6 * k + OFFSET_M) / CELL_M)
             free[AISLE_ROWS[0]:AISLE_ROWS[1], c - 1:c + 2] = False
 
+    return free, _station_cells(stations, free), stations
+
+
+def _station_cells(stations, free):
+    """스테이션 좌표(m) → 격자 칸: 정확한 칸이 막혀 있으면 상하좌우 첫 free 칸으로 (v1 규칙)."""
+    H, W = free.shape
     st_cell = {}
     for kind, pts in stations.items():
         if kind == "charge_zone":            # 사각형 목록(m) — 스테이션 점이 아님, load_charge_zone 이 읽음
@@ -58,7 +64,7 @@ def load_map(base_dir=None, aisle_block=False):
                 if 0 <= rr < H and 0 <= cc < W and free[rr, cc]:
                     st_cell[f"{kind}[{i}]"] = (rr, cc)
                     break
-    return free, st_cell, stations
+    return st_cell
 
 
 def load_charge_zone(free, map_dir=None):
@@ -117,14 +123,20 @@ def make_homes(free, st_cell, n_robots):
     homes = [st_cell[f"charger[{i}]"] for i in range(6)] + \
             [st_cell[f"charge_q[{i}]"] for i in range(6)]
     if n_robots > len(homes):
-        taken = set(homes) | set(st_cell.values())
-        for r in range(45, min(77, H)):
-            for c in range(100, min(112, W)):
-                if len(homes) >= n_robots:
-                    break
-                if free[r, c] and (r, c) not in taken and \
-                        all(abs(r - hr) + abs(c - hc) >= 2 for hr, hc in homes):
-                    homes.append((r, c))
-                    taken.add((r, c))
+        _fill_extra_homes(free, st_cell, homes, n_robots)
     assert n_robots <= len(homes), f"홈 슬롯 부족: {len(homes)}"
     return homes[:n_robots]
+
+
+def _fill_extra_homes(free, st_cell, homes, n_robots):
+    """12대 초과분: 충전존 인근(행 45~76, 열 100~111) free 칸 중 기존 홈과 맨해튼 ≥ 2 인 칸을 행 우선으로 채운다 (v1 동일)."""
+    H, W = free.shape
+    taken = set(homes) | set(st_cell.values())
+    for r in range(45, min(77, H)):
+        for c in range(100, min(112, W)):
+            if len(homes) >= n_robots:
+                break
+            if free[r, c] and (r, c) not in taken and \
+                    all(abs(r - hr) + abs(c - hc) >= 2 for hr, hc in homes):
+                homes.append((r, c))
+                taken.add((r, c))

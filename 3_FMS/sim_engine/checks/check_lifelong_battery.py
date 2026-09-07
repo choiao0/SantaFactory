@@ -56,20 +56,25 @@ def check_shift_windows():
     for T, shifts, gap, gin in [(10800, ("in", "out", "out"), 15, None), (5000, ("out", "in", "out", "in"), 7.5, 30),
                                 (3600, ("out",), 20, None)]:
         s = OrderStream(np.random.default_rng(1), "main", 0, gap, st_cell, stations, inbound_gap=gin, horizon=T, shifts=shifts)
-        win = {"in": [(a, b) for k, a, b in s.windows if k == "in"], "out": [(a, b) for k, a, b in s.windows if k == "out"]}
-        inside = lambda t, ws: any(a <= t < b for a, b in ws)
-        assert all(inside(t, win["out"]) for t in s.order_times), "출고 도착이 out 창 밖"
-        assert all(inside(t, win["in"]) for t in s.inbound_times), "입고 도착이 in 창 밖"
-        assert all(0 < t < T for t in list(s.order_times) + list(s.inbound_times))
-        assert s.n_orders == len(s.order_times) and s.n_inbound == len(s.inbound_times) and s.outstanding == s.n_orders + s.n_inbound
-        # 창 안 도착 수가 기대(창 길이/gap)와 크게 다르지 않은지 (±35 %, 시드 1개라 느슨하게)
-        for kind, times, g in (("out", s.order_times, gap), ("in", s.inbound_times, gap if gin is None else gin)):
-            span = sum(b - a for a, b in win[kind])
-            if span:
-                exp = span / g
-                assert 0.65 * exp <= len(times) <= 1.35 * exp, f"{kind} 도착 {len(times)} vs 기대 {exp:.0f}"
+        _assert_stream_in_windows(s, T, gap, gin)
         n_checked += 1
     print(f"[2] 교대 창: 창 밖 도착 0건, 병합 규칙 3건, 스트림 {n_checked}벌 : OK")
+
+
+def _assert_stream_in_windows(s, T, gap, gin):
+    """스트림 s 의 도착이 전부 자기 종류의 창 안이고, 창별 도착 수가 기대(창 길이/gap)의 ±35 % 안인가."""
+    win = {"in": [(a, b) for k, a, b in s.windows if k == "in"], "out": [(a, b) for k, a, b in s.windows if k == "out"]}
+    inside = lambda t, ws: any(a <= t < b for a, b in ws)
+    assert all(inside(t, win["out"]) for t in s.order_times), "출고 도착이 out 창 밖"
+    assert all(inside(t, win["in"]) for t in s.inbound_times), "입고 도착이 in 창 밖"
+    assert all(0 < t < T for t in list(s.order_times) + list(s.inbound_times))
+    assert s.n_orders == len(s.order_times) and s.n_inbound == len(s.inbound_times) and s.outstanding == s.n_orders + s.n_inbound
+    # 창 안 도착 수가 기대(창 길이/gap)와 크게 다르지 않은지 (±35 %, 시드 1개라 느슨하게)
+    for kind, times, g in (("out", s.order_times, gap), ("in", s.inbound_times, gap if gin is None else gin)):
+        span = sum(b - a for a, b in win[kind])
+        if span:
+            exp = span / g
+            assert 0.65 * exp <= len(times) <= 1.35 * exp, f"{kind} 도착 {len(times)} vs 기대 {exp:.0f}"
 
 
 def _assert_no_low_soc_dispatch(kernel, prev_task, t):
