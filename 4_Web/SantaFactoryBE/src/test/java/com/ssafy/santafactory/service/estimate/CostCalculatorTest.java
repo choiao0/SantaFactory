@@ -43,20 +43,20 @@ class CostCalculatorTest {
     }
 
     @Test
-    void max_fleet_divides_the_budget_by_per_unit_cost_then_adds_margin() {
+    void max_amr_count_divides_the_budget_by_per_unit_cost_then_adds_margin() {
         // 1억 / 1550만 = 6대, + 여유 1 = 7대
-        assertThat(calculator.maxFleet(100_000_000L)).isEqualTo(7);
+        assertThat(calculator.maxAmrCount(100_000_000L)).isEqualTo(7);
     }
 
     @Test
-    void max_fleet_is_capped_at_eight() {
+    void max_amr_count_is_capped_at_eight() {
         // 예산 3억(창고 시드 값)이면 19대까지 살 수 있지만 상한이 먼저 걸린다
-        assertThat(calculator.maxFleet(300_000_000L)).isEqualTo(8);
+        assertThat(calculator.maxAmrCount(300_000_000L)).isEqualTo(8);
     }
 
     @Test
-    void max_fleet_tries_at_least_one_even_on_a_tiny_budget() {
-        assertThat(calculator.maxFleet(0L)).isEqualTo(1);
+    void max_amr_count_tries_at_least_one_even_on_a_tiny_budget() {
+        assertThat(calculator.maxAmrCount(0L)).isEqualTo(1);
     }
 
     @Test
@@ -72,7 +72,7 @@ class CostCalculatorTest {
         CostCalculator undecided = new CostCalculator(
                 new EstimateProperties(0L, 0L, 0L, 8, 6, 4, 1));
 
-        assertThat(undecided.maxFleet(1_000L)).isEqualTo(8);
+        assertThat(undecided.maxAmrCount(1_000L)).isEqualTo(8);
         assertThat(undecided.cost(6)).isZero();
     }
 }

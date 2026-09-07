@@ -31,10 +31,10 @@ estimate:
   install-per-unit: 500000
   # 충전기 단가는 DB·ERD 어디에도 없어 팀 미정 (0이면 비용에 미반영)
   charger-price: 0
-  max-fleet: 8
+  max-amr-count: 8
   max-chargers: 6
   amr-per-charger: 4
-  fleet-margin: 1
+  amr-count-margin: 1
 
 springdoc:
   swagger-ui:

@@ -33,18 +33,18 @@ public class CostCalculator {
     }
 
     /**
-     * 예산 ÷ 대당 비용 + 여유분, 상한 maxFleet.
+     * 예산 ÷ 대당 비용 + 여유분, 상한 maxAmrCount.
      *
      * <p>충전기 값은 여기 넣지 않는다 — 여유분이 이미 예산을 넘겨 잡는 쪽이고, 예산 초과는
      * 조건 판정에서 대수별 실제 비용으로 다시 걸러진다. 단가가 0(미정)이면 나눌 수 없으므로
      * 상한을 그대로 쓴다.
      */
-    public int maxFleet(long budget) {
+    public int maxAmrCount(long budget) {
         long perUnit = props.perUnitCost();
         if (perUnit <= 0) {
-            return props.maxFleet();
+            return props.maxAmrCount();
         }
         long affordable = Math.max(0, budget) / perUnit;
-        return Math.clamp(affordable + props.fleetMargin(), 1, props.maxFleet());
+        return Math.clamp(affordable + props.amrCountMargin(), 1, props.maxAmrCount());
     }
 }
