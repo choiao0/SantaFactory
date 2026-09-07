@@ -78,6 +78,8 @@ class GuidanceTheta:
     """AI가 내놓는 것 — 통행 규칙 파라미터 θ 11개."""
 
     # 연속 파라미터 8개
+    # aisle 계열 4개(aisle_alt_gain·aisle_alt_boost·aisle_period·aisle_phase)는 기준선(aisle_block=1, 입구버퍼)에서
+    # 적용 간선이 없어 무효 — 중립과 비트 동일 (θ 감도 실험 2026-09-04 §5). 스키마엔 두고 탐색 공간에서만 제외.
     aisle_alt_gain: float    # 1.0 ~ 3.5 — 통로 역주행 벌금
     aisle_alt_boost: float   # 0.5 ~ 1.0 — 통로 순방향 할인
     loop_gain: float         # 1.0 ~ 3.0 — 순환로 역주행 벌금

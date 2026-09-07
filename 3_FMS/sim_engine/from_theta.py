@@ -88,7 +88,12 @@ def station_entry_dir(free, loop_fwd, rc):
 
 
 def extract_topology(free, st_cell, verbose=False):
-    """wallA 규칙 기반 추출. 통로차단 ON이면 랙 내부 통로 칸이 free=False라 자동 비활성."""
+    """wallA 규칙 기반 추출. 통로차단 ON이면 랙 내부 통로 칸이 free=False라 자동 비활성.
+
+    귀결(θ 감도 실험 2026-09-04 §5): 기준선(aisle_block=1, 입구버퍼 인수인계)에서는 rank 를 매기는 세로 통로 칸이
+    전부 막혀 있어 aisle 계열 θ 4개(aisle_alt_gain·aisle_alt_boost·aisle_period·aisle_phase)가 **무효**(중립과 비트 동일).
+    코드 결함이 아니라 운영 모델의 결과이며, 스키마는 11개 그대로 두고 BO 탐색 공간에서만 제외한다.
+    슬롯 앞 정차(Locus식)로 바꾸면 코드 수정 없이 되살아난다."""
     H, W = free.shape
     rank = np.full((H, W), -1, dtype=np.int16)
     for k, x in enumerate(VA_XS_M):

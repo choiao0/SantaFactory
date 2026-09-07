@@ -12,6 +12,9 @@
 #
 # 이 파일은 sim_v2_tasks.py(-143 시점)의 틱 루프를 **로직 변경 없이** 옮긴 것이다. 기준값 3개·CSV 80행이 비트 동일해야 한다.
 # 반복 순서(rids, robots.items())·정렬 키·동률 규칙을 바꾸지 말 것 — 결과가 바뀐다.
+#
+# 배터리·충전 도크 (-145, docs/2026-09-05_SimPy사건층_배터리_교대_설계.md §2): KernelConfig.battery 가 켜졌을 때만
+# SoC 를 틱 단위로 차감/충전하고 TO_CHARGE/CHARGING 상태를 쓴다. 꺼져 있으면(기본) 아래 배차 순서·반복 순서는 이전과 같다.
 # ============================================================
 import io
 from contextlib import redirect_stdout
@@ -24,12 +27,15 @@ from pibt_core import (DIRS, TURN_TICKS, Replanner, Stagnation,
                        dist_map, dist_map_h, dump_candidates_h, occupied, stay_map_h,
                        step, step_h, swing_cells, valid_state, wait_bias)
 
-# 로봇 상태 (설계 §4) / PIBT 계급 (설계 §5)
-IDLE, TO_PICK, SVC_PICK, TO_DROP, SVC_DROP, TO_HOME, FREED = \
-    "IDLE", "TO_PICK", "SVC_PICK", "TO_DROP", "SVC_DROP", "TO_HOME", "FREED"
-RANK = {SVC_PICK: 0, SVC_DROP: 0, TO_DROP: 1, TO_PICK: 2, TO_HOME: 3, IDLE: 3, FREED: 3}
-NAV = (TO_PICK, TO_DROP, TO_HOME)
+# 로봇 상태 (설계 §4) / PIBT 계급 (설계 §5). TO_CHARGE·CHARGING 은 배터리 모드 전용 (-145 §2-2)
+IDLE, TO_PICK, SVC_PICK, TO_DROP, SVC_DROP, TO_HOME, FREED, TO_CHARGE, CHARGING = \
+    "IDLE", "TO_PICK", "SVC_PICK", "TO_DROP", "SVC_DROP", "TO_HOME", "FREED", "TO_CHARGE", "CHARGING"
+RANK = {SVC_PICK: 0, SVC_DROP: 0, CHARGING: 0, TO_DROP: 1, TO_PICK: 2, TO_CHARGE: 2, TO_HOME: 3, IDLE: 3, FREED: 3}
+NAV = (TO_PICK, TO_DROP, TO_HOME, TO_CHARGE)
 SERVICE = (SVC_PICK, SVC_DROP)
+HOLD = SERVICE + (CHARGING,)             # 제자리 고정(stay 만 허용, 밀리지 않음)
+ON_TASK = (TO_PICK, SVC_PICK, TO_DROP, SVC_DROP)
+PARKABLE = (IDLE, FREED, TO_HOME)        # 태스크가 없는 로봇 — 충전 진입 후보
 
 
 class StallError(RuntimeError):
@@ -48,7 +54,19 @@ class KernelConfig:
     turn_ticks: int = TURN_TICKS  # 90° 회전 틱
     dock_clear: int = 3           # 장치 ⑤ 유지 거리 (체비쇼프, 로봇 길이)
     stall_ticks: int = 1500       # 워치독: 이 틱 동안 완료 태스크 수 무변화 → StallError
+    stall_warn_only: bool = False # 고정 시간 실행: 무진전은 기록하고 계속 (유한 모드는 기존 StallError)
     trace_len: int = 12           # STALL 덤프용 최근 틱 이력 길이
+    # 배터리·충전 도크 (-145 §2-1). battery=False 면 아래는 전부 무시.
+    battery: bool = False
+    dock_cells: tuple = ()        # 충전 도크 칸 (r, c) — stations.json charger[0..k)
+    soc_init: tuple = ()          # 로봇별 초기 SoC 0~1 (셸이 시드로 뽑아 넘김)
+    drain_drive: float = 0.0      # 주행·회전 1틱 소모 (SoC 비율)
+    drain_idle: float = 0.0       # 정지(대기·서비스·유휴) 1틱 소모
+    charge_rate: float = 0.0      # 충전 1틱 회복
+    soc_low: float = 0.20         # 강제 충전 (배차 제외)
+    soc_go: float = 0.80          # 유휴 기회 충전 진입
+    soc_leave: float = 0.95       # 충전 종료
+    soc_yield: float = 0.50       # 강제 충전 로봇에 도크를 내주는 최소 SoC (퇴거 대상)
 
 
 class FmsKernel:
@@ -68,11 +86,24 @@ class FmsKernel:
         self.turn_cost = float(cfg.turn_ticks)
         self.warnings = []                      # 초기화 중 경고 문구 (셸이 출력)
 
+        # 배터리·충전 도크 (-145 §2). 도크는 주차 후보(zone_cells)에서 제외 — 초기 배치(homes)는 셸이 그대로 둔다(§2-5).
+        self.battery = bool(cfg.battery)
+        self.docks = [tuple(d) for d in cfg.dock_cells] if self.battery else []
+        self.dock_owner = {d: None for d in self.docks}
+        if self.battery:
+            assert self.docks, "배터리 모드: 도크 칸이 없음"
+            assert all(free[d] for d in self.docks), f"도크 칸이 통행 불가: {[d for d in self.docks if not free[d]]}"
+            assert len(cfg.soc_init) == n_robots, f"soc_init {len(cfg.soc_init)} != 로봇 {n_robots}"
+            dock_set = set(self.docks)
+            self.zone_cells = [rc for rc in self.zone_cells if rc not in dock_set]
+        self.bat_stats = dict(events=0, charging=0, dock_wait=0, evictions=0, soc_min=1.0, empty=0)
+
         # 거리장 캐시 (θ 는 실행 중 고정이라 무효화 불필요)
         self._dist_cache, self._dist_cache_h, self._stay_cache = {}, {}, {}
         self._stag = Stagnation()               # 헤딩: 거리 개선 없는 연속 틱 (우선순위·대기 상승·재계획)
         self._replan = Replanner(free, edge_cost, self.turn_cost) if self.heading else None
         self._trace = []                        # STALL 진단용 링버퍼 (t, rid -> (상태, busy, 액션))
+        self.stall_warning_ticks = []            # 고정 시간 모드 무진전 경고 시각(계속 실행)
 
         # 로봇
         self.robots = {}
@@ -81,7 +112,12 @@ class FmsKernel:
                                     goal=homes[rid], task=None, svc_end=-1, waitc=0,
                                     drive=0, wait=0, pushed=0, svc=0, turns=0, heading=None,
                                     h=None, busy=0, swing=set(), rot=0, rev=0, replan=0,
-                                    turns_idle=0, goal_prev=None, goal_t=0, idle_moves=0, leave_from=None)
+                                    turns_idle=0, goal_prev=None, goal_t=0, idle_moves=0, leave_from=None,
+                                    soc=1.0, charge_n=0, chg=0, soc_empty=0)
+            if self.battery:
+                self.robots[rid]["soc"] = float(cfg.soc_init[rid])
+        if self.battery:
+            self.bat_stats["soc_min"] = min(rb["soc"] for rb in self.robots.values())
         self.rids = list(self.robots)
         if self.heading:
             # 초기 방향: 홈에서 valid(뒤 칸 free)하고 타 로봇 점유와 안 겹치는 첫 방향 (결정론적)
@@ -168,7 +204,8 @@ class FmsKernel:
         for o, ob in robots.items():
             if o == rid:
                 continue
-            if ob["state"] in (TO_HOME, IDLE) and zone_mask[ob["goal"]]:
+            # 충전 가는/중인 로봇의 도크(존 안)와 이웃도 예약 — 주차 로봇이 도킹 자세를 막지 않게 (-145 §2-5)
+            if ob["state"] in (TO_HOME, IDLE, TO_CHARGE, CHARGING) and zone_mask[ob["goal"]]:
                 gr, gc = ob["goal"]
                 reserved.update((gr + dr, gc + dc) for dr in (-1, 0, 1) for dc in (-1, 0, 1))
             bodies.update(self._body_cells(ob))
@@ -182,11 +219,13 @@ class FmsKernel:
                 return rb["home"]
         return min(cand, key=key)
 
+    def _needs_charge(self, rb):
+        return self.battery and rb["soc"] < self.cfg.soc_low
+
     def _try_assign_all(self, t):
-        """설계 §7: waiting FIFO × (IDLE ∪ FREED) 최근접 배차. 남은 FREED는 홈으로
-        (존: 존 내 최근접 빈 칸, 도착하면 그 칸이 새 홈)."""
+        """설계 §7: waiting FIFO × (IDLE ∪ FREED) 최근접 배차. 배터리 모드에서 SoC < soc_low 인 로봇은 후보에서 뺀다."""
         robots = self.robots
-        eligible = [rid for rid, rb in robots.items() if rb["state"] in (IDLE, FREED)]
+        eligible = [rid for rid, rb in robots.items() if rb["state"] in (IDLE, FREED) and not self._needs_charge(rb)]
         for task in list(self.waiting):
             if not eligible:
                 break
@@ -199,7 +238,10 @@ class FmsKernel:
             eligible.remove(rid)
             if rb["pos"] == rb["goal"]:              # 제자리 배차(pack 승계 등) 즉시 도킹
                 self._begin_service(rb, t, "pick")
-        for rid, rb in robots.items():
+
+    def _send_freed_home(self):
+        """남은 FREED는 홈으로 (존: 존 내 최근접 빈 칸, 도착하면 그 칸이 새 홈)."""
+        for rid, rb in self.robots.items():
             if rb["state"] == FREED:
                 rb["state"] = TO_HOME
                 rb["goal"] = self.zone_goal(rid) if self.zone else rb["home"]
@@ -209,10 +251,118 @@ class FmsKernel:
                     rb["state"] = IDLE
 
     # ------------------------------------------------------------
+    # 배터리·충전 도크 (-145 §2-3) — battery 꺼짐이면 어느 것도 호출되지 않는다
+    # ------------------------------------------------------------
+    def _free_dock(self, rid):
+        """빈 도크 중 맨해튼 최근접 (동률: 도크 순서). 없으면 None."""
+        pr, pc = self.robots[rid]["pos"]
+        cand = [d for d in self.docks if self.dock_owner[d] is None]
+        if not cand:
+            return None
+        return min(cand, key=lambda d: (abs(d[0] - pr) + abs(d[1] - pc), self.docks.index(d)))
+
+    def _go_charge(self, rid, dock):
+        rb = self.robots[rid]
+        rb["state"], rb["goal"], rb["task"] = TO_CHARGE, dock, None
+        self.dock_owner[dock] = rid
+        rb["charge_n"] += 1
+        self.bat_stats["events"] += 1
+        if rb["pos"] == dock:                        # 도크 위에서 진입 — 즉시 충전
+            rb["state"] = CHARGING
+
+    def _undock(self, rid):
+        rb = self.robots[rid]
+        self.dock_owner[rb["goal"]] = None
+        rb["state"] = FREED
+
+    def _charge_release(self):
+        """충전 종료: CHARGING 이고 SoC ≥ soc_leave → FREED (도크 해제). 같은 틱 배차 후보가 된다."""
+        for rid in self.rids:
+            rb = self.robots[rid]
+            if rb["state"] == CHARGING and rb["soc"] >= self.cfg.soc_leave:
+                self._undock(rid)
+
+    def _charge_forced(self):
+        """강제 충전: 태스크 없는 로봇 중 SoC < soc_low 를 SoC 오름차순으로 빈 도크에. 빈 도크가 없으면 SoC ≥ soc_yield 인
+        충전 중 로봇(최고 SoC)을 퇴거시켜 자리를 넘긴다. 그래도 없으면 대기(dock_wait, 배차 제외는 _try_assign_all 이 처리)."""
+        robots, cfg = self.robots, self.cfg
+        need = sorted((rid for rid in self.rids if robots[rid]["state"] in PARKABLE and robots[rid]["soc"] < cfg.soc_low),
+                      key=lambda r: (robots[r]["soc"], r))
+        for rid in need:
+            dock = self._free_dock(rid)
+            if dock is None:
+                victims = [o for o in self.rids if robots[o]["state"] == CHARGING and robots[o]["soc"] >= cfg.soc_yield]
+                if not victims:
+                    self.bat_stats["dock_wait"] += 1
+                    continue
+                victim = max(victims, key=lambda o: (robots[o]["soc"], -o))
+                dock = robots[victim]["goal"]
+                self._undock(victim)
+                self.bat_stats["evictions"] += 1
+            self._go_charge(rid, dock)
+
+    def _unpark_docks(self):
+        """도크 위/도크 목표로 주차한(홈이 도크인 초기 배치, -145 §2-5) 로봇을 그 도크를 다른 로봇이 예약한 순간 존 빈 칸으로
+        재선택. 없으면 밀려난 뒤에도 goal=home=도크라 첫 태스크까지 도크 옆을 맴돈다 (2026-09-06 검토)."""
+        for rid in self.rids:
+            rb = self.robots[rid]
+            if rb["state"] in (IDLE, TO_HOME) and rb["goal"] in self.dock_owner \
+                    and self.dock_owner[rb["goal"]] not in (None, rid):
+                rb["state"] = TO_HOME
+                rb["goal"] = rb["home"] = self.zone_goal(rid)
+                self.zone_stats["retargets"] += 1
+                if rb["pos"] == rb["goal"]:
+                    rb["state"] = IDLE
+
+    def _charge_opportunistic(self):
+        """기회 충전: 배차 뒤에도 태스크가 없는 로봇 중 SoC < soc_go 를 (SoC 오름차순) 빈 도크가 있는 만큼."""
+        robots, cfg = self.robots, self.cfg
+        idle = sorted((rid for rid in self.rids if robots[rid]["state"] in PARKABLE and robots[rid]["soc"] < cfg.soc_go),
+                      key=lambda r: (robots[r]["soc"], r))
+        for rid in idle:
+            dock = self._free_dock(rid)
+            if dock is None:
+                break
+            self._go_charge(rid, dock)
+
+    def _battery_tick(self, before):
+        """틱 소모/충전 (-145 §2-6): 이동·회전 중이면 주행 소모, CHARGING 이면 충전, 그 외 정지 소모. 0 은 clamp + 카운트."""
+        cfg, bs = self.cfg, self.bat_stats
+        if cfg.check:
+            charging = [rid for rid in self.rids if self.robots[rid]["state"] == CHARGING]
+            assert len(charging) <= len(self.docks), f"동시 충전 {len(charging)} > 도크 {len(self.docks)}"
+            for rid in charging:
+                pos = self.robots[rid]["pos"]
+                assert self.dock_owner.get(pos) == rid, f"robot{rid} 충전 중인데 도크 {pos} 소유자 {self.dock_owner.get(pos)}"
+        for rid in self.rids:
+            rb = self.robots[rid]
+            if rb["state"] == CHARGING:
+                rb["soc"] = min(1.0, rb["soc"] + cfg.charge_rate)
+                rb["chg"] += 1
+                bs["charging"] += 1
+            else:
+                p0, h0, busy0 = before[rid]
+                active = rb["pos"] != p0 or rb["h"] != h0 or busy0 > 0
+                rb["soc"] = max(0.0, rb["soc"] - (cfg.drain_drive if active else cfg.drain_idle))
+                if rb["soc"] <= 0.0:
+                    rb["soc_empty"] += 1
+                    bs["empty"] += 1
+            if rb["soc"] < bs["soc_min"]:
+                bs["soc_min"] = rb["soc"]
+
+    def battery_summary(self):
+        bs = self.bat_stats
+        socs = [rb["soc"] for rb in self.robots.values()]
+        return dict(charge_events=bs["events"], charging_steps=bs["charging"], dock_wait_steps=bs["dock_wait"],
+                    charge_evictions=bs["evictions"], soc_min=bs["soc_min"], soc_end_mean=sum(socs) / len(socs),
+                    soc_empty_steps=bs["empty"], n_docks=len(self.docks))
+
+    # ------------------------------------------------------------
     # 틱 — dispatch(t) → [셸 종료 판단] → move(t)
     # ------------------------------------------------------------
     def dispatch(self, t):
-        """(2) 서비스 완료 — 전 로봇 만료 처리, 하역 완료는 on_task_completed 콜백(후속 태스크 즉시 접수). (3) 배차."""
+        """(2) 서비스 완료 — 전 로봇 만료 처리, 하역 완료는 on_task_completed 콜백(후속 태스크 즉시 접수).
+        (배터리) 충전 종료 → 강제 충전. (3) 배차. (배터리) 기회 충전. FREED → 홈."""
         for rid in self.rids:
             rb = self.robots[rid]
             if rb["state"] in SERVICE and rb["svc_end"] == t:
@@ -226,13 +376,20 @@ class FmsKernel:
                         for follow in self.on_task_completed(task, t) or ():
                             self.submit_task(follow)
                     rb["state"], rb["task"] = FREED, None
+        if self.battery:
+            self._charge_release()
+            self._charge_forced()
+            self._unpark_docks()
         self._try_assign_all(t)
+        if self.battery:
+            self._charge_opportunistic()
+        self._send_freed_home()
 
     def move(self, t):
-        """(4) PIBT 한 스텝 pos(t)→pos(t+1), (5) 존 지표·재선택, (6) 도착 감지(시각 t+1), 워치독."""
+        """(4) PIBT 한 스텝 pos(t)→pos(t+1), (5) 존 지표·재선택, (배터리) 틱 소모, (6) 도착 감지(시각 t+1), 워치독."""
         robots, rids = self.robots, self.rids
-        if self.zone:
-            before = {rid: (robots[rid]["pos"], robots[rid]["h"]) for rid in rids}
+        if self.zone or self.battery:
+            before = {rid: (robots[rid]["pos"], robots[rid]["h"], robots[rid]["busy"]) for rid in rids}
         if self.heading:
             self._tick_heading(t)
         else:
@@ -244,7 +401,7 @@ class FmsKernel:
             # 지표 (구현 설계 §4): 존 안 복귀 대기 / 비임무 밀림 이동 / 동시 주차
             for rid in rids:
                 rb = robots[rid]
-                p0, h0 = before[rid]
+                p0, h0, _ = before[rid]
                 if rb["state"] == TO_HOME and rb["pos"] == p0 and rb["h"] == h0 and zone_mask[p0]:
                     zs["wait"] += 1
                 elif rb["state"] in (IDLE, FREED) and rb["pos"] != p0:
@@ -262,6 +419,9 @@ class FmsKernel:
                     rb["goal"] = rb["home"] = self.zone_goal(rid)
                     zs["retargets"] += 1
 
+        if self.battery:
+            self._battery_tick(before)              # 도착 판정 전 — 도착한 틱은 주행 소모, 충전은 다음 틱부터
+
         # (6) 도착 감지 — pos(t+1) 기준
         for rid in rids:
             rb = robots[rid]
@@ -273,12 +433,23 @@ class FmsKernel:
                 self._begin_service(rb, t1, "drop")
             elif rb["state"] == TO_HOME:
                 rb["state"] = IDLE
+            elif rb["state"] == TO_CHARGE:
+                rb["state"] = CHARGING
 
-        # 워치독 (v1 STALL 동일 기준: stall_ticks 무진전)
-        if len(self.tasks_done) != self._progress[0]:
+        # 워치독 (v1 STALL 동일 기준: stall_ticks 무진전). 고정 시간 모드(stall_warn_only)에서만 "대기 큐가 비고 임무 중
+        # 로봇이 없으면 할 일이 없는 것"을 진전으로 본다 (-145 §2-7: 한가한 구간·집단 충전). 유한 모드는 옛 규칙 그대로 —
+        # 이 조건은 유한 모드에서도 첫 도착 전(도착 틱 ≥ 1)에 참이 되므로 게이트 없이 두면 한가한 부하(간격 ≥ 1000)의
+        # STALL 시각·유무가 v2.1 과 달라진다 (2026-09-06 검토에서 재현).
+        if len(self.tasks_done) != self._progress[0] or \
+                (self.cfg.stall_warn_only and not self.waiting
+                 and not any(rb["state"] in ON_TASK for rb in robots.values())):
             self._progress[0], self._progress[1] = len(self.tasks_done), t1
         elif t1 - self._progress[1] > self.cfg.stall_ticks:
-            raise StallError(self._stall_dump(t1))
+            if self.cfg.stall_warn_only:
+                self.stall_warning_ticks.append(t1)
+                self._progress[1] = t1
+            else:
+                raise StallError(self._stall_dump(t1))
         assert t1 < 200_000, "시뮬 정체 (틱 상한 초과)"
 
     def step(self, t):
@@ -322,7 +493,7 @@ class FmsKernel:
         dists = {}
         for rid in rids:
             rb = robots[rid]
-            if rb["state"] in SERVICE or rb["busy"] > 0:
+            if rb["state"] in HOLD or rb["busy"] > 0:
                 dists[rid] = stay_map_h(free, states[rid])
             elif rb["pos"] != rb["goal"]:
                 base = self.dmap_h(rb["goal"])
@@ -393,12 +564,12 @@ class FmsKernel:
             act = {"fwd": "move", "rev": "reverse", "turn": "rotate", "busy": "rotate", "wait": "wait"}
             for rid in rids:
                 rb = robots[rid]
-                a = "service" if rb["state"] in SERVICE else act[snap[rid][2]]
+                a = "service" if rb["state"] in SERVICE else "charge" if rb["state"] == CHARGING else act[snap[rid][2]]
                 self.export_log[rid].append((t + 1, rb["pos"][0], rb["pos"][1], rb["h"], a))
         for rid in rids:
             rb = robots[rid]
             s1 = new[rid]
-            if rb["state"] in SERVICE:
+            if rb["state"] in HOLD:
                 self._stag.update(rid, rb["goal"], 0.0)
             else:
                 self._stag.update(rid, rb["goal"], self.dmap_h(rb["goal"])[s1])
@@ -413,7 +584,7 @@ class FmsKernel:
         dists = {}
         for rid in rids:
             rb = robots[rid]
-            dists[rid] = self.staymap(rb["pos"]) if rb["state"] in SERVICE else self.dmap(rb["goal"])
+            dists[rid] = self.staymap(rb["pos"]) if rb["state"] in HOLD else self.dmap(rb["goal"])
         new_pos = step(positions, dists, self.edge_cost, self.wait_cost, self.free, prio)
 
         if cfg.check:
@@ -449,7 +620,7 @@ class FmsKernel:
                 rb["heading"] = d
             rb["pos"] = p1
             if cfg.export:
-                a = "move" if moved else "service" if rb["state"] in SERVICE else "wait"
+                a = "move" if moved else "service" if rb["state"] in SERVICE else "charge" if rb["state"] == CHARGING else "wait"
                 self.export_log[rid].append((t + 1, p1[0], p1[1], rb["heading"], a))
 
     # ------------------------------------------------------------
@@ -469,7 +640,7 @@ class FmsKernel:
                 dists = {rid: self.dmap_h(robots[rid]["goal"]) for rid in rids}
                 goals = {rid: robots[rid]["goal"] for rid in rids}
                 bias = {rid: wait_bias(self._stag.get(rid)) for rid in rids}
-                only = {rid for rid in rids if robots[rid]["pos"] != robots[rid]["goal"] and robots[rid]["state"] not in SERVICE}
+                only = {rid for rid in rids if robots[rid]["pos"] != robots[rid]["goal"] and robots[rid]["state"] not in HOLD}
                 dump_candidates_h(states, dists, goals, extra, bias, self.free, self.edge_cost, self.wait_cost,
                                   self.turn_cost, only=only, label=lambda a: f"robot{a}")
                 moving = [rid for rid in rids if robots[rid]["pos"] != robots[rid]["goal"]]
