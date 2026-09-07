@@ -7,5 +7,9 @@ __pycache__/
 
 server-setup/
 
+# 레포 루트를 IDE로 열 때 생기는 개인 작업물 (모듈 구성·플러그인 세션 상태).
+# 공유가 필요한 IDE 설정은 4_Web/SantaFactoryBE/.idea 에 이미 추적돼 있다.
+/.idea/
+
 # sim_v2 Isaac 리플레이 내보내기 산출물 (SIM_EXPORT_ISAAC=1) — 재생성 가능, 커밋하지 않음
 3_FMS/sim_engine/isaac_export_*/
