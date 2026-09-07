@@ -7,17 +7,21 @@
 #       × θ 조건 {neutral, theta_n(최근접 대수 θ, 동률 → 큰 쪽), theta_24(24대 θ 고정)} × 평가 시드 {101,103,104} (계약 v2.3 §5)
 # 모델: 헤딩 기본 + 충전 존 기본 + aisle_block=1. θ 파일: ../infra/out/theta_wallA_r{8,12,16,20,24,28}_g15.json (A트랙 -142, 읽기만).
 # 산출: results/theta_sweep.csv, theta_sweep_throughput.png, theta_sweep_gain.png, theta_sweep_cross.csv
-# 사용: python fleet_sweep_theta.py                       (234런, 약 20분)
-#       SWEEP_PLOT_ONLY=1 python fleet_sweep_theta.py     (CSV 로 그래프·교차표만)
-#       SWEEP_ROBOTS=20,24 SWEEP_SEEDS=101 SWEEP_LOADS=L2 SWEEP_OUT=theta_sweep_smoke.csv python fleet_sweep_theta.py   (배관 확인)
+# 사용: python sweeps/fleet_sweep_theta.py                       (234런, 약 20분)
+#       SWEEP_PLOT_ONLY=1 python sweeps/fleet_sweep_theta.py     (CSV 로 그래프·교차표만)
+#       SWEEP_ROBOTS=20,24 SWEEP_SEEDS=101 SWEEP_LOADS=L2 SWEEP_OUT=theta_sweep_smoke.csv python sweeps/fleet_sweep_theta.py   (배관 확인)
 # ============================================================
 import math
 import os
+import sys
+
+ENGINE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ENGINE_DIR)
 
 import numpy as np
 
-from _sweep_common import (RES_DIR, ENGINE_DIR, env_list, is_stall, mean_series, out_paths, read_csv, run_sim,
-                           setup_plt, spread_series, values, write_csv)
+from _common import (RES_DIR, env_list, is_stall, mean_series, out_paths, read_csv, run_sim,
+                     setup_plt, spread_series, values, write_csv)
 
 ROBOTS = env_list("SWEEP_ROBOTS", [8, 10, 12, 14, 16, 18, 20, 21, 22, 23, 24, 26, 28])
 SEEDS = env_list("SWEEP_SEEDS", [101, 103, 104])

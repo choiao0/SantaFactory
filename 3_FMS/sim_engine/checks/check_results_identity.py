@@ -7,9 +7,9 @@
 # 최적화는 이 검사가 통과해야만 유효하다 (contracts/SIM_RUN_CONTRACT.md §5).
 #
 # 사용 (3_FMS/sim_engine):
-#   python check_results_identity.py                 # 전부 (헤딩 28대 포함, 수십 분)
-#   python check_results_identity.py --quick         # 대표 8조합 = 12행 (칸·헤딩 × 소·대 × 두 CSV, 고부하는 간격 15·25 둘, ~1분)
-#   python check_results_identity.py --csv results/b0z_sweep.csv --engine heading --max 4
+#   python checks/check_results_identity.py                 # 전부 (헤딩 28대 포함, 수십 분)
+#   python checks/check_results_identity.py --quick         # 대표 8조합 = 12행 (칸·헤딩 × 소·대 × 두 CSV, 고부하는 간격 15·25 둘, ~1분)
+#   python checks/check_results_identity.py --csv results/b0z_sweep.csv --engine heading --max 4
 # 종료 코드 0 = 전부 동일, 1 = 차이 있음 (차이 난 키·값 출력).
 # ============================================================
 import argparse
@@ -20,7 +20,9 @@ import subprocess
 import sys
 import time
 
-OUT = os.path.dirname(os.path.abspath(__file__))
+ENGINE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ENGINE_DIR)
+OUT = ENGINE_DIR
 RES = os.path.join(OUT, "results")
 PY = sys.executable
 ENV = dict(os.environ, SIM_NO_PLOT="1", PYTHONIOENCODING="utf-8")

@@ -18,8 +18,14 @@
 #    (b) 비싼 엣지밖에 없는 통로에서 정체 없이 전진하는지 (비가중이면 대기가 이겨
 #    영구 정체 → SystemExit)
 #
-# 사용: python pibt_mvp_demo.py
+# 사용: python checks/pibt_mvp_demo.py
 # ============================================================
+import os
+import sys
+
+ENGINE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ENGINE_DIR)
+
 import numpy as np
 
 from pibt_core import dist_map, run

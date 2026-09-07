@@ -13,8 +13,8 @@
 #   cell 계열의 차이 = 존 효과(홈 위치만 다름), heading 계열의 차이 = 존 + 회전 2틱→1틱.
 # 산출: results/b0z_sweep.csv, b0z_cell_vs_heading.png, b0z_zone_metrics.png
 # 기존 결과 파일은 건드리지 않는다 (이력 보존).
-# 사용: python fleet_sweep_b0z.py     (헤딩 계열이 느려 ~10분)
-#       SWEEP_PLOT_ONLY=1 python fleet_sweep_b0z.py   (CSV에서 그래프만)
+# 사용: python sweeps/fleet_sweep_b0z.py     (헤딩 계열이 느려 ~10분)
+#       SWEEP_PLOT_ONLY=1 python sweeps/fleet_sweep_b0z.py   (CSV에서 그래프만)
 # ============================================================
 import csv
 import json
@@ -23,8 +23,10 @@ import subprocess
 import sys
 import time
 
+ENGINE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ENGINE_DIR)
 PY = sys.executable
-OUT = os.path.dirname(os.path.abspath(__file__))
+OUT = ENGINE_DIR
 RES = os.path.join(OUT, "results")
 ROBOTS = [2, 3, 4, 6, 8, 10, 12, 16]
 SEEDS = [42, 7]

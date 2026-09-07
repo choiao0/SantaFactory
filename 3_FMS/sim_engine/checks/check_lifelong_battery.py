@@ -11,13 +11,16 @@
 # [6] 유한 모드 워치독은 옛 규칙 그대로 (첫 완료 전 타임스탬프 [0,0], 간격 1500 → [STALL] t=1501)
 # [7] --battery 유무가 주문 스트림을 바꾸지 않음 (초기 SoC 별도 rng)
 #
-# 사용 (3_FMS/sim_engine):  python check_lifelong_battery.py        (~20초)
+# 사용 (3_FMS/sim_engine):  python checks/check_lifelong_battery.py        (~20초)
 # 종료 코드 0 = 전부 통과.
 # ============================================================
 import json
 import os
 import subprocess
 import sys
+
+ENGINE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ENGINE_DIR)
 
 import numpy as np
 
@@ -26,7 +29,7 @@ from map_loader import load_map
 from order_stream import OrderStream, shift_windows
 from sim_v2_tasks import build, parse_args, run_ticks
 
-OUT = os.path.dirname(os.path.abspath(__file__))
+OUT = ENGINE_DIR
 PY = sys.executable
 ENV = dict(os.environ, SIM_NO_PLOT="1", PYTHONIOENCODING="utf-8")
 

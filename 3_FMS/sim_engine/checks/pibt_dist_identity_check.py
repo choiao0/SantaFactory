@@ -6,9 +6,14 @@
 # 2) 막힌 칸 패치: 랜덤 로봇 배치로 만든 막힌 칸 집합 40개 — 참조는 free 를 직접 막아 계산
 # 3) 증분 복구 시간 vs 참조 전체 재계산 시간
 # 4) θ 비용(비정수): 값 차이 ≤ 1e-9 (동률 경로 선택 차이만 허용)
-# 사용: python pibt_dist_identity_check.py    (~1분)
+# 사용: python checks/pibt_dist_identity_check.py    (~1분)
 # ============================================================
+import os
+import sys
 import time
+
+ENGINE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ENGINE_DIR)
 
 import numpy as np
 

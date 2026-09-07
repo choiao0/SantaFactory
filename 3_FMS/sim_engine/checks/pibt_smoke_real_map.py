@@ -16,10 +16,14 @@
 #
 # 맵 로드는 map_loader 공용 모듈 사용 (통로차단 ON — fleet_sweep과 동일 방침).
 #
-# 사용: python pibt_smoke_real_map.py
+# 사용: python checks/pibt_smoke_real_map.py
 # ============================================================
 import os
+import sys
 import time
+
+ENGINE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ENGINE_DIR)
 
 import numpy as np
 
@@ -28,7 +32,7 @@ from pibt_core import dist_map, dist_map_h, occupied, run, run_h, valid_state
 from pibt_heading_demo import check_collisions_h
 from pibt_mvp_demo import check_collisions
 
-OUT = os.path.dirname(os.path.abspath(__file__))
+OUT = ENGINE_DIR
 FREE, st_cell, stations = load_map(aisle_block=True)             # 공식 맵 3_FMS/map
 H, W = FREE.shape
 print(f"[0] 맵 coarse {H}x{W}, free 칸 {int(FREE.sum())}개, 통로차단 ON")
