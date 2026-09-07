@@ -2,6 +2,7 @@ package com.ssafy.santafactory.service;
 
 import com.ssafy.santafactory.dto.simulation.SimulationRequest;
 import com.ssafy.santafactory.global.config.SimProperties;
+import com.ssafy.santafactory.support.PostgresSupport;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
@@ -15,7 +16,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 @SpringBootTest
 @EnabledIfEnvironmentVariable(named = "RABBITMQ_HOST", matches = ".+")
-class SimulationPublishIT {
+class SimulationPublishIT extends PostgresSupport {
 
     @Autowired
     SimulationService simulationService;
