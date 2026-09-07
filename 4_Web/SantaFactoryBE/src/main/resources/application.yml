@@ -35,6 +35,11 @@ estimate:
   max-chargers: 6
   amr-per-charger: 4
   amr-count-margin: 1
+  # 시뮬 고정 시간 실행 — 성능 제약(견적 1회 90초)으로 정해지는 값.
+  # shifts 는 이 시간을 토큰 수로 등분한다: 6h / 6토큰 = 1h 단위 → 입고 2h + 출고 4h.
+  # 나중에 하루 전량으로 바꿀 때 horizon: 24h 로만 고치면 된다.
+  horizon: 6h
+  shifts: in,in,out,out,out,out
   # 발행 후 결과가 이 시간 안에 안 오면 TIMEOUT (명세 §1-4 는 30분 — 시연 때는 줄여도 된다)
   run-timeout: 30m
   timeout-sweep-interval: 60   # 스윕 주기(초)
