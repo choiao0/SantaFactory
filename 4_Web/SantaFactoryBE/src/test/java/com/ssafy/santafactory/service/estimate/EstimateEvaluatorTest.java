@@ -46,7 +46,7 @@ class EstimateEvaluatorTest {
 
     /** 단가 1,500만 · 대당 구축·설치비 50만 (robots 시드) · 충전기 500만(미정이라 테스트 가정). */
     private static final EstimateProperties PROPS =
-            new EstimateProperties(15_000_000L, 5_000_000L, 500_000L, 8, 6, 4, 1, Duration.ofMinutes(30));
+            new EstimateProperties(15_000_000L, 5_000_000L, 500_000L, 8, 6, 4, 1, Duration.ofMinutes(30), Duration.ofHours(6), "in,in,out,out,out,out");
 
     private final CostCalculator costCalculator = new CostCalculator(PROPS);
     private final EstimateEvaluator evaluator = new EstimateEvaluator();
@@ -104,6 +104,32 @@ class EstimateEvaluatorTest {
 
         assertThat(verdict.recommendedCount()).isNull();
         assertThat(verdict.reasonCode()).isEqualTo(ReasonCode.UTILIZATION_SHORT);
+    }
+
+    @Test
+    void refuses_to_recommend_when_throughput_cannot_tell_fleet_sizes_apart() {
+        // 유한 주문 모드로 돌리면 전 대수 완료율이 100 % 다. 그대로 판정하면 가동률이 가장 높은
+        // 최소 대수, 즉 "1대 권장" 이라는 틀린 답이 나온다.
+        List<RunResult> finiteMode = List.of(
+                new RunResult(1, 100.0, 99.0, costCalculator.cost(1)),
+                new RunResult(2, 100.0, 98.0, costCalculator.cost(2)),
+                new RunResult(4, 100.0, 95.0, costCalculator.cost(4)));
+
+        EstimateVerdict verdict = evaluator.evaluate(finiteMode, new EstimateGoal(95.0, 80.0, 300_000_000L));
+
+        assertThat(verdict.recommendedCount()).isNull();
+        assertThat(verdict.reasonCode()).isEqualTo(ReasonCode.LOAD_TOO_LOW);
+    }
+
+    @Test
+    void a_single_run_at_full_throughput_is_still_a_valid_recommendation() {
+        // 대수 하나만 남은 경우는 비교 대상이 없으니 구분 불가로 볼 수 없다
+        List<RunResult> only = List.of(new RunResult(1, 100.0, 99.0, costCalculator.cost(1)));
+
+        EstimateVerdict verdict = evaluator.evaluate(only, new EstimateGoal(95.0, 80.0, 300_000_000L));
+
+        assertThat(verdict.recommendedCount()).isEqualTo(1);
+        assertThat(verdict.reasonCode()).isNull();
     }
 
     @Test

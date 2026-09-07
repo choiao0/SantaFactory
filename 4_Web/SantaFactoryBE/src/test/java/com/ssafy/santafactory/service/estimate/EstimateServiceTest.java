@@ -45,7 +45,7 @@ import static org.mockito.Mockito.when;
 class EstimateServiceTest {
 
     private static final EstimateProperties PROPS =
-            new EstimateProperties(15_000_000L, 5_000_000L, 500_000L, 8, 6, 4, 1, Duration.ofMinutes(30));
+            new EstimateProperties(15_000_000L, 5_000_000L, 500_000L, 8, 6, 4, 1, Duration.ofMinutes(30), Duration.ofHours(6), "in,in,out,out,out,out");
 
     @Mock
     EstimateRepository estimateRepository;
@@ -105,6 +105,24 @@ class EstimateServiceTest {
         assertThat(saved.getAllValues()).extracting(SimScenario::getStatus)
                 .containsOnly(RunStatus.QUEUED);
         assertThat(saved.getAllValues().get(3).getTotalCost()).isEqualTo(costCalculator.cost(4));
+    }
+
+    @Test
+    void the_request_pins_the_fixed_time_run_and_keeps_the_real_arrival_rate() {
+        givenWarehouse(1L);
+        givenSavedEstimateId(77L);
+        when(simulationService.publishRuns(any(), any())).thenReturn(List.of());
+
+        service().create(new EstimateCreateRequest(1L, null, null, null, null));
+
+        ArgumentCaptor<SimulationRequest> base = ArgumentCaptor.captor();
+        verify(simulationService).publishRuns(base.capture(), any());
+        SimulationRequest sent = base.getValue();
+        // 실행 시간을 명시하지 않으면 시뮬이 유한 주문 모드로 돌아 처리율이 전 대수 100 % 가 된다
+        assertThat(sent.horizonS()).isEqualTo(21600L);                    // 6시간
+        assertThat(sent.shifts()).isEqualTo("in,in,out,out,out,out");     // 입고 2h + 출고 4h
+        assertThat(sent.inboundGapS()).isEqualTo(48.0);                   // 600건 / 8시간
+        assertThat(sent.outboundGapS()).isEqualTo(22.5);                  // 800건 / 5시간
     }
 
     @Test

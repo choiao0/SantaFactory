@@ -101,6 +101,8 @@ class EstimateFlowIT extends PostgresSupport {
         assertThat(detail.runs()).hasSize(8);
         assertThat(detail.runs()).extracting(EstimateDetailResponse.Run::status).containsOnly(RunStatus.DONE);
         assertThat(detail.runs().get(7).throughput()).isEqualTo(96.0);
+        // 시뮬 출고창 4시간(6h × 4/6) 실측 96건 → 실제 출고창 5시간 기준 120건/일
+        assertThat(detail.runs().get(7).outbound()).isEqualTo(120L);
     }
 
     @Test
