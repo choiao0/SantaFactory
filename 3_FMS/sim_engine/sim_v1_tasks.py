@@ -47,9 +47,10 @@ K, OX = round(CELL_M / 0.1), round(OFFSET_M / 0.1)
 # ------------------------------------------------------------
 # 1) 맵 로드 + 다운샘플 + 스테이션 매핑 (v0과 동일 규칙)
 # ------------------------------------------------------------
-grid01 = np.load(os.path.join(OUT, GRID_FILE))
-stations = json.load(open(os.path.join(OUT, ST_FILE)))
-raw = np.isin(grid01, (1, 2, 5)).astype(np.uint8)
+MAP_DIR = os.path.join(os.path.dirname(OUT), "map")      # 공식 맵 3_FMS/map (map_loader.MAP_DIR 과 동일)
+grid01 = np.load(os.path.join(MAP_DIR, GRID_FILE))
+stations = json.load(open(os.path.join(MAP_DIR, ST_FILE), encoding="utf-8"))
+raw = np.isin(grid01, (1, 2, 5, 6)).astype(np.uint8)   # map_loader.OBSTACLE_VALUES 와 동일 유지 (6=바닥 파렛트)
 m2 = np.pad(raw, ((0, 0), (OX, 0)), constant_values=1)
 h, w = m2.shape
 m2 = np.pad(m2, ((0, (-h) % K), (0, (-w) % K)), constant_values=1)
@@ -58,14 +59,16 @@ FREE = coarse == 0
 H, W = coarse.shape
 
 if AISLE_BLOCK:
-    # 렉 통로 내부(y48~67) = 피커 전용 구역, 로봇 통행 금지.
-    # 입구버퍼(남 46.2 / 북 69.4)는 통로 밖이라 영향 없음.
+    # 렉 사이 통로 내부 = 피커 전용 구역, 로봇 통행 금지. map_loader.AISLE_ROWS 와 동일 유지.
+    # 2026-09-03 맵 동기화: 랙 1 m 연장으로 [48,68) → [47,68). 입구버퍼(남 46.2 / 북 69.4)는 통로 밖.
     for k in range(11):
         c = int((35.1 + 6 * k + OFFSET_M) / CELL_M)
-        FREE[48:68, c - 1:c + 2] = False
+        FREE[47:68, c - 1:c + 2] = False
 
 st_cell = {}
 for kind, pts in stations.items():
+    if kind == "charge_zone":            # 충전 존 사각형(m) — 스테이션 점이 아님 (map_loader 와 동일)
+        continue
     for i, (x, y) in enumerate(pts):
         r, c = int(y / CELL_M), int((x + OFFSET_M) / CELL_M)
         for rr, cc in [(r, c), (r - 1, c), (r + 1, c), (r, c - 1), (r, c + 1)]:

@@ -7,6 +7,8 @@
 # v1compat은 rng 소비 순서까지 v1과 동일 → 두 엔진이 같은 주문 스트림 처리.
 # 산출: results/b1e_sweep.csv, b1e_astar_vs_pibt.png,
 #       results/fleet_sweep_v2_main.csv, fleet_sweep_v2_main.png
+# 지위(2026-09-03): 이력 벤치마크. pibt_main 은 --fixed-homes 로 당시 구성(고정 홈 12칸)을 재현한다.
+#       현재 기준선은 fleet_sweep_b0z.py (충전 존 기본, 헤딩 모델).
 # ============================================================
 import csv
 import json
@@ -47,7 +49,8 @@ else:
     rows = []
     for engine, script, extra in [("astar_v1", "sim_v1_tasks.py", ()),
                                   ("pibt_v1compat", "sim_v2_tasks.py", ("--flow=v1compat",)),
-                                  ("pibt_main", "sim_v2_tasks.py", ("--flow=main",))]:
+                                  # 2026-09-03 충전 존이 main 기본값이 됨 → 이력 CSV 재현엔 고정 홈 명시
+                                  ("pibt_main", "sim_v2_tasks.py", ("--flow=main", "--fixed-homes"))]:
         for n in ROBOTS:
             for seed in SEEDS:
                 rec = run_one(script, n, seed, extra)

@@ -14,7 +14,8 @@
 | `view_scene.py` | WebRTC 스트리밍 뷰어 (헤드리스 서버 관전용) |
 | `http_stream.py` | TCP 전용 HTTP MJPEG 관전 경로 — UDP 차단망(교육장 내부망) 대응 |
 | `export_replay.py` | 맵 → `../isaac_export_t3/` 재생 데이터 생성 (isaac_replay 포맷) |
-| `warehouse_sim.py` | **T3 본편** — 씬 + iw.hub + 물리 라이다, ROS2 개통 (/scan /odom /tf /clock, /cmd_vel 구독) |
+| `warehouse_sim.py` | **T3 본편** — 씬 + iw.hub ×N + 물리 라이다, ROS2 개통 (/scan /odom /tf /clock, /cmd_vel 구독). `WSIM_N=3`이면 `/amr01~03/…` 네임스페이스 |
+| `ros2/multi_check.py` | 다중 로봇 개통 검증 — 로봇별 odom·scan·/clock 발행률, /tf 프레임, 지정 로봇만 이동하는지 확인(JSON + exit code) |
 | `ros2/` | localization 스택 — nav2 AMCL + map_server + foxglove_bridge 런치·파라미터 |
 | `out/scene_*.png` | 검수 스크린샷 (외관·트러스·통로·스테이션·사무실 등) |
 
@@ -99,8 +100,30 @@ warehouse_sim.py가 런타임 수술(깨진 콜리전 비활성 + 자체 하부 
 바퀴 실측 반경 0.08m·트랙 0.58m — T1의 0.115/0.413은 오류였음. 물리 센서는
 반드시 리지드바디 링크(chassis) 밑에 부착(루트 Xform은 시뮬 중 동결).
 
+## 다중 로봇 (2026-09-06)
+
+`warehouse_sim.py`는 환경변수로 로봇 수를 정한다. 로봇마다 스폰·수술·라이다·ROS2 그래프를 따로 만들고 `/clock`은 1번 로봇만 낸다.
+
+| 환경변수 | 기본 | 뜻 |
+|---|---|---|
+| `WSIM_N` | 1 | 로봇 수. 2 이상이면 네임스페이스 모드 |
+| `WSIM_NS` | auto | N=1에서도 네임스페이스를 강제(1)하거나 해제(0) |
+| `WSIM_SPACING` | 3.0 | 스폰 간격 [m]. 남측 코리도 (36.0, 40.8)부터 +x (x 36~60 구간 장애물 이격 ≥ 3.9 m) |
+| `WSIM_SPAWN` | — | `"x,y;x,y;…"`로 직접 지정(개수 = N) |
+
+이름 규칙: 프림 `/World/amr01`, 토픽 `/amr01/{cmd_vel,odom,scan}`, 프레임 `amr01/{odom,base_link,laser}`.
+`../t4_agent/` `agent.launch.py serial:=amr01`의 기본 토픽과 같아서 `flat_topics` 없이 붙는다. 단일 모드(기본)는 예전 그대로 `/World/iw_hub` · `/odom` · `/cmd_vel`이라 `loc.launch.py`·`patrol.py`가 그대로 돈다.
+
+```bash
+cd <isaacsim> && WSIM_N=3 ./python.sh <repo>/2_Simulation/t3_warehouse/warehouse_sim.py     # 3대
+source /opt/ros/humble/setup.bash && python3 <repo>/2_Simulation/t3_warehouse/ros2/multi_check.py --n 3 --drive amr02
+```
+
+개통 검증(9/6, 원본 렌더 구성, 창고 씬): N=1 평면 토픽 57 Hz · 0.83 m 이동(회귀 동일) / N=3 로봇별 40 Hz · 720빔 유효 · amr02만 0.58 m 이동, 나머지 0.000 m.
+3대에서 프레임이 40 fps(RTF ≈ 0.66)로 떨어지므로 검증 런은 경량 구성으로 돌리거나 배리어 틱이 시뮬 시각 기준임을 FMS 파트와 맞춘다.
+
 ## 남은 것 (T3 본편 다음 단계)
 
-Nav2 경로 추종(개루프 직진은 슬립 비대칭으로 서서히 휨 — 제어 루프가 흡수),
+경로 추종은 `../t4_agent/`의 그리드 프리미티브 컨트롤러가 맡는다(개루프 직진의 슬립 비대칭 휨은 셀 단위 폐루프가 흡수).
 스테이션 왕복 order 연쇄, 리프트 도킹 1장면, 사이클 타임 분해 + 도킹 시간 분포
 실측(DES 환류), 오돔 노이즈 주입(현재는 정답 오돔이라 AMCL alpha 최소 설정).

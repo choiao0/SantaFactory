@@ -21,6 +21,8 @@ variables:
 
 .convention-lint:
   stage: lint
+  variables:
+    GIT_DEPTH: 0
   image:
     name: alpine/git:latest
     entrypoint: [""]

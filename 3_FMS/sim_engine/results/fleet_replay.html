@@ -1,0 +1,344 @@
+<title>FMS 플릿 리플레이</title>
+<!--
+  FMS 플릿 리플레이 — sim_v2 Isaac 내보내기(isaac_export_<tag>/scene.json + trajectories.json)를 브라우저에서 재생.
+  사용: 이 파일을 브라우저로 열고 두 JSON 을 "파일 열기"로 선택하거나 페이지에 끌어다 놓는다 (서버 불필요).
+  데이터 생성: SIM_EXPORT_ISAAC=1 SIM_NO_PLOT=1 python sim_v2_tasks.py <tag> <n> <orders> <seed> <blk>  (simpy_harness.py 도 동일)
+  좌표 규약(sim_v2 export_isaac): x = (c+0.5)·1 m − 0.4, y = (r+0.5)·1 m → c = round(x − 0.1), r = round(y − 0.5). 행 증가 = 북.
+  scene.grid 가 있으면 그대로 쓰고('#' 장애물 '.' 통행 'a' 피커 통로 'z' 충전 존), 없으면 nodes·zones 로 복원한다(구 내보내기 호환).
+-->
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0f1720; --panel: #16202b; --edge: #24303d; --floor: #1c2733; --wall: #2a3644; --picker: #223041;
+    --zone: #1f3a33; --zone-edge: #2f6b5a; --text: #e3eaf2; --muted: #8a9bb0; --station: #35c98e;
+    --act-move: #f5b641; --act-wait: #6b7c90; --act-rot: #4dc3e8; --act-rev: #ef7ab0; --act-svc: #35c98e; --act-chg: #a78bfa;
+    --robot-rear: rgba(255,255,255,0.10); --grid-line: rgba(255,255,255,0.035); --drop: rgba(245,182,65,0.12);
+    --sans: "IBM Plex Sans KR", "Malgun Gothic", "Apple SD Gothic Neo", sans-serif;
+    --mono: "IBM Plex Mono", Consolas, "D2Coding", monospace;
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      color-scheme: light;
+      --bg: #f2f4f7; --panel: #ffffff; --edge: #d7dee6; --floor: #e6ebf0; --wall: #b3bec9; --picker: #d5dde6;
+      --zone: #cfe9df; --zone-edge: #6fbf9f; --text: #16212c; --muted: #5d6c7d; --station: #1f9d6a;
+      --act-move: #d9930a; --act-wait: #8a99a9; --act-rot: #1a99bf; --act-rev: #d1478a; --act-svc: #1f9d6a; --act-chg: #7c4dff;
+      --robot-rear: rgba(0,0,0,0.12); --grid-line: rgba(0,0,0,0.05); --drop: rgba(217,147,10,0.12);
+    }
+  }
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --bg: #f2f4f7; --panel: #ffffff; --edge: #d7dee6; --floor: #e6ebf0; --wall: #b3bec9; --picker: #d5dde6;
+    --zone: #cfe9df; --zone-edge: #6fbf9f; --text: #16212c; --muted: #5d6c7d; --station: #1f9d6a;
+    --act-move: #d9930a; --act-wait: #8a99a9; --act-rot: #1a99bf; --act-rev: #d1478a; --act-svc: #1f9d6a; --act-chg: #7c4dff;
+    --robot-rear: rgba(0,0,0,0.12); --grid-line: rgba(0,0,0,0.05); --drop: rgba(217,147,10,0.12);
+  }
+  * { box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); font-family: var(--sans); margin: 0; min-height: 100vh; display: flex; flex-direction: column; font-size: 14px; }
+  body.dragging { outline: 3px dashed var(--act-move); outline-offset: -6px; background: var(--drop); }
+  header { display: flex; align-items: baseline; gap: 18px; flex-wrap: wrap; padding: 14px 22px 12px; border-bottom: 1px solid var(--edge); }
+  h1 { font-size: 17px; font-weight: 700; margin: 0; letter-spacing: -0.01em; text-wrap: balance; }
+  .meta { display: flex; gap: 8px 14px; flex-wrap: wrap; font: 500 12.5px var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+  .meta b { color: var(--text); font-weight: 500; }
+  .meta .k { text-transform: uppercase; letter-spacing: 0.06em; font-size: 10.5px; margin-right: 4px; }
+  .open { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+  .open label { font: 500 13px var(--sans); color: #10151c; background: var(--act-move); border-radius: 6px; padding: 7px 12px; cursor: pointer; }
+  .open label:focus-within { outline: 2px solid var(--act-rot); outline-offset: 2px; }
+  .open input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+  .open .status { font-size: 12.5px; color: var(--muted); max-width: 46ch; }
+  main { flex: 1; display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 16px; padding: 16px 22px; min-height: 0; }
+  @media (max-width: 980px) { main { grid-template-columns: 1fr; } }
+  .stage { display: flex; align-items: flex-start; justify-content: center; min-width: 0; position: relative; }
+  canvas { max-width: 100%; height: auto; display: block; border-radius: 6px; border: 1px solid var(--edge); }
+  .empty-stage { border: 1px dashed var(--edge); border-radius: 8px; padding: 48px 28px; max-width: 560px; color: var(--muted); line-height: 1.6; }
+  .empty-stage b { color: var(--text); }
+  .empty-stage code { font: 500 12px var(--mono); background: var(--panel); border: 1px solid var(--edge); border-radius: 4px; padding: 1px 6px; }
+  .empty-stage pre { font: 12px/1.5 var(--mono); background: var(--panel); border: 1px solid var(--edge); border-radius: 6px; padding: 10px 12px; overflow-x: auto; margin: 10px 0 0; color: var(--text); }
+  aside { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+  .box { background: var(--panel); border: 1px solid var(--edge); border-radius: 8px; padding: 12px 14px; }
+  .box h2 { font-size: 11px; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin: 0 0 10px; }
+  .counts { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; }
+  .count { display: flex; align-items: center; gap: 8px; font: 500 13px var(--mono); font-variant-numeric: tabular-nums; }
+  .count .sw { width: 10px; height: 10px; border-radius: 2px; flex: none; }
+  .count .n { margin-left: auto; color: var(--text); min-width: 2ch; text-align: right; }
+  .count .l { color: var(--muted); font-family: var(--sans); font-weight: 400; }
+  .legend { display: grid; gap: 6px; font-size: 12.5px; color: var(--muted); }
+  .legend div { display: flex; align-items: center; gap: 8px; }
+  .legend .sw { width: 14px; height: 10px; border-radius: 2px; flex: none; border: 1px solid var(--edge); }
+  .feed { display: grid; gap: 4px; font: 400 12px var(--mono); font-variant-numeric: tabular-nums; max-height: 240px; overflow: auto; }
+  .feed div { display: grid; grid-template-columns: 3.4em 2.4em 1fr; gap: 8px; color: var(--muted); }
+  .feed div b { color: var(--text); font-weight: 500; }
+  .feed div .k { color: var(--act-svc); }
+  .feed div .k.in { color: var(--act-rot); }
+  .feed .empty { color: var(--muted); font-family: var(--sans); }
+  .dock { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 12px 22px 16px; border-top: 1px solid var(--edge); background: var(--panel); }
+  .dock button { font: 500 13px var(--sans); color: var(--text); background: var(--bg); border: 1px solid var(--edge); border-radius: 6px; padding: 7px 12px; cursor: pointer; }
+  .dock button#play { width: 40px; height: 40px; border-radius: 50%; border: none; background: var(--act-move); color: #10151c; font-size: 15px; flex: none; }
+  .dock button:disabled, .dock input:disabled, .dock select:disabled { opacity: 0.45; cursor: default; }
+  .dock button:hover:not(:disabled) { border-color: var(--muted); }
+  .dock button:focus-visible, .dock input:focus-visible, .dock select:focus-visible, .dock label:focus-within { outline: 2px solid var(--act-rot); outline-offset: 2px; }
+  #slider { flex: 1; min-width: 180px; accent-color: var(--act-move); }
+  .tick { font: 500 13px var(--mono); font-variant-numeric: tabular-nums; min-width: 190px; text-align: right; }
+  .tick small { color: var(--muted); font-weight: 400; }
+  .dock select { font: 500 13px var(--mono); background: var(--bg); color: var(--text); border: 1px solid var(--edge); border-radius: 6px; padding: 6px 8px; }
+  .dock label { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
+  .dock label input { accent-color: var(--act-move); }
+  .hint { font-size: 12px; color: var(--muted); }
+</style>
+
+<header>
+  <h1>FMS 플릿 리플레이</h1>
+  <div class="meta" id="meta"></div>
+  <div class="open">
+    <span class="status" id="status"></span>
+    <label tabindex="0">파일 열기<input id="file" type="file" accept=".json,application/json" multiple></label>
+  </div>
+</header>
+
+<main>
+  <div class="stage" id="stage">
+    <div class="empty-stage" id="empty">
+      <b>내보내기 폴더의 두 JSON을 열어 주세요.</b> 우측 상단 "파일 열기"에서 <code>scene.json</code>과 <code>trajectories.json</code>을 함께 선택하거나, 이 페이지에 끌어다 놓으면 됩니다.
+      <pre>SIM_EXPORT_ISAAC=1 SIM_NO_PLOT=1 python sim_v2_tasks.py base 12 40 42 1
+→ 3_FMS/sim_engine/isaac_export_base/{scene,trajectories}.json</pre>
+    </div>
+    <canvas id="cv" aria-label="창고 격자 위 로봇 리플레이" hidden></canvas>
+  </div>
+  <aside>
+    <section class="box">
+      <h2>이 틱의 로봇 상태</h2>
+      <div class="counts" id="counts"></div>
+    </section>
+    <section class="box">
+      <h2>범례</h2>
+      <div class="legend">
+        <div><span class="sw" style="background:var(--act-move)"></span>로봇 앞축 칸 (색 = 이 틱의 동작), 밝은 점 = 진행 방향</div>
+        <div><span class="sw" style="background:var(--robot-rear)"></span>뒤 칸 (헤딩 모델 2칸 차체, 칸 모델은 없음)</div>
+        <div><span class="sw" style="background:var(--station)"></span>스테이션 (통로 버퍼·패킹·입고·컨베이어 등)</div>
+        <div><span class="sw" style="background:var(--zone); border-color:var(--zone-edge)"></span>충전 존 (유휴 복귀 구역)</div>
+        <div><span class="sw" style="background:var(--picker)"></span>랙 사이 통로 (피커 전용, 로봇 통행 금지)</div>
+        <div><span class="sw" style="background:var(--wall)"></span>랙·벽·파렛트·컨베이어</div>
+      </div>
+    </section>
+    <section class="box">
+      <h2>완료된 태스크 <span id="done-n" style="color:var(--text)"></span></h2>
+      <div class="feed" id="feed"><div class="empty">데이터를 열면 여기에 표시됩니다</div></div>
+    </section>
+  </aside>
+</main>
+
+<div class="dock">
+  <button id="play" aria-label="재생/일시정지" disabled>▶</button>
+  <input id="slider" type="range" min="0" max="1" step="1" value="0" aria-label="시각" disabled>
+  <div class="tick" id="tick">t = — / —</div>
+  <select id="speed" aria-label="배속" disabled>
+    <option value="1">1 틱/s (실시간)</option>
+    <option value="4">4 틱/s</option>
+    <option value="10" selected>10 틱/s</option>
+    <option value="25">25 틱/s</option>
+    <option value="60">60 틱/s</option>
+  </select>
+  <label><input id="trails" type="checkbox" checked disabled> 최근 30틱 궤적</label>
+  <label><input id="labels" type="checkbox" disabled> 로봇 번호</label>
+  <span class="hint">Space 재생 · ←/→ 1틱 · Shift+←/→ 30틱</span>
+</div>
+
+<script>
+// ============================================================
+// 데이터 적재 — Isaac 내보내기 포맷 → 내부 프레임
+// ============================================================
+const DIRS = [[1, 0], [0, 1], [-1, 0], [0, -1]];        // 0=N 1=E 2=S 3=W (행 증가 = 북)
+const ACT_NAMES = ["주행", "대기", "회전", "후진", "서비스(도킹)", "충전"];
+const ACT_VARS = ["--act-move", "--act-wait", "--act-rot", "--act-rev", "--act-svc", "--act-chg"];
+const ACT_CODE = { move: 0, wait: 1, rotate: 2, reverse: 3, service: 4, charge: 5 };   // charge: -145 배터리 모드
+const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const toRC = (x, y) => [Math.round(y - 0.5), Math.round(x - 0.1)];
+const yawToH = yaw => { const k = [1, 0, 3, 2];                       // atan2(dr,dc): E=0 → 1, N=π/2 → 0, W=π → 3, S=−π/2 → 2
+  const q = Math.round(yaw / (Math.PI / 2)); return k[((q % 4) + 4) % 4]; };
+
+let D = null;    // { H, W, grid, T, stations:{name:[r,c]}, robots:{rid:[[r,c,h,a],...]}, tasks, meta, twoCell }
+
+function buildModel(scene, traj) {
+  let grid, H, W;
+  if (scene.grid) { grid = scene.grid; H = grid.length; W = grid[0].length; }
+  else {                                                             // 구 내보내기: nodes(free) + zones 로 복원
+    const cells = scene.nodes.map(([x, y]) => toRC(x, y));
+    H = Math.max(...cells.map(p => p[0])) + 2; W = Math.max(...cells.map(p => p[1])) + 2;
+    const g = Array.from({ length: H }, () => Array(W).fill("#"));
+    for (const [r, c] of cells) g[r][c] = ".";
+    for (const z of scene.zones || []) {
+      const [x0, y0, w, h] = z.rect;
+      for (let r = Math.floor(y0); r < Math.floor(y0 + h); r++) for (let c = Math.floor(x0 + 0.4); c < Math.floor(x0 + w + 0.4); c++)
+        if (g[r] && g[r][c] === ".") g[r][c] = "z";
+    }
+    grid = g.map(row => row.join(""));
+  }
+  const free = (r, c) => r >= 0 && r < H && c >= 0 && c < W && (grid[r][c] === "." || grid[r][c] === "z");
+  let stations = {};
+  if (scene.station_cells) stations = scene.station_cells;
+  else for (const [kind, pts] of Object.entries(scene.stations || {})) {   // load_map 의 스냅 규칙과 동일
+    if (kind === "charge_zone") continue;
+    pts.forEach(([x, y], i) => {
+      const r = Math.floor(y), c = Math.floor(x + 0.4);
+      for (const [rr, cc] of [[r, c], [r - 1, c], [r + 1, c], [r, c - 1], [r, c + 1]]) if (free(rr, cc)) { stations[`${kind}[${i}]`] = [rr, cc]; break; }
+    });
+  }
+  const robots = {}; let T = 0;
+  for (const [rid, pts] of Object.entries(traj.robots)) {
+    const hd = new Map((traj.headings?.[rid] || []).map(([t, y]) => [Math.round(t), y]));
+    const ac = new Map((traj.actions?.[rid] || []).map(([t, a]) => [Math.round(t), a]));
+    const arr = pts.map(([t, x, y]) => { const [r, c] = toRC(x, y); const tt = Math.round(t);
+      return [r, c, hd.has(tt) ? yawToH(hd.get(tt)) : 1, ACT_CODE[ac.get(tt) || "move"] ?? 0]; });
+    robots[rid] = arr; T = Math.max(T, arr.length);
+  }
+  const model = traj.model || scene.meta?.model || "heading";
+  return { H, W, grid, T, stations, robots, tasks: traj.tasks || [], twoCell: model === "heading",
+           meta: { ...(scene.meta || {}), model, dt: traj.dt_s || scene.meta?.dt_s || 1 } };
+}
+
+// ============================================================
+// 화면
+// ============================================================
+const CELL = 7;
+const cv = document.getElementById("cv"), ctx = cv.getContext("2d");
+const dpr = Math.min(window.devicePixelRatio || 1, 2);
+const emptyEl = document.getElementById("empty"), metaEl = document.getElementById("meta"), statusEl = document.getElementById("status");
+const slider = document.getElementById("slider"), tickEl = document.getElementById("tick"), playBtn = document.getElementById("play");
+const speedEl = document.getElementById("speed"), trailsEl = document.getElementById("trails"), labelsEl = document.getElementById("labels");
+const countsEl = document.getElementById("counts"), feedEl = document.getElementById("feed"), doneN = document.getElementById("done-n");
+const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+let RIDS = [], staticLayer = null, t = 0, playing = false;
+const px = c => c * CELL, py = r => (D.H - 1 - r) * CELL;
+
+function buildStatic() {
+  const { H, W, grid, stations } = D;
+  staticLayer = document.createElement("canvas");
+  staticLayer.width = cv.width; staticLayer.height = cv.height;
+  const s = staticLayer.getContext("2d"); s.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const col = { "#": css("--wall"), ".": css("--floor"), "a": css("--picker"), "z": css("--zone") };
+  for (let r = 0; r < H; r++) for (let c = 0; c < W; c++) { s.fillStyle = col[grid[r][c]] || col["#"]; s.fillRect(px(c), py(r), CELL, CELL); }
+  s.strokeStyle = css("--grid-line"); s.lineWidth = 1;
+  for (let c = 0; c <= W; c += 5) { s.beginPath(); s.moveTo(px(c) + 0.5, 0); s.lineTo(px(c) + 0.5, H * CELL); s.stroke(); }
+  for (let r = 0; r <= H; r += 5) { s.beginPath(); s.moveTo(0, py(r) + CELL + 0.5); s.lineTo(W * CELL, py(r) + CELL + 0.5); s.stroke(); }
+  s.strokeStyle = css("--zone-edge");
+  const nz = (rr, cc) => rr < 0 || rr >= H || cc < 0 || cc >= W || grid[rr][cc] !== "z";
+  for (let r = 0; r < H; r++) for (let c = 0; c < W; c++) if (grid[r][c] === "z") {
+    if (nz(r + 1, c)) { s.beginPath(); s.moveTo(px(c), py(r) + 0.5); s.lineTo(px(c) + CELL, py(r) + 0.5); s.stroke(); }
+    if (nz(r - 1, c)) { s.beginPath(); s.moveTo(px(c), py(r) + CELL - 0.5); s.lineTo(px(c) + CELL, py(r) + CELL - 0.5); s.stroke(); }
+    if (nz(r, c - 1)) { s.beginPath(); s.moveTo(px(c) + 0.5, py(r)); s.lineTo(px(c) + 0.5, py(r) + CELL); s.stroke(); }
+    if (nz(r, c + 1)) { s.beginPath(); s.moveTo(px(c) + CELL - 0.5, py(r)); s.lineTo(px(c) + CELL - 0.5, py(r) + CELL); s.stroke(); }
+  }
+  s.fillStyle = css("--station");
+  for (const [r, c] of Object.values(stations)) s.fillRect(px(c) + 1.5, py(r) + 1.5, CELL - 3, CELL - 3);
+}
+
+function frame(rid, i) { const a = D.robots[rid]; return a[Math.max(0, Math.min(i, a.length - 1))]; }
+function pose(rid, tt) {
+  const i = Math.floor(tt), f = tt - i;
+  const [r0, c0, h0, a0] = frame(rid, i); const [r1, c1] = frame(rid, i + 1);
+  return { r: r0 + (r1 - r0) * f, c: c0 + (c1 - c0) * f, h: h0, a: a0 };
+}
+const fmtTime = s => `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
+
+function draw() {
+  if (!D) return;
+  ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.drawImage(staticLayer, 0, 0); ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const ti = Math.floor(t);
+  if (trailsEl.checked) {
+    ctx.lineWidth = 2; ctx.lineCap = "round"; ctx.strokeStyle = css("--act-move"); ctx.globalAlpha = 0.28;
+    for (const rid of RIDS) {
+      const back = Math.max(0, ti - 30); ctx.beginPath();
+      for (let k = back; k <= ti; k++) { const [r, c] = frame(rid, k); const x = px(c) + CELL / 2, y = py(r) + CELL / 2; k === back ? ctx.moveTo(x, y) : ctx.lineTo(x, y); }
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+  }
+  const counts = [0, 0, 0, 0, 0, 0];
+  for (const rid of RIDS) {
+    const p = pose(rid, t); counts[p.a]++;
+    const [dr, dc] = DIRS[p.h];
+    if (D.twoCell) { ctx.fillStyle = css("--robot-rear"); ctx.fillRect(px(p.c - dc) + 1, py(p.r - dr) + 1, CELL - 2, CELL - 2); }
+    ctx.fillStyle = css(ACT_VARS[p.a]); ctx.fillRect(px(p.c) + 0.5, py(p.r) + 0.5, CELL - 1, CELL - 1);
+    ctx.fillStyle = "rgba(255,255,255,0.92)"; ctx.beginPath();
+    ctx.arc(px(p.c) + CELL / 2 + dc * CELL * 0.28, py(p.r) + CELL / 2 - dr * CELL * 0.28, 1.3, 0, Math.PI * 2); ctx.fill();
+    if (labelsEl.checked) { ctx.font = `500 9px ${css("--mono")}`; ctx.fillStyle = css("--text"); ctx.textBaseline = "bottom"; ctx.fillText(rid, px(p.c) + CELL + 1, py(p.r) - 1); }
+  }
+  countsEl.innerHTML = ACT_NAMES.map((n, i) => `<div class="count"><span class="sw" style="background:var(${ACT_VARS[i]})"></span><span class="l">${n}</span><span class="n">${counts[i]}</span></div>`).join("")
+    + `<div class="count"><span class="sw" style="background:transparent"></span><span class="l">전체</span><span class="n">${RIDS.length}</span></div>`;
+  const done = D.tasks.filter(k => k.completed != null && k.completed <= ti);
+  doneN.textContent = `${done.length} / ${D.tasks.length}`;
+  feedEl.innerHTML = done.length ? done.slice(-10).reverse().map(k =>
+    `<div><b>t=${k.completed}</b><span class="k ${k.kind === "in" || k.kind === "supply" ? "in" : ""}">${k.kind === "in" ? "입고" : k.kind === "out" ? "출고" : k.kind}</span><span>${k.frm_name} → ${k.to_name}</span></div>`).join("")
+    : `<div class="empty">아직 완료된 태스크가 없습니다</div>`;
+  tickEl.innerHTML = `t = ${String(ti).padStart(4, " ")} / ${D.T - 1} <small>${fmtTime(ti * D.meta.dt)}</small>`;
+  slider.value = ti;
+}
+
+function load(scene, traj, label) {
+  D = buildModel(scene, traj);
+  RIDS = Object.keys(D.robots).sort((a, b) => a - b);
+  cv.width = D.W * CELL * dpr; cv.height = D.H * CELL * dpr; cv.style.width = D.W * CELL + "px";
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  buildStatic();
+  emptyEl.hidden = true; cv.hidden = false;
+  for (const el of [playBtn, slider, speedEl, trailsEl, labelsEl]) el.disabled = false;
+  slider.max = D.T - 1;
+  t = Math.min(600, D.T - 1); setPlaying(false);
+  const done = D.tasks.filter(k => k.completed != null);
+  const last = done.length ? Math.max(...done.map(k => k.completed)) : D.T - 1;
+  const orders = new Set(D.tasks.map(k => k.order).filter(o => o != null)).size;
+  const m = D.meta;
+  metaEl.innerHTML = [
+    ["run", m.variant || label || "—"], ["모델", m.model === "heading" ? `헤딩 PIBT (2칸 차체·회전 ${m.turn_ticks ?? 1}틱)` : "칸 모델"],
+    ["로봇", `${RIDS.length}대`], ["태스크", `${D.tasks.length}개${orders ? ` (주문 ${orders}건)` : ""}`],
+    ["격자", `1.0 m · 1 틱 = ${m.dt} s`], ["makespan", `${last}틱 = ${(last * m.dt / 60).toFixed(1)}분`],
+    ["처리량", done.length ? `${(done.length / (last * m.dt / 3600)).toFixed(0)} tasks/h` : "—"],
+  ].map(([k, v]) => `<span><span class="k">${k}</span><b>${v}</b></span>`).join("");
+  statusEl.textContent = label ? `열림: ${label}` : "";
+  draw();
+}
+
+// ---- 파일 열기 / 드래그 ----
+async function openFiles(files) {
+  let scene = null, traj = null, names = [];
+  for (const f of files) {
+    if (!/\.json$/i.test(f.name)) continue;
+    try { const j = JSON.parse(await f.text()); names.push(f.name);
+      if (j.robots && j.robots !== null && typeof j.robots === "object" && !Array.isArray(j.robots) && !j.obstacles) traj = j;
+      else if (j.obstacles || j.nodes || j.grid) scene = j;
+    } catch (e) { statusEl.textContent = `${f.name}: JSON 을 읽지 못했습니다 (${e.message})`; return; }
+  }
+  if (!traj) { statusEl.textContent = "trajectories.json 이 없습니다 — 두 파일을 함께 선택해 주세요"; return; }
+  if (!scene) { statusEl.textContent = "scene.json 이 없습니다 — 두 파일을 함께 선택해 주세요"; return; }
+  load(scene, traj, names.sort().join(" + "));
+}
+document.getElementById("file").addEventListener("change", e => openFiles([...e.target.files]));
+document.addEventListener("dragover", e => { e.preventDefault(); document.body.classList.add("dragging"); });
+document.addEventListener("dragleave", e => { if (e.target === document.body || e.relatedTarget === null) document.body.classList.remove("dragging"); });
+document.addEventListener("drop", e => { e.preventDefault(); document.body.classList.remove("dragging"); openFiles([...e.dataTransfer.files]); });
+
+// ---- 재생 ----
+let last = performance.now();
+function loop(now) {
+  if (playing && D) { t += (now - last) / 1000 * +speedEl.value; if (t >= D.T - 1) { t = D.T - 1; setPlaying(false); } draw(); }
+  last = now; requestAnimationFrame(loop);
+}
+function setPlaying(v) { playing = v; playBtn.textContent = v ? "❚❚" : "▶"; playBtn.setAttribute("aria-pressed", v); }
+playBtn.addEventListener("click", () => { if (!D) return; if (t >= D.T - 1) t = 0; setPlaying(!playing); });
+slider.addEventListener("input", () => { t = +slider.value; draw(); });
+trailsEl.addEventListener("change", draw); labelsEl.addEventListener("change", draw);
+document.addEventListener("keydown", e => {
+  if (!D || e.target.tagName === "SELECT" || e.target.tagName === "INPUT") return;
+  if (e.code === "Space") { e.preventDefault(); playBtn.click(); }
+  else if (e.key === "ArrowRight") { t = Math.min(D.T - 1, Math.floor(t) + (e.shiftKey ? 30 : 1)); draw(); }
+  else if (e.key === "ArrowLeft") { t = Math.max(0, Math.floor(t) - (e.shiftKey ? 30 : 1)); draw(); }
+});
+if (reduceMotion) speedEl.value = "1";
+matchMedia("(prefers-color-scheme: light)").addEventListener("change", () => { if (D) { buildStatic(); draw(); } });
+new MutationObserver(() => { if (D) { buildStatic(); draw(); } }).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+requestAnimationFrame(loop);
+
+// 내장 샘플(있으면) — 저장소 사본에는 없고, 공유용 아티팩트에만 12대 실행 하나를 넣는다.
+const sampleEl = document.getElementById("sample");
+if (sampleEl) { const s = JSON.parse(sampleEl.textContent); load(s.scene, s.trajectories, s.label); }
+</script>
