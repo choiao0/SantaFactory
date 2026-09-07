@@ -22,23 +22,23 @@ public abstract class PostgresSupport {
 
     private static final String SCHEMA_SCRIPT = "db/santafactory.sql";
 
-    private static final String url;
-    private static final String username;
-    private static final String password;
+    private static final String JDBC_URL;
+    private static final String USERNAME;
+    private static final String PASSWORD;
 
     static {
         String envUrl = System.getenv("DB_URL");
         if (envUrl != null && !envUrl.isBlank()) {
-            url = envUrl;
-            username = envOrDefault("DB_USERNAME", "postgres");
-            password = envOrDefault("DB_PASSWORD", "postgres");
+            JDBC_URL = envUrl;
+            USERNAME = envOrDefault("DB_USERNAME", "postgres");
+            PASSWORD = envOrDefault("DB_PASSWORD", "postgres");
         } else {
             PostgreSQLContainer<?> container = new PostgreSQLContainer<>("postgres:16-alpine")
                     .withInitScript(SCHEMA_SCRIPT);
             container.start();   // JVM 종료 시 Ryuk 이 정리한다
-            url = container.getJdbcUrl();
-            username = container.getUsername();
-            password = container.getPassword();
+            JDBC_URL = container.getJdbcUrl();
+            USERNAME = container.getUsername();
+            PASSWORD = container.getPassword();
         }
     }
 
@@ -49,8 +49,8 @@ public abstract class PostgresSupport {
 
     @DynamicPropertySource
     static void datasource(DynamicPropertyRegistry registry) {
-        registry.add("spring.datasource.url", () -> url);
-        registry.add("spring.datasource.username", () -> username);
-        registry.add("spring.datasource.password", () -> password);
+        registry.add("spring.datasource.url", () -> JDBC_URL);
+        registry.add("spring.datasource.username", () -> USERNAME);
+        registry.add("spring.datasource.password", () -> PASSWORD);
     }
 }
