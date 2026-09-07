@@ -1,0 +1,56 @@
+C:\Users\SSAFY\AppData\Local\Programs\Python\Python314\python.exe C:\Users\SSAFY\Desktop\S15P21A106\3_FMS\sim_engine\sim_v2_tasks.py b5 22 120 101 1 --order-gap=15
+
+[WARN] 헤딩 모델: 목표 칸 간격 <3인 쌍 1개 (차체 겹침 가능) 예: [((53, 105), (55, 105))]
+[STALL] t=4455, done=335/337, waiting=0
+  robot0 pos=(46, 42) h=1 state=TO_PICK goal=(46, 47) busy=0 stag=1669
+  robot1 pos=(51, 102) h=1 state=TO_HOME goal=(52, 105) busy=0 stag=1453
+  robot2 pos=(56, 108) h=2 state=IDLE goal=(56, 108) busy=0 stag=0
+  robot3 pos=(48, 103) h=0 state=IDLE goal=(48, 103) busy=0 stag=0
+  robot4 pos=(54, 107) h=2 state=IDLE goal=(54, 107) busy=0 stag=0
+  robot5 pos=(59, 103) h=1 state=IDLE goal=(59, 103) busy=0 stag=0
+  robot6 pos=(48, 107) h=0 state=IDLE goal=(48, 107) busy=0 stag=0
+  robot7 pos=(52, 107) h=2 state=IDLE goal=(52, 107) busy=0 stag=0
+  robot8 pos=(56, 106) h=2 state=IDLE goal=(56, 106) busy=0 stag=0
+  robot9 pos=(54, 105) h=1 state=IDLE goal=(54, 105) busy=0 stag=0
+  robot10 pos=(46, 43) h=3 state=TO_PICK goal=(46, 41) busy=0 stag=1663
+  robot11 pos=(48, 105) h=0 state=IDLE goal=(48, 105) busy=0 stag=0
+  robot12 pos=(50, 105) h=3 state=IDLE goal=(50, 105) busy=0 stag=0
+  robot13 pos=(57, 103) h=1 state=IDLE goal=(57, 103) busy=0 stag=0
+  robot14 pos=(59, 105) h=2 state=IDLE goal=(59, 105) busy=0 stag=0
+  robot15 pos=(52, 103) h=3 state=IDLE goal=(52, 103) busy=0 stag=0
+  robot16 pos=(54, 103) h=1 state=IDLE goal=(54, 103) busy=0 stag=0
+  robot17 pos=(50, 107) h=2 state=IDLE goal=(50, 107) busy=0 stag=0
+  robot18 pos=(66, 103) h=1 state=IDLE goal=(66, 103) busy=0 stag=0
+  robot19 pos=(64, 103) h=1 state=IDLE goal=(64, 103) busy=0 stag=0
+  robot20 pos=(61, 103) h=3 state=IDLE goal=(61, 103) busy=0 stag=0
+  robot21 pos=(50, 103) h=3 state=IDLE goal=(50, 103) busy=0 stag=0
+  robot0 (46, 42, 1) goal=(46, 47) dist=5.0 bias=20
+     fwd  -> (46, 43, 1) dist=4.0 blocked_by={(46, 43): 10}
+     wait -> (46, 42, 1) dist=5.0 blocked_by={}
+     turn -> (46, 42, 0) dist=6.0 blocked_by={}
+     rev  -> (46, 41, 1) dist=6.0 blocked_by={}
+  robot1 (51, 102, 1) goal=(52, 105) dist=5.0 bias=20
+     fwd  -> (51, 103, 1) dist=4.0 blocked_by={}
+     wait -> (51, 102, 1) dist=5.0 blocked_by={}
+     turn -> (51, 102, 0) dist=5.0 blocked_by={}
+     turn -> (51, 102, 2) dist=6.0 blocked_by={}
+     rev  -> (51, 101, 1) dist=6.0 blocked_by={}
+  robot10 (46, 43, 3) goal=(46, 41) dist=2.0 bias=20
+     fwd  -> (46, 42, 3) dist=1.0 blocked_by={(46, 42): 0}
+     wait -> (46, 43, 3) dist=2.0 blocked_by={}
+     turn -> (46, 43, 0) dist=3.0 blocked_by={}
+     rev  -> (46, 44, 3) dist=3.0 blocked_by={}
+  [최근 12틱 이력, 미도달 로봇 [0, 1, 10]]
+   t=4443 r0:(46, 42, 1) fwd  r1:(51, 102, 1) rev  r10:(46, 43, 3) rev
+   t=4444 r0:(46, 43, 1) fwd  r1:(51, 101, 1) turn  r10:(46, 44, 3) rev
+   t=4445 r0:(46, 44, 1) turn  r1:(51, 101, 2) turn  r10:(46, 45, 3) turn
+   t=4446 r0:(46, 44, 0) rev  r1:(51, 101, 1) fwd  r10:(46, 45, 0) rev
+   t=4447 r0:(45, 44, 0) turn  r1:(51, 102, 1) fwd  r10:(45, 45, 0) turn
+   t=4448 r0:(45, 44, 1) rev  r1:(51, 103, 1) fwd  r10:(45, 45, 3) fwd
+   t=4449 r0:(45, 43, 1) rev  r1:(51, 104, 1) fwd  r10:(45, 44, 3) fwd
+   t=4450 r0:(45, 42, 1) rev  r1:(51, 105, 1) fwd  r10:(45, 43, 3) fwd
+   t=4451 r0:(45, 41, 1) turn  r1:(51, 106, 1) rev  r10:(45, 42, 3) turn
+   t=4452 r0:(45, 41, 0) fwd  r1:(51, 105, 1) rev  r10:(45, 42, 0) fwd
+   t=4453 r0:(46, 41, 0) turn  r1:(51, 104, 1) rev  r10:(46, 42, 0) turn
+   t=4454 r0:(46, 41, 1) fwd  r1:(51, 103, 1) rev  r10:(46, 42, 3) rev
+시뮬 정체 감지
