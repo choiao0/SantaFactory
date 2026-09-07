@@ -25,6 +25,16 @@ sim:
   request-queue: sim.request
   result-queue: sim.result
 
+estimate:
+  # 단가 3개는 팀 미정 — 확정되면 이 값만 고친다 (0이면 예산 기반 대수 산정을 건너뛰고 상한까지 시도)
+  amr-price: 0
+  charger-price: 0
+  install-fixed: 0
+  max-fleet: 8
+  max-chargers: 6
+  amr-per-charger: 4
+  fleet-margin: 1
+
 springdoc:
   swagger-ui:
     path: /swagger-ui.html
