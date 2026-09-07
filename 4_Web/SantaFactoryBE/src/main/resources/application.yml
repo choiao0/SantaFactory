@@ -26,10 +26,11 @@ sim:
   result-queue: sim.result
 
 estimate:
-  # 단가 3개는 팀 미정 — 확정되면 이 값만 고친다 (0이면 예산 기반 대수 산정을 건너뛰고 상한까지 시도)
-  amr-price: 0
+  # amr-price / install-per-unit 은 robots 시드의 price(단가) / cost(구축·설치비)와 같은 값 — 둘 다 대당
+  amr-price: 15000000
+  install-per-unit: 500000
+  # 충전기 단가는 DB·ERD 어디에도 없어 팀 미정 (0이면 비용에 미반영)
   charger-price: 0
-  install-fixed: 0
   max-fleet: 8
   max-chargers: 6
   amr-per-charger: 4
