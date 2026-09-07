@@ -1,0 +1,160 @@
+package com.ssafy.santafactory.entity.estimate;
+
+import com.ssafy.santafactory.entity.warehouse.Warehouse;
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
+import jakarta.persistence.FetchType;
+import jakarta.persistence.GeneratedValue;
+import jakarta.persistence.GenerationType;
+import jakarta.persistence.Id;
+import jakarta.persistence.JoinColumn;
+import jakarta.persistence.ManyToOne;
+import jakarta.persistence.PrePersist;
+import jakarta.persistence.PreUpdate;
+import jakarta.persistence.Table;
+import lombok.AccessLevel;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+
+import java.time.LocalDateTime;
+
+/**
+ * 견적 1건 — 요청 시점의 목표·예산과 스윕 전체의 결론.
+ *
+ * <p>대수별 결과는 {@code SimScenarios} 에 1행씩 쌓이고, 이 테이블은 "그래서 몇 대가 답인가"를 담는다.
+ * 목표 3개를 {@code Warehouses} 에서 복사해 두는 이유는 창고 설정이 나중에 바뀌어도 과거 견적의
+ * 판정 근거가 소급 변경되지 않게 하기 위함이다(창고 행은 1개뿐이라 견적마다 다른 예산을 담을 수도 없다).
+ *
+ * <p>단위는 % — {@code Warehouses.target_throughput}·{@code target_utilization} 규약을 따른다.
+ */
+@Entity
+@Table(name = "Estimates")
+@Getter
+@NoArgsConstructor(access = AccessLevel.PROTECTED)
+public class Estimate {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    @Column(name = "estimate_id")
+    private Long id;
+
+    /** 운영조건·레이아웃 출처. 시뮬 요청 메시지를 만들 때 이 창고의 값을 읽는다. */
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "warehouse_id", nullable = false)
+    private Warehouse warehouse;
+
+    @Column(name = "amr_model", nullable = false, length = 100)
+    private String amrModel;
+
+    /** 목표 출고 처리율 %. 생성 시 창고 값 복사. */
+    @Column(name = "target_throughput", nullable = false)
+    private Double targetThroughput;
+
+    /** 목표 AMR 가동률 %. 생성 시 창고 값 복사. */
+    @Column(name = "target_utilization", nullable = false)
+    private Double targetUtilization;
+
+    /** 목표 구축 비용(원). 생성 시 창고 값 복사. */
+    @Column(name = "budget_limit", nullable = false)
+    private Long budgetLimit;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "status", nullable = false, length = 20)
+    private EstimateStatus status;
+
+    /** 3조건을 모두 만족하는 최소 대수. 없으면 null 이고 이때만 reasonCode 가 채워진다. */
+    @Column(name = "recommended_count")
+    private Integer recommendedCount;
+
+    /** 대수를 늘려도 처리율이 거의 오르지 않기 시작하는 대수. 판정 불가면 null. */
+    @Column(name = "knee_count")
+    private Integer kneeCount;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "reason_code", length = 30)
+    private ReasonCode reasonCode;
+
+    @Column(name = "created_at", nullable = false)
+    private LocalDateTime createdAt;
+
+    @Column(name = "updated_at", nullable = false)
+    private LocalDateTime updatedAt;
+
+    /** 마지막 run 결과가 도착한 시각. createdAt 과의 차이가 견적 소요시간(90초 목표 측정). */
+    @Column(name = "completed_at")
+    private LocalDateTime completedAt;
+
+    private Estimate(Warehouse warehouse, String amrModel,
+                     double targetThroughput, double targetUtilization, long budgetLimit) {
+        this.warehouse = warehouse;
+        this.amrModel = amrModel;
+        this.targetThroughput = targetThroughput;
+        this.targetUtilization = targetUtilization;
+        this.budgetLimit = budgetLimit;
+        this.status = EstimateStatus.RUNNING;
+    }
+
+    /**
+     * 견적을 열어 RUNNING 으로 시작한다. 목표·예산은 호출자가 창고 값 또는 요청 값으로 넘긴다.
+     *
+     * @param targetThroughput  목표 출고 처리율 %
+     * @param targetUtilization 목표 AMR 가동률 %
+     * @param budgetLimit       목표 구축 비용, 원
+     */
+    public static Estimate open(Warehouse warehouse, String amrModel,
+                                double targetThroughput, double targetUtilization, long budgetLimit) {
+        return new Estimate(warehouse, amrModel, targetThroughput, targetUtilization, budgetLimit);
+    }
+
+    /**
+     * 전 대수 완료 후 판정 결과를 확정한다.
+     *
+     * <p>권장 대수·무릎·사유를 한 번에 넣어 "권장 대수가 있으면 사유는 없다"는 배타 관계를 유지하고,
+     * 완료 시각도 같이 찍어 빠뜨릴 수 없게 한다. 취소된 견적은 뒤늦게 결과가 와도 되살리지 않는다
+     * (같은 run_id 가 두 번 올 수 있다 — 명세 §1-3).
+     *
+     * @param anyFailed 실패·타임아웃 run 이 하나라도 있었나 (있으면 PARTIAL)
+     */
+    public void complete(Integer recommendedCount, Integer kneeCount, ReasonCode reasonCode, boolean anyFailed) {
+        if (status == EstimateStatus.CANCELLED) {
+            return;
+        }
+        this.recommendedCount = recommendedCount;
+        this.kneeCount = kneeCount;
+        this.reasonCode = reasonCode;
+        this.status = anyFailed ? EstimateStatus.PARTIAL : EstimateStatus.DONE;
+        this.completedAt = LocalDateTime.now();
+    }
+
+    /** 사용자 취소. 이미 끝난 견적은 건드리지 않는다. */
+    public void cancel() {
+        if (status == EstimateStatus.RUNNING) {
+            this.status = EstimateStatus.CANCELLED;
+        }
+    }
+
+    public boolean isCancelled() {
+        return status == EstimateStatus.CANCELLED;
+    }
+
+    /** 견적 소요시간(초). 아직 완료 전이면 null — 90초 목표 측정에 쓴다. */
+    public Long elapsedSeconds() {
+        if (completedAt == null) {
+            return null;
+        }
+        return java.time.Duration.between(createdAt, completedAt).toSeconds();
+    }
+
+    @PrePersist
+    void onCreate() {
+        this.createdAt = LocalDateTime.now();
+        this.updatedAt = this.createdAt;
+    }
+
+    @PreUpdate
+    void onUpdate() {
+        this.updatedAt = LocalDateTime.now();
+    }
+}
