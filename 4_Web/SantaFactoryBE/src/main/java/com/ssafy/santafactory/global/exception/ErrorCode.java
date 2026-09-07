@@ -15,6 +15,10 @@ public enum ErrorCode {
 
     // Sim
     SIM_QUEUE_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "SIM503", "시뮬레이션 요청 큐에 연결할 수 없습니다."),
+
+    // Estimate
+    WAREHOUSE_NOT_FOUND(HttpStatus.NOT_FOUND, "EST404_1", "요청한 창고를 찾을 수 없습니다."),
+    ESTIMATE_NOT_FOUND(HttpStatus.NOT_FOUND, "EST404_2", "요청한 견적을 찾을 수 없습니다."),
     ;
 
     private final HttpStatus httpStatus;
