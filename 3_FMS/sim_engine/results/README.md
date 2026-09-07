@@ -6,13 +6,11 @@ Fleet sweep 벤치마크·검증 산출물 (csv/png/npz). **기존 파일은 덮
 ## 현재
 | 파일 | 내용 | 지위 |
 |---|---|---|
-| `b0z_sweep.csv`, `b0z_cell_vs_heading.png`, `b0z_zone_metrics.png` | **B0″ 현재 기준선** — 동기화 맵(벽있음 ∪ v5.8) + 충전 존 기본 + TURN_TICKS=1, 칸 vs 헤딩 (`sweeps/fleet_sweep_b0z.py`) | 현재. [문서](../../docs/2026-09-03_B0z_충전존_기준선.md) |
-| `load_sweep.csv`, `load_throughput.png`, `load_zone.png` | **고부하 스윕** — L1(80주문/25틱)·L2(120주문/15틱) × 8~28대, 칸 vs 헤딩 (`sweeps/fleet_sweep_load.py`) | 현재. [문서](../../docs/2026-09-04_고부하_무릎_판정.md) |
-| `load_sweep_eval.csv`, `load_throughput_eval.png`, `load_zone_eval.png`, `stall_load_r16_o120_g15_s102_heading.txt` | **평가 시드 기준선** — 같은 고부하 격자를 평가 시드 {101,102,103,104}로 (`SWEEP_SEEDS=... SWEEP_OUT=... sweeps/fleet_sweep_load.py`). **평가 시드 {101,103,104}는 2026-09-07 합의·계약 v2.3 §5** — θ 성과·B-5·견적 KPI는 이 시드로. 시드 102·16대·L2·헤딩 STALL 덤프 포함 | 현재. [문서](../../docs/2026-09-06_평가시드_후보_기준선.md) |
-| `theta_sweep.csv`, `theta_sweep_throughput.png`, `theta_sweep_gain.png`, `theta_sweep_cross.csv` | **B-5 θ 적용 스윕** (-149) — 8~28대 × L1/L2 × {neutral, theta_n, theta_24} × 평가 시드 {101,103,104}, 234행. 교차표 = 중립 N대를 처음 넘는 θ 최소 대수 (`sweeps/fleet_sweep_theta.py`). STALL 덤프 `stall_b5_L1_neutral_r14_*.txt`(스테이션 뒤 칸), `stall_b5_L2_neutral_r22_*.txt`(정면 교착) | 현재. [설계](../../docs/2026-09-07_B5_θ적용_FleetSweep_설계.md) |
-| `b2_from_theta_dirflow.png`, `sim_v2_b2demo_*` , `theta_b2_dummy.json` | B-2 from_theta 검증 산출물 (`checks/from_theta_demo.py`가 매번 재생성) | 검증 |
+| `b0z_sweep.csv`, `b0z_cell_vs_heading.png`, `b0z_zone_metrics.png` | **B0″ 현재 기준선** — 동기화 맵(벽있음 ∪ v5.8) + 충전 존 기본 + TURN_TICKS=1, 칸 vs 헤딩 (`sweeps/fleet_sweep_b0z.py`) | 현재. [문서](../../docs/θ_경로_기준선.md#기준선-계보) |
+| `load_sweep.csv`, `load_throughput.png`, `load_zone.png` | **고부하 스윕** — L1(80주문/25틱)·L2(120주문/15틱) × 8~28대, 칸 vs 헤딩 (`sweeps/fleet_sweep_load.py`) | 현재. [문서](../../docs/θ_경로_기준선.md#고부하-l1l2) |
+| `load_sweep_eval.csv`, `load_throughput_eval.png`, `load_zone_eval.png`, `stall_load_r16_o120_g15_s102_heading.txt` | **평가 시드 기준선** — 같은 고부하 격자를 평가 시드 {101,102,103,104}로 (`SWEEP_SEEDS=... SWEEP_OUT=... sweeps/fleet_sweep_load.py`). **평가 시드 {101,103,104}는 2026-09-07 합의·계약 v2.3 §5** — θ 성과·B-5·견적 KPI는 이 시드로. 시드 102·16대·L2·헤딩 STALL 덤프 포함 | 현재. [문서](../../docs/θ_경로_기준선.md#시드-역할) |
+| `theta_sweep.csv`, `theta_sweep_throughput.png`, `theta_sweep_gain.png`, `theta_sweep_cross.csv` | **B-5 θ 적용 스윕** (-149) — 8~28대 × L1/L2 × {neutral, theta_n, theta_24} × 평가 시드 {101,103,104}, 234행. 교차표 = 중립 N대를 처음 넘는 θ 최소 대수 (`sweeps/fleet_sweep_theta.py`). STALL 덤프 `stall_b5_L1_neutral_r14_*.txt`(스테이션 뒤 칸), `stall_b5_L2_neutral_r22_*.txt`(정면 교착) | 현재. [결과](../../docs/θ_경로_기준선.md#b-5-결과) |
 | **`fleet_replay.html`** | **범용 리플레이 플레이어** — 브라우저로 열고 `isaac_export_<tag>/scene.json`·`trajectories.json`(`SIM_EXPORT_ISAAC=1`)을 선택/드래그하면 1 m 격자 위에서 틱 단위 재생(2칸 차체·방향·동작색·존·스테이션·완료 태스크 피드). 서버·파이썬 불필요, 데이터 미내장 | 도구 (-144) |
-| `sim_v2_*_heat.png`, `map_overview.png` | 개별 실행 히트맵·맵 그림 | 보조 |
 
 ## archive/ — 대체된 산출물
 

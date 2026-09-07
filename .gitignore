@@ -9,3 +9,24 @@ server-setup/
 
 # sim_v2 Isaac 리플레이 내보내기 산출물 (SIM_EXPORT_ISAAC=1) — 재생성 가능, 커밋하지 않음
 3_FMS/sim_engine/isaac_export_*/
+
+# FMS 날짜 기록은 로컬 보관. 견적 엔진 입력 3개·A트랙 원문 3개·API 스키마 html 은 계속 추적
+3_FMS/docs/20*
+3_FMS/docs/*.png
+3_FMS/docs/*.html
+!3_FMS/docs/2026-08-31_백엔드AI_API계약_검토.md
+!3_FMS/docs/2026-09-04_θ_실험_로드맵_AB공동.md
+!3_FMS/docs/2026-09-04_시스템아키텍처_검토_B트랙관점.md
+!3_FMS/docs/2026-09-04_θ감도_실험.md
+!3_FMS/docs/2026-09-04_θ탐색_대수별_결과.md
+!3_FMS/docs/2026-09-04_θ탐색_예산_측정.md
+!3_FMS/docs/api_response_schema_v1.html
+
+# from_theta·개별 실행이 다시 만드는 검증 산출물
+3_FMS/sim_engine/results/b2_from_theta_dirflow.png
+3_FMS/sim_engine/results/sim_v2_b2demo_r10_main_dirflow.npz
+3_FMS/sim_engine/results/sim_v2_b2demo_r10_main_heat.png
+3_FMS/sim_engine/results/sim_v2_b2demo_r10_main_th_dirflow.npz
+3_FMS/sim_engine/results/sim_v2_b2demo_r10_main_th_heat.png
+3_FMS/sim_engine/results/theta_b2_dummy.json
+3_FMS/sim_engine/results/sim_v2_base_r10_blk_main_heat.png
