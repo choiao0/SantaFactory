@@ -60,8 +60,13 @@ K_LINE_P = [0.5, 0.3, 0.2]          # 주문당 상품 라인 수 {1,2,3} 분포
 # ------------------------------------------------------------
 # 0) 인자
 # ------------------------------------------------------------
-def parse_args(argv):
-    """sys.argv[1:] → 네임스페이스. 경고 문구는 .warnings 에 (셸이 출력 — 순서 보존)."""
+def _opt(argv, name, conv=float, default=None):
+    """--name=<값> 옵션 (첫 것). 없으면 default."""
+    return next((conv(f.split("=", 1)[1]) for f in argv if f.startswith(f"--{name}=")), default)
+
+
+def _parse_positional(argv):
+    """위치 인자 [태그] [로봇수] [주문수] [시드] [통로차단] + --flow/--theta → 네임스페이스."""
     pos = [a for a in argv if not a.startswith("--")]
     a = SimpleNamespace(
         variant=pos[0] if len(pos) > 0 else "base",
@@ -76,6 +81,11 @@ def parse_args(argv):
         elif f.startswith("--theta="):
             a.theta_path = f.split("=", 1)[1]
     assert a.flow in ("main", "v1compat"), f"알 수 없는 flow: {a.flow}"
+    return a, pos
+
+
+def _parse_model(a, argv):
+    """이동 모델·홈·주문 간격 — v1compat 패리티 규칙 포함."""
     # 헤딩 모델 = 기본값 (2026-09-04 결정, docs/2026-09-04_헤딩기본값_Isaac내보내기_설계.md §1, 계약 v2).
     # 칸 모델(점로봇)은 --cell opt-in. --heading 은 호환용으로 받되 무시. v1compat 은 패리티 때문에 항상 칸.
     a.heading = "--cell" not in argv
@@ -94,24 +104,27 @@ def parse_args(argv):
         a.order_gap_arg = None
     a.order_gap = a.order_gap_arg if a.order_gap_arg is not None else 50
     assert a.order_gap > 0, f"--order-gap 은 양수: {a.order_gap:g}"
+
+
+def _parse_env(a):
     a.check = bool(os.environ.get("SIM_CHECK"))
     a.dirflow = bool(os.environ.get("SIM_DIRFLOW"))
     a.export = bool(os.environ.get("SIM_EXPORT_ISAAC"))
     a.dock_prio = not os.environ.get("SIM_NO_DOCK_PRIO")
 
-    def opt(name, conv=float, default=None):
-        return next((conv(f.split("=", 1)[1]) for f in argv if f.startswith(f"--{name}=")), default)
 
+def _parse_lifelong(a, argv, pos):
+    """입고 간격·고정 시간·교대 (-145 §1)."""
     # 입고 간격 (-145 §1-2). 유한 모드에서도 받는다 — 입고 시각표만 바뀌고 rng 순서는 그대로. v1compat 은 입고가 없다.
-    a.inbound_gap_arg = opt("inbound-gap")
+    a.inbound_gap_arg = _opt(argv, "inbound-gap")
     if a.inbound_gap_arg is not None and a.flow == "v1compat":
         a.warnings.append("[WARN] --inbound-gap 은 v1compat 에서 무시 (입고 없음)")
         a.inbound_gap_arg = None
     if a.inbound_gap_arg is not None:
         assert a.inbound_gap_arg > 0, f"--inbound-gap 은 양수: {a.inbound_gap_arg:g}"
     # 고정 시간·교대 (-145 §1). --horizon 없이 --shifts 만 주면 무시.
-    a.horizon = opt("horizon", int)
-    shifts_arg = opt("shifts", str)
+    a.horizon = _opt(argv, "horizon", int)
+    shifts_arg = _opt(argv, "shifts", str)
     a.shifts = tuple(s.strip() for s in shifts_arg.split(",")) if shifts_arg else ("in", "out", "out")
     if a.horizon is not None:
         assert 0 < a.horizon < 200_000, f"--horizon 은 1~199,999 틱 (커널 틱 상한 200,000): {a.horizon}"
@@ -121,12 +134,15 @@ def parse_args(argv):
             a.warnings.append(f"[WARN] 고정 시간 모드: 주문수 인자 {pos[2]} 무시 (T 안에서 생기는 만큼)")
     elif shifts_arg:
         a.warnings.append("[WARN] --shifts 는 --horizon 없이는 무시")
-    # 배터리 (-145 §2). 도크 = 존 안 charger 칸이라 존 기본값(main, 고정 홈 아님) 전용.
+
+
+def _parse_battery(a, argv):
+    """배터리 (-145 §2). 도크 = 존 안 charger 칸이라 존 기본값(main, 고정 홈 아님) 전용."""
     a.battery = "--battery" in argv
-    a.chargers = opt("chargers", int, 6)
-    a.runtime_h = opt("runtime-h", float, 8.0)
-    a.charge_h = opt("charge-h", float, 1.5)
-    soc = opt("soc", str, "20,80,95")
+    a.chargers = _opt(argv, "chargers", int, 6)
+    a.runtime_h = _opt(argv, "runtime-h", float, 8.0)
+    a.charge_h = _opt(argv, "charge-h", float, 1.5)
+    soc = _opt(argv, "soc", str, "20,80,95")
     a.soc = tuple(float(x) / 100 for x in soc.split(","))
     bat_only = [f.split("=", 1)[0] for f in argv if f.split("=", 1)[0] in ("--chargers", "--runtime-h", "--charge-h", "--soc")]
     if bat_only and not a.battery:
@@ -136,6 +152,15 @@ def parse_args(argv):
         assert 1 <= a.chargers <= 6, f"--chargers 는 1~6 (stations.json charger 칸 수): {a.chargers}"
         assert a.runtime_h > 0 and a.charge_h > 0, "--runtime-h·--charge-h 는 양수"
         assert len(a.soc) == 3 and 0 < a.soc[0] < a.soc[1] < a.soc[2] <= 1.0, f"--soc 는 low<go<leave (%) : {soc}"
+
+
+def parse_args(argv):
+    """sys.argv[1:] → 네임스페이스. 경고 문구는 .warnings 에 (셸이 출력 — 순서 보존)."""
+    a, pos = _parse_positional(argv)
+    _parse_model(a, argv)
+    _parse_env(a)
+    _parse_lifelong(a, argv, pos)
+    _parse_battery(a, argv)
     return a
 
 
