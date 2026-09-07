@@ -1,5 +1,7 @@
 package com.ssafy.santafactory.service.estimate;
 
+import com.ssafy.santafactory.entity.estimate.ReasonCode;
+
 import org.springframework.stereotype.Component;
 
 import java.util.Comparator;

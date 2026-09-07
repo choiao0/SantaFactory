@@ -1,5 +1,7 @@
 package com.ssafy.santafactory.service.estimate;
 
+import com.ssafy.santafactory.entity.estimate.ReasonCode;
+
 import org.junit.jupiter.api.Test;
 
 import java.io.BufferedReader;

@@ -1,4 +1,4 @@
-package com.ssafy.santafactory.service.estimate;
+package com.ssafy.santafactory.entity.estimate;
 
 /** 권장 대수를 내지 못한 사유. */
 public enum ReasonCode {

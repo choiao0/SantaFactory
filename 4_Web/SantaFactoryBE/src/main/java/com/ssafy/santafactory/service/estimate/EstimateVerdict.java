@@ -1,5 +1,7 @@
 package com.ssafy.santafactory.service.estimate;
 
+import com.ssafy.santafactory.entity.estimate.ReasonCode;
+
 /**
  * 견적 판정 결과.
  *
