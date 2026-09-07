@@ -126,6 +126,28 @@ class EstimateServiceTest {
     }
 
     @Test
+    void a_shift_crossing_midnight_keeps_its_real_length() {
+        // 야간 출고 22:00 → 06:00 (8시간). 같은 날짜로 저장돼 종료가 시작보다 앞선다
+        Warehouse nightShift = mock(Warehouse.class);
+        lenient().when(nightShift.getTargetThroughput()).thenReturn(95.0);
+        lenient().when(nightShift.getTargetUtilization()).thenReturn(80.0);
+        lenient().when(nightShift.getBudgetLimit()).thenReturn(300_000_000L);
+        lenient().when(nightShift.getOutboundStart()).thenReturn(LocalDateTime.of(2026, 1, 1, 22, 0));
+        lenient().when(nightShift.getOutboundEnd()).thenReturn(LocalDateTime.of(2026, 1, 1, 6, 0));
+        lenient().when(nightShift.getOutboundAvg()).thenReturn(800L);
+        when(warehouseRepository.findById(1L)).thenReturn(Optional.of(nightShift));
+        givenSavedEstimateId(77L);
+        when(simulationService.publishRuns(any(), any())).thenReturn(List.of());
+
+        service().create(new EstimateCreateRequest(1L, null, null, null, null));
+
+        ArgumentCaptor<SimulationRequest> base = ArgumentCaptor.captor();
+        verify(simulationService).publishRuns(base.capture(), any());
+        // 800건 / 8시간 = 36초. 24시간으로 폴백하면 108초가 되어 부하가 3배 과소 추정된다
+        assertThat(base.getValue().outboundGapS()).isEqualTo(36.0);
+    }
+
+    @Test
     void request_values_override_the_warehouse_defaults() {
         givenWarehouse(1L);
         ArgumentCaptor<Estimate> saved = ArgumentCaptor.captor();

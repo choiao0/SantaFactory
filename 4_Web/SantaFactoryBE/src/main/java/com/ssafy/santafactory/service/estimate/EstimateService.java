@@ -139,11 +139,22 @@ public class EstimateService {
         return (double) windowSeconds(start, end) / dailyCount;
     }
 
+    /**
+     * 작업창 길이(초).
+     *
+     * <p>야간 교대(22:00 → 06:00)를 같은 날짜로 저장하면 종료가 시작보다 앞서는데, 그건 자정을 넘긴
+     * 것이므로 하루를 더해 읽는다. 이걸 24시간으로 폴백하면 도착 간격이 3배 느슨해져 부하가
+     * 과소 추정된다. 시각이 아예 없으면 하루 24시간 균등으로 본다.
+     */
     private long windowSeconds(LocalDateTime start, LocalDateTime end) {
-        if (start == null || end == null || !end.isAfter(start)) {
+        if (start == null || end == null) {
             return Duration.ofDays(1).toSeconds();
         }
-        return Duration.between(start, end).toSeconds();
+        Duration window = Duration.between(start, end);
+        if (window.isNegative()) {
+            window = window.plusDays(1);
+        }
+        return window.isZero() ? Duration.ofDays(1).toSeconds() : window.toSeconds();
     }
 
     // ── 조회 ─────────────────────────────────────────────────────────────────
