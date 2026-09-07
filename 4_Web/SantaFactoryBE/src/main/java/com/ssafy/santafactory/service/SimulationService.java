@@ -17,10 +17,18 @@ public class SimulationService {
 
     private final SimulationClient simulationClient;
 
+    /**
+     * run 식별자 규칙 — {@code {base}_n{대수}} (명세 §0).
+     * 발행 전에 run 행을 만들어야 하는 호출자가 같은 규칙으로 id 를 미리 계산할 수 있게 꺼내 뒀다.
+     */
+    public static String runId(String baseRunId, int amrCount) {
+        return "%s_n%d".formatted(baseRunId, amrCount);
+    }
+
     public List<String> publishRuns(SimulationRequest base, List<Integer> amrCounts) {
         List<String> runIds = new ArrayList<>();
         for (int amrCount : amrCounts) {
-            String runId = "%s_n%d".formatted(base.runId(), amrCount);
+            String runId = runId(base.runId(), amrCount);
             SimulationRequest.Amr amr = base.amr();
             simulationClient.publish(new SimulationRequest(
                     runId,
