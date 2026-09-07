@@ -1,12 +1,4 @@
-export const WAREHOUSE = {
-  name: '품고 3PL 센터',
-  width: 24,
-  length: 14,
-  area: 336,
-  rackCount: 96,
-  stationCount: 4,
-  dockCount: 3,
-}
+export const GRID = { width: 24, length: 14 }
 
 export const AMR_MODELS = [
   {
@@ -91,13 +83,13 @@ export function formatWon(man) {
   return `${eok}억 ${rest.toLocaleString()}만원`
 }
 
-export const EMPTY = 0
+const EMPTY = 0
 export const RACK = 1
 export const STATION = 2
 export const DOCK = 3
 
 export function buildLayout() {
-  const { width: W, length: H } = WAREHOUSE
+  const { width: W, length: H } = GRID
   const cells = new Array(W * H).fill(EMPTY)
   for (let y = 2; y < H - 2; y++) {
     if (y % 3 === 1) continue

@@ -1,4 +1,4 @@
-import { AMR_MODEL, ESTIMATE, RUNS, WAREHOUSE, formatWon, totalCost } from '../data/mock.js'
+import { AMR_MODEL, ESTIMATE, RUNS, formatWon, totalCost } from '../data/mock.js'
 
 const DONE = RUNS.filter((r) => r.status === 'DONE')
 const REC = DONE.find((r) => r.n === ESTIMATE.recommended)
@@ -134,7 +134,7 @@ export default function QuoteStep() {
       <div className="q-head">
         <h3>SANTA FACTORY · QUOTATION</h3>
         <span className="mono">
-          EST #{ESTIMATE.id} · {ESTIMATE.createdAt} · {WAREHOUSE.name} · {AMR_MODEL.model} · SEED {ESTIMATE.seed}
+          EST #{ESTIMATE.id} · {ESTIMATE.createdAt} · {AMR_MODEL.model} · SEED {ESTIMATE.seed}
         </span>
       </div>
 
@@ -233,7 +233,6 @@ export default function QuoteStep() {
           <details className="assume">
             <summary>입력 조건과 고정값</summary>
             <ul>
-              <li>창고 {WAREHOUSE.name} · {WAREHOUSE.width}×{WAREHOUSE.length} m · 랙 {WAREHOUSE.rackCount} · 스테이션 {WAREHOUSE.stationCount} · 도크 {WAREHOUSE.dockCount}</li>
               <li>작업자 4명 · 입고 01:00–09:00 (480건) · 출고 13:00–18:00 (500건) · 시드 {ESTIMATE.seed}</li>
               <li>AMR {AMR_MODEL.model} 단일 모델 · 속도 {AMR_MODEL.speedEmpty}/{AMR_MODEL.speedLoaded} m/s · 적재 {AMR_MODEL.capacity} · 충전 임계 {AMR_MODEL.chargeThreshold * 100}%</li>
               <li>구축비용 = 대당 {formatWon(AMR_MODEL.price)} × 대수 + 기본 구축비 {formatWon(ESTIMATE.baseCost)}. 유지보수·자재 관리비 제외</li>

@@ -8,7 +8,7 @@ import {
   RUNS,
   RUN_STATUS_LABEL,
   STATION,
-  WAREHOUSE,
+  GRID,
   buildLayout,
 } from '../data/mock.js'
 
@@ -54,8 +54,8 @@ function formatClock(sec) {
 
 function ReplayBoard() {
   const cells = buildLayout()
-  const cellPct = 100 / WAREHOUSE.width
-  const rowPct = 100 / WAREHOUSE.length
+  const cellPct = 100 / GRID.width
+  const rowPct = 100 / GRID.length
   const [playing, setPlaying] = useState(true)
   const [speed, setSpeed] = useState(4)
   const [clock, setClock] = useState(START_SECONDS)
@@ -68,7 +68,7 @@ function ReplayBoard() {
 
   const nextSpeed = () => setSpeed((v) => SPEEDS[(SPEEDS.indexOf(v) + 1) % SPEEDS.length])
   const boardStyle = {
-    aspectRatio: `${WAREHOUSE.width} / ${WAREHOUSE.length}`,
+    aspectRatio: `${GRID.width} / ${GRID.length}`,
     '--bot-duration': `${BASE_DURATION / speed}s`,
     '--bot-play': playing ? 'running' : 'paused',
   }
@@ -93,7 +93,7 @@ function ReplayBoard() {
       <div className="sim-board">
         <div className="board-head">
           <span>TOP VIEW · SIMPY QUOTE ENGINE</span>
-          <span>{WAREHOUSE.width} × {WAREHOUSE.length} · 1 CELL = 1 m</span>
+          <span>{GRID.width} × {GRID.length} · 1 CELL = 1 m</span>
         </div>
         <div className="hud tl"><b>{ESTIMATE.recommended}</b> AMR · ACTIVE 8 · CHARGING 0</div>
         <div className="hud tr">ORDERS <b>212</b> / 500 · LEAD <b>3m 28s</b></div>
