@@ -24,6 +24,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
@@ -97,9 +98,14 @@ public class EstimateService {
     /**
      * 대수만 바꿔 발행할 기준 요청.
      *
-     * <p>AMR 사양(속도·배터리·소모량)과 주문 목록은 비워 둔다 — 시뮬이 자체 기본값과 주문 스트림을
-     * 쓰기 때문이다. 운영조건을 시뮬 인자(고정 시간·도착 간격)로 어떻게 환산할지는 아직 미합의라
-     * 창고 값을 그대로 실어 보낸다.
+     * <p><b>실행 시간을 명시한다.</b> 안 보내면 시뮬이 유한 주문 모드로 돌아 처리율이 전 대수 100 % 가
+     * 되고 견적이 "1대 권장" 같은 틀린 답을 낸다. 실행 시간은 성능 제약(견적 1회 90초)으로 정해지는
+     * 값이라 창고 데이터가 아니라 설정({@code estimate.horizon})에서 온다.
+     *
+     * <p>도착 간격은 창고의 <b>작업 시간 기준</b>으로 계산한다 — 하루 물량을 실제 작업창으로 나눈
+     * 도착률이다(입고 600건 / 8시간 → 48초). 시간만 줄이고 간격은 유지하므로 부하 밀도가 보존된다.
+     *
+     * <p>AMR 사양(속도·배터리·소모량)과 주문 목록은 비워 둔다 — 시뮬이 자체 기본값과 주문 스트림을 쓴다.
      */
     private SimulationRequest baseRequest(String baseRunId, Warehouse warehouse) {
         SimulationRequest.Warehouse conditions = new SimulationRequest.Warehouse(
@@ -112,7 +118,32 @@ public class EstimateService {
                 toInt(warehouse.getOutboundAvg()));
         SimulationRequest.Amr amr =
                 new SimulationRequest.Amr(0, null, null, null, null, null, null, null);
-        return new SimulationRequest(baseRunId, FIXED_SEED, conditions, amr, List.of(), List.of());
+        return new SimulationRequest(
+                baseRunId,
+                FIXED_SEED,
+                properties.horizon().toSeconds(),
+                properties.shifts(),
+                gapSeconds(warehouse.getInboundAvg(), warehouse.getInboundStart(), warehouse.getInboundEnd()),
+                gapSeconds(warehouse.getOutboundAvg(), warehouse.getOutboundStart(), warehouse.getOutboundEnd()),
+                conditions, amr, List.of(), List.of());
+    }
+
+    /**
+     * 하루 물량 ÷ 작업창 = 도착률, 그 역수가 평균 도착 간격(초).
+     * 작업창을 알 수 없으면(창고 종료 시각이 비어 있으면) 하루 24시간 균등으로 본다.
+     */
+    private Double gapSeconds(Long dailyCount, LocalDateTime start, LocalDateTime end) {
+        if (dailyCount == null || dailyCount <= 0) {
+            return null;
+        }
+        return (double) windowSeconds(start, end) / dailyCount;
+    }
+
+    private long windowSeconds(LocalDateTime start, LocalDateTime end) {
+        if (start == null || end == null || !end.isAfter(start)) {
+            return Duration.ofDays(1).toSeconds();
+        }
+        return Duration.between(start, end).toSeconds();
     }
 
     // ── 조회 ─────────────────────────────────────────────────────────────────
@@ -199,7 +230,7 @@ public class EstimateService {
             run.markFailed("결과에 kpi 가 없음");
             return;
         }
-        run.markDone(throughputPercent(kpi), utilizationPercent(kpi), completedOrders(kpi));
+        run.markDone(throughputPercent(kpi), utilizationPercent(kpi), dailyOutbound(run, kpi));
         log.info("run 완료: runId={}, 처리율={}%, 가동률={}%",
                 run.getRunId(), run.getThroughput(), run.getUtilization());
     }
@@ -225,11 +256,27 @@ public class EstimateService {
     }
 
     /**
-     * 출고 처리 건수. ERD 단위는 건/일인데 시뮬 실행 시간이 하루가 아니라서,
-     * 지금은 완료 주문 수를 그대로 넣는다 — 일 단위 환산은 실행 시간(horizon)이 확정된 뒤에.
+     * 출고 처리 건수를 <b>건/일</b>로 환산한다 ({@code SimScenarios.outbound} 단위).
+     *
+     * <p>시뮬은 horizon 중 출고 구간(기본 4시간)만 출고를 받는데, 도착 간격은 실제 도착률을 그대로
+     * 쓰므로 실측 건수 × (실제 출고창 ÷ 시뮬 출고창) 이 하루 물량이 된다. 기본 설정이면 배율 1.25다
+     * (실제 5시간 ÷ 시뮬 4시간). 하루 전량 실행(horizon 24h)으로 바꾸면 배율이 1에 가까워진다.
+     *
+     * <p>창고 출고창을 알 수 없으면 환산 근거가 없으므로 실측값을 그대로 남긴다.
      */
-    private Long completedOrders(SimulationResponse.Kpi kpi) {
-        return kpi.ordersCompleted() == null ? null : kpi.ordersCompleted().longValue();
+    private Long dailyOutbound(SimScenario run, SimulationResponse.Kpi kpi) {
+        Integer completed = kpi.ordersCompleted();
+        if (completed == null) {
+            return null;
+        }
+        Warehouse warehouse = run.getEstimate().getWarehouse();
+        LocalDateTime start = warehouse.getOutboundStart();
+        LocalDateTime end = warehouse.getOutboundEnd();
+        long simulated = properties.simulatedOutboundSeconds();
+        if (start == null || end == null || !end.isAfter(start) || simulated <= 0) {
+            return completed.longValue();
+        }
+        return Math.round(completed * (double) Duration.between(start, end).toSeconds() / simulated);
     }
 
     /** 미완료 run 이 없으면 판정을 확정한다. 하나라도 남아 있으면 아무것도 하지 않는다. */
