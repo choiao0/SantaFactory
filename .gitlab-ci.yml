@@ -14,10 +14,12 @@ stages:
   - comment
 
 variables:
-  SONAR_HOST_URL: "http://host.docker.internal:9000"
-  OLLAMA_HOST_URL: "http://host.docker.internal:11434"
-  OLLAMA_MODEL: "qwen2.5-coder:7b"
-  OLLAMA_TIMEOUT: "120"
+  # EC2 Runner의 Docker executor가 sonar-network에 참여하므로
+  # 외부 포트 개방 없이 서비스 이름으로 접근한다.
+  SONAR_HOST_URL: "http://sonarqube:9000/sonarqube"
+  GMS_API_URL: "https://gms.ssafy.io/gmsapi/api.openai.com/v1/responses"
+  GMS_MODEL: "gpt-5-mini"
+  GMS_TIMEOUT: "60"
 
 .convention-lint:
   stage: lint
@@ -27,7 +29,7 @@ variables:
     name: alpine/git:latest
     entrypoint: [""]
   tags:
-    - sonar-local
+    - sonar-ec2
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
 
@@ -82,7 +84,7 @@ sonarqube-analysis:
     name: sonarsource/sonar-scanner-cli:12.1.0.3233_8.0.1
     entrypoint: [""]
   tags:
-    - sonar-local
+    - sonar-ec2
   variables:
     SONAR_USER_HOME: "${CI_PROJECT_DIR}/.sonar"
     GIT_DEPTH: "0"
@@ -105,7 +107,7 @@ sonarqube-mr-comment:
   stage: comment
   image: python:3.13-alpine
   tags:
-    - sonar-local
+    - sonar-ec2
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
   when: always

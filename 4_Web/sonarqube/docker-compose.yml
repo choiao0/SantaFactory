@@ -1,0 +1,77 @@
+name: santafactory-sonar
+
+services:
+  sonar-db:
+    image: postgres:16-alpine
+    container_name: a106-sonar-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: sonarqube
+      POSTGRES_USER: sonarqube
+      POSTGRES_PASSWORD: ${SONAR_DB_PASSWORD}
+    volumes:
+      - sonar-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sonarqube -d sonarqube"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    mem_limit: 1g
+    cpus: 1.0
+    networks:
+      - sonar-network
+
+  sonarqube:
+    image: sonarqube:community
+    container_name: a106-sonarqube
+    restart: unless-stopped
+    environment:
+      SONAR_JDBC_URL: jdbc:postgresql://sonar-db:5432/sonarqube
+      SONAR_JDBC_USERNAME: sonarqube
+      SONAR_JDBC_PASSWORD: ${SONAR_DB_PASSWORD}
+      SONAR_WEB_CONTEXT: /sonarqube
+    ports:
+      - "127.0.0.1:9000:9000"
+    depends_on:
+      sonar-db:
+        condition: service_healthy
+    volumes:
+      - sonar-data:/opt/sonarqube/data
+      - sonar-extensions:/opt/sonarqube/extensions
+      - sonar-logs:/opt/sonarqube/logs
+    mem_limit: 4g
+    cpus: 2.0
+    ulimits:
+      nofile:
+        soft: 131072
+        hard: 131072
+    networks:
+      - sonar-network
+
+  gitlab-runner:
+    image: gitlab/gitlab-runner:alpine
+    container_name: a106-gitlab-runner
+    restart: unless-stopped
+    volumes:
+      - runner-config:/etc/gitlab-runner
+      - /var/run/docker.sock:/var/run/docker.sock
+    mem_limit: 256m
+    cpus: 0.5
+    networks:
+      - sonar-network
+
+volumes:
+  sonar-db-data:
+    name: a106-sonar-db-data
+  sonar-data:
+    name: a106-sonar-data
+  sonar-extensions:
+    name: a106-sonar-extensions
+  sonar-logs:
+    name: a106-sonar-logs
+  runner-config:
+    name: a106-sonar-runner-config
+
+networks:
+  sonar-network:
+    name: sonar-network

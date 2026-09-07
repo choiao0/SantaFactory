@@ -313,7 +313,26 @@ def normalize_review(content):
     return content[:1000].strip()
 
 
-def ollama_review(base_url, model, timeout, issue, path, line_number, code_context):
+def extract_gms_text(result):
+    """Extract text from an OpenAI Responses API compatible response."""
+    direct_text = result.get("output_text")
+    if isinstance(direct_text, str) and direct_text.strip():
+        return direct_text
+
+    texts = []
+    for output in result.get("output", []):
+        if not isinstance(output, dict):
+            continue
+        for content in output.get("content", []):
+            if not isinstance(content, dict):
+                continue
+            text = content.get("text")
+            if isinstance(text, str) and text.strip():
+                texts.append(text)
+    return "\n".join(texts)
+
+
+def gms_review(api_url, api_key, model, timeout, issue, path, line_number, code_context):
     system_prompt = """당신은 GitLab Merge Request를 검토하는 한국어 코드 리뷰어입니다.
 SonarQube 이슈와 주변 코드를 근거로 문제의 원인, 영향, 수정 방향을 자연스러운 한국어로 설명하세요.
 출력은 500자 이내의 짧은 문단 하나여야 합니다.
@@ -342,43 +361,39 @@ SonarQube 메시지:
     payload = json.dumps(
         {
             "model": model,
-            "stream": False,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": prompt},
-            ],
-            "options": {
-                "temperature": 0.1,
-                "num_ctx": 4096,
-                "num_predict": 220,
-            },
+            "instructions": system_prompt,
+            "input": prompt,
+            "max_output_tokens": 300,
         }
     ).encode("utf-8")
     result = request_json(
-        f"{base_url}/api/chat",
-        headers={"Content-Type": "application/json; charset=utf-8"},
+        api_url,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json; charset=utf-8",
+        },
         data=payload,
         method="POST",
         timeout=timeout,
     )
-    content = result.get("message", {}).get("content", "")
+    content = extract_gms_text(result)
     review = normalize_review(content)
     if len(review) < 40:
-        raise RuntimeError("Ollama returned an empty or incomplete review")
+        raise RuntimeError("GMS returned an empty or incomplete review")
     return review
 
 
 def main():
     sonar_url = require_env("SONAR_HOST_URL").rstrip("/")
     sonar_token = require_env("SONAR_TOKEN")
-    ollama_url = os.environ.get("OLLAMA_HOST_URL", "").rstrip("/")
-    ollama_model = os.environ.get(
-        "OLLAMA_MODEL", "qwen2.5-coder:7b"
-    )
+    gms_url = os.environ.get("GMS_API_URL", "").strip()
+    gms_key = os.environ.get("GMS_API_KEY", "").strip()
+    gms_model = os.environ.get("GMS_MODEL", "gpt-5-mini").strip()
+    gms_enabled = bool(gms_url and gms_key)
     try:
-        ollama_timeout = max(1, int(os.environ.get("OLLAMA_TIMEOUT", "120")))
+        gms_timeout = max(1, int(os.environ.get("GMS_TIMEOUT", "60")))
     except ValueError:
-        ollama_timeout = 120
+        gms_timeout = 60
     gitlab_token = require_env("GITLAB_REVIEW_TOKEN")
     gitlab_api = require_env("CI_API_V4_URL").rstrip("/")
     project_id = require_env("CI_PROJECT_ID")
@@ -416,7 +431,7 @@ def main():
         f"**검사 커밋:** `{commit_sha}`",
         "**분석 범위:** 이번 MR에서 추가·수정한 코드",
         f"**변경 파일:** {len(changed_files)}개",
-        f"**AI 모델:** `{ollama_model}`" if ollama_url else "**AI 검토:** 비활성화",
+        f"**AI 모델:** `{gms_model}`" if gms_enabled else "**AI 검토:** 비활성화",
         "",
         f"### 🤖 주요 정적 분석 이슈 (최대 {MAX_REVIEW_ISSUES}개)",
     ]
@@ -440,17 +455,18 @@ def main():
             issue_type = issue.get("type", "ISSUE")
 
             review = ""
-            if ollama_url:
+            if gms_enabled:
                 try:
                     code_context = read_code_context(
                         os.environ.get("CI_PROJECT_DIR", os.getcwd()),
                         path,
                         line_number,
                     )
-                    review = ollama_review(
-                        ollama_url,
-                        ollama_model,
-                        ollama_timeout,
+                    review = gms_review(
+                        gms_url,
+                        gms_key,
+                        gms_model,
+                        gms_timeout,
                         issue,
                         path,
                         line_number,
@@ -465,7 +481,7 @@ def main():
             if not review:
                 review = (
                     f"{original_message} "
-                    "(AI 설명을 생성하지 못해 SonarQube 원문을 표시합니다.)"
+                    "(GMS 설명을 생성하지 못해 SonarQube 원문을 표시합니다.)"
                 )
             review = review.replace("|", "\\|")
             lines.append(
