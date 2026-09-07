@@ -23,13 +23,16 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.within;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
@@ -42,7 +45,7 @@ import static org.mockito.Mockito.when;
 class EstimateServiceTest {
 
     private static final EstimateProperties PROPS =
-            new EstimateProperties(15_000_000L, 5_000_000L, 500_000L, 8, 6, 4, 1);
+            new EstimateProperties(15_000_000L, 5_000_000L, 500_000L, 8, 6, 4, 1, Duration.ofMinutes(30));
 
     @Mock
     EstimateRepository estimateRepository;
@@ -59,7 +62,7 @@ class EstimateServiceTest {
     private EstimateService service() {
         if (service == null) {
             service = new EstimateService(estimateRepository, scenarioRepository, warehouseRepository,
-                    simulationService, costCalculator, new EstimateEvaluator());
+                    simulationService, costCalculator, new EstimateEvaluator(), PROPS);
         }
         return service;
     }
@@ -276,6 +279,66 @@ class EstimateServiceTest {
 
         assertThat(run.getThroughput()).isNull();                 // 처리율을 계산할 수 없다
         assertThat(estimate.getReasonCode()).isEqualTo(ReasonCode.ALL_FAILED);
+    }
+
+    // ── TIMEOUT 스윕 ─────────────────────────────────────────────────────────
+
+    @Test
+    void sweep_does_nothing_when_no_run_is_overdue() {
+        when(scenarioRepository.findByStatusInAndPublishedAtBefore(any(), any())).thenReturn(List.of());
+
+        assertThat(service().sweepTimeouts()).isZero();
+    }
+
+    @Test
+    void sweep_looks_back_by_the_configured_timeout() {
+        when(scenarioRepository.findByStatusInAndPublishedAtBefore(any(), any())).thenReturn(List.of());
+
+        service().sweepTimeouts();
+
+        ArgumentCaptor<List<RunStatus>> statuses = ArgumentCaptor.captor();
+        ArgumentCaptor<LocalDateTime> threshold = ArgumentCaptor.captor();
+        verify(scenarioRepository).findByStatusInAndPublishedAtBefore(statuses.capture(), threshold.capture());
+        assertThat(statuses.getValue()).containsExactly(RunStatus.QUEUED, RunStatus.RUNNING);
+        assertThat(threshold.getValue()).isCloseTo(LocalDateTime.now().minusMinutes(30),
+                within(5, ChronoUnit.SECONDS));
+    }
+
+    @Test
+    void sweep_times_out_a_stuck_run_and_finalizes_the_estimate() {
+        Estimate estimate = estimate(85.0, 90.0, 1_000_000_000L);
+        SimScenario twoAmr = run(estimate, 2);
+        SimScenario fourAmr = run(estimate, 4);
+        SimScenario sixAmr = run(estimate, 6);
+        twoAmr.markDone(60.0, 98.0, 60L);
+        fourAmr.markDone(85.0, 95.0, 85L);
+        when(scenarioRepository.findByStatusInAndPublishedAtBefore(any(), any())).thenReturn(List.of(sixAmr));
+        when(scenarioRepository.findByEstimateIdOrderByAmrCountAsc(any()))
+                .thenReturn(List.of(twoAmr, fourAmr, sixAmr));
+
+        assertThat(service().sweepTimeouts()).isEqualTo(1);
+
+        assertThat(sixAmr.getStatus()).isEqualTo(RunStatus.TIMEOUT);
+        assertThat(estimate.getRecommendedCount()).isEqualTo(4);              // 남은 결과로 판정
+        assertThat(estimate.getStatus()).isEqualTo(EstimateStatus.PARTIAL);
+    }
+
+    @Test
+    void sweep_reports_all_failed_when_every_run_is_stuck() {
+        Estimate estimate = estimate(85.0, 90.0, 1_000_000_000L);
+        SimScenario twoAmr = run(estimate, 2);
+        SimScenario fourAmr = run(estimate, 4);
+        when(scenarioRepository.findByStatusInAndPublishedAtBefore(any(), any()))
+                .thenReturn(List.of(twoAmr, fourAmr));
+        when(scenarioRepository.findByEstimateIdOrderByAmrCountAsc(any()))
+                .thenReturn(List.of(twoAmr, fourAmr));
+
+        assertThat(service().sweepTimeouts()).isEqualTo(2);
+
+        // 같은 견적의 run 두 건이지만 판정은 한 번만 확정된다 (distinct)
+        verify(scenarioRepository, times(1)).findByEstimateIdOrderByAmrCountAsc(any());
+        assertThat(estimate.getReasonCode()).isEqualTo(ReasonCode.ALL_FAILED);
+        assertThat(estimate.getStatus()).isEqualTo(EstimateStatus.PARTIAL);
     }
 
     // ── 픽스처 ────────────────────────────────────────────────────────────────
