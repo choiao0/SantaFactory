@@ -29,7 +29,9 @@ import java.time.LocalDateTime;
  * 그대로 쓴다. 나머지 KPI(리드타임·makespan 등)는 run 상세 조회 API 를 만들 때 추가한다.
  */
 @Entity
-@Table(name = "SimScenarios")
+// 실제 테이블명은 simscenarios 다. "SimScenarios" 로 두면 Hibernate 기본 네이밍 전략이
+// sim_scenarios 로 바꿔 버려서 ddl-auto=update 일 때 테이블이 하나 더 생긴다.
+@Table(name = "simscenarios")
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class SimScenario {
