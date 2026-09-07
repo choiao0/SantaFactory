@@ -7,6 +7,7 @@ from .geometry import (DIRS, REVERSE_FACTOR, TURN_TICKS, _inb, occupied,
 from .hgraph import dist_map_h
 from .liveness import Replanner, Stagnation, wait_bias
 
+
 def candidates_h(s, dist, edge_cost, wait_cost, free, turn_cost, bias=0.0):
     """s에서 가능한 다음 상태 후보를 score 오름차순으로: [(상태, 점유칸 집합), ...].
     score = 액션 비용 + dist[결과 상태]. 대기 후보에는 bias(대기 상승)가 더해진다.
@@ -68,6 +69,15 @@ class _PIBTStepH:
                 del self.occ_next[cell]            # 덮어썼으면 보존
         del self.next_of[a]
 
+    def _push_occupants(self, a, cells):
+        """cells 의 현 점유자(자기 제외, 미결정)를 칸 순서대로 밀어낸다. 하나라도 실패하면 False."""
+        for cell in sorted(cells):
+            k = self.occ_now.get(cell)
+            if k is not None and k != a and k not in self.next_of:
+                if not self.resolve(k, a):              # 점유자 밀어내기 실패
+                    return False
+        return True
+
     def resolve(self, a, parent=None):
         cur = self.states[a]
         for s2, cells in candidates_h(cur, self.dists[a], self.edge_cost,
@@ -80,17 +90,9 @@ class _PIBTStepH:
             if parent is not None and cells & self.now_cells[parent]:
                 continue                                    # 부모와 맞교환(swap) 금지
             self._reserve(a, s2, cells)
-            ok = True
-            for cell in sorted(cells):
-                k = self.occ_now.get(cell)
-                if k is not None and k != a and k not in self.next_of:
-                    if not self.resolve(k, a):              # 점유자 밀어내기 실패
-                        ok = False
-                        break
-            if not ok:
-                self._release(a)
-                continue
-            return True
+            if self._push_occupants(a, cells):
+                return True
+            self._release(a)
         self._reserve(a, cur, self.now_cells[a])            # 갈 곳 없음 → 제자리
         return False
 
@@ -110,23 +112,94 @@ def step_h(states, dists, edge_cost, wait_cost, free, priority_order,
     return dict(ps.next_of), dict(ps.next_cells)
 
 
-def dump_candidates_h(states, dists, goals, extra, bias, free, edge_cost, wait_cost,
-                      turn_cost, only=None, label=lambda a: f"agent{a}"):
-    """정체 진단: 각 agent의 후보 상태·거리·차단 agent를 출력 (run_h / sim_v2 공용)."""
+def _occupancy(states, extra):
+    """cell -> agent (몸 + 스윙 칸)."""
     occ = {}
     for a, s in states.items():
         for cell in set(occupied(s)) | set(extra.get(a, ())):
             occ[cell] = a
+    return occ
+
+
+def _action_kind(s, st):
+    if st == s:
+        return "wait"
+    if st[:2] == s[:2]:
+        return "turn"
+    return "fwd" if (st[0] - s[0], st[1] - s[1]) == DIRS[s[2]] else "rev"
+
+
+def dump_candidates_h(states, dists, goals, extra, bias, free, edge_cost, wait_cost,
+                      turn_cost, only=None, label=lambda a: f"agent{a}"):
+    """정체 진단: 각 agent의 후보 상태·거리·차단 agent를 출력 (run_h / sim_v2 공용)."""
+    occ = _occupancy(states, extra)
     for a, s in states.items():
         if only is not None and a not in only:
             continue
         d = dists[a]
         print(f"  {label(a)} {s} goal={goals[a]} dist={d[s]:.1f} bias={bias.get(a, 0):.0f}")
         for st, cc in candidates_h(s, d, edge_cost, wait_cost, free, turn_cost):
-            kind = ("wait" if st == s else "turn" if st[:2] == s[:2]
-                    else "fwd" if (st[0] - s[0], st[1] - s[1]) == DIRS[s[2]] else "rev")
             blk = {cell: occ[cell] for cell in cc if occ.get(cell, a) != a}
-            print(f"     {kind:4s} -> {st} dist={d[st]:.1f} blocked_by={blk}")
+            print(f"     {_action_kind(s, st):4s} -> {st} dist={d[st]:.1f} blocked_by={blk}")
+
+
+def _default_costs_h(free, edge_cost, wait_cost, turn_cost, turn_ticks):
+    H, W = free.shape
+    if edge_cost is None:
+        edge_cost = np.ones((H, W, 4), dtype=np.float64)
+    if wait_cost is None:
+        wait_cost = np.ones((H, W), dtype=np.float64)
+    if turn_cost is None:
+        turn_cost = float(turn_ticks)
+    return edge_cost, wait_cost, turn_cost
+
+
+def _all_at_goal_h(states, goals, agents):
+    return all(states[a][:2] == goals[a] for a in agents)
+
+
+def _dists_now_h(agents, states, goals, dists, busy, replan, stag, extra, t, free):
+    """이번 틱 거리장: 회전 중 = stay, 미도달 = 재계획 거리장(정체 시), 도달 = 기본."""
+    d_now = {}
+    for a in agents:
+        if busy[a] > 0:
+            d_now[a] = stay_map_h(free, states[a])
+        elif states[a][:2] != goals[a]:
+            d_now[a] = replan.dist_for(a, t, states, extra, goals[a], dists[a], stag.get(a))
+        else:
+            d_now[a] = dists[a]
+    return d_now
+
+
+def _after_step_h(agents, states, new, goals, dists, busy, swing, stag, age, turn_ticks):
+    """회전 시작/진행 부기, 정체 카운터, 우선순위 age 갱신."""
+    for a in agents:
+        s0, s1 = states[a], new[a]
+        if s1[:2] == s0[:2] and s1[2] != s0[2]:          # 회전 시작
+            busy[a] = turn_ticks - 1
+            swing[a] = swing_cells(s0[0], s0[1], s0[2], s1[2])
+        elif busy[a] > 0:
+            busy[a] -= 1
+            if busy[a] == 0:
+                swing[a] = set()
+        stag.update(a, goals[a], dists[a][s1])
+        age[a] = 0 if s1[:2] == goals[a] else age[a] + 1
+
+
+def _raise_stuck_h(agents, states, goals, stag, busy, history, d_now, extra, bias,
+                   free, edge_cost, wait_cost, turn_cost, max_steps):
+    stuck = {a: states[a] for a in agents if states[a][:2] != goals[a]}
+    print(f"[정체 진단] 미도달 {len(stuck)}대 (stag: {[stag.get(a) for a in stuck]}, "
+          f"busy: {[busy[a] for a in stuck]})")
+    for a in stuck:
+        print(f"  agent{a} 최근 상태: {[h[a] for h in history[-8:]]}")
+    near = set(stuck)
+    for a in list(stuck):
+        r0, c0 = states[a][:2]
+        near |= {b for b in agents if max(abs(states[b][0] - r0), abs(states[b][1] - c0)) <= 3}
+    dump_candidates_h(states, d_now, goals, extra, bias, free, edge_cost, wait_cost,
+                      turn_cost, only=near)
+    raise SystemExit(f"PIBT(헤딩) 정체: {max_steps}스텝 내 미도달 {stuck}")
 
 
 def run_h(free, starts, goals, edge_cost=None, wait_cost=None, max_steps=200,
@@ -135,13 +208,7 @@ def run_h(free, starts, goals, edge_cost=None, wait_cost=None, max_steps=200,
     (첫 틱에 방향 전환, 나머지는 스윙 칸을 점유한 채 대기).
     반환 (history, cells_hist): history[t] = {a: 상태}, cells_hist[t] = {a: t→t+1
     동안 점유·예약한 칸}. 전원 도달 못 하면 SystemExit."""
-    H, W = free.shape
-    if edge_cost is None:
-        edge_cost = np.ones((H, W, 4), dtype=np.float64)
-    if wait_cost is None:
-        wait_cost = np.ones((H, W), dtype=np.float64)
-    if turn_cost is None:
-        turn_cost = float(turn_ticks)
+    edge_cost, wait_cost, turn_cost = _default_costs_h(free, edge_cost, wait_cost, turn_cost, turn_ticks)
     agents = list(starts)
     states = dict(starts)
     for a, s in states.items():
@@ -157,53 +224,24 @@ def run_h(free, starts, goals, edge_cost=None, wait_cost=None, max_steps=200,
         stag.update(a, goals[a], dists[a][states[a]])
     age = {a: 0 for a in agents}      # 목표 미도달 연속 틱 — 원 PIBT 우선순위 (단조 증가)
     history, cells_hist = [dict(states)], []
-
-    def at_goal(a):
-        return states[a][:2] == goals[a]
+    d_now, extra, bias = {}, {}, {}   # 정체 진단용 (마지막 틱 값)
 
     for t in range(max_steps):
-        if all(at_goal(a) for a in agents):
+        if _all_at_goal_h(states, goals, agents):
             return history, cells_hist
         # 우선순위는 단조 증가하는 age로 — 정체 카운터(stag)로 매기면 밀린 쪽이 다음 틱에
         # 우선권을 얻어 되밀고, 매 틱 뒤집히며 정면 핑퐁 진동이 된다 (seed 11 실측).
         prio = sorted(agents, key=lambda a: (-age[a], a))
         extra = {a: swing[a] for a in agents if busy[a] > 0}
-        d_now = {}
-        for a in agents:
-            if busy[a] > 0:
-                d_now[a] = stay_map_h(free, states[a])
-            elif not at_goal(a):
-                d_now[a] = replan.dist_for(a, t, states, extra, goals[a], dists[a], stag.get(a))
-            else:
-                d_now[a] = dists[a]
+        d_now = _dists_now_h(agents, states, goals, dists, busy, replan, stag, extra, t, free)
         bias = {a: wait_bias(stag.get(a)) for a in agents}
         new, cells = step_h(states, d_now, edge_cost, wait_cost, free, prio,
                             turn_cost, extra, bias)
-        for a in agents:
-            s0, s1 = states[a], new[a]
-            if s1[:2] == s0[:2] and s1[2] != s0[2]:          # 회전 시작
-                busy[a] = turn_ticks - 1
-                swing[a] = swing_cells(s0[0], s0[1], s0[2], s1[2])
-            elif busy[a] > 0:
-                busy[a] -= 1
-                if busy[a] == 0:
-                    swing[a] = set()
-            stag.update(a, goals[a], dists[a][s1])
-            age[a] = 0 if s1[:2] == goals[a] else age[a] + 1
+        _after_step_h(agents, states, new, goals, dists, busy, swing, stag, age, turn_ticks)
         states = new
         history.append(dict(states))
         cells_hist.append(cells)
-    if all(at_goal(a) for a in agents):
+    if _all_at_goal_h(states, goals, agents):
         return history, cells_hist
-    stuck = {a: states[a] for a in agents if not at_goal(a)}
-    print(f"[정체 진단] 미도달 {len(stuck)}대 (stag: {[stag.get(a) for a in stuck]}, "
-          f"busy: {[busy[a] for a in stuck]})")
-    for a in stuck:
-        print(f"  agent{a} 최근 상태: {[h[a] for h in history[-8:]]}")
-    near = set(stuck)
-    for a in list(stuck):
-        r0, c0 = states[a][:2]
-        near |= {b for b in agents if max(abs(states[b][0] - r0), abs(states[b][1] - c0)) <= 3}
-    dump_candidates_h(states, d_now, goals, extra, bias, free, edge_cost, wait_cost,
-                      turn_cost, only=near)
-    raise SystemExit(f"PIBT(헤딩) 정체: {max_steps}스텝 내 미도달 {stuck}")
+    _raise_stuck_h(agents, states, goals, stag, busy, history, d_now, extra, bias,
+                   free, edge_cost, wait_cost, turn_cost, max_steps)

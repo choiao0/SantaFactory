@@ -6,6 +6,29 @@ import numpy as np
 from .geometry import (DIRS, REVERSE_FACTOR, TURN_TICKS, turn_ok,
                        valid_state)
 
+
+def _relax_ref(pq, dm, s, nd):
+    """참조 구현 완화: dm[s] 가 미정이거나 nd 가 더 작으면 갱신·push."""
+    r, c, h = s
+    if dm[r, c, h] < 0 or nd < dm[r, c, h]:
+        dm[r, c, h] = nd
+        heappush(pq, (nd, s))
+
+
+def _expand_ref(free, edge_cost, turn_cost, dm, done, pq, r, c, h, dv):
+    """참조 구현: 상태 (r,c,h) 를 확정한 뒤 선행 상태 3종(전진·후진·회전) 완화."""
+    dr, dc = DIRS[h]
+    ur, uc = r - dr, c - dc
+    if valid_state(free, (ur, uc, h)) and not done[ur, uc, h]:
+        _relax_ref(pq, dm, (ur, uc, h), dv + float(edge_cost[ur, uc, h]))
+    br, bc = r + dr, c + dc                       # 후진 선행: 한 칸 앞에서 뒤로
+    if valid_state(free, (br, bc, h)) and not done[br, bc, h]:
+        _relax_ref(pq, dm, (br, bc, h), dv + float(edge_cost[br, bc, (h + 2) % 4]) * REVERSE_FACTOR)
+    for h1 in ((h + 1) % 4, (h - 1) % 4):
+        if not done[r, c, h1] and turn_ok(free, r, c, h1, h):
+            _relax_ref(pq, dm, (r, c, h1), dv + turn_cost)
+
+
 def _dist_map_h_ref(free, goal, edge_cost=None, turn_cost=None):
     """[참조 구현 — 동일성 테스트용, 실행 경로는 HGraph.dist] (칸, 방향) 그래프 위 goal까지의 최소 비용 (H, W, 4). 도달 불가/invalid 상태는 -1.
     goal 칸의 valid한 모든 방향이 0 (도착 방향 무관). 역방향 다익스트라:
@@ -28,27 +51,74 @@ def _dist_map_h_ref(free, goal, edge_cost=None, turn_cost=None):
         if done[r, c, h]:
             continue
         done[r, c, h] = True
-        dr, dc = DIRS[h]
-        ur, uc = r - dr, c - dc
-        if valid_state(free, (ur, uc, h)) and not done[ur, uc, h]:
-            nd = dv + float(edge_cost[ur, uc, h])
-            if dm[ur, uc, h] < 0 or nd < dm[ur, uc, h]:
-                dm[ur, uc, h] = nd
-                heappush(pq, (nd, (ur, uc, h)))
-        br, bc = r + dr, c + dc                       # 후진 선행: 한 칸 앞에서 뒤로
-        if valid_state(free, (br, bc, h)) and not done[br, bc, h]:
-            nd = dv + float(edge_cost[br, bc, (h + 2) % 4]) * REVERSE_FACTOR
-            if dm[br, bc, h] < 0 or nd < dm[br, bc, h]:
-                dm[br, bc, h] = nd
-                heappush(pq, (nd, (br, bc, h)))
-        for h1 in ((h + 1) % 4, (h - 1) % 4):
-            if not done[r, c, h1] and turn_ok(free, r, c, h1, h):
-                nd = dv + turn_cost
-                if dm[r, c, h1] < 0 or nd < dm[r, c, h1]:
-                    dm[r, c, h1] = nd
-                    heappush(pq, (nd, (r, c, h1)))
+        _expand_ref(free, edge_cost, turn_cost, dm, done, pq, r, c, h, dv)
     return dm
 
+
+def _valid_states(cell_free, H, W):
+    """상태 i = (r*W + c)*4 + h 가 유효한가: 앞축 칸과 뒤 칸(r-dr, c-dc)이 모두 free."""
+    valid = [False] * (H * W * 4)
+    for r in range(H):
+        for c in range(W):
+            if not cell_free[r * W + c]:
+                continue
+            for h in range(4):
+                rr, cc = r - DIRS[h][0], c - DIRS[h][1]
+                if 0 <= rr < H and 0 <= cc < W and cell_free[rr * W + cc]:
+                    valid[(r * W + c) * 4 + h] = True
+    return valid
+
+
+def _state_edges(r, c, h, base, ec, tc, H, W):
+    """상태 i=(r,c,h) 의 역방향 완화 대상(preds)과 나가는 간선(succs): (상대 인덱스, 비용, 스윙 대각 칸 인덱스|-1)."""
+    i = base + h
+    pl, sl = [], []
+    dr, dc = DIRS[h]
+    ur, uc = r - dr, c - dc                       # 전진 선행 u→i: 비용 edge_cost[u, h]
+    if 0 <= ur < H and 0 <= uc < W:
+        j = (ur * W + uc) * 4 + h
+        pl.append((j, ec[j], -1))
+        sl.append((j, ec[(ur * W + uc) * 4 + (h + 2) % 4] * REVERSE_FACTOR, -1))   # i→u 는 후진
+    br, bc = r + dr, c + dc                       # 후진 선행 b→i: edge_cost[b, 반대] × REVERSE_FACTOR
+    if 0 <= br < H and 0 <= bc < W:
+        j = (br * W + bc) * 4 + h
+        pl.append((j, ec[(br * W + bc) * 4 + (h + 2) % 4] * REVERSE_FACTOR, -1))
+        sl.append((j, ec[i], -1))                                                   # i→b 는 전진
+    for h1 in ((h + 1) % 4, (h - 1) % 4):         # 회전 (r,c,h1)↔(r,c,h): 스윙 대각 칸 free 필요
+        d1, d2 = DIRS[h1], DIRS[h]
+        gr, gc = r - d1[0] - d2[0], c - d1[1] - d2[1]
+        if 0 <= gr < H and 0 <= gc < W:
+            pl.append((base + h1, tc, gr * W + gc))
+            sl.append((base + h1, tc, gr * W + gc))
+    return pl, sl
+
+
+def _build_edges(ec, tc, H, W):
+    n = H * W * 4
+    preds = [()] * n
+    succs = [()] * n
+    for r in range(H):
+        for c in range(W):
+            base = (r * W + c) * 4
+            for h in range(4):
+                pl, sl = _state_edges(r, c, h, base, ec, tc, H, W)
+                preds[base + h] = tuple(pl)
+                succs[base + h] = tuple(sl)
+    return preds, succs
+
+
+def _finalize_solution(n, dm, succ, sdiag, done):
+    """(dm float64[n] (-1 unreachable), dm list, sdiag int32[n], children dict) — 도달 상태만."""
+    idx = np.flatnonzero(np.frombuffer(bytes(done), dtype=np.uint8))
+    out = np.full(n, -1.0, dtype=np.float64)
+    out[idx] = [dm[i] for i in idx.tolist()]
+    sdiag_a = np.array(sdiag, dtype=np.int32)
+    children = {}                                   # j -> [i : succ[i] == j]  (도달 상태만, ~7k)
+    for i in idx.tolist():
+        sj = succ[i]
+        if sj >= 0:
+            children.setdefault(sj, []).append(i)
+    return (out, out.tolist(), sdiag_a, children)
 
 
 class HGraph:
@@ -75,47 +145,12 @@ class HGraph:
             edge_cost = np.ones((H, W, 4), dtype=np.float64)
         tc = float(TURN_TICKS if turn_cost is None else turn_cost)
         self.turn_cost = tc
-        n = H * W * 4
-        self.n = n
+        self.n = H * W * 4
         cell_free = free.ravel().tolist()
         ec = np.asarray(edge_cost, dtype=np.float64).ravel().tolist()      # 인덱스 = 상태 인덱스
-        valid = [False] * n
-        for r in range(H):
-            for c in range(W):
-                if not cell_free[r * W + c]:
-                    continue
-                for h in range(4):
-                    rr, cc = r - DIRS[h][0], c - DIRS[h][1]
-                    if 0 <= rr < H and 0 <= cc < W and cell_free[rr * W + cc]:
-                        valid[(r * W + c) * 4 + h] = True
-        preds = [()] * n
-        succs = [()] * n
-        for r in range(H):
-            for c in range(W):
-                base = (r * W + c) * 4
-                for h in range(4):
-                    i = base + h
-                    pl, sl = [], []
-                    dr, dc = DIRS[h]
-                    ur, uc = r - dr, c - dc                       # 전진 선행 u→i: 비용 edge_cost[u, h]
-                    if 0 <= ur < H and 0 <= uc < W:
-                        j = (ur * W + uc) * 4 + h
-                        pl.append((j, ec[j], -1))
-                        sl.append((j, ec[(ur * W + uc) * 4 + (h + 2) % 4] * REVERSE_FACTOR, -1))   # i→u 는 후진
-                    br, bc = r + dr, c + dc                       # 후진 선행 b→i: edge_cost[b, 반대] × REVERSE_FACTOR
-                    if 0 <= br < H and 0 <= bc < W:
-                        j = (br * W + bc) * 4 + h
-                        pl.append((j, ec[(br * W + bc) * 4 + (h + 2) % 4] * REVERSE_FACTOR, -1))
-                        sl.append((j, ec[i], -1))                                                   # i→b 는 전진
-                    for h1 in ((h + 1) % 4, (h - 1) % 4):         # 회전 (r,c,h1)↔(r,c,h): 스윙 대각 칸 free 필요
-                        d1, d2 = DIRS[h1], DIRS[h]
-                        gr, gc = r - d1[0] - d2[0], c - d1[1] - d2[1]
-                        if 0 <= gr < H and 0 <= gc < W:
-                            pl.append((base + h1, tc, gr * W + gc))
-                            sl.append((base + h1, tc, gr * W + gc))
-                    preds[i] = tuple(pl)
-                    succs[i] = tuple(sl)
-        self.cell_free, self.valid, self.preds, self.succs = cell_free, valid, preds, succs
+        self.cell_free = cell_free
+        self.valid = _valid_states(cell_free, H, W)
+        self.preds, self.succs = _build_edges(ec, tc, H, W)
         self._base = {}          # goal -> (dm float64[n] (-1 unreachable), dm list, sdiag int32[n], children dict)
 
     # ---- 기본(막힘 없음) 풀이: 후속 상태 기록 ----
@@ -153,30 +188,12 @@ class HGraph:
                     succ[j] = i
                     sdiag[j] = diag
                     heappush(pq, (nd, j))
-        idx = np.flatnonzero(np.frombuffer(bytes(done), dtype=np.uint8))
-        out = np.full(n, -1.0, dtype=np.float64)
-        out[idx] = [dm[i] for i in idx.tolist()]
-        sdiag_a = np.array(sdiag, dtype=np.int32)
-        children = {}                                   # j -> [i : succ[i] == j]  (도달 상태만, ~7k)
-        for i in idx.tolist():
-            sj = succ[i]
-            if sj >= 0:
-                children.setdefault(sj, []).append(i)
-        return (out, out.tolist(), sdiag_a, children)
+        return _finalize_solution(n, dm, succ, sdiag, done)
 
     # ---- 재계획: 증분 복구 ----
-    def dist(self, goal, blocked=()):
-        """goal까지 최소 비용 (H,W,4), 도달 불가/invalid -1. blocked: 추가로 막을 칸 집합(재계획, 증분 복구).
-
-        영향 집합 A = 막힌 칸으로 무효가 된 상태 ∪ 후속 간선의 스윙 대각 칸이 막힌 상태 에서 출발해 자식(succ==i)으로
-        닫은 집합. A 밖 값은 정확히 그대로(간선 제거는 거리를 늘리기만 하고 A 밖 상태의 최적 경로는 온전). A 안만
-        경계값에서 다시 다익스트라. 시도했다 뺀 것: 동률 경로 가지치기(dm 오름차순 심사) — 실제 시뮬에선 막힌 칸이
-        통로를 끊어 뒤쪽 상태의 거리가 진짜로 바뀌므로 A 가 줄지 않고 심사 힙만 추가돼 20% 느려졌다(2026-09-04 실측)."""
-        H, W, n = self.H, self.W, self.n
-        dm_b, dm_l, sdiag, children = self.base(goal)
-        if not blocked:
-            return dm_b.reshape(H, W, 4)
-        valid, cell_free, preds, succs = self.valid, self.cell_free, self.preds, self.succs
+    def _removed_states(self, blocked):
+        """막힌 칸 → (막힌 칸 인덱스 집합, 무효가 된 상태 집합: 앞축 또는 뒤 칸이 막힌 칸)."""
+        H, W, valid = self.H, self.W, self.valid
         bcells = set()
         removed = set()
         for (r, c) in blocked:
@@ -188,7 +205,11 @@ class HGraph:
                 rr, cc = r + DIRS[h][0], c + DIRS[h][1]              # 뒤 칸이 막힌 칸인 상태
                 if 0 <= rr < H and 0 <= cc < W and valid[(rr * W + cc) * 4 + h]:
                     removed.add((rr * W + cc) * 4 + h)
-        inA = bytearray(n)
+        return bcells, removed
+
+    def _affected_set(self, removed, bcells, dm_l, sdiag, children):
+        """영향 집합 A: 무효 상태 ∪ 후속 간선의 스윙 대각 칸이 막힌 상태 에서 출발해 자식(succ==i)으로 닫은 집합."""
+        inA = bytearray(self.n)
         stack = [i for i in removed if dm_l[i] >= 0]
         if bcells:
             stack.extend(np.flatnonzero(np.isin(sdiag, np.fromiter(bcells, dtype=np.int32))).tolist())
@@ -200,31 +221,39 @@ class HGraph:
                 if not inA[k]:
                     inA[k] = 1
                     stack.append(k)
-        out = dm_b.copy()
-        if removed:
-            out[list(removed)] = -1.0
-        todo = [i for i in np.flatnonzero(np.frombuffer(bytes(inA), dtype=np.uint8)).tolist() if i not in removed]
-        if not todo:
-            return out.reshape(H, W, 4)
-        out[todo] = -1.0
-        # A 안만 다시 푼다: 경계(A 밖·유효·도달)에서 오는 값으로 초기화 → A 내부 다익스트라
+        return inA
+
+    def _seed_boundary(self, todo, inA, dm_l, bcells):
+        """A 안 상태를 경계(A 밖·유효·도달) 후속 상태에서 오는 값으로 초기화 → (dm dict, 힙)."""
         inf = float("inf")
         dm = {}
         pq = []
         for i in todo:
-            best = inf
-            for j, cost, diag in succs[i]:
-                if inA[j] or not valid[j]:
-                    continue
-                dj = dm_l[j]
-                if dj < 0 or (diag >= 0 and (not cell_free[diag] or diag in bcells)):
-                    continue
-                v = dj + cost
-                if v < best:
-                    best = v
+            best = self._boundary_best(i, inA, dm_l, bcells)
             if best < inf:
                 dm[i] = best
                 heappush(pq, (best, i))
+        return dm, pq
+
+    def _boundary_best(self, i, inA, dm_l, bcells):
+        """상태 i 의 후속 중 A 밖·유효·도달·스윙 열림인 것으로 얻는 최소 dm_l[j] + cost (없으면 inf)."""
+        valid, cell_free = self.valid, self.cell_free
+        best = float("inf")
+        for j, cost, diag in self.succs[i]:
+            if inA[j] or not valid[j]:
+                continue
+            dj = dm_l[j]
+            if dj < 0 or (diag >= 0 and (not cell_free[diag] or diag in bcells)):
+                continue
+            v = dj + cost
+            if v < best:
+                best = v
+        return best
+
+    def _relax_affected(self, out, dm, pq, inA, removed, bcells):
+        """A 내부 다익스트라 — out 에 확정값 기록."""
+        valid, cell_free, preds = self.valid, self.cell_free, self.preds   # 가장 안쪽 루프 — 메서드 호출 없이 지역 변수로 (성능)
+        inf = float("inf")
         done = set()
         while pq:
             dv, i = heappop(pq)
@@ -241,6 +270,29 @@ class HGraph:
                 if nd < dm.get(j, inf):
                     dm[j] = nd
                     heappush(pq, (nd, j))
+
+    def dist(self, goal, blocked=()):
+        """goal까지 최소 비용 (H,W,4), 도달 불가/invalid -1. blocked: 추가로 막을 칸 집합(재계획, 증분 복구).
+
+        영향 집합 A = 막힌 칸으로 무효가 된 상태 ∪ 후속 간선의 스윙 대각 칸이 막힌 상태 에서 출발해 자식(succ==i)으로
+        닫은 집합. A 밖 값은 정확히 그대로(간선 제거는 거리를 늘리기만 하고 A 밖 상태의 최적 경로는 온전). A 안만
+        경계값에서 다시 다익스트라. 시도했다 뺀 것: 동률 경로 가지치기(dm 오름차순 심사) — 실제 시뮬에선 막힌 칸이
+        통로를 끊어 뒤쪽 상태의 거리가 진짜로 바뀌므로 A 가 줄지 않고 심사 힙만 추가돼 20% 느려졌다(2026-09-04 실측)."""
+        H, W = self.H, self.W
+        dm_b, dm_l, sdiag, children = self.base(goal)
+        if not blocked:
+            return dm_b.reshape(H, W, 4)
+        bcells, removed = self._removed_states(blocked)
+        inA = self._affected_set(removed, bcells, dm_l, sdiag, children)
+        out = dm_b.copy()
+        if removed:
+            out[list(removed)] = -1.0
+        todo = [i for i in np.flatnonzero(np.frombuffer(bytes(inA), dtype=np.uint8)).tolist() if i not in removed]
+        if not todo:
+            return out.reshape(H, W, 4)
+        out[todo] = -1.0
+        dm, pq = self._seed_boundary(todo, inA, dm_l, bcells)
+        self._relax_affected(out, dm, pq, inA, removed, bcells)
         return out.reshape(H, W, 4)
 
 

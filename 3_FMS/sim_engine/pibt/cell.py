@@ -6,26 +6,38 @@ import numpy as np
 
 from .geometry import DIRS
 
-def dist_map(free, goal, edge_cost=None):
-    """goal까지의 정적 최단 비용. 도달 불가 칸은 -1.
-    edge_cost=None → 비가중 BFS(int32, 칸 수).
-    edge_cost (H,W,4) → 가중 다익스트라(float64):
-        dist[u] = min_d edge_cost[u, d] + dist[u + DIRS[d]]
-    u에서 '나가는' 엣지 비용으로, goal에서 역방향(선행 칸 방향)으로 완화한다."""
-    H, W = free.shape
-    if edge_cost is None:
-        dm = np.full((H, W), -1, dtype=np.int32)
-        dm[goal] = 0
-        q = deque([goal])
-        while q:
-            r, c = q.popleft()
-            for dr, dc in DIRS:
-                rr, cc = r + dr, c + dc
-                if 0 <= rr < H and 0 <= cc < W and free[rr, cc] and dm[rr, cc] < 0:
-                    dm[rr, cc] = dm[r, c] + 1
-                    q.append((rr, cc))
-        return dm
 
+def _dist_map_bfs(free, goal):
+    """비가중 BFS (int32, 칸 수). 도달 불가 -1."""
+    H, W = free.shape
+    dm = np.full((H, W), -1, dtype=np.int32)
+    dm[goal] = 0
+    q = deque([goal])
+    while q:
+        r, c = q.popleft()
+        for dr, dc in DIRS:
+            rr, cc = r + dr, c + dc
+            if 0 <= rr < H and 0 <= cc < W and free[rr, cc] and dm[rr, cc] < 0:
+                dm[rr, cc] = dm[r, c] + 1
+                q.append((rr, cc))
+    return dm
+
+
+def _relax_cell_preds(free, edge_cost, dm, done, pq, r, c, dv):
+    """(r, c) 의 선행 칸 u (u + DIRS[d] == (r, c)) 를 edge_cost[u, d] 로 완화."""
+    H, W = free.shape
+    for d, (dr, dc) in enumerate(DIRS):
+        ur, uc = r - dr, c - dc
+        if 0 <= ur < H and 0 <= uc < W and free[ur, uc] and not done[ur, uc]:
+            nd = dv + float(edge_cost[ur, uc, d])
+            if dm[ur, uc] < 0 or nd < dm[ur, uc]:
+                dm[ur, uc] = nd
+                heappush(pq, (nd, (ur, uc)))
+
+
+def _dist_map_dijkstra(free, goal, edge_cost):
+    """가중 다익스트라 (float64). 도달 불가 -1."""
+    H, W = free.shape
     dm = np.full((H, W), -1.0, dtype=np.float64)
     done = np.zeros((H, W), dtype=bool)
     dm[goal] = 0.0
@@ -35,14 +47,19 @@ def dist_map(free, goal, edge_cost=None):
         if done[r, c]:
             continue
         done[r, c] = True
-        for d, (dr, dc) in enumerate(DIRS):
-            ur, uc = r - dr, c - dc                  # u + DIRS[d] == (r, c)
-            if 0 <= ur < H and 0 <= uc < W and free[ur, uc] and not done[ur, uc]:
-                nd = dv + float(edge_cost[ur, uc, d])
-                if dm[ur, uc] < 0 or nd < dm[ur, uc]:
-                    dm[ur, uc] = nd
-                    heappush(pq, (nd, (ur, uc)))
+        _relax_cell_preds(free, edge_cost, dm, done, pq, r, c, dv)
     return dm
+
+
+def dist_map(free, goal, edge_cost=None):
+    """goal까지의 정적 최단 비용. 도달 불가 칸은 -1.
+    edge_cost=None → 비가중 BFS(int32, 칸 수).
+    edge_cost (H,W,4) → 가중 다익스트라(float64):
+        dist[u] = min_d edge_cost[u, d] + dist[u + DIRS[d]]
+    u에서 '나가는' 엣지 비용으로, goal에서 역방향(선행 칸 방향)으로 완화한다."""
+    if edge_cost is None:
+        return _dist_map_bfs(free, goal)
+    return _dist_map_dijkstra(free, goal, edge_cost)
 
 
 def candidates(pos, dist, edge_cost, wait_cost, free):
@@ -112,6 +129,19 @@ def step(positions, dists, edge_cost, wait_cost, free, priority_order):
     return dict(ps.next_of)
 
 
+def _all_at_goal(positions, goals, agents):
+    return all(positions[a] == goals[a] for a in agents)
+
+
+def _update_wait_counters(agents, positions, goals, prev, wait_counter):
+    """도착했거나 움직였으면 0, 제자리 대기면 +1 (starvation 방지 우선순위용)."""
+    for a in agents:
+        if positions[a] == goals[a] or positions[a] != prev[a]:
+            wait_counter[a] = 0
+        else:
+            wait_counter[a] += 1
+
+
 def run(free, starts, goals, edge_cost=None, wait_cost=None, max_steps=200):
     """starts/goals: {agent_id: (r, c)}.
     우선순위: 제자리 대기 누적이 큰 로봇 우선(starvation 방지), 동률이면
@@ -132,18 +162,14 @@ def run(free, starts, goals, edge_cost=None, wait_cost=None, max_steps=200):
     history = [dict(positions)]
 
     for _ in range(max_steps):
-        if all(positions[a] == goals[a] for a in agents):
+        if _all_at_goal(positions, goals, agents):
             return history
         priority_order = sorted(agents, key=lambda a: (-wait_counter[a], a))
         positions = step(positions, dists, edge_cost, wait_cost, free,
                          priority_order)
-        for a in agents:
-            if positions[a] == goals[a] or positions[a] != history[-1][a]:
-                wait_counter[a] = 0
-            else:
-                wait_counter[a] += 1
+        _update_wait_counters(agents, positions, goals, history[-1], wait_counter)
         history.append(dict(positions))
-    if all(positions[a] == goals[a] for a in agents):
+    if _all_at_goal(positions, goals, agents):
         return history
     stuck = {a for a in agents if positions[a] != goals[a]}
     raise SystemExit(f"PIBT 정체: {max_steps}스텝 내 미도달 {stuck}")
