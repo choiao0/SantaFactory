@@ -14,6 +14,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 
@@ -45,7 +46,7 @@ class EstimateEvaluatorTest {
 
     /** 단가 1,500만 · 대당 구축·설치비 50만 (robots 시드) · 충전기 500만(미정이라 테스트 가정). */
     private static final EstimateProperties PROPS =
-            new EstimateProperties(15_000_000L, 5_000_000L, 500_000L, 8, 6, 4, 1);
+            new EstimateProperties(15_000_000L, 5_000_000L, 500_000L, 8, 6, 4, 1, Duration.ofMinutes(30));
 
     private final CostCalculator costCalculator = new CostCalculator(PROPS);
     private final EstimateEvaluator evaluator = new EstimateEvaluator();

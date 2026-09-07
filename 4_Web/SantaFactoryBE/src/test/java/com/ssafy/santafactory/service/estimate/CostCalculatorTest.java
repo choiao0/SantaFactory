@@ -2,6 +2,8 @@ package com.ssafy.santafactory.service.estimate;
 
 import org.junit.jupiter.api.Test;
 
+import java.time.Duration;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 class CostCalculatorTest {
@@ -11,7 +13,7 @@ class CostCalculatorTest {
      * 충전기 1대당 AMR 4대. → 대당 비용 1,550만.
      */
     private final CostCalculator calculator = new CostCalculator(
-            new EstimateProperties(15_000_000L, 5_000_000L, 500_000L, 8, 6, 4, 1));
+            new EstimateProperties(15_000_000L, 5_000_000L, 500_000L, 8, 6, 4, 1, Duration.ofMinutes(30)));
 
     @Test
     void chargers_round_up_one_per_four_amrs() {
@@ -62,7 +64,7 @@ class CostCalculatorTest {
     @Test
     void undecided_charger_price_simply_drops_out_of_the_cost() {
         CostCalculator noChargerPrice = new CostCalculator(
-                new EstimateProperties(15_000_000L, 0L, 500_000L, 8, 6, 4, 1));
+                new EstimateProperties(15_000_000L, 0L, 500_000L, 8, 6, 4, 1, Duration.ofMinutes(30)));
 
         assertThat(noChargerPrice.cost(6)).isEqualTo(93_000_000L);
     }
@@ -70,7 +72,7 @@ class CostCalculatorTest {
     @Test
     void undecided_prices_fall_back_to_the_fleet_cap() {
         CostCalculator undecided = new CostCalculator(
-                new EstimateProperties(0L, 0L, 0L, 8, 6, 4, 1));
+                new EstimateProperties(0L, 0L, 0L, 8, 6, 4, 1, Duration.ofMinutes(30)));
 
         assertThat(undecided.maxAmrCount(1_000L)).isEqualTo(8);
         assertThat(undecided.cost(6)).isZero();
