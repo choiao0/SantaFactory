@@ -3,6 +3,8 @@ package com.ssafy.santafactory.service.estimate;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.bind.DefaultValue;
 
+import java.time.Duration;
+
 /**
  * 견적 단가·상한.
  *
@@ -20,6 +22,7 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  * @param maxChargers    충전기 수 상한
  * @param amrPerCharger  충전기 1대가 감당하는 AMR 수
  * @param amrCountMargin    예산으로 살 수 있는 대수에 더할 여유분
+ * @param runTimeout        발행 후 이 시간이 지나도 결과가 없으면 TIMEOUT 처리 (명세 §1-4 는 30분)
  */
 @ConfigurationProperties(prefix = "estimate")
 public record EstimateProperties(
@@ -29,7 +32,8 @@ public record EstimateProperties(
         @DefaultValue("8") int maxAmrCount,
         @DefaultValue("6") int maxChargers,
         @DefaultValue("4") int amrPerCharger,
-        @DefaultValue("1") int amrCountMargin
+        @DefaultValue("1") int amrCountMargin,
+        @DefaultValue("30m") Duration runTimeout
 ) {
 
     /** 대수에 비례하는 1대당 비용 — 단가 + 구축·설치비. 충전기는 대수의 계단 함수라 여기 넣지 않는다. */
