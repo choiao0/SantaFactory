@@ -41,6 +41,14 @@ services:
       rabbitmq:
         condition: service_healthy
 
+  frontend:
+    build: ./SantaFactoryFE
+    image: santafactory-fe:latest
+    container_name: a106-frontend
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:80"
+
   rabbitmq:
     image: rabbitmq:3-management-alpine
     container_name: a106-rabbitmq
@@ -51,6 +59,8 @@ services:
     ports:
       - "127.0.0.1:5672:5672"
       - "127.0.0.1:15672:15672"
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
       interval: 5s
@@ -83,6 +93,7 @@ services:
 
 volumes:
   db-data:
+  rabbitmq-data:
   sonar-data:
   sonar-extensions:
   sonar-logs:
