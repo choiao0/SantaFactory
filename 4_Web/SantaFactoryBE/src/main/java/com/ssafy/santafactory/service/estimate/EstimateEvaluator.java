@@ -15,7 +15,7 @@ import java.util.Optional;
 @Component
 public class EstimateEvaluator {
 
-    /** 무릎 판정 — 대수당 처리량 증가분이 첫 구간 증가분의 이 비율 밑으로 떨어지는 첫 지점. */
+    /** 무릎 판정 — 대수당 처리율 증가분이 첫 구간 증가분의 이 비율 밑으로 떨어지는 첫 지점. */
     private static final double KNEE_RATIO = 0.2;
 
     public EstimateVerdict evaluate(List<RunResult> runs, EstimateGoal goal) {
@@ -37,28 +37,28 @@ public class EstimateEvaluator {
                 .orElseGet(() -> EstimateVerdict.none(reasonFor(sorted, goal), knee));
     }
 
-    /** 처리량 ≥ 목표 · 가동률 ≥ 목표 · 비용 ≤ 예산. */
+    /** 처리율 ≥ 목표 · 가동률 ≥ 목표 · 비용 ≤ 예산. */
     private boolean satisfies(RunResult run, EstimateGoal goal) {
-        return run.ordersPerH() >= goal.targetOrdersPerH()
-                && run.utilization() >= goal.targetUtilization()
-                && run.cost() <= goal.budget();
+        return run.throughputPercent() >= goal.targetThroughputPercent()
+                && run.utilizationPercent() >= goal.targetUtilizationPercent()
+                && run.cost() <= goal.budgetLimit();
     }
 
-    /** 어느 조건에서 처음 막혔는지 — 예산 → 처리량 → 가동률 순으로 좁힌다. */
+    /** 어느 조건에서 처음 막혔는지 — 예산 → 처리율 → 가동률 순으로 좁힌다. */
     private ReasonCode reasonFor(List<RunResult> sorted, EstimateGoal goal) {
         List<RunResult> withinBudget = sorted.stream()
-                .filter(run -> run.cost() <= goal.budget())
+                .filter(run -> run.cost() <= goal.budgetLimit())
                 .toList();
         if (withinBudget.isEmpty()) {
             return ReasonCode.BUDGET_EXCEEDED;
         }
         boolean throughputMet = withinBudget.stream()
-                .anyMatch(run -> run.ordersPerH() >= goal.targetOrdersPerH());
+                .anyMatch(run -> run.throughputPercent() >= goal.targetThroughputPercent());
         return throughputMet ? ReasonCode.UTILIZATION_SHORT : ReasonCode.THROUGHPUT_SHORT;
     }
 
     /**
-     * 대수당 처리량 증가분이 처음 꺾이는 대수.
+     * 대수당 처리율 증가분이 처음 꺾이는 대수.
      * 점이 3개 미만이거나 첫 구간이 이미 안 오르면 판정하지 않는다(null).
      */
     private Integer findKnee(List<RunResult> sorted) {
@@ -77,9 +77,9 @@ public class EstimateEvaluator {
         return null;
     }
 
-    /** 대수 1대당 처리량 증가분. 대수가 같으면(중복 run) 0으로 본다. */
+    /** 대수 1대당 처리율 증가분(%p). 대수가 같으면(중복 run) 0으로 본다. */
     private double gain(RunResult from, RunResult to) {
         int step = to.amrCount() - from.amrCount();
-        return step <= 0 ? 0 : (to.ordersPerH() - from.ordersPerH()) / step;
+        return step <= 0 ? 0 : (to.throughputPercent() - from.throughputPercent()) / step;
     }
 }
