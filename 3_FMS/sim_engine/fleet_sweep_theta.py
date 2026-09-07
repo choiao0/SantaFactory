@@ -11,6 +11,7 @@
 #       SWEEP_PLOT_ONLY=1 python fleet_sweep_theta.py     (CSV 로 그래프·교차표만)
 #       SWEEP_ROBOTS=20,24 SWEEP_SEEDS=101 SWEEP_LOADS=L2 SWEEP_OUT=theta_sweep_smoke.csv python fleet_sweep_theta.py   (배관 확인)
 # ============================================================
+import math
 import os
 
 import numpy as np
@@ -106,7 +107,7 @@ for ax, load in zip(axes[0], loads):
     base = mean_series(rows, "tasks_per_h", robots, load=load, cond="neutral")
     for cond in ("theta_n", "theta_24"):
         m = mean_series(rows, "tasks_per_h", robots, load=load, cond=cond)
-        gain = [(a / b - 1) * 100 if b == b and b > 0 else float("nan") for a, b in zip(m, base)]
+        gain = [(a / b - 1) * 100 if not math.isnan(b) and b > 0 else float("nan") for a, b in zip(m, base)]
         ax.plot(robots, gain, "o-", color=STYLE[cond][0], lw=2, ms=4, label=STYLE[cond][1])
     ax.axhline(0, color="k", lw=0.8, alpha=0.5)
     ax.set_xlabel("n_robots")
@@ -128,9 +129,9 @@ for load in loads:
         th = dict(zip(robots, mean_series(rows, "tasks_per_h", robots, load=load, cond=cond)))
         for n in robots:
             b = base[n]
-            if b != b:
+            if math.isnan(b):
                 continue
-            m = next((k for k in robots if th[k] == th[k] and th[k] >= b), None)
+            m = next((k for k in robots if not math.isnan(th[k]) and th[k] >= b), None)
             # 시드별 부호 일치 검사: M대 θ vs N대 중립을 같은 시드끼리 비교
             verdict = ""
             if m is not None:
@@ -155,7 +156,7 @@ for load in loads:
     a = mean_series(rows, "tasks_per_h", robots, load=load, cond="theta_24")
     b = mean_series(rows, "tasks_per_h", robots, load=load, cond="theta_n")
     band = spread_series(rows, "tasks_per_h", robots, load=load, cond="theta_n")
-    outside = [n for n, x, y, (lo, hi) in zip(robots, a, b, band) if x == x and y == y and abs(x - y) > (hi - lo)]
+    outside = [n for n, x, y, (lo, hi) in zip(robots, a, b, band) if not (math.isnan(x) or math.isnan(y)) and abs(x - y) > (hi - lo)]
     print(f"  {load}: 산포 밖 대수 {outside if outside else '없음 → θ 한 벌 충분'}")
 
 print(f"\n저장: results/{os.path.basename(CSV_PATH)}, theta_sweep_throughput{TAG}.png, theta_sweep_gain{TAG}.png, "
