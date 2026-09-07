@@ -15,8 +15,14 @@
 # 6) 벽 레인 탈출: 벽에 붙은 레인에서 벽 반대쪽 목표 — 회전만으로는 불가(뒤 칸이 벽),
 #    후진 1칸 후 회전(3점 회전)으로 탈출. 충전기 열(c=108) 정체의 축소 재현
 #
-# 사용: python pibt_heading_demo.py
+# 사용: python checks/pibt_heading_demo.py
 # ============================================================
+import os
+import sys
+
+ENGINE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ENGINE_DIR)
+
 import numpy as np
 
 from pibt_core import DIRS, TURN_TICKS, run_h, valid_state

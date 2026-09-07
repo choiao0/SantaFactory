@@ -12,7 +12,7 @@
 # 2부: 더미 θ(교대 순환 극단)로 sim_v2 실행, uniform 대비 통로 방향 분극 assert.
 #   극단 θ 완주 자체가 가중 거리항 라이브니스 회귀 (2026-09-02 결정 §5).
 #
-# 사용: python from_theta_demo.py   (~1분, sim_v2 2회 포함)
+# 사용: python checks/from_theta_demo.py   (~1분, sim_v2 2회 포함)
 # ============================================================
 import json
 import os
@@ -21,6 +21,9 @@ import sys
 import tempfile
 from dataclasses import asdict
 
+ENGINE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ENGINE_DIR)
+
 import numpy as np
 
 from from_theta import JUNCTION_ROWS, VA_ROWS, extract_topology, from_theta, load_theta
@@ -28,7 +31,7 @@ from map_loader import load_map
 from contracts.guidance_types import (COST_MAX, COST_MIN, GuidanceTheta,
                                       max_realizable_edge_cost)
 
-OUT = os.path.dirname(os.path.abspath(__file__))
+OUT = ENGINE_DIR
 RES = os.path.join(OUT, "results")
 N, E, S, W = 0, 1, 2, 3
 

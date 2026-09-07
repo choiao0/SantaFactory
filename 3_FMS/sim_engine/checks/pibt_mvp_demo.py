@@ -3,7 +3,7 @@
 # PIBT 코어 MVP 검증 (S15P21A106-107)
 #
 # pibt_core.py를 3개 표준 시나리오로 검증. 저장소에 pytest 등 테스트
-# 프레임워크가 없어 fleet_sweep.py처럼 콘솔 출력 + assert로 검증한다.
+# 프레임워크가 없어 콘솔 출력 + assert로 검증한다 (A트랙 ai_theta/tests 만 pytest).
 #
 # 모든 시나리오에서 매 틱 vertex 충돌(같은 칸 2대)과 edge 스왑(맞교환
 # 통과)을 전수 검사한다 — 최종 도착만 보면 "서로를 통과해서 도착"하는
@@ -18,8 +18,14 @@
 #    (b) 비싼 엣지밖에 없는 통로에서 정체 없이 전진하는지 (비가중이면 대기가 이겨
 #    영구 정체 → SystemExit)
 #
-# 사용: python pibt_mvp_demo.py
+# 사용: python checks/pibt_mvp_demo.py
 # ============================================================
+import os
+import sys
+
+ENGINE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ENGINE_DIR)
+
 import numpy as np
 
 from pibt_core import dist_map, run

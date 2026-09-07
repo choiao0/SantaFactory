@@ -16,7 +16,8 @@ import sys
 import time
 
 PY = sys.executable
-ENGINE_DIR = os.path.dirname(os.path.abspath(__file__))
+ENGINE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ENGINE_DIR)
 RES_DIR = os.path.join(ENGINE_DIR, "results")
 SIM = os.path.join(ENGINE_DIR, "sim_v2_tasks.py")
 ENV = dict(os.environ, SIM_NO_PLOT="1", PYTHONIOENCODING="utf-8")

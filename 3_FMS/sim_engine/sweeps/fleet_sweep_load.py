@@ -11,10 +11,10 @@
 # 두 계열: cell(--cell) / heading(기본, --heading 은 호환 표기) — 둘 다 충전 존 기본, 동기화 맵, TURN_TICKS=1.
 # 지표: 처리량·리드타임 + 존 지표(복귀 대기, 재선택, 예약 무시, 체류 평균/p90, 비임무 밀림).
 # 산출: results/load_sweep.csv, load_throughput.png, load_zone.png
-# 사용: python fleet_sweep_load.py                 (헤딩 28대·L2 가 실행당 1~2분, 전체 30분 안팎)
-#       SWEEP_PLOT_ONLY=1 python fleet_sweep_load.py
-#       SWEEP_LOADS=L1 python fleet_sweep_load.py   (부하 하나만)
-#       SWEEP_SEEDS=101,102,103 SWEEP_OUT=load_sweep_eval.csv python fleet_sweep_load.py
+# 사용: python sweeps/fleet_sweep_load.py                 (헤딩 28대·L2 가 실행당 1~2분, 전체 30분 안팎)
+#       SWEEP_PLOT_ONLY=1 python sweeps/fleet_sweep_load.py
+#       SWEEP_LOADS=L1 python sweeps/fleet_sweep_load.py   (부하 하나만)
+#       SWEEP_SEEDS=101,102,103 SWEEP_OUT=load_sweep_eval.csv python sweeps/fleet_sweep_load.py
 #           — 다른 시드 집합을 **별도 CSV/PNG** 로 (기본 load_sweep.csv 는 동일성 검사 기준이라 덮어쓰지 않는다).
 #             θ 평가 시드 후보 기준선용 (2026-09-06, -145 후속; θ감도 실험 §6-3 미합의 항목). PNG 는 load_throughput<접미>.png 식.
 # ============================================================
@@ -25,8 +25,10 @@ import subprocess
 import sys
 import time
 
+ENGINE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ENGINE_DIR)
 PY = sys.executable
-OUT = os.path.dirname(os.path.abspath(__file__))
+OUT = ENGINE_DIR
 RES = os.path.join(OUT, "results")
 ROBOTS = [8, 12, 16, 20, 24, 28]
 SEEDS = [int(x) for x in os.environ["SWEEP_SEEDS"].split(",")] if os.environ.get("SWEEP_SEEDS") else [42, 7]
