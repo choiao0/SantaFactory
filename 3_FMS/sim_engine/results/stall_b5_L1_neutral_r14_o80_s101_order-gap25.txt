@@ -1,0 +1,71 @@
+C:\Users\SSAFY\AppData\Local\Programs\Python\Python314\python.exe C:\Users\SSAFY\Desktop\S15P21A106\3_FMS\sim_engine\sim_v2_tasks.py b5 14 80 101 1 --order-gap=25
+
+[WARN] 헤딩 모델: 목표 칸 간격 <3인 쌍 1개 (차체 겹침 가능) 예: [((53, 105), (55, 105))]
+[STALL] t=4015, done=201/207, waiting=0
+  robot0 pos=(40, 87) h=1 state=TO_DROP goal=(40, 88) busy=0 stag=1503
+  robot1 pos=(52, 103) h=1 state=IDLE goal=(52, 103) busy=0 stag=0
+  robot2 pos=(50, 103) h=3 state=IDLE goal=(50, 103) busy=0 stag=0
+  robot3 pos=(44, 88) h=2 state=TO_DROP goal=(40, 88) busy=0 stag=1389
+  robot4 pos=(42, 87) h=1 state=TO_DROP goal=(40, 88) busy=0 stag=1483
+  robot5 pos=(52, 105) h=1 state=IDLE goal=(52, 105) busy=0 stag=0
+  robot6 pos=(42, 88) h=3 state=TO_DROP goal=(40, 88) busy=0 stag=1510
+  robot7 pos=(40, 85) h=2 state=TO_DROP goal=(40, 88) busy=0 stag=1364
+  robot8 pos=(54, 103) h=3 state=IDLE goal=(54, 103) busy=0 stag=0
+  robot9 pos=(44, 86) h=2 state=TO_DROP goal=(40, 88) busy=0 stag=1470
+  robot10 pos=(48, 105) h=0 state=IDLE goal=(48, 105) busy=0 stag=0
+  robot11 pos=(50, 105) h=0 state=IDLE goal=(50, 105) busy=0 stag=0
+  robot12 pos=(48, 103) h=0 state=IDLE goal=(48, 103) busy=0 stag=0
+  robot13 pos=(41, 88) h=0 state=TO_HOME goal=(48, 107) busy=0 stag=1512
+  robot0 (40, 87, 1) goal=(40, 88) dist=1.0 bias=20
+     fwd  -> (40, 88, 1) dist=0.0 blocked_by={(40, 88): 13}
+     wait -> (40, 87, 1) dist=1.0 blocked_by={}
+     turn -> (40, 87, 2) dist=2.0 blocked_by={}
+     rev  -> (40, 86, 1) dist=2.0 blocked_by={(40, 85): 7}
+  robot3 (44, 88, 2) goal=(40, 88) dist=4.0 bias=20
+     fwd  -> (43, 88, 2) dist=3.0 blocked_by={}
+     wait -> (44, 88, 2) dist=4.0 blocked_by={}
+     turn -> (44, 88, 3) dist=5.0 blocked_by={}
+     turn -> (44, 88, 1) dist=5.0 blocked_by={}
+     rev  -> (45, 88, 2) dist=5.0 blocked_by={}
+  robot4 (42, 87, 1) goal=(40, 88) dist=4.0 bias=20
+     fwd  -> (42, 88, 1) dist=3.0 blocked_by={(42, 88): 6}
+     wait -> (42, 87, 1) dist=4.0 blocked_by={}
+     turn -> (42, 87, 2) dist=4.0 blocked_by={}
+     turn -> (42, 87, 0) dist=5.0 blocked_by={}
+     rev  -> (42, 86, 1) dist=5.0 blocked_by={}
+  robot6 (42, 88, 3) goal=(40, 88) dist=3.0 bias=20
+     turn -> (42, 88, 2) dist=2.0 blocked_by={}
+     wait -> (42, 88, 3) dist=3.0 blocked_by={}
+     turn -> (42, 88, 0) dist=4.0 blocked_by={(41, 88): 13}
+     fwd  -> (42, 87, 3) dist=5.0 blocked_by={(42, 87): 4}
+     rev  -> (42, 89, 3) dist=4.0 blocked_by={}
+  robot7 (40, 85, 2) goal=(40, 88) dist=4.0 bias=20
+     turn -> (40, 85, 1) dist=3.0 blocked_by={}
+     wait -> (40, 85, 2) dist=4.0 blocked_by={}
+     turn -> (40, 85, 3) dist=5.0 blocked_by={(40, 86): 0}
+     rev  -> (41, 85, 2) dist=5.0 blocked_by={}
+  robot9 (44, 86, 2) goal=(40, 88) dist=7.0 bias=20
+     fwd  -> (43, 86, 2) dist=6.0 blocked_by={}
+     wait -> (44, 86, 2) dist=7.0 blocked_by={}
+     turn -> (44, 86, 1) dist=7.0 blocked_by={}
+     turn -> (44, 86, 3) dist=8.0 blocked_by={}
+     rev  -> (45, 86, 2) dist=8.0 blocked_by={}
+  robot13 (41, 88, 0) goal=(48, 107) dist=28.0 bias=20
+     fwd  -> (42, 88, 0) dist=27.0 blocked_by={(42, 88): 6}
+     wait -> (41, 88, 0) dist=28.0 blocked_by={}
+     turn -> (41, 88, 1) dist=29.0 blocked_by={(40, 87): 0}
+     turn -> (41, 88, 3) dist=29.0 blocked_by={}
+  [최근 12틱 이력, 미도달 로봇 [0, 3, 4, 6, 7, 9, 13]]
+   t=4003 r0:(40, 87, 1) turn  r3:(44, 88, 2) turn  r4:(42, 87, 1) turn  r6:(42, 88, 3) turn  r7:(40, 85, 2) turn  r9:(44, 86, 2) turn  r13:(41, 88, 0) wait
+   t=4004 r0:(40, 87, 2) turn  r3:(44, 88, 3) turn  r4:(42, 87, 2) turn  r6:(42, 88, 2) turn  r7:(40, 85, 1) turn  r9:(44, 86, 3) turn  r13:(41, 88, 0) wait
+   t=4005 r0:(40, 87, 1) turn  r3:(44, 88, 2) turn  r4:(42, 87, 1) turn  r6:(42, 88, 3) turn  r7:(40, 85, 2) turn  r9:(44, 86, 2) turn  r13:(41, 88, 0) wait
+   t=4006 r0:(40, 87, 2) turn  r3:(44, 88, 3) turn  r4:(42, 87, 2) turn  r6:(42, 88, 2) turn  r7:(40, 85, 1) turn  r9:(44, 86, 3) turn  r13:(41, 88, 0) wait
+   t=4007 r0:(40, 87, 1) turn  r3:(44, 88, 2) turn  r4:(42, 87, 1) turn  r6:(42, 88, 3) turn  r7:(40, 85, 2) turn  r9:(44, 86, 2) turn  r13:(41, 88, 0) wait
+   t=4008 r0:(40, 87, 2) turn  r3:(44, 88, 3) turn  r4:(42, 87, 2) turn  r6:(42, 88, 2) turn  r7:(40, 85, 1) turn  r9:(44, 86, 3) turn  r13:(41, 88, 0) wait
+   t=4009 r0:(40, 87, 1) turn  r3:(44, 88, 2) turn  r4:(42, 87, 1) turn  r6:(42, 88, 3) turn  r7:(40, 85, 2) turn  r9:(44, 86, 2) turn  r13:(41, 88, 0) wait
+   t=4010 r0:(40, 87, 2) turn  r3:(44, 88, 3) turn  r4:(42, 87, 2) turn  r6:(42, 88, 2) turn  r7:(40, 85, 1) turn  r9:(44, 86, 3) turn  r13:(41, 88, 0) wait
+   t=4011 r0:(40, 87, 1) turn  r3:(44, 88, 2) turn  r4:(42, 87, 1) turn  r6:(42, 88, 3) turn  r7:(40, 85, 2) turn  r9:(44, 86, 2) turn  r13:(41, 88, 0) wait
+   t=4012 r0:(40, 87, 2) turn  r3:(44, 88, 3) turn  r4:(42, 87, 2) turn  r6:(42, 88, 2) turn  r7:(40, 85, 1) turn  r9:(44, 86, 3) turn  r13:(41, 88, 0) wait
+   t=4013 r0:(40, 87, 1) turn  r3:(44, 88, 2) turn  r4:(42, 87, 1) turn  r6:(42, 88, 3) turn  r7:(40, 85, 2) turn  r9:(44, 86, 2) turn  r13:(41, 88, 0) wait
+   t=4014 r0:(40, 87, 2) turn  r3:(44, 88, 3) turn  r4:(42, 87, 2) turn  r6:(42, 88, 2) turn  r7:(40, 85, 1) turn  r9:(44, 86, 3) turn  r13:(41, 88, 0) wait
+시뮬 정체 감지
