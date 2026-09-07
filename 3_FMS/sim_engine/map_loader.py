@@ -20,7 +20,7 @@ OBSTACLE_VALUES = (1, 2, 5, 6)
 AISLE_ROWS = (47, 68)
 
 # 공식 맵 폴더 (3_FMS/map). charge_zone.json 이 여기 있고, 맵 세트 수신 후에는
-# occupancy_grid/stations 도 여기서 읽는다 (docs/2026-09-03_맵버전_동기화_결정.md).
+# occupancy_grid/stations 도 여기서 읽는다 (docs/맵_충전존.md#fms-정답지-생성-절차).
 MAP_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "map")
 
 

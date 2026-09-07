@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # ============================================================
 # FMS 결정 커널 — 로봇 상태머신 · 배차 · PIBT 이동 · 충전 존 복귀 · 서비스 · 지표 카운터
-# (설계: docs/2026-09-04_커널_라이브러리화_SimPy하네스_설계.md §3·§4, 틱 루프: docs/2026-08-31_sim_v2_틱루프_설계.md)
+# (설계·틱 루프: docs/커널_시뮬_구조.md#커널-인터페이스)
 #
 # 시계·난수·I/O 가 없다. 셸(sim_v2_tasks.py CLI / simpy_harness.py / 앞으로의 MQTT 데몬)이
 #   for task in stream.arrivals(t): k.submit_task(task)
@@ -13,7 +13,7 @@
 # 이 파일은 sim_v2_tasks.py(-143 시점)의 틱 루프를 **로직 변경 없이** 옮긴 것이다. 기준값 3개·CSV 80행이 비트 동일해야 한다.
 # 반복 순서(rids, robots.items())·정렬 키·동률 규칙을 바꾸지 말 것 — 결과가 바뀐다.
 #
-# 배터리·충전 도크 (-145, docs/2026-09-05_SimPy사건층_배터리_교대_설계.md §2): KernelConfig.battery 가 켜졌을 때만
+# 배터리·충전 도크 (docs/커널_시뮬_구조.md#배터리와-충전-도크): KernelConfig.battery 가 켜졌을 때만
 # SoC 를 틱 단위로 차감/충전하고 TO_CHARGE/CHARGING 상태를 쓴다. 꺼져 있으면(기본) 아래 배차 순서·반복 순서는 이전과 같다.
 # ============================================================
 from dataclasses import dataclass

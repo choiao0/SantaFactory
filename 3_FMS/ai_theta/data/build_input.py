@@ -332,7 +332,7 @@ def build_guidance_input(n_agents, order_rate, sim_engine_dir=_SIM_ENGINE,
 
     맵은 map_loader.load_map 을, 충전 존은 map_loader.load_charge_zone 을 그대로
     쓴다. 시뮬과 다른 로더를 두면 격자가 어긋난다
-    (docs/2026-09-03_맵버전_동기화_결정.md 의 결정 5).
+    (docs/맵_충전존.md#맵-불일치와-동기화-결정).
     """
     if map_dir is None:
         map_dir = os.path.join(_FMS_ROOT, "map")          # 공식 맵 폴더 (= map_loader.MAP_DIR)

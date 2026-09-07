@@ -7,17 +7,10 @@ PIBT 이동계층 + θ → 통행 비용 변환(`from_theta`) + Fleet 벤치마�
 
 ## 진행 상태
 
-1. **B-0** 기준선 재확정 — 완료 (SPEED 1.0 m/s, 단일 맵 wallA). A* 기준선 `sim_v1_tasks.py`는 2026-09-07 레거시 정리(-152)로 삭제 — 패리티 2384틱/181.2 tasks/h(동기화 전 2378/181.7)는 기록만
-2. **B-1** 시공간 A* → PIBT 교체 — 완료 (벤치마크: PIBT ≥ A* 전 구간, [B1e 결과](../docs/2026-08-31_B1e_벤치마크_결과.md); 스크립트·CSV는 `results/archive/`)
-3. **B-2** `from_theta()` 배관 — 완료 (스키마 v2 배타 규칙, 더미 θ 방향 분극 검증 통과, 거리항 가중 다익스트라)
-3b. **PIBT 헤딩 모델** (2026-09-02 결정 ②③④⑤) — 완료. B0′ 기준선(무릎 8→10대, `TURN_TICKS=2`) → Isaac 실측 반영(`TURN_TICKS=1`, 2026-09-03) → B0″ 재실측 → **2026-09-04 기본값 전환(-143, 계약 v2)**: 칸 모델은 `--cell` opt-in, `--heading` 은 호환용 무시
-3c. **충전 존** (2026-09-03 결정) — 완료, **main 흐름 기본값** (`--fixed-homes`로 기존 고정 홈 12칸). 존 내 최근접 빈 칸 복귀·초기 배치, 지표(복귀 대기·재선택·예약 무시·체류 평균/p90·비임무 밀림), 스모크 [D]. B-1e CSV 원칙 종료 → 기준선 B0″(`sweeps/fleet_sweep_b0z.py`, 동기화 맵)
-3d. **고부하 스윕** (2026-09-04) — `sweeps/fleet_sweep_load.py` (`--order-gap`). 헤딩이 칸을 28대 +38%, STALL → 라이브니스 장치 ⑤(도킹 칸 이탈 최우선 sticky, sim_v2 헤딩 기본)
-3e. **성능 최적화** (2026-09-04, -136) — `pibt_core.HGraph`(정적 테이블) + 재계획 증분 복구. 헤딩 28대 57~86 s → 7~11 s, 결과 비트 동일
-3f. **헤딩 기본값 + Isaac 내보내기** (2026-09-04, -143, [설계](../docs/2026-09-04_헤딩기본값_Isaac내보내기_설계.md)) — 기본 모델 = 헤딩, `SIM_EXPORT_ISAAC=1` 로 sim_v2 궤적·yaw·액션을 `isaac_replay.py` 포맷으로. 2번째 존은 폐기(28대 = 존 용량 = 견적 제약), 배터리·충전 도크는 SimPy 단계로
-3g. **커널 라이브러리화 + SimPy 하네스** (2026-09-04, -144, [설계](../docs/2026-09-04_커널_라이브러리화_SimPy하네스_설계.md)) — 틱 루프를 `fms_kernel.FmsKernel`(시계·난수·I/O 없음, `submit_task`/`dispatch`/`move`)로, 주문 생성은 `order_stream.OrderStream`(커널 밖). `sim_v2_tasks.py`는 얇은 CLI 셸, `simpy_harness.py`는 같은 커널을 SimPy 시계로. **동작 불변** — 기준값 3개·CSV 80행·내보내기·STALL 덤프 비트 동일, 실행 시간 동일. 다음: 배터리·충전 도크·고정 시간 실행(이 커널 위에)
-3h. **SimPy 사건 층 — 고정 시간·교대·배터리** (2026-09-05, -145, [설계](../docs/2026-09-05_SimPy사건층_배터리_교대_설계.md)) — `--horizon`(T까지 돌리고 T 안 완료 수 = Lifelong 평가), `--shifts=in,out,out`(전체 실행 시간을 3등분: 앞 1/3 입고만, 뒤 2/3 출고만 — 시간상 비겹침), `--battery`(SoC 틱 모델, `charger[0..6)` 도크, 강제 20 %/기회 80 %/종료 95 %, 퇴거). SimPy 하네스는 도착 프로세스(URGENT)+`env.run(until)` 고정 시간 실행. **전부 opt-in** — 기준값 3개·80행·STALL·내보내기 비트 동일, 하네스 패리티 6벌. 계약 v2.2. 검사 `checks/check_lifelong_battery.py`
-4. **B-5** θ 적용 Fleet Sweep (2026-09-07, -149, [설계](../docs/2026-09-07_B5_θ적용_FleetSweep_설계.md)) — `sweeps/fleet_sweep_theta.py`: 8~28대(20~24 구간 1대 간격) × L1/L2 × {중립, 대수별 최근접 θ, 24대 θ 고정} × 평가 시드 {101,103,104}. 절감 대수 교차표·"θ 한 벌 충분" 판정. 스윕 공통 골격 `sweeps/_common.py`. **[결과](../docs/2026-09-07_B5_θ적용_FleetSweep_결과.md): θ 20~21대 = 중립 24대(3~4대 절감), +10~15 %, θ 한 벌 충분, 중립 STALL 3건/θ 0건**
+1. **B-0/B-1** — SPEED 1.0 m/s 기준선과 A*→PIBT 교체를 완료했다. PIBT가 A*보다 전 구간 낮지 않았으며 옛 스크립트와 산출물은 git 이력과 `results/archive/`에 보존한다.
+2. **B-2** — θ v2 배타 조립, 가중 다익스트라 거리항과 `from_theta()` 연결을 완료했다.
+3. **3a~3h 완료 요약** — `(칸,방향)` 헤딩 PIBT와 2칸 차체·회전 스윙·후진, 동기화 맵과 충전 존, 고부하·라이브니스 장치 5종, HGraph 성능 최적화, 헤딩 기본값과 Isaac 내보내기, 순수 `FmsKernel`·`OrderStream` 분리, SimPy 고정 시간·교대·배터리 사건층까지 구현했다. 칸 모델은 `--cell`, 고정 홈은 `--fixed-homes` 비교축이고, 28대는 현재 존 용량의 견적 제약이다. 상세는 [이동계층](../docs/이동계층_PIBT.md#현재-결론), [커널·시뮬](../docs/커널_시뮬_구조.md#현재-구조), [맵·충전 존](../docs/맵_충전존.md#충전-존-결정)에 있다.
+4. **B-5** — 평가 시드 {101,103,104}에서 θ 20~21대가 중립 24대와 같은 처리량을 냈다(3~4대 절감, 동일 대수 +10~15%). wallA의 대수 축에서는 [θ 한 벌이면 충분](../docs/θ_경로_기준선.md#θ-한-벌-판정)했고, 중립 STALL 3건·θ 0건을 기록했다.
 
 설계·결정 문서 인덱스: [`../docs/README.md`](../docs/README.md)
 
@@ -53,6 +46,6 @@ python checks/check_results_identity.py --quick                                 
 | `sweeps/_common.py` | **스윕 공통 골격** (-149) — `run_sim`(서브프로세스 + SUMMARY 파싱 + STALL 행·덤프), CSV·시드 집계·plot 공통 함수. 계약 v2.3 호출만 의존 |
 | `sweeps/fleet_sweep_theta.py` | **B-5 θ 적용 스윕** (-149) — 중립 vs 대수별 θ(최근접, 동률은 큰 쪽) vs 24대 θ 고정. `SWEEP_PLOT_ONLY` 등 지원 |
 | `sweeps/fleet_sweep_b0z.py`, `sweeps/fleet_sweep_load.py` | **B0″ 기준선** / **고부하** 스윕. 이번 이동에서는 두 스크립트 구현을 `_common`으로 합치지 않음 |
-| `from_theta.py` | B-2: wallA 토폴로지 추출 + θ→비용 변환, 스키마 v2 배타 조립 ([설계](../docs/2026-09-01_B2_from_theta_설계.md)) |
+| `from_theta.py` | B-2: wallA 토폴로지 추출 + θ→비용 변환, 스키마 v2 배타 조립 ([설계](../docs/θ_경로_기준선.md#from_theta-조립-규칙)) |
 | `checks/` | PIBT 데모 3종·`from_theta` 데모·거리/결과 동일성·고정 시간/배터리 불변 검사 |
 | [`results/`](results/) | 벤치마크·검증 산출물 (csv/png/npz) — 기존 결과 덮어쓰기 금지. 대체된 기준선·초기 산출물은 `results/archive/` |

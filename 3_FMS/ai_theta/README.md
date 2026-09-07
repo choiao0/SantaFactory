@@ -25,7 +25,7 @@ python ai_theta/tests/test_theta_fixtures.py # 실제 from_theta 출력과 대�
 ```
 
 `from_theta` 자체의 성질 검산(중립 uniform / 포화 없음 / 배타 규칙 / station
-`entry_dir` / 교차로 경계)은 [`../sim_engine/from_theta_demo.py`](../sim_engine/from_theta_demo.py)가
+`entry_dir` / 교차로 경계)은 [`../sim_engine/checks/from_theta_demo.py`](../sim_engine/checks/from_theta_demo.py)가
 이미 `[1]`~`[5]`로 수행한다. 이쪽은 그 데모가 다루지 않는 **범주형 3개**
 (`aisle_period`, `aisle_phase`, `loop_dir`)를 기본값 이외의 값으로 검증한다.
 데모는 세 값을 전부 neutral 기본값(1 / 0 / 0)으로만 쓴다.
