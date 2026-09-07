@@ -1,5 +1,8 @@
 package com.ssafy.santafactory.service.estimate;
 
+import com.ssafy.santafactory.dto.estimate.EstimateCreateRequest;
+import com.ssafy.santafactory.dto.estimate.EstimateCreateResponse;
+import com.ssafy.santafactory.dto.simulation.SimulationRequest;
 import com.ssafy.santafactory.dto.simulation.SimulationResponse;
 import com.ssafy.santafactory.entity.estimate.Estimate;
 import com.ssafy.santafactory.entity.estimate.EstimateStatus;
@@ -7,20 +10,31 @@ import com.ssafy.santafactory.entity.estimate.ReasonCode;
 import com.ssafy.santafactory.entity.estimate.RunStatus;
 import com.ssafy.santafactory.entity.simulation.SimScenario;
 import com.ssafy.santafactory.entity.warehouse.Warehouse;
+import com.ssafy.santafactory.global.exception.ErrorCode;
+import com.ssafy.santafactory.global.exception.GlobalException;
+import com.ssafy.santafactory.repository.EstimateRepository;
 import com.ssafy.santafactory.repository.SimScenarioRepository;
+import com.ssafy.santafactory.repository.WarehouseRepository;
+import com.ssafy.santafactory.service.SimulationService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.test.util.ReflectionTestUtils;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -31,17 +45,99 @@ class EstimateServiceTest {
             new EstimateProperties(15_000_000L, 5_000_000L, 500_000L, 8, 6, 4, 1);
 
     @Mock
+    EstimateRepository estimateRepository;
+    @Mock
     SimScenarioRepository scenarioRepository;
+    @Mock
+    WarehouseRepository warehouseRepository;
+    @Mock
+    SimulationService simulationService;
 
     private final CostCalculator costCalculator = new CostCalculator(PROPS);
     private EstimateService service;
 
     private EstimateService service() {
         if (service == null) {
-            service = new EstimateService(scenarioRepository, new EstimateEvaluator());
+            service = new EstimateService(estimateRepository, scenarioRepository, warehouseRepository,
+                    simulationService, costCalculator, new EstimateEvaluator());
         }
         return service;
     }
+
+    // ── 생성 ─────────────────────────────────────────────────────────────────
+
+    @Test
+    void creates_runs_for_one_up_to_the_affordable_fleet_size() {
+        givenWarehouse(1L);
+        givenSavedEstimateId(77L);
+        when(simulationService.publishRuns(any(), any())).thenReturn(List.of("est_77_n1"));
+
+        EstimateCreateResponse response = service().create(
+                new EstimateCreateRequest(1L, null, null, null, null));
+
+        // 예산 3억이면 19대까지 살 수 있지만 상한 8이 먼저 걸린다
+        assertThat(response.estimateId()).isEqualTo(77L);
+        assertThat(response.maxAmrCount()).isEqualTo(8);
+        verify(scenarioRepository, times(8)).save(any());
+
+        ArgumentCaptor<List<Integer>> counts = ArgumentCaptor.captor();
+        ArgumentCaptor<SimulationRequest> base = ArgumentCaptor.captor();
+        verify(simulationService).publishRuns(base.capture(), counts.capture());
+        assertThat(counts.getValue()).containsExactly(1, 2, 3, 4, 5, 6, 7, 8);
+        assertThat(base.getValue().runId()).isEqualTo("est_77");
+    }
+
+    @Test
+    void run_rows_carry_the_queue_key_and_the_cost_of_their_fleet_size() {
+        givenWarehouse(1L);
+        givenSavedEstimateId(77L);
+        when(simulationService.publishRuns(any(), any())).thenReturn(List.of());
+
+        service().create(new EstimateCreateRequest(1L, null, null, null, 50_000_000L));
+
+        ArgumentCaptor<SimScenario> saved = ArgumentCaptor.captor();
+        verify(scenarioRepository, times(4)).save(saved.capture());   // 5천만 / 1550만 = 3대 + 여유 1
+        assertThat(saved.getAllValues()).extracting(SimScenario::getRunId)
+                .containsExactly("est_77_n1", "est_77_n2", "est_77_n3", "est_77_n4");
+        assertThat(saved.getAllValues()).extracting(SimScenario::getStatus)
+                .containsOnly(RunStatus.QUEUED);
+        assertThat(saved.getAllValues().get(3).getTotalCost()).isEqualTo(costCalculator.cost(4));
+    }
+
+    @Test
+    void request_values_override_the_warehouse_defaults() {
+        givenWarehouse(1L);
+        ArgumentCaptor<Estimate> saved = ArgumentCaptor.captor();
+        when(estimateRepository.save(saved.capture())).thenAnswer(call -> withId(call.getArgument(0), 77L));
+        when(simulationService.publishRuns(any(), any())).thenReturn(List.of());
+
+        service().create(new EstimateCreateRequest(1L, "geek.p40", 88.0, 70.0, 100_000_000L));
+
+        assertThat(saved.getValue().getAmrModel()).isEqualTo("geek.p40");
+        assertThat(saved.getValue().getTargetThroughput()).isEqualTo(88.0);
+        assertThat(saved.getValue().getTargetUtilization()).isEqualTo(70.0);
+        assertThat(saved.getValue().getBudgetLimit()).isEqualTo(100_000_000L);
+    }
+
+    @Test
+    void rejects_an_unknown_warehouse() {
+        when(warehouseRepository.findById(99L)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service().create(new EstimateCreateRequest(99L, null, null, null, null)))
+                .isInstanceOf(GlobalException.class)
+                .hasFieldOrPropertyWithValue("errorCode", ErrorCode.WAREHOUSE_NOT_FOUND);
+    }
+
+    @Test
+    void rejects_an_unknown_estimate_on_lookup() {
+        when(estimateRepository.findById(99L)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service().detail(99L))
+                .isInstanceOf(GlobalException.class)
+                .hasFieldOrPropertyWithValue("errorCode", ErrorCode.ESTIMATE_NOT_FOUND);
+    }
+
+    // ── 결과 반영 ────────────────────────────────────────────────────────────
 
     @Test
     void ignores_a_result_for_an_unknown_run() {
@@ -183,6 +279,32 @@ class EstimateServiceTest {
     }
 
     // ── 픽스처 ────────────────────────────────────────────────────────────────
+
+    /** 창고 시드 값(품고): 작업자 12명, 목표 처리율 95 %, 가동률 80 %, 예산 3억. */
+    private void givenWarehouse(long warehouseId) {
+        Warehouse warehouse = mock(Warehouse.class);
+        lenient().when(warehouse.getTargetThroughput()).thenReturn(95.0);
+        lenient().when(warehouse.getTargetUtilization()).thenReturn(80.0);
+        lenient().when(warehouse.getBudgetLimit()).thenReturn(300_000_000L);
+        lenient().when(warehouse.getWorkerCount()).thenReturn(12);
+        lenient().when(warehouse.getInboundStart()).thenReturn(LocalDateTime.of(2026, 1, 1, 1, 0));
+        lenient().when(warehouse.getInboundEnd()).thenReturn(LocalDateTime.of(2026, 1, 1, 9, 0));
+        lenient().when(warehouse.getOutboundStart()).thenReturn(LocalDateTime.of(2026, 1, 1, 13, 0));
+        lenient().when(warehouse.getOutboundEnd()).thenReturn(LocalDateTime.of(2026, 1, 1, 18, 0));
+        lenient().when(warehouse.getInboundAvg()).thenReturn(600L);
+        lenient().when(warehouse.getOutboundAvg()).thenReturn(800L);
+        when(warehouseRepository.findById(warehouseId)).thenReturn(Optional.of(warehouse));
+    }
+
+    /** save() 가 PK 를 채워 돌려주는 것을 흉내낸다 — run_id 접두사가 견적 번호로 만들어진다. */
+    private void givenSavedEstimateId(long estimateId) {
+        when(estimateRepository.save(any())).thenAnswer(call -> withId(call.getArgument(0), estimateId));
+    }
+
+    private Estimate withId(Estimate estimate, long id) {
+        ReflectionTestUtils.setField(estimate, "id", id);
+        return estimate;
+    }
 
     private Estimate estimate(double targetThroughput, double targetUtilization, long budgetLimit) {
         return Estimate.open(mock(Warehouse.class), "iw.hub", targetThroughput, targetUtilization, budgetLimit);

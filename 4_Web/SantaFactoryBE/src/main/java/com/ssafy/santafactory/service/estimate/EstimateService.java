@@ -1,29 +1,137 @@
 package com.ssafy.santafactory.service.estimate;
 
+import com.ssafy.santafactory.dto.estimate.EstimateCreateRequest;
+import com.ssafy.santafactory.dto.estimate.EstimateCreateResponse;
+import com.ssafy.santafactory.dto.estimate.EstimateDetailResponse;
+import com.ssafy.santafactory.dto.estimate.EstimateSummaryResponse;
+import com.ssafy.santafactory.dto.simulation.SimulationRequest;
 import com.ssafy.santafactory.dto.simulation.SimulationResponse;
 import com.ssafy.santafactory.entity.estimate.Estimate;
 import com.ssafy.santafactory.entity.simulation.SimScenario;
+import com.ssafy.santafactory.entity.warehouse.Warehouse;
+import com.ssafy.santafactory.global.exception.ErrorCode;
+import com.ssafy.santafactory.global.exception.GlobalException;
+import com.ssafy.santafactory.repository.EstimateRepository;
 import com.ssafy.santafactory.repository.SimScenarioRepository;
+import com.ssafy.santafactory.repository.WarehouseRepository;
+import com.ssafy.santafactory.service.SimulationService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.List;
+import java.util.stream.IntStream;
 
 /**
- * 시뮬 결과를 견적에 반영한다.
+ * 견적 생성·조회, 그리고 시뮬 결과 반영.
  *
- * <p>run 1건이 도착하면 그 run 만 갱신하고, 그 견적의 마지막 run 이었으면 곡선 전체로 판정을 확정한다.
- * 실패는 해당 run 에 격리되어 나머지 대수는 계속 진행한다(지라 S15P21A106-82 완료 조건).
+ * <p>생성은 대수 1~최대까지 run 을 만들어 큐에 발행하고, 결과가 하나씩 돌아오면 그 run 만 갱신한다.
+ * 마지막 run 이 끝나면 곡선 전체로 판정을 확정한다. 실패는 해당 run 에 격리되어 나머지 대수는
+ * 계속 진행한다(지라 S15P21A106-82 완료 조건).
  */
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class EstimateService {
 
+    /** 시뮬 시각 필드는 "HH:mm" 문자열이다 (명세 §1-1). */
+    private static final DateTimeFormatter HH_MM = DateTimeFormatter.ofPattern("HH:mm");
+
+    /** 시뮬은 결정론이라 시드를 고정해 두면 같은 견적이 같은 결과를 낸다. 시드 개수는 미확정. */
+    private static final long FIXED_SEED = 42L;
+
+    private final EstimateRepository estimateRepository;
     private final SimScenarioRepository scenarioRepository;
+    private final WarehouseRepository warehouseRepository;
+    private final SimulationService simulationService;
+    private final CostCalculator costCalculator;
     private final EstimateEvaluator evaluator;
+
+    // ── 생성 ─────────────────────────────────────────────────────────────────
+
+    /**
+     * 견적을 만들고 대수별 run 을 전부 발행한다.
+     *
+     * <p>run 행을 먼저 저장하고 발행한다. 발행이 실패하면 트랜잭션이 롤백돼 견적도 남지 않고
+     * 호출자에게 503 이 간다(명세 §1-4).
+     */
+    @Transactional
+    public EstimateCreateResponse create(EstimateCreateRequest request) {
+        Warehouse warehouse = warehouseRepository.findById(request.warehouseId())
+                .orElseThrow(() -> new GlobalException(ErrorCode.WAREHOUSE_NOT_FOUND));
+
+        double targetThroughput = orDefault(request.targetThroughput(), warehouse.getTargetThroughput());
+        double targetUtilization = orDefault(request.targetUtilization(), warehouse.getTargetUtilization());
+        long budgetLimit = orDefault(request.budgetLimit(), warehouse.getBudgetLimit());
+
+        Estimate estimate = estimateRepository.save(Estimate.open(
+                warehouse, request.amrModelOrDefault(), targetThroughput, targetUtilization, budgetLimit));
+
+        int maxAmrCount = costCalculator.maxAmrCount(budgetLimit);
+        String baseRunId = "est_" + estimate.getId();
+        List<Integer> amrCounts = IntStream.rangeClosed(1, maxAmrCount).boxed().toList();
+
+        for (int amrCount : amrCounts) {
+            scenarioRepository.save(SimScenario.queued(
+                    estimate, SimulationService.runId(baseRunId, amrCount), amrCount, costCalculator.cost(amrCount)));
+        }
+        List<String> runIds = simulationService.publishRuns(baseRequest(baseRunId, warehouse), amrCounts);
+
+        log.info("견적 생성: estimateId={}, 최대 {}대, 목표 처리율 {}%, 가동률 {}%, 예산 {}원",
+                estimate.getId(), maxAmrCount, targetThroughput, targetUtilization, budgetLimit);
+        return new EstimateCreateResponse(estimate.getId(), maxAmrCount, runIds);
+    }
+
+    /**
+     * 대수만 바꿔 발행할 기준 요청.
+     *
+     * <p>AMR 사양(속도·배터리·소모량)과 주문 목록은 비워 둔다 — 시뮬이 자체 기본값과 주문 스트림을
+     * 쓰기 때문이다. 운영조건을 시뮬 인자(고정 시간·도착 간격)로 어떻게 환산할지는 아직 미합의라
+     * 창고 값을 그대로 실어 보낸다.
+     */
+    private SimulationRequest baseRequest(String baseRunId, Warehouse warehouse) {
+        SimulationRequest.Warehouse conditions = new SimulationRequest.Warehouse(
+                warehouse.getWorkerCount(),
+                format(warehouse.getInboundStart()),
+                format(warehouse.getInboundEnd()),
+                format(warehouse.getOutboundStart()),
+                format(warehouse.getOutboundEnd()),
+                toInt(warehouse.getInboundAvg()),
+                toInt(warehouse.getOutboundAvg()));
+        SimulationRequest.Amr amr =
+                new SimulationRequest.Amr(0, null, null, null, null, null, null, null);
+        return new SimulationRequest(baseRunId, FIXED_SEED, conditions, amr, List.of(), List.of());
+    }
+
+    // ── 조회 ─────────────────────────────────────────────────────────────────
+
+    @Transactional(readOnly = true)
+    public EstimateDetailResponse detail(Long estimateId) {
+        Estimate estimate = estimateRepository.findById(estimateId)
+                .orElseThrow(() -> new GlobalException(ErrorCode.ESTIMATE_NOT_FOUND));
+        return EstimateDetailResponse.of(estimate, scenarioRepository.findByEstimateIdOrderByAmrCountAsc(estimateId));
+    }
+
+    @Transactional(readOnly = true)
+    public Page<EstimateSummaryResponse> list(Pageable pageable) {
+        return estimateRepository.findAllByOrderByCreatedAtDesc(pageable).map(EstimateSummaryResponse::from);
+    }
+
+    /** 견적 취소. 이미 큐에 들어간 run 의 결과가 와도 판정은 확정되지 않는다. */
+    @Transactional
+    public void cancel(Long estimateId) {
+        Estimate estimate = estimateRepository.findById(estimateId)
+                .orElseThrow(() -> new GlobalException(ErrorCode.ESTIMATE_NOT_FOUND));
+        estimate.cancel();
+        log.info("견적 취소: estimateId={}, status={}", estimateId, estimate.getStatus());
+    }
+
+    // ── 결과 반영 ────────────────────────────────────────────────────────────
 
     @Transactional
     public void applyResult(SimulationResponse response) {
@@ -119,5 +227,23 @@ public class EstimateService {
                 run.getThroughput(),
                 run.getUtilization(),
                 run.getTotalCost() == null ? 0L : run.getTotalCost());
+    }
+
+    // ── 잡동사니 ─────────────────────────────────────────────────────────────
+
+    private double orDefault(Double requested, Double fallback) {
+        return requested != null ? requested : fallback;
+    }
+
+    private long orDefault(Long requested, Long fallback) {
+        return requested != null ? requested : fallback;
+    }
+
+    private String format(LocalDateTime time) {
+        return time == null ? null : time.format(HH_MM);
+    }
+
+    private Integer toInt(Long value) {
+        return value == null ? null : value.intValue();
     }
 }
