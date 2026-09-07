@@ -82,27 +82,36 @@ class BatteryMixin:
                 break
             self._go_charge(rid, dock)
 
+    def _check_charging_invariants(self):
+        """SIM_CHECK: 동시 충전 ≤ 도크 수, 충전 중 로봇은 자기 도크 위."""
+        charging = [rid for rid in self.rids if self.robots[rid]["state"] == CHARGING]
+        assert len(charging) <= len(self.docks), f"동시 충전 {len(charging)} > 도크 {len(self.docks)}"
+        for rid in charging:
+            pos = self.robots[rid]["pos"]
+            assert self.dock_owner.get(pos) == rid, f"robot{rid} 충전 중인데 도크 {pos} 소유자 {self.dock_owner.get(pos)}"
+
+    def _soc_step(self, rb, before_rb):
+        """로봇 1대의 틱 SoC: CHARGING 이면 충전(1.0 clamp), 이동·회전 중이면 주행 소모, 그 외 정지 소모. 0 은 clamp + 카운트."""
+        cfg, bs = self.cfg, self.bat_stats
+        if rb["state"] == CHARGING:
+            rb["soc"] = min(1.0, rb["soc"] + cfg.charge_rate)
+            rb["chg"] += 1
+            bs["charging"] += 1
+            return
+        p0, h0, busy0 = before_rb
+        active = rb["pos"] != p0 or rb["h"] != h0 or busy0 > 0
+        rb["soc"] = max(0.0, rb["soc"] - (cfg.drain_drive if active else cfg.drain_idle))
+        if rb["soc"] <= 0.0:
+            rb["soc_empty"] += 1
+            bs["empty"] += 1
+
     def _battery_tick(self, before):
         """틱 소모/충전 (-145 §2-6): 이동·회전 중이면 주행 소모, CHARGING 이면 충전, 그 외 정지 소모. 0 은 clamp + 카운트."""
-        cfg, bs = self.cfg, self.bat_stats
-        if cfg.check:
-            charging = [rid for rid in self.rids if self.robots[rid]["state"] == CHARGING]
-            assert len(charging) <= len(self.docks), f"동시 충전 {len(charging)} > 도크 {len(self.docks)}"
-            for rid in charging:
-                pos = self.robots[rid]["pos"]
-                assert self.dock_owner.get(pos) == rid, f"robot{rid} 충전 중인데 도크 {pos} 소유자 {self.dock_owner.get(pos)}"
+        bs = self.bat_stats
+        if self.cfg.check:
+            self._check_charging_invariants()
         for rid in self.rids:
             rb = self.robots[rid]
-            if rb["state"] == CHARGING:
-                rb["soc"] = min(1.0, rb["soc"] + cfg.charge_rate)
-                rb["chg"] += 1
-                bs["charging"] += 1
-            else:
-                p0, h0, busy0 = before[rid]
-                active = rb["pos"] != p0 or rb["h"] != h0 or busy0 > 0
-                rb["soc"] = max(0.0, rb["soc"] - (cfg.drain_drive if active else cfg.drain_idle))
-                if rb["soc"] <= 0.0:
-                    rb["soc_empty"] += 1
-                    bs["empty"] += 1
+            self._soc_step(rb, before[rid])
             if rb["soc"] < bs["soc_min"]:
                 bs["soc_min"] = rb["soc"]

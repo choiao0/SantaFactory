@@ -24,19 +24,24 @@ class MetricsMixin:
                 print(f"  robot{rid} pos={rb['pos']} h={rb['h']} state={rb['state']} "
                       f"goal={rb['goal']} busy={rb['busy']} stag={self._stag.get(rid)}")
             if self.heading:
-                states = {rid: (robots[rid]["pos"][0], robots[rid]["pos"][1], robots[rid]["h"]) for rid in rids}
-                extra = {rid: robots[rid]["swing"] for rid in rids if robots[rid]["busy"] > 0}
-                dists = {rid: self.dmap_h(robots[rid]["goal"]) for rid in rids}
-                goals = {rid: robots[rid]["goal"] for rid in rids}
-                bias = {rid: wait_bias(self._stag.get(rid)) for rid in rids}
-                only = {rid for rid in rids if robots[rid]["pos"] != robots[rid]["goal"] and robots[rid]["state"] not in HOLD}
-                dump_candidates_h(states, dists, goals, extra, bias, self.free, self.edge_cost, self.wait_cost,
-                                  self.turn_cost, only=only, label=lambda a: f"robot{a}")
-                moving = [rid for rid in rids if robots[rid]["pos"] != robots[rid]["goal"]]
-                print(f"  [최근 {len(self._trace)}틱 이력, 미도달 로봇 {moving}]")
-                for tt, snap in self._trace:
-                    print("   t=%d " % tt + "  ".join(f"r{rid}:{snap[rid][0]} {snap[rid][2]}" for rid in moving))
+                self._dump_heading_diag()
         return buf.getvalue().rstrip("\n")
+
+    def _dump_heading_diag(self):
+        """헤딩 모델 정체 진단: 미도달 로봇의 후보·차단자 + 최근 틱 이력 (stdout 으로, _stall_dump 가 캡처)."""
+        robots, rids = self.robots, self.rids
+        states = {rid: (robots[rid]["pos"][0], robots[rid]["pos"][1], robots[rid]["h"]) for rid in rids}
+        extra = {rid: robots[rid]["swing"] for rid in rids if robots[rid]["busy"] > 0}
+        dists = {rid: self.dmap_h(robots[rid]["goal"]) for rid in rids}
+        goals = {rid: robots[rid]["goal"] for rid in rids}
+        bias = {rid: wait_bias(self._stag.get(rid)) for rid in rids}
+        only = {rid for rid in rids if robots[rid]["pos"] != robots[rid]["goal"] and robots[rid]["state"] not in HOLD}
+        dump_candidates_h(states, dists, goals, extra, bias, self.free, self.edge_cost, self.wait_cost,
+                          self.turn_cost, only=only, label=lambda a: f"robot{a}")
+        moving = [rid for rid in rids if robots[rid]["pos"] != robots[rid]["goal"]]
+        print(f"  [최근 {len(self._trace)}틱 이력, 미도달 로봇 {moving}]")
+        for tt, snap in self._trace:
+            print("   t=%d " % tt + "  ".join(f"r{rid}:{snap[rid][0]} {snap[rid][2]}" for rid in moving))
 
     def totals(self):
         """로봇 카운터 합계 (지표 계산용)."""
