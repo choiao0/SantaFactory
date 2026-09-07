@@ -6,9 +6,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class CostCalculatorTest {
 
-    /** 대당 1억 · 충전기 500만 · 설치 3천만, 충전기 1대당 AMR 4대. */
+    /**
+     * 단가 1,500만 · 대당 구축·설치비 50만 (robots 시드 값) · 충전기 500만(미정이라 테스트 가정),
+     * 충전기 1대당 AMR 4대. → 대당 비용 1,550만.
+     */
     private final CostCalculator calculator = new CostCalculator(
-            new EstimateProperties(100_000_000L, 5_000_000L, 30_000_000L, 8, 6, 4, 1));
+            new EstimateProperties(15_000_000L, 5_000_000L, 500_000L, 8, 6, 4, 1));
 
     @Test
     void chargers_round_up_one_per_four_amrs() {
@@ -24,25 +27,44 @@ class CostCalculatorTest {
     }
 
     @Test
-    void cost_sums_amrs_chargers_and_installation() {
-        // 6대 = 6억 + 충전기 2대 1천만 + 설치 3천만
-        assertThat(calculator.cost(6)).isEqualTo(640_000_000L);
+    void cost_scales_install_fee_per_amr_not_as_a_lump_sum() {
+        // 6대 = (1500만 + 50만) × 6 + 충전기 2대 1000만 = 9300만 + 1000만
+        assertThat(calculator.cost(6)).isEqualTo(103_000_000L);
+        // 1대는 대당 비용 + 충전기 1대
+        assertThat(calculator.cost(1)).isEqualTo(20_500_000L);
     }
 
     @Test
-    void max_fleet_divides_the_budget_after_installation_then_adds_margin() {
-        // (5.3억 - 3천만) / 1억 = 5대, + 여유 1 = 6대
-        assertThat(calculator.maxFleet(530_000_000L)).isEqualTo(6);
+    void cost_steps_up_where_another_charger_is_needed() {
+        // 4→5대: AMR 1대(1550만) + 충전기 1대(500만)
+        assertThat(calculator.cost(5) - calculator.cost(4)).isEqualTo(20_500_000L);
+        // 5→6대: AMR 1대만 (충전기는 그대로 2대)
+        assertThat(calculator.cost(6) - calculator.cost(5)).isEqualTo(15_500_000L);
+    }
+
+    @Test
+    void max_fleet_divides_the_budget_by_per_unit_cost_then_adds_margin() {
+        // 1억 / 1550만 = 6대, + 여유 1 = 7대
+        assertThat(calculator.maxFleet(100_000_000L)).isEqualTo(7);
     }
 
     @Test
     void max_fleet_is_capped_at_eight() {
-        assertThat(calculator.maxFleet(100_000_000_000L)).isEqualTo(8);
+        // 예산 3억(창고 시드 값)이면 19대까지 살 수 있지만 상한이 먼저 걸린다
+        assertThat(calculator.maxFleet(300_000_000L)).isEqualTo(8);
     }
 
     @Test
     void max_fleet_tries_at_least_one_even_on_a_tiny_budget() {
         assertThat(calculator.maxFleet(0L)).isEqualTo(1);
+    }
+
+    @Test
+    void undecided_charger_price_simply_drops_out_of_the_cost() {
+        CostCalculator noChargerPrice = new CostCalculator(
+                new EstimateProperties(15_000_000L, 0L, 500_000L, 8, 6, 4, 1));
+
+        assertThat(noChargerPrice.cost(6)).isEqualTo(93_000_000L);
     }
 
     @Test

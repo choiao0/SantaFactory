@@ -21,22 +21,30 @@ public class CostCalculator {
         return Math.min(needed, props.maxChargers());
     }
 
-    /** AMR 단가 + 충전기 + 구축·설치. */
+    /**
+     * 총 구축 비용 = (AMR 단가 + 대당 구축·설치비) × 대수 + 충전기 단가 × 충전기 수.
+     *
+     * <p>{@code Robots.cost}(구축/설치비)가 대당 금액이라 대수에 비례하고, 충전기만 4대마다
+     * 하나씩 늘어나는 계단 함수다.
+     */
     public long cost(int amrCount) {
-        return props.amrPrice() * amrCount
-                + props.chargerPrice() * chargers(amrCount)
-                + props.installFixed();
+        return props.perUnitCost() * amrCount
+                + props.chargerPrice() * chargers(amrCount);
     }
 
     /**
      * 예산 ÷ 대당 비용 + 여유분, 상한 maxFleet.
-     * 단가가 0(미정)이면 예산으로 나눌 수 없으므로 상한을 그대로 쓴다.
+     *
+     * <p>충전기 값은 여기 넣지 않는다 — 여유분이 이미 예산을 넘겨 잡는 쪽이고, 예산 초과는
+     * 조건 판정에서 대수별 실제 비용으로 다시 걸러진다. 단가가 0(미정)이면 나눌 수 없으므로
+     * 상한을 그대로 쓴다.
      */
     public int maxFleet(long budget) {
-        if (props.amrPrice() <= 0) {
+        long perUnit = props.perUnitCost();
+        if (perUnit <= 0) {
             return props.maxFleet();
         }
-        long affordable = Math.max(0, budget - props.installFixed()) / props.amrPrice();
+        long affordable = Math.max(0, budget) / perUnit;
         return Math.clamp(affordable + props.fleetMargin(), 1, props.maxFleet());
     }
 }
