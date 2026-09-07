@@ -1,0 +1,131 @@
+# -*- coding: utf-8 -*-
+import json
+import os
+
+import numpy as np
+
+from pibt_core import TURN_TICKS
+
+from .common import DT, OUT, SPEED
+from .export_isaac import export_isaac
+
+def _mean(x):
+    return float(x.mean()) if len(x) else 0.0
+
+
+def _p90(x):
+    return float(np.percentile(x, 90)) if len(x) else 0.0
+
+
+def report(a, kernel, stream, ctx):
+    lifelong = a.horizon is not None
+    robots, tasks_done = kernel.robots, kernel.tasks_done
+    # 고정 시간 모드의 분모는 T (Lifelong: T 안의 완료 수), 리드타임 표본은 T 안에 완료된 태스크만 (-145 §1-1)
+    T_END = a.horizon if lifelong else max(tk["completed"] for tk in tasks_done)
+    n_tasks = len(tasks_done)
+    lat_total = np.array([tk["completed"] - tk["created"] for tk in tasks_done]) * DT
+    lat_drive = np.array([tk["completed"] - tk["assigned"] for tk in tasks_done]) * DT
+    lat_queue = np.array([tk["assigned"] - tk["created"] for tk in tasks_done]) * DT
+    sim_hours = T_END * DT / 3600
+    tot = kernel.totals()
+    busy_v1 = tot["drive"] + 2 * tot["wait"]              # v1 호환 (대기 이중계산, 서비스 제외)
+    util = busy_v1 / (a.n_robots * T_END)
+    util_incl = (tot["drive"] + tot["wait"] + tot["svc"] + tot["rot"]) / (a.n_robots * T_END)
+    conflict_wait = tot["wait"] / max(busy_v1, 1)
+    orders_done = sum(1 for od in stream.orders.values() if od["completed"] is not None)
+    orders_ph = (orders_done if lifelong else a.n_orders) / sim_hours
+    zone, heading = kernel.zone, kernel.heading
+
+    print(f"[1] 맵={a.variant}, {ctx.H}x{ctx.W}, 로봇 {a.n_robots}대, 주문 {a.n_orders}건"
+          + (f" + 입고 {stream.n_inbound}건" if a.flow == "main" else "")
+          + f", seed={a.seed}, flow={a.flow}, 통로차단={'ON' if a.aisle_block else 'OFF'}"
+          + (f", 헤딩 모델(회전 {TURN_TICKS}틱)" if heading else "")
+          + (f", 충전 존({len(kernel.zone_cells)}칸, 홈 간격≥2)" if zone else ", 고정 홈 12칸")
+          + (f", 주문 간격 {a.order_gap:g}틱" if a.order_gap_arg is not None else "")
+          + (f", 입고 간격 {a.inbound_gap_arg:g}틱" if a.inbound_gap_arg is not None else "")
+          + (f", 고정 시간 {a.horizon}틱 = {a.horizon*DT/3600:.1f}h, 교대 {'/'.join(a.shifts)} "
+             + " ".join(f"{k}[{s},{e})" for k, s, e in stream.windows) if lifelong else "")
+          + (f", 배터리(도크 {len(kernel.docks)}, 가동 {a.runtime_h:g}h/충전 {a.charge_h:g}h, "
+             f"SoC {a.soc[0]*100:.0f}/{a.soc[1]*100:.0f}/{a.soc[2]*100:.0f}%)" if a.battery else ""))
+    if lifelong:
+        n_in = sum(1 for tk in tasks_done if tk["kind"] == "in")
+        print(f"[2] 완료: 태스크 {n_tasks}개 (입고 {n_in} / 출고 {n_tasks - n_in}), 미완료 {kernel.n_submitted - n_tasks}개, "
+              f"주문 완료 {orders_done}/{a.n_orders}, 고정 시간 {T_END}틱 = {T_END*DT/3600:.2f}h")
+    else:
+        print(f"[2] 완료: 태스크 {n_tasks}개, makespan {T_END}틱 = {T_END*DT/60:.1f}분")
+    print(f"[3] 처리량: {n_tasks/sim_hours:.0f} 태스크/시간 ({orders_ph:.0f} 주문/시간)")
+    print(f"    대기(생성→배차): 평균 {_mean(lat_queue):6.1f}s / p90 {_p90(lat_queue):6.1f}s")
+    print(f"    주행(배차→완료): 평균 {_mean(lat_drive):6.1f}s / p90 {_p90(lat_drive):6.1f}s")
+    print(f"    총 리드타임    : 평균 {_mean(lat_total):6.1f}s / p90 {_p90(lat_total):6.1f}s")
+    print(f"    가동률(v1호환) {util*100:.0f}% (서비스 포함 {util_incl*100:.0f}%) / "
+          f"충돌대기 {conflict_wait*100:.1f}% / 밀림 {tot['pushed']}틱 / "
+          f"태스크당 회전 {tot['turns']/max(n_tasks,1):.1f}회"
+          + (f" / 회전 소모 {tot['rot']}틱 (비임무 회전 {tot['turns_idle']}회) / 후진 {tot['rev']}칸 / 재계획 {tot['replan']}틱"
+             if heading else ""))
+    zone_extra = {}
+    if zone:
+        zs = kernel.zone_stats
+        # 존 체류 분포: 틱별 존 안 로봇 수의 평균·p90 (시작·종료의 '전원 존 안'은 포함 — 실행이 길수록 희석).
+        # 견적용 "존이 실제로 얼마나 차는가". 최대치는 항상 n 이라 의미 없어 제외 (B0″ §2).
+        occ = np.array(zs["occ"] or [a.n_robots], dtype=float)
+        zone_occ_mean, zone_occ_p90 = float(occ.mean()), float(np.percentile(occ, 90))
+        print(f"    충전 존: 존 안 복귀 대기 {zs['wait']}틱 / 재선택 {zs['retargets']}회 / "
+              f"예약 무시 {zs['degraded']}회 / 존 체류 평균 {zone_occ_mean:.1f}대 (p90 {zone_occ_p90:.0f}) / "
+              f"비임무 밀림 이동 {tot['idle_moves']}칸")
+        zone_extra = dict(zone=1, zone_wait_steps=int(zs["wait"]), zone_retargets=int(zs["retargets"]),
+                          zone_degraded=int(zs["degraded"]), zone_occ_mean=round(zone_occ_mean, 2),
+                          zone_occ_p90=round(zone_occ_p90, 1), idle_moves=int(tot["idle_moves"]))
+    lifelong_extra, bat_extra = {}, {}
+    if lifelong:
+        n_in = sum(1 for tk in tasks_done if tk["kind"] == "in")
+        lifelong_extra = dict(horizon_steps=int(a.horizon), shifts=",".join(a.shifts), orders_done=int(orders_done),
+                              open_tasks=int(kernel.n_submitted - n_tasks), tasks_in=int(n_in), tasks_out=int(n_tasks - n_in),
+                              stall_warnings=len(kernel.stall_warning_ticks))
+        if kernel.stall_warning_ticks:
+            print(f"[WARN] 고정 시간 모드: {kernel.cfg.stall_ticks}틱 완료 무진전 {len(kernel.stall_warning_ticks)}회 "
+                  f"(계속 실행, 첫 시각 t={kernel.stall_warning_ticks[0]})")
+    if a.battery:
+        b = kernel.battery_summary()
+        dock_util = b["charging_steps"] / (b["n_docks"] * T_END)
+        print(f"[5] 배터리: 충전 진입 {b['charge_events']}회 (퇴거 {b['charge_evictions']}회) / 충전 {b['charging_steps']}틱 "
+              f"(도크 가동률 {dock_util*100:.0f}%) / 도크 대기 {b['dock_wait_steps']}틱 / "
+              f"SoC 최저 {b['soc_min']*100:.1f}% · 종료 평균 {b['soc_end_mean']*100:.1f}% / 0% 체류 {b['soc_empty_steps']}틱")
+        bat_extra = dict(battery=1, chargers=int(b["n_docks"]), charge_events=int(b["charge_events"]),
+                         charging_steps=int(b["charging_steps"]), dock_wait_steps=int(b["dock_wait_steps"]),
+                         charge_evictions=int(b["charge_evictions"]), soc_min=round(b["soc_min"] * 100, 1),
+                         soc_end_mean=round(b["soc_end_mean"] * 100, 1), soc_empty_steps=int(b["soc_empty_steps"]),
+                         dock_util=round(dock_util, 3))
+
+    summary = dict(
+        variant=a.variant, n_robots=a.n_robots, n_orders=a.n_orders, seed=a.seed,
+        aisle_block=int(a.aisle_block), flow=a.flow, makespan_steps=int(T_END),
+        tasks_per_h=round(n_tasks / sim_hours, 1),
+        orders_per_h=round(orders_ph, 1),
+        lead_mean_s=round(_mean(lat_total), 1),
+        lead_p90_s=round(_p90(lat_total), 1),
+        queue_mean_s=round(_mean(lat_queue), 1),
+        drive_mean_s=round(_mean(lat_drive), 1),
+        util=round(float(util), 3),
+        util_incl_service=round(float(util_incl), 3),
+        conflict_wait=round(float(conflict_wait), 4),
+        pushed_steps=int(tot["pushed"]),
+        turns_per_task=round(tot["turns"] / max(n_tasks, 1), 2),
+        **(dict(heading=1, rot_steps=int(tot["rot"]), rev_steps=int(tot["rev"]),
+                replan_steps=int(tot["replan"])) if heading else {}),
+        **zone_extra,
+        **(dict(order_gap=a.order_gap) if a.order_gap_arg is not None else {}),   # v1compat SUMMARY 불변
+        **(dict(inbound_gap=a.inbound_gap_arg) if a.inbound_gap_arg is not None else {}),
+        **lifelong_extra, **bat_extra)
+    print("[SUMMARY] " + json.dumps(summary))
+
+    tag = (f"sim_v2_{a.variant}_r{a.n_robots}{'_blk' if a.aisle_block else ''}_{a.flow}"
+           f"{'_th' if a.theta_path else ''}{'_h' if heading else ''}"
+           f"{'_fh' if (a.flow == 'main' and not zone) else ''}"
+           f"{'_hz' if lifelong else ''}{'_bat' if a.battery else ''}")
+    if a.dirflow:
+        npz = os.path.join(OUT, "results", tag + "_dirflow.npz")
+        np.savez_compressed(npz, dir_flow=kernel.dir_flow, visit=kernel.visit_count)
+        print(f"[DIRFLOW] 저장: {os.path.basename(npz)}")
+    if a.export:
+        export_isaac(a, kernel, ctx)
+    return summary, tag, n_tasks / sim_hours
