@@ -74,7 +74,7 @@ class EstimateFlowIT extends PostgresSupport {
     @Test
     void runs_the_whole_sweep_and_lands_on_a_recommendation() {
         EstimateCreateResponse created = estimateService.create(
-                new EstimateCreateRequest(warehouseId, null, null, null, null));
+                new EstimateCreateRequest(warehouseId, null, null, null, null, null, null, null));
 
         // 예산 3억 ÷ 대당 1,550만 = 19대 + 여유 1 = 20대. 충전 존 상한 28 보다 작아 예산이 먼저 걸린다
         assertThat(created.maxAmrCount()).isEqualTo(MAX_AMR);
@@ -107,7 +107,7 @@ class EstimateFlowIT extends PostgresSupport {
     @Test
     void one_failed_run_does_not_stop_the_rest() {
         EstimateCreateResponse created = estimateService.create(
-                new EstimateCreateRequest(warehouseId, null, null, null, null));
+                new EstimateCreateRequest(warehouseId, null, null, null, null, null, null, null));
 
         for (int amrCount = 1; amrCount <= MAX_AMR; amrCount++) {
             if (amrCount != 12) {
@@ -128,7 +128,7 @@ class EstimateFlowIT extends PostgresSupport {
     @Test
     void a_redelivered_result_does_not_overwrite_the_first_one() {
         EstimateCreateResponse created = estimateService.create(
-                new EstimateCreateRequest(warehouseId, null, null, null, null));
+                new EstimateCreateRequest(warehouseId, null, null, null, null, null, null, null));
         String runId = "est_%d_n3".formatted(created.estimateId());
 
         estimateService.applyResult(done(created.estimateId(), 3));
@@ -144,7 +144,7 @@ class EstimateFlowIT extends PostgresSupport {
     @Test
     void a_stuck_run_is_recovered_by_the_timeout_sweep() {
         EstimateCreateResponse created = estimateService.create(
-                new EstimateCreateRequest(warehouseId, null, null, null, null));
+                new EstimateCreateRequest(warehouseId, null, null, null, null, null, null, null));
         for (int amrCount = 1; amrCount < MAX_AMR; amrCount++) {
             estimateService.applyResult(done(created.estimateId(), amrCount));
         }
