@@ -9,3 +9,10 @@ spring:
     listener:
       simple:
         auto-startup: false
+
+# 이 파일이 main 의 application.yml 을 클래스패스에서 가려버리므로, 테스트에서 필요한 값은
+# 여기 다시 적어야 한다. 단가가 비면 perUnitCost() 가 0 이 되어 예산 기반 대수 산정을 건너뛰고
+# 상한을 그대로 반환한다 — 예산 경로가 검증되지 않는다.
+estimate:
+  amr-price: 15000000
+  install-per-unit: 500000

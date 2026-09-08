@@ -31,7 +31,11 @@ estimate:
   install-per-unit: 500000
   # 충전기 단가는 DB·ERD 어디에도 없어 팀 미정 (0이면 비용에 미반영)
   charger-price: 0
-  max-amr-count: 8
+  # 충전 존 초기 배치 용량. 동쪽 존 106칸이지만 2칸 차체를 간격 2로 세워야 해서 약 1/4 밀도다.
+  # 이 값을 넘겨 발행하면 시뮬이 배치 단계에서 assert 로 죽는다(map_loader.make_homes_zone).
+  # 맵에 존이 추가되면(3_FMS/docs/2026-09-04_고부하_무릎_판정.md §4) 이 값도 같이 올릴 것.
+  # 출처: 3_FMS/contracts/SIM_RUN_CONTRACT.md §1 — "충전 존 초기 배치 상한 28, 견적 제약으로 취급"
+  max-amr-count: 28
   max-chargers: 6
   amr-per-charger: 4
   amr-count-margin: 1

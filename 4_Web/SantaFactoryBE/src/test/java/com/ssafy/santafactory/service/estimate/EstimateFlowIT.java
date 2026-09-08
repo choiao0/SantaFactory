@@ -46,6 +46,9 @@ class EstimateFlowIT extends PostgresSupport {
     @Autowired
     JdbcTemplate jdbc;
 
+    /** 예산 3억 ÷ 대당 1,550만 = 19대 + 여유 1. 충전 존 상한 28 보다 작아 예산이 실질 상한이다. */
+    private static final int MAX_AMR = 20;
+
     private Long warehouseId;
 
     @BeforeEach
@@ -73,36 +76,32 @@ class EstimateFlowIT extends PostgresSupport {
         EstimateCreateResponse created = estimateService.create(
                 new EstimateCreateRequest(warehouseId, null, null, null, null));
 
-        // 예산 3억이면 19대까지 살 수 있지만 상한 8이 먼저 걸린다
-        assertThat(created.maxAmrCount()).isEqualTo(8);
+        // 예산 3억 ÷ 대당 1,550만 = 19대 + 여유 1 = 20대. 충전 존 상한 28 보다 작아 예산이 먼저 걸린다
+        assertThat(created.maxAmrCount()).isEqualTo(MAX_AMR);
         List<SimScenario> queued = scenarioRepository.findByEstimateIdOrderByAmrCountAsc(created.estimateId());
-        assertThat(queued).hasSize(8);
+        assertThat(queued).hasSize(MAX_AMR);
         assertThat(queued).extracting(SimScenario::getStatus).containsOnly(RunStatus.QUEUED);
         assertThat(queued).extracting(SimScenario::getRunId)
-                .containsExactly("est_%d_n1".formatted(created.estimateId()),
-                        "est_%d_n2".formatted(created.estimateId()),
-                        "est_%d_n3".formatted(created.estimateId()),
-                        "est_%d_n4".formatted(created.estimateId()),
-                        "est_%d_n5".formatted(created.estimateId()),
-                        "est_%d_n6".formatted(created.estimateId()),
-                        "est_%d_n7".formatted(created.estimateId()),
-                        "est_%d_n8".formatted(created.estimateId()));
+                .startsWith("est_%d_n1".formatted(created.estimateId()))
+                .endsWith("est_%d_n%d".formatted(created.estimateId(), MAX_AMR));
 
         // 대수를 늘릴수록 처리율은 오르고 가동률은 떨어지는 곡선을 하나씩 되돌려준다
-        for (int amrCount = 1; amrCount <= 8; amrCount++) {
+        for (int amrCount = 1; amrCount <= MAX_AMR; amrCount++) {
             estimateService.applyResult(done(created.estimateId(), amrCount));
         }
 
         EstimateDetailResponse detail = estimateService.detail(created.estimateId());
         assertThat(detail.status()).isEqualTo(EstimateStatus.DONE);
-        assertThat(detail.recommendedCount()).isEqualTo(8);   // 96 % ≥ 95 %, 84 % ≥ 80 %
+        // 12대가 처음으로 세 조건을 만족한다: 처리율 96 % ≥ 95, 가동률 82 % ≥ 80, 1.86억 ≤ 3억.
+        // 11대는 처리율 88 % 로 모자라고 14대부터는 가동률이 79 % 로 떨어진다
+        assertThat(detail.recommendedCount()).isEqualTo(12);
         assertThat(detail.reasonCode()).isNull();
         assertThat(detail.elapsedSeconds()).isNotNull();
-        assertThat(detail.runs()).hasSize(8);
+        assertThat(detail.runs()).hasSize(MAX_AMR);
         assertThat(detail.runs()).extracting(EstimateDetailResponse.Run::status).containsOnly(RunStatus.DONE);
-        assertThat(detail.runs().get(7).throughput()).isEqualTo(96.0);
+        assertThat(detail.runs().get(11).throughput()).isEqualTo(96.0);
         // 시뮬 출고창 4시간(6h × 4/6) 실측 96건 → 실제 출고창 5시간 기준 120건/일
-        assertThat(detail.runs().get(7).outbound()).isEqualTo(120L);
+        assertThat(detail.runs().get(11).outbound()).isEqualTo(120L);
     }
 
     @Test
@@ -110,19 +109,20 @@ class EstimateFlowIT extends PostgresSupport {
         EstimateCreateResponse created = estimateService.create(
                 new EstimateCreateRequest(warehouseId, null, null, null, null));
 
-        for (int amrCount = 1; amrCount <= 7; amrCount++) {
-            estimateService.applyResult(done(created.estimateId(), amrCount));
+        for (int amrCount = 1; amrCount <= MAX_AMR; amrCount++) {
+            if (amrCount != 12) {
+                estimateService.applyResult(done(created.estimateId(), amrCount));
+            }
         }
         estimateService.applyResult(new SimulationResponse(
-                "est_%d_n8".formatted(created.estimateId()), "failed", "시뮬 정체 감지", null));
+                "est_%d_n12".formatted(created.estimateId()), "failed", "시뮬 정체 감지", null));
 
         EstimateDetailResponse detail = estimateService.detail(created.estimateId());
         assertThat(detail.status()).isEqualTo(EstimateStatus.PARTIAL);
-        // 8대가 빠지면 목표 처리율 95 % 에 닿는 대수가 없다 (7대는 84 %)
-        assertThat(detail.recommendedCount()).isNull();
-        assertThat(detail.reasonCode()).isEqualTo(ReasonCode.THROUGHPUT_SHORT);
-        assertThat(detail.runs().get(7).status()).isEqualTo(RunStatus.FAILED);
-        assertThat(detail.runs().get(7).error()).isEqualTo("시뮬 정체 감지");
+        // 권장 후보였던 12대가 빠져도 13대가 세 조건을 만족한다 (처리율 100 %, 가동률 80.5 %, 2.02억)
+        assertThat(detail.recommendedCount()).isEqualTo(13);
+        assertThat(detail.runs().get(11).status()).isEqualTo(RunStatus.FAILED);
+        assertThat(detail.runs().get(11).error()).isEqualTo("시뮬 정체 감지");
     }
 
     @Test
@@ -137,7 +137,7 @@ class EstimateFlowIT extends PostgresSupport {
                         null, null, 0.01, null, null, null)));
 
         SimScenario run = scenarioRepository.findByRunId(runId).orElseThrow();
-        assertThat(run.getThroughput()).isEqualTo(36.0);   // 3대 첫 결과가 유지된다
+        assertThat(run.getThroughput()).isEqualTo(24.0);   // 3대 첫 결과가 유지된다
         assertThat(run.getStatus()).isEqualTo(RunStatus.DONE);
     }
 
@@ -145,27 +145,30 @@ class EstimateFlowIT extends PostgresSupport {
     void a_stuck_run_is_recovered_by_the_timeout_sweep() {
         EstimateCreateResponse created = estimateService.create(
                 new EstimateCreateRequest(warehouseId, null, null, null, null));
-        for (int amrCount = 1; amrCount <= 7; amrCount++) {
+        for (int amrCount = 1; amrCount < MAX_AMR; amrCount++) {
             estimateService.applyResult(done(created.estimateId(), amrCount));
         }
-        // 8대 run 만 결과가 오지 않은 상태로 발행 시각을 과거로 돌린다
+        // 마지막 대수 run 만 결과가 오지 않은 상태로 발행 시각을 과거로 돌린다
         jdbc.update("UPDATE simscenarios SET published_at = published_at - INTERVAL '2 hours' WHERE status = 'QUEUED'");
 
         assertThat(estimateService.sweepTimeouts()).isEqualTo(1);
 
         EstimateDetailResponse detail = estimateService.detail(created.estimateId());
-        assertThat(detail.runs().get(7).status()).isEqualTo(RunStatus.TIMEOUT);
+        assertThat(detail.runs().get(MAX_AMR - 1).status()).isEqualTo(RunStatus.TIMEOUT);
         assertThat(detail.status()).isEqualTo(EstimateStatus.PARTIAL);
-        assertThat(detail.reasonCode()).isEqualTo(ReasonCode.THROUGHPUT_SHORT);
+        assertThat(detail.recommendedCount()).isEqualTo(12);   // 남은 결과로 판정은 그대로
     }
 
-    /** 대수가 늘면 처리율 +12 %p, 가동률 −2 %p. 8대에서 96 % / 84 % 로 목표(95/80)를 처음 넘는다. */
+    /**
+     * 대수가 늘면 처리율 +8 %p(100 % 에서 포화), 가동률 −1.5 %p.
+     * 목표 95 % / 80 % 에서는 12~13대만 세 조건을 만족한다.
+     */
     private SimulationResponse done(long estimateId, int amrCount) {
         SimulationResponse.Kpi kpi = new SimulationResponse.Kpi(
-                100, amrCount * 12, null, null,
+                100, Math.min(100, amrCount * 8), null, null,
                 null, null, null, null,
                 null, null,
-                (100 - amrCount * 2) / 100.0, null, null, null);
+                (100 - amrCount * 1.5) / 100.0, null, null, null);
         return new SimulationResponse("est_%d_n%d".formatted(estimateId, amrCount), "done", null, kpi);
     }
 }
