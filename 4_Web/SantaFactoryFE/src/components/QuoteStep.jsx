@@ -25,11 +25,13 @@ function CurveChart({ runs, target, budget, recommended, knee }) {
   const xMax = Math.max(...counts)
   const span = Math.max(1, xMax - xMin)
   const done = runs.filter(isDone)
-  const costMax = Math.max(budget, ...runs.map((r) => r.total_cost ?? 0)) * 1.1
+  const costPeak = Math.max(budget, ...runs.map((r) => r.total_cost ?? 0)) * 1.15
+  const costStep = [2.5e7, 5e7, 1e8, 2e8, 5e8, 1e9].find((step) => costPeak / step <= 5) ?? 1e9
+  const costMax = Math.ceil(costPeak / costStep) * costStep
   const x = (n) => pad.l + ((n - xMin) / span) * iw
   const y = (v) => pad.t + ih - (v / 100) * ih
   const yc = (v) => pad.t + ih - (v / costMax) * ih
-  const costTicks = 4
+  const costTicks = Math.round(costMax / costStep)
 
   const tp = done.map((r) => `${x(r.amr_count)},${y(r.throughput)}`).join(' ')
   const cp = runs.filter((r) => r.total_cost != null).map((r) => `${x(r.amr_count)},${yc(r.total_cost)}`).join(' ')
@@ -57,7 +59,7 @@ function CurveChart({ runs, target, budget, recommended, knee }) {
       <line x1={pad.l} x2={W - pad.r} y1={y(target)} y2={y(target)} stroke="#111" strokeDasharray="4 4" />
       <text x={W - pad.r - 4} y={y(target) - 5} textAnchor="end" fontSize="7.5" fill="#111" fontFamily={MONO}>TARGET {target}%</text>
       <line x1={pad.l} x2={W - pad.r} y1={yc(budget)} y2={yc(budget)} stroke="#8a8983" strokeDasharray="2 4" />
-      <text x={pad.l + 4} y={yc(budget) - 5} fontSize="7.5" fill="#8a8983" fontFamily={MONO}>BUDGET {formatWon(budget)}</text>
+      <text x={W - pad.r - 4} y={yc(budget) + 11} textAnchor="end" fontSize="7.5" fill="#8a8983" fontFamily={MONO}>BUDGET {formatWon(budget)}</text>
 
       <polyline points={cp} fill="none" stroke="#8a8983" strokeWidth="1.5" />
       {runs.filter((r) => r.total_cost != null).map((r) => (
@@ -72,13 +74,13 @@ function CurveChart({ runs, target, budget, recommended, knee }) {
       {knee != null && knee !== recommended && (
         <>
           <line x1={x(knee)} x2={x(knee)} y1={pad.t} y2={pad.t + ih} stroke="#8a8983" strokeDasharray="3 3" />
-          <text x={x(knee) + 6} y={pad.t + 24} fontSize="7.5" fill="#8a8983" fontFamily={MONO}>KNEE {knee}</text>
+          <text x={x(knee) + 6} y={pad.t + ih - 20} fontSize="7.5" fill="#8a8983" fontFamily={MONO}>KNEE {knee}</text>
         </>
       )}
       {recommended != null && (
         <>
           <line x1={x(recommended)} x2={x(recommended)} y1={pad.t} y2={pad.t + ih} stroke="#e72d2d" strokeDasharray="3 3" />
-          <text x={x(recommended) + 6} y={pad.t + 12} fontSize="8" fontWeight="600" fill="#b51616" fontFamily={MONO}>RECOMMENDED {recommended}</text>
+          <text x={x(recommended) + 6} y={pad.t + ih - 8} fontSize="8" fontWeight="600" fill="#b51616" fontFamily={MONO}>RECOMMENDED {recommended}</text>
         </>
       )}
     </svg>
