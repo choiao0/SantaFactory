@@ -1,6 +1,10 @@
 import { formatDateTime, formatEok, formatWon } from '../utils/format.js'
 
 const MONO = 'DM Mono, Pretendard Variable, Pretendard, monospace'
+const GRID_LINE = '#e0ded9'
+const MUTED = '#8a8983'
+const RED = '#e72d2d'
+const EOK = 100_000_000
 
 const REASON_TEXT = {
   BUDGET_EXCEEDED: '예산 안에 드는 대수가 없습니다. 예산을 올리거나 목표를 낮춰 다시 요청해 보세요.',
@@ -14,6 +18,22 @@ function isDone(run) {
   return run.status === 'DONE' && run.throughput != null
 }
 
+/**
+ * 비용 축의 최대값. 처리율 축이 0/25/50/75/100 을 4등분하고 두 축이 격자선을 공유하므로,
+ * 비용 축도 4등분이 예쁜 값으로 올려야 눈금이 "0.8 / 1.6 / 2.4" 같이 지저분해지지 않는다.
+ */
+function niceCostMax(rawMax) {
+  const steps = [0.25, 0.5, 1, 1.5, 2, 2.5, 3, 5, 7.5, 10, 15, 20, 25, 50, 100]
+  const step = steps.find((s) => 4 * s * EOK >= rawMax) ?? Math.ceil(rawMax / (4 * EOK))
+  return 4 * step * EOK
+}
+
+/** 대수가 많으면(최대 28) x축 라벨이 겹친다 — 일정 간격만 찍되 강조할 대수는 항상 찍는다. */
+function tickIndexes(runs, keepIndex) {
+  const every = Math.max(1, Math.ceil(runs.length / 10))
+  return runs.map((_, i) => i).filter((i) => i % every === 0 || i === keepIndex)
+}
+
 function CurveChart({ runs, target, budget, recommended, knee }) {
   const W = 560
   const H = 300
@@ -25,62 +45,83 @@ function CurveChart({ runs, target, budget, recommended, knee }) {
   const xMax = Math.max(...counts)
   const span = Math.max(1, xMax - xMin)
   const done = runs.filter(isDone)
-  const costPeak = Math.max(budget, ...runs.map((r) => r.total_cost ?? 0)) * 1.15
-  const costStep = [2.5e7, 5e7, 1e8, 2e8, 5e8, 1e9].find((step) => costPeak / step <= 5) ?? 1e9
-  const costMax = Math.ceil(costPeak / costStep) * costStep
+  const costMax = niceCostMax(Math.max(budget, ...runs.map((r) => r.total_cost ?? 0)) * 1.15)
   const x = (n) => pad.l + ((n - xMin) / span) * iw
   const y = (v) => pad.t + ih - (v / 100) * ih
   const yc = (v) => pad.t + ih - (v / costMax) * ih
-  const costTicks = Math.round(costMax / costStep)
 
   const tp = done.map((r) => `${x(r.amr_count)},${y(r.throughput)}`).join(' ')
   const cp = runs.filter((r) => r.total_cost != null).map((r) => `${x(r.amr_count)},${yc(r.total_cost)}`).join(' ')
+  const recIndex = runs.findIndex((r) => r.amr_count === recommended)
+  const visible = new Set(tickIndexes(runs, recIndex))
+
+  // 예산 초과 구간 음영 — 대수가 늘면 비용이 단조 증가하므로 첫 초과 대수부터 오른쪽 전부다.
+  const overBudget = runs.find((r) => r.total_cost > budget)
+  const halfStep = runs.length > 1 ? iw / (runs.length - 1) / 2 : iw / 4
 
   return (
     <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label="AMR 대수별 처리율과 구축비용 곡선">
       {[0, 25, 50, 75, 100].map((v) => (
         <g key={v}>
-          <line x1={pad.l} x2={W - pad.r} y1={y(v)} y2={y(v)} stroke="#e0ded9" />
-          <text x={pad.l - 8} y={y(v) + 3} textAnchor="end" fontSize="8" fill="#8a8983" fontFamily={MONO}>{v}%</text>
+          <line x1={pad.l} x2={W - pad.r} y1={y(v)} y2={y(v)} stroke={GRID_LINE} />
+          <text x={pad.l - 8} y={y(v) + 3} textAnchor="end" fontSize="8" fill={MUTED} fontFamily={MONO}>{v}</text>
         </g>
       ))}
-      {Array.from({ length: costTicks + 1 }, (_, i) => (costMax / costTicks) * i).map((v) => (
-        <text key={v} x={W - pad.r + 8} y={yc(v) + 3} fontSize="8" fill="#8a8983" fontFamily={MONO}>{formatEok(v)}</text>
+      {[0, 0.25, 0.5, 0.75, 1].map((f) => (
+        <text key={f} x={W - pad.r + 8} y={yc(costMax * f) + 3} fontSize="8" fill={MUTED} fontFamily={MONO}>
+          {formatEok(costMax * f)}
+        </text>
       ))}
-      {runs.map((r) => (
+      {runs.filter((_, i) => visible.has(i)).map((r) => (
         <text key={r.run_id} x={x(r.amr_count)} y={H - pad.b + 16} textAnchor="middle" fontSize="8" fill={isDone(r) ? '#4a4a46' : '#b7b5b0'} fontFamily={MONO}>
           {r.amr_count}
         </text>
       ))}
-      <text x={pad.l} y={H - 4} fontSize="7.5" fill="#8a8983" fontFamily={MONO}>AMR COUNT →</text>
-      <text x={pad.l - 40} y={pad.t - 6} fontSize="7.5" fill="#8a8983" fontFamily={MONO}>처리율</text>
-      <text x={W - pad.r + 8} y={pad.t - 6} fontSize="7.5" fill="#8a8983" fontFamily={MONO}>구축비</text>
+      <text x={pad.l} y={H - 4} fontSize="7.5" fill={MUTED} fontFamily={MONO}>AMR COUNT →</text>
+      <text x={pad.l - 40} y={pad.t - 6} fontSize="7.5" fill={MUTED} fontFamily={MONO}>처리율</text>
+      <text x={W - pad.r + 8} y={pad.t - 6} fontSize="7.5" fill={MUTED} fontFamily={MONO}>구축비</text>
 
       <line x1={pad.l} x2={W - pad.r} y1={y(target)} y2={y(target)} stroke="#111" strokeDasharray="4 4" />
-      <text x={W - pad.r - 4} y={y(target) - 5} textAnchor="end" fontSize="7.5" fill="#111" fontFamily={MONO}>TARGET {target}%</text>
-      <line x1={pad.l} x2={W - pad.r} y1={yc(budget)} y2={yc(budget)} stroke="#8a8983" strokeDasharray="2 4" />
-      <text x={W - pad.r - 4} y={yc(budget) + 11} textAnchor="end" fontSize="7.5" fill="#8a8983" fontFamily={MONO}>BUDGET {formatWon(budget)}</text>
+      <text x={pad.l + 4} y={y(target) - 5} fontSize="7.5" fill="#111" fontFamily={MONO}>TARGET {target}%</text>
 
-      <polyline points={cp} fill="none" stroke="#8a8983" strokeWidth="1.5" />
+      {overBudget && (
+        <rect x={x(overBudget.amr_count) - halfStep} y={pad.t}
+              width={W - pad.r - x(overBudget.amr_count) + halfStep} height={ih}
+              fill="#111" opacity=".06" />
+      )}
+      {budget <= costMax && (
+        <>
+          <line x1={pad.l} x2={W - pad.r} y1={yc(budget)} y2={yc(budget)} stroke={MUTED} strokeDasharray="2 4" />
+          <text x={W - pad.r - 4} y={yc(budget) + 11} textAnchor="end" fontSize="7.5" fill={MUTED} fontFamily={MONO}>
+            BUDGET {formatWon(budget)}
+          </text>
+        </>
+      )}
+
+      <polyline points={cp} fill="none" stroke={MUTED} strokeWidth="1.5" />
       {runs.filter((r) => r.total_cost != null).map((r) => (
-        <circle key={r.run_id} cx={x(r.amr_count)} cy={yc(r.total_cost)} r="3" fill="#fbfaf8" stroke="#8a8983" strokeWidth="1.5" />
+        <circle key={r.run_id} cx={x(r.amr_count)} cy={yc(r.total_cost)} r="3" fill="#fbfaf8" stroke={MUTED} strokeWidth="1.5" />
       ))}
 
-      <polyline points={tp} fill="none" stroke="#e72d2d" strokeWidth="2.5" />
+      <polyline points={tp} fill="none" stroke={RED} strokeWidth="2.5" />
       {done.map((r) => (
-        <circle key={r.run_id} cx={x(r.amr_count)} cy={y(r.throughput)} r="4" fill={r.amr_count === recommended ? '#e72d2d' : '#fbfaf8'} stroke="#e72d2d" strokeWidth="2" />
+        <circle key={r.run_id} cx={x(r.amr_count)} cy={y(r.throughput)} r="4" fill={r.amr_count === recommended ? RED : '#fbfaf8'} stroke={RED} strokeWidth="2" />
       ))}
 
       {knee != null && knee !== recommended && (
         <>
-          <line x1={x(knee)} x2={x(knee)} y1={pad.t} y2={pad.t + ih} stroke="#8a8983" strokeDasharray="3 3" />
-          <text x={x(knee) + 6} y={pad.t + ih - 20} fontSize="7.5" fill="#8a8983" fontFamily={MONO}>KNEE {knee}</text>
+          <line x1={x(knee)} x2={x(knee)} y1={pad.t} y2={pad.t + ih} stroke={MUTED} strokeDasharray="3 3" />
+          <text x={x(knee) + 6} y={pad.t + ih - 20} fontSize="7.5" fill={MUTED} fontFamily={MONO}>KNEE {knee}</text>
         </>
       )}
       {recommended != null && (
         <>
-          <line x1={x(recommended)} x2={x(recommended)} y1={pad.t} y2={pad.t + ih} stroke="#e72d2d" strokeDasharray="3 3" />
-          <text x={x(recommended) + 6} y={pad.t + ih - 8} fontSize="8" fontWeight="600" fill="#b51616" fontFamily={MONO}>RECOMMENDED {recommended}</text>
+          <line x1={x(recommended)} x2={x(recommended)} y1={pad.t} y2={pad.t + ih} stroke={RED} strokeDasharray="3 3" />
+          <text x={x(recommended) + (x(recommended) > pad.l + iw * 0.7 ? -6 : 6)} y={pad.t + ih - 8}
+                textAnchor={x(recommended) > pad.l + iw * 0.7 ? 'end' : 'start'}
+                fontSize="8" fontWeight="600" fill="#b51616" fontFamily={MONO}>
+            RECOMMENDED {recommended}
+          </text>
         </>
       )}
     </svg>
@@ -94,13 +135,15 @@ function UtilChart({ runs, target, recommended }) {
   const iw = W - pad.l - pad.r
   const ih = H - pad.t - pad.b
   const bw = iw / Math.max(1, runs.length)
+  const recIndex = runs.findIndex((r) => r.amr_count === recommended)
+  const visible = new Set(tickIndexes(runs, recIndex))
 
   return (
     <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label="AMR 대수별 가동률">
       {[0, 25, 50, 75, 100].map((v) => (
         <g key={v}>
-          <line x1={pad.l} x2={W - pad.r} y1={pad.t + ih - (v / 100) * ih} y2={pad.t + ih - (v / 100) * ih} stroke="#e0ded9" />
-          <text x={pad.l - 8} y={pad.t + ih - (v / 100) * ih + 3} textAnchor="end" fontSize="8" fill="#8a8983" fontFamily={MONO}>{v}%</text>
+          <line x1={pad.l} x2={W - pad.r} y1={pad.t + ih - (v / 100) * ih} y2={pad.t + ih - (v / 100) * ih} stroke={GRID_LINE} />
+          <text x={pad.l - 8} y={pad.t + ih - (v / 100) * ih + 3} textAnchor="end" fontSize="8" fill={MUTED} fontFamily={MONO}>{v}%</text>
         </g>
       ))}
       {target != null && (
@@ -108,27 +151,35 @@ function UtilChart({ runs, target, recommended }) {
       )}
       {runs.map((r, i) => {
         const cx = pad.l + bw * i + bw / 2
+        const hl = r.amr_count === recommended
+        const label = visible.has(i) && (
+          <text x={cx} y={H - pad.b + 16} textAnchor="middle" fontSize="8" fontWeight={hl ? '600' : '400'}
+                fill={hl ? '#b51616' : isDone(r) ? '#4a4a46' : '#b7b5b0'} fontFamily={MONO}>
+            {r.amr_count}
+          </text>
+        )
         if (!isDone(r) || r.utilization == null) {
           return (
             <g key={r.run_id}>
-              <rect x={cx - bw * 0.3} y={pad.t} width={bw * 0.6} height={ih} fill="#e0ded9" opacity=".5" />
-              <text x={cx} y={H - pad.b + 16} textAnchor="middle" fontSize="8" fill="#b7b5b0" fontFamily={MONO}>{r.amr_count}</text>
+              <rect x={cx - bw * 0.3} y={pad.t} width={bw * 0.6} height={ih} fill={GRID_LINE} opacity=".5" />
+              {label}
             </g>
           )
         }
         const uh = (Math.min(100, r.utilization) / 100) * ih
-        const hl = r.amr_count === recommended
         return (
           <g key={r.run_id}>
-            <rect x={cx - bw * 0.3} y={pad.t + ih - uh} width={bw * 0.6} height={uh} fill={hl ? '#e72d2d' : '#3f3f3d'} />
-            <text x={cx} y={pad.t + ih - uh - 6} textAnchor="middle" fontSize="8" fontWeight="600" fill={hl ? '#b51616' : '#4a4a46'} fontFamily={MONO}>
-              {Math.round(r.utilization)}
-            </text>
-            <text x={cx} y={H - pad.b + 16} textAnchor="middle" fontSize="8" fill="#4a4a46" fontFamily={MONO}>{r.amr_count}</text>
+            <rect x={cx - bw * 0.3} y={pad.t + ih - uh} width={bw * 0.6} height={uh} fill={hl ? RED : '#3f3f3d'} />
+            {hl && (
+              <text x={cx} y={pad.t + ih - uh - 6} textAnchor="middle" fontSize="8" fontWeight="600" fill="#b51616" fontFamily={MONO}>
+                {Math.round(r.utilization)}
+              </text>
+            )}
+            {label}
           </g>
         )
       })}
-      <text x={pad.l} y={H - 4} fontSize="7.5" fill="#8a8983" fontFamily={MONO}>■ AMR 가동률 · 점선 = 목표 가동률</text>
+      <text x={pad.l} y={H - 4} fontSize="7.5" fill={MUTED} fontFamily={MONO}>검은 막대 가동률 · 빨간 막대 권장 구성 · 회색 막대 결과 없는 run</text>
     </svg>
   )
 }
@@ -239,7 +290,7 @@ export default function QuoteStep({ estimateId, estimate, verdict, model, form }
                 <div>
                   <h5>UTILIZATION</h5>
                   <UtilChart runs={runs} target={estimate.target_utilization} recommended={recommended} />
-                  <p className="chart-cap">회색 막대 = 결과 없는 run</p>
+                  <p className="chart-cap">대수가 많으면 x축 라벨은 일부만 표시됩니다</p>
                 </div>
               </div>
 
