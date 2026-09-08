@@ -71,7 +71,7 @@ pipeline {
             steps {
                 withCredentials([file(credentialsId: 'app-env', variable: 'APP_ENV_FILE')]) {
                     sh '''
-                        cp "$APP_ENV_FILE" 4_Web/.env
+                        cp -f "$APP_ENV_FILE" 4_Web/.env
                         $COMPOSE build backend
                         docker tag santafactory-be:latest santafactory-be:$BUILD_NUMBER
                         $COMPOSE up -d backend
@@ -98,7 +98,7 @@ pipeline {
             steps {
                 withCredentials([file(credentialsId: 'app-env', variable: 'APP_ENV_FILE')]) {
                     sh '''
-                        cp "$APP_ENV_FILE" 4_Web/.env
+                        cp -f "$APP_ENV_FILE" 4_Web/.env
                         $COMPOSE build frontend
                         docker tag santafactory-fe:latest santafactory-fe:$BUILD_NUMBER
                         $COMPOSE up -d frontend
