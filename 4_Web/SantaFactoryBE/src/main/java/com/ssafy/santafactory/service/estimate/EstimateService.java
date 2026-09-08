@@ -49,8 +49,8 @@ public class EstimateService {
     /** 시뮬 시각 필드는 "HH:mm" 문자열이다 (명세 §1-1). */
     private static final DateTimeFormatter HH_MM = DateTimeFormatter.ofPattern("HH:mm");
 
-    /** 시뮬은 결정론이라 시드를 고정해 두면 같은 견적이 같은 결과를 낸다. 시드 개수는 미확정. */
-    private static final long FIXED_SEED = 42L;
+    /** 시뮬 평가 시드 */
+    private static final long FIXED_SEED = 101L;
 
     /** 아직 결과를 기다리는 상태 — TIMEOUT 스윕 대상. */
     private static final List<RunStatus> PENDING = List.of(RunStatus.QUEUED, RunStatus.RUNNING);

@@ -169,6 +169,7 @@ class EstimateServiceTest {
         verify(simulationService).publishRuns(base.capture(), any());
         SimulationRequest sent = base.getValue();
         // 실행 시간을 명시하지 않으면 시뮬이 유한 주문 모드로 돌아 처리율이 전 대수 100 % 가 된다
+        assertThat(sent.seed()).isEqualTo(101L);                          // 평가 시드, API 로 받지 않는다
         assertThat(sent.horizonS()).isEqualTo(21600L);                    // 6시간
         assertThat(sent.shifts()).isEqualTo("in,in,out,out,out,out");     // 입고 2h + 출고 4h
         assertThat(sent.inboundGapS()).isEqualTo(48.0);                   // 600건 / 8시간
