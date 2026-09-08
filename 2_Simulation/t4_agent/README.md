@@ -70,5 +70,5 @@ ros2 launch amr_agent agent.launch.py serial:=amr01 mqtt_username:=amr01 mqtt_pa
 
 - Isaac 다중 로봇: warehouse_sim 이 로봇별 네임스페이스(`/amr01/odom` …)로 발행하도록 확장
 - 앞축 종방향 위치·회전 각속도 실측 → FMS 헤딩 상수(REAR_CELLS · TURN_TICKS) 확정
-- sim-runner 데몬(Sparkplug NCMD Start/Stop)과 에이전트 ×N 기동 연동, 런 아티팩트(리플레이·영상) — `2_Simulation/sim_runner/` (다음)
+- ~~sim-runner 데몬(Sparkplug NCMD Start/Stop)과 에이전트 ×N 기동 연동~~ 완료 9/8 — [`../sim_runner/`](../sim_runner/). 런 아티팩트(리플레이·영상)는 남음
 - AMCL 폐루프(`pose_source:=amcl`)에서의 정지 정밀도 실측, 오돔 노이즈 주입
