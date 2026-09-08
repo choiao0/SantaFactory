@@ -138,7 +138,7 @@ export default function RunsStep({ estimateId, estimate, connected, error }) {
       )}
 
       {estimateId != null && !estimate && !error && (
-        <div className="runs-empty">ESTIMATE #{estimateId} · 진행 상황 연결 중…</div>
+        <div className="runs-empty"><span className="live-dot pulse" /> ESTIMATE #{estimateId} · 진행 상황 연결 중…</div>
       )}
 
       {error && <div className="runs-empty form-error">{error}</div>}

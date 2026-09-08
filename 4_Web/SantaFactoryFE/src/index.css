@@ -47,6 +47,12 @@ button { font-family: inherit; }
   border-radius: 50%;
   box-shadow: 0 0 0 4px rgba(231, 45, 45, .15);
 }
+.live-dot.pulse { animation: pulse-ring 1.6s ease-out infinite; }
+@keyframes pulse-ring {
+  0% { box-shadow: 0 0 0 0 rgba(231, 45, 45, .55); }
+  70% { box-shadow: 0 0 0 9px rgba(231, 45, 45, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(231, 45, 45, 0); }
+}
 .section-dark { background: var(--black); color: var(--white); }
 .section-light { background: var(--light); color: var(--ink); }
 
@@ -380,6 +386,12 @@ section.step > p.desc { font-size: 18px; line-height: 1.7; max-width: 760px; mar
 .q-table td { border-bottom: 1px solid #d5d3ce; padding: 11px 12px; white-space: nowrap; }
 .q-table td span { color: #8a8983; font-size: 14.5px; }
 .q-table tr.hl td { background: #f3e3e0; font-weight: 600; }
+.rec-chip {
+  display: inline-block; margin-left: 8px; vertical-align: middle;
+  font: 600 11px var(--font-mono); letter-spacing: .04em; line-height: 1;
+  color: var(--red-dark); border: 1px solid var(--red-dark);
+  padding: 3px 8px; border-radius: 2px;
+}
 .q-table tr.fail td { color: #8a8983; }
 .tablewrap { overflow-x: auto; }
 .cong { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; }

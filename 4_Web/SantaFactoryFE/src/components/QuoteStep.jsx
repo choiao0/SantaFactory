@@ -141,7 +141,7 @@ function Placeholder({ estimateId, estimate }) {
   const finished = runs.filter((r) => r.status !== 'QUEUED' && r.status !== 'RUNNING').length
   return (
     <div className="q-empty">
-      <span className="live-dot" /> 시뮬레이션 진행 중 · {finished} / {runs.length} 완료
+      <span className="live-dot pulse" /> 시뮬레이션 진행 중 · {finished} / {runs.length} 완료
       <br />
       마지막 run 이 끝나면 권장 대수와 비용 곡선이 자동으로 표시됩니다.
     </div>
@@ -273,7 +273,7 @@ export default function QuoteStep({ estimateId, estimate, verdict, model, form }
                       }
                       return (
                         <tr key={r.run_id} className={r.amr_count === recommended ? 'hl' : ''}>
-                          <td>{r.amr_count}대{r.amr_count === recommended && <span> · 권장</span>}</td>
+                          <td>{r.amr_count}대{r.amr_count === recommended && <span className="rec-chip">권장</span>}</td>
                           <td>완료</td>
                           <td>{r.throughput.toFixed(1)}%</td>
                           <td>{r.throughput >= estimate.target_throughput ? '충족' : <span>미달</span>}</td>
