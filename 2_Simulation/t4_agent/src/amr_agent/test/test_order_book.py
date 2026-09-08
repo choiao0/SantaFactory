@@ -71,8 +71,9 @@ def test_stitch_one_node_per_tick():
 def test_stitch_rejections():
     b = OrderBook()
     b.receive(mk("o1", 0, [("n0", True, 0, 0, 0), ("n1", True, 1, 0, 0), ("n2", False, 2, 0, 0)]))
-    with pytest.raises(OrderError):   # same updateId
-        b.receive(mk("o1", 0, [("n1", True, 1, 0, 0), ("n2", True, 2, 0, 0)]))
+    # same updateId = FMS re-publish (contract §4.3): ignored, book untouched — see test_duplicate_update_is_ignored_without_error
+    assert b.receive(mk("o1", 0, [("n1", True, 1, 0, 0), ("n2", True, 2, 0, 0)])) == "duplicate"
+    assert b.order.base_len() == 2
     with pytest.raises(OrderError):   # does not start at last base node (n1)
         b.receive(mk("o1", 1, [("n0", True, 0, 0, 0), ("n2", True, 2, 0, 0)]))
     with pytest.raises(OrderError):   # different order while base active
@@ -98,3 +99,16 @@ def test_reverse_edge_detection():
     assert o.edges[0].is_reverse()
     assert not Edge("e", 1, True, "a", "b", orientation=0.0).is_reverse()
     assert not Edge("e", 1, True, "a", "b", orientation=math.pi, orientation_type="GLOBAL").is_reverse()
+
+
+def test_duplicate_update_is_ignored_without_error():
+    from amr_agent.vda5050.order import OrderUpdateError
+    b = OrderBook()
+    b.receive(mk("o1", 0, [("n0", True, 0, 0, 0), ("n1", False, 1, 0, 0)]))
+    upd = mk("o1", 1, [("n0", True, 0, 0, 0), ("n1", True, 1, 0, 0), ("n2", False, 2, 0, 0)])
+    assert b.receive(upd) == "stitched"
+    assert b.receive(upd) == "duplicate"                    # same orderUpdateId again → ignored
+    assert b.order_update_id == 1 and b.order.base_len() == 2   # book untouched
+    with pytest.raises(OrderUpdateError):                    # lower → orderUpdateError
+        b.receive(mk("o1", 0, [("n0", True, 0, 0, 0), ("n1", False, 1, 0, 0)]))
+    assert b.order_update_id == 1

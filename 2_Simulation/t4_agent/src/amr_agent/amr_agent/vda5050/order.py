@@ -18,6 +18,10 @@ class OrderError(ValueError):
     """Order rejected: malformed or violates VDA 5050 acceptance rules."""
 
 
+class OrderUpdateError(OrderError):
+    """orderUpdateId lower than the one already held (VDA errorType orderUpdateError)."""
+
+
 def wrap(a: float) -> float:
     return math.atan2(math.sin(a), math.cos(a))
 
@@ -256,12 +260,17 @@ class OrderBook:
     # ---- transitions ---------------------------------------------------------
     def receive(self, incoming: Order, at_xy: Optional[Tuple[float, float]] = None,
                 first_node_tol: float = 0.5) -> str:
-        """Apply an incoming order. Returns 'started' | 'stitched'. Raises OrderError."""
+        """Apply an incoming order. Returns 'started' | 'stitched' | 'duplicate'. Raises OrderError.
+
+        Same orderId and same orderUpdateId = re-publish by the FMS (contract §4.3): ignore, no error.
+        Lower orderUpdateId = stale: OrderUpdateError. Both leave the book untouched."""
         cur = self.order
         if cur is not None and incoming.order_id == cur.order_id:
-            if incoming.order_update_id <= cur.order_update_id:
-                raise OrderError(f"orderUpdateId {incoming.order_update_id} not greater than "
-                                 f"{cur.order_update_id}")
+            if incoming.order_update_id == cur.order_update_id:
+                return "duplicate"
+            if incoming.order_update_id < cur.order_update_id:
+                raise OrderUpdateError(f"orderUpdateId {incoming.order_update_id} lower than current "
+                                       f"{cur.order_update_id}")
             self._stitch(incoming)
             return "stitched"
         if self.active:

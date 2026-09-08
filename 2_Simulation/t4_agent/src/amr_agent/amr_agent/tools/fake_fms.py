@@ -7,6 +7,9 @@ sent only after state.lastNodeId acknowledges the previous one. Prints per-tick 
 and final position error. Exit code 0 = plan completed within tolerance.
 
   python3 -m amr_agent.tools.fake_fms --host localhost --serial amr01 --plan F,F,L,F,B
+  # through EMQX (3_FMS/infra/emqx): the FMS side uses the fms-core account
+  python3 -m amr_agent.tools.fake_fms --host <EMQX> --user fms-core --pw "$MQTT_PW_FMS_CORE" --serial amr01 --plan F,F --repeat-last
+--repeat-last re-sends the final order update unchanged: the agent must ignore it (no state.errors, same lastNodeId).
 """
 from __future__ import annotations
 
@@ -73,10 +76,18 @@ class FakeFms:
         self.header = 0
         self.c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=f"fake-fms-{args.serial}",
                              protocol=mqtt.MQTTv311)
-        self.c.on_connect = lambda c, u, f, rc, p=None: c.subscribe([(self.t_state, 0), (self.t_conn, 1)])
+        if args.user:
+            self.c.username_pw_set(args.user, args.pw or None)
+        self.c.on_connect = self._on_connect
         self.c.on_message = self._on_message
         self.c.connect(args.host, args.port, 30)
         self.c.loop_start()
+
+    def _on_connect(self, c, _u, _f, rc, _p=None) -> None:
+        if rc != 0:
+            print(f"[fake_fms] MQTT connect refused: {rc} (account/password?)", flush=True)
+            return
+        c.subscribe([(self.t_state, 0), (self.t_conn, 1)])
 
     def _on_message(self, _c, _u, m) -> None:
         try:
@@ -154,15 +165,35 @@ class FakeFms:
         ok = worst_xy <= self.a.dev_xy and worst_th <= math.degrees(self.a.dev_theta)
         print(f"[fake_fms] done: {N} ticks in {total:.1f}s — worst pos err {worst_xy:.3f} m, "
               f"worst θ err {worst_th:.1f}° → {'PASS' if ok else 'FAIL'}")
+        if self.a.repeat_last:
+            ok = self._repeat_last(nodes, edges, N) and ok
         self.c.loop_stop()
         return 0 if ok else 1
+
+    def _repeat_last(self, nodes, edges, N: int) -> bool:
+        """Same orderId + same orderUpdateId again (FMS re-publish, contract §4.3): must be ignored without an error."""
+        ns, es = release_upto(nodes, edges, N)
+        with self.cv:
+            self.state = None
+        self.send_order(Order(self.a.order_id, N, ns[max(N - 1, 0):], es[max(N - 1, 0):]))
+        st, err = self.wait_state(lambda s: int(s.get("orderUpdateId", -1)) == N, 5.0)
+        if st is None:
+            print(f"[fake_fms] repeat-last: agent reported an error → FAIL: {err}")
+            return False
+        if st.get("lastNodeId") != f"n{N}":
+            print(f"[fake_fms] repeat-last: lastNodeId changed to {st.get('lastNodeId')} → FAIL")
+            return False
+        print(f"[fake_fms] repeat-last: duplicate orderUpdateId {N} ignored, no errors → PASS")
+        return True
 
 
 def main(argv=None) -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--host", default="localhost")
     ap.add_argument("--port", type=int, default=1883)
-    ap.add_argument("--manufacturer", default="santa")
+    ap.add_argument("--user", default="", help="MQTT username (EMQX: fms-core)")
+    ap.add_argument("--pw", default="", help="MQTT password")
+    ap.add_argument("--manufacturer", default="idealworks")
     ap.add_argument("--serial", default="amr01")
     ap.add_argument("--map-id", default="")
     ap.add_argument("--plan", default="F,F,L,F,B")
@@ -171,6 +202,7 @@ def main(argv=None) -> None:
     ap.add_argument("--dev-theta", type=float, default=0.087, help="allowedDeviationTheta per node [rad]")
     ap.add_argument("--timeout", type=float, default=30.0, help="per-tick ack timeout [s]")
     ap.add_argument("--order-id", default=f"demo-{int(time.time()) % 100000}")
+    ap.add_argument("--repeat-last", action="store_true", help="re-send the final update; agent must ignore it")
     sys.exit(FakeFms(ap.parse_args(argv)).run())
 
 
