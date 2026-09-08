@@ -28,6 +28,7 @@ import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Optional;
+import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
@@ -45,7 +46,7 @@ import static org.mockito.Mockito.when;
 class EstimateServiceTest {
 
     private static final EstimateProperties PROPS =
-            new EstimateProperties(15_000_000L, 5_000_000L, 500_000L, 8, 6, 4, 1, Duration.ofMinutes(30), Duration.ofHours(6), "in,in,out,out,out,out");
+            new EstimateProperties(15_000_000L, 5_000_000L, 500_000L, 28, 6, 4, 1, Duration.ofMinutes(30), Duration.ofHours(6), "in,in,out,out,out,out");
 
     @Mock
     EstimateRepository estimateRepository;
@@ -78,15 +79,15 @@ class EstimateServiceTest {
         EstimateCreateResponse response = service().create(
                 new EstimateCreateRequest(1L, null, null, null, null));
 
-        // 예산 3억이면 19대까지 살 수 있지만 상한 8이 먼저 걸린다
+        // 예산 3억 ÷ 대당 1,550만 = 19대 + 여유 1 = 20대. 충전 존 상한 28 보다 작아 예산이 먼저 걸린다
         assertThat(response.estimateId()).isEqualTo(77L);
-        assertThat(response.maxAmrCount()).isEqualTo(8);
-        verify(scenarioRepository, times(8)).save(any());
+        assertThat(response.maxAmrCount()).isEqualTo(20);
+        verify(scenarioRepository, times(20)).save(any());
 
         ArgumentCaptor<List<Integer>> counts = ArgumentCaptor.captor();
         ArgumentCaptor<SimulationRequest> base = ArgumentCaptor.captor();
         verify(simulationService).publishRuns(base.capture(), counts.capture());
-        assertThat(counts.getValue()).containsExactly(1, 2, 3, 4, 5, 6, 7, 8);
+        assertThat(counts.getValue()).containsExactlyElementsOf(IntStream.rangeClosed(1, 20).boxed().toList());
         assertThat(base.getValue().runId()).isEqualTo("est_77");
     }
 

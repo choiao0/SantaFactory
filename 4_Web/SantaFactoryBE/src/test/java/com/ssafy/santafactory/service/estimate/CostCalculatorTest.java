@@ -13,7 +13,7 @@ class CostCalculatorTest {
      * 충전기 1대당 AMR 4대. → 대당 비용 1,550만.
      */
     private final CostCalculator calculator = new CostCalculator(
-            new EstimateProperties(15_000_000L, 5_000_000L, 500_000L, 8, 6, 4, 1, Duration.ofMinutes(30), Duration.ofHours(6), "in,in,out,out,out,out"));
+            new EstimateProperties(15_000_000L, 5_000_000L, 500_000L, 28, 6, 4, 1, Duration.ofMinutes(30), Duration.ofHours(6), "in,in,out,out,out,out"));
 
     @Test
     void chargers_round_up_one_per_four_amrs() {
@@ -51,9 +51,16 @@ class CostCalculatorTest {
     }
 
     @Test
-    void max_amr_count_is_capped_at_eight() {
-        // 예산 3억(창고 시드 값)이면 19대까지 살 수 있지만 상한이 먼저 걸린다
-        assertThat(calculator.maxAmrCount(300_000_000L)).isEqualTo(8);
+    void the_budget_binds_before_the_charge_zone_capacity() {
+        // 예산 3억(창고 시드 값) ÷ 대당 1,550만 = 19대, + 여유 1 = 20대.
+        // 상한 28 은 이보다 크므로 걸리지 않는다 — 예산이 실질 상한이다.
+        assertThat(calculator.maxAmrCount(300_000_000L)).isEqualTo(20);
+    }
+
+    @Test
+    void max_amr_count_is_capped_at_the_charge_zone_capacity() {
+        // 예산이 아주 크면 충전 존 용량(28)에서 잘린다. 그 이상은 시뮬이 배치 단계에서 죽는다
+        assertThat(calculator.maxAmrCount(10_000_000_000L)).isEqualTo(28);
     }
 
     @Test
@@ -64,7 +71,7 @@ class CostCalculatorTest {
     @Test
     void undecided_charger_price_simply_drops_out_of_the_cost() {
         CostCalculator noChargerPrice = new CostCalculator(
-                new EstimateProperties(15_000_000L, 0L, 500_000L, 8, 6, 4, 1, Duration.ofMinutes(30), Duration.ofHours(6), "in,in,out,out,out,out"));
+                new EstimateProperties(15_000_000L, 0L, 500_000L, 28, 6, 4, 1, Duration.ofMinutes(30), Duration.ofHours(6), "in,in,out,out,out,out"));
 
         assertThat(noChargerPrice.cost(6)).isEqualTo(93_000_000L);
     }
@@ -72,9 +79,9 @@ class CostCalculatorTest {
     @Test
     void undecided_prices_fall_back_to_the_fleet_cap() {
         CostCalculator undecided = new CostCalculator(
-                new EstimateProperties(0L, 0L, 0L, 8, 6, 4, 1, Duration.ofMinutes(30), Duration.ofHours(6), "in,in,out,out,out,out"));
+                new EstimateProperties(0L, 0L, 0L, 28, 6, 4, 1, Duration.ofMinutes(30), Duration.ofHours(6), "in,in,out,out,out,out"));
 
-        assertThat(undecided.maxAmrCount(1_000L)).isEqualTo(8);
+        assertThat(undecided.maxAmrCount(1_000L)).isEqualTo(28);
         assertThat(undecided.cost(6)).isZero();
     }
 }
