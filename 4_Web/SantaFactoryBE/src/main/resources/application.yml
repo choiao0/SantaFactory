@@ -5,9 +5,15 @@ spring:
     url: ${DB_URL:jdbc:postgresql://localhost:5432/santafactory}
     username: ${DB_USERNAME:postgres}
     password: ${DB_PASSWORD:postgres}
+  flyway:
+    # 앱은 스키마(migration) + 데모 시드(seed)를 함께 적용한다. 테스트는 migration 만
+    # 읽는다 (test/resources/application.yml) — 이유는 R__seed_demo.sql 주석 참고.
+    locations: classpath:db/migration,classpath:db/seed
   jpa:
     hibernate:
-      ddl-auto: update
+      # 스키마는 Flyway 가 만든다. 여기서는 엔티티가 요구하는 테이블·컬럼이 마이그레이션
+      # 결과에 있는지만 검사한다 — 어긋나면 부팅이 실패한다. 이게 이 설정의 목적이다.
+      ddl-auto: validate
     show-sql: true
     properties:
       hibernate:

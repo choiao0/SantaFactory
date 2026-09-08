@@ -1,3 +1,15 @@
+-- 데모 시드 — 반복 마이그레이션(R__)이라 버전 마이그레이션이 모두 끝난 뒤 마지막에 실행된다.
+--
+-- 앱은 db/migration + db/seed 를 함께 읽고, 테스트는 db/migration 만 읽는다
+-- (test/resources/application.yml). EstimateFlowIT 가 DELETE FROM warehouses 로
+-- 자기 창고를 심는데, 시드가 들어와 있으면 zones 의 FK 때문에 실패한다.
+--
+-- 이 파일을 고치면 체크섬이 바뀌어 다시 실행되고, 아래 TRUNCATE CASCADE 로 그때까지
+-- 쌓인 견적·주문까지 함께 지워진다. 데모 데이터 전용이라 그대로 둔다 — 오히려
+-- "시드 고치면 데모 데이터가 초기화된다"가 의도한 동작이다.
+TRUNCATE warehouses, facility, zones, stores, rack, products, robots
+    RESTART IDENTITY CASCADE;
+
 INSERT INTO warehouses
 (warehouse_id,name,area,width,length,worker_count,
  inbound_start,inbound_end,outbound_start,outbound_end,status,
