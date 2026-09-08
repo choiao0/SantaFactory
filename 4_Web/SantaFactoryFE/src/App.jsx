@@ -21,7 +21,7 @@ const DEFAULT_FORM = {
   budgetMan: 30000,
 }
 
-const DEFAULT_FLEET = { min: 3, max: 15, step: 2 }
+const DEFAULT_FLEET = { min: 3, max: 15 }
 
 export default function App() {
   useReveal()
@@ -56,7 +56,6 @@ export default function App() {
         amrModel: model,
         fleetMin: fleet.min,
         fleetMax: fleet.max,
-        fleetStep: fleet.step,
       })
       setEstimateId(estimate.estimate_id)
       document.getElementById('s3')?.scrollIntoView({ behavior: 'smooth' })

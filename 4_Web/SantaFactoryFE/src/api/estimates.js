@@ -22,13 +22,12 @@ export function getRobots() {
   return api.get('/robots')
 }
 
-export function createEstimate({ warehouseId, amrModel, fleetMin, fleetMax, fleetStep }) {
+export function createEstimate({ warehouseId, amrModel, fleetMin, fleetMax }) {
   return api.post('/estimates', {
     warehouse_id: warehouseId,
     amr_model: amrModel,
     fleet_min: fleetMin,
     fleet_max: fleetMax,
-    fleet_step: fleetStep,
   })
 }
 

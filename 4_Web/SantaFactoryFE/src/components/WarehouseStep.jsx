@@ -12,6 +12,10 @@ function hoursBetween(start, end) {
 export default function WarehouseStep({ form, onChange, models, modelsError, model, onSelectModel }) {
   const number = (key) => (e) => onChange({ [key]: e.target.value === '' ? '' : Number(e.target.value) })
   const text = (key) => (e) => onChange({ [key]: e.target.value })
+  const digits = (key) => (e) => {
+    const v = e.target.value.replace(/[^0-9]/g, '')
+    onChange({ [key]: v === '' ? '' : Number(v) })
+  }
 
   const outboundHours = hoursBetween(form.outboundStart, form.outboundEnd)
   const arrivalsPerHour = outboundHours ? Math.round(form.outboundAvg / outboundHours) : null
@@ -30,18 +34,24 @@ export default function WarehouseStep({ form, onChange, models, modelsError, mod
           <div className="formgrid">
             <div className="span2">
               <label htmlFor="workers">작업자 수</label>
-              <input id="workers" type="number" value={form.workerCount} min={1} onChange={number('workerCount')} />
-              <span className="unit">명</span>
+              <div className="field">
+                <input id="workers" type="number" value={form.workerCount} min={1} onChange={number('workerCount')} />
+                <span className="suffix">명</span>
+              </div>
             </div>
             <div>
               <label htmlFor="inbound-avg">일 평균 입고</label>
-              <input id="inbound-avg" type="number" value={form.inboundAvg} min={0} onChange={number('inboundAvg')} />
-              <span className="unit">건 / 일</span>
+              <div className="field">
+                <input id="inbound-avg" type="text" inputMode="numeric" value={form.inboundAvg} onChange={digits('inboundAvg')} />
+                <span className="suffix">건/일</span>
+              </div>
             </div>
             <div>
               <label htmlFor="outbound-avg">일 평균 출고 주문</label>
-              <input id="outbound-avg" type="number" value={form.outboundAvg} min={0} onChange={number('outboundAvg')} />
-              <span className="unit">건 / 일</span>
+              <div className="field">
+                <input id="outbound-avg" type="text" inputMode="numeric" value={form.outboundAvg} onChange={digits('outboundAvg')} />
+                <span className="suffix">건/일</span>
+              </div>
             </div>
 
             <div className="span2">
@@ -62,14 +72,18 @@ export default function WarehouseStep({ form, onChange, models, modelsError, mod
             </div>
 
             <div className="span2">
-              <label htmlFor="target">목표 출고 처리율</label>
-              <input id="target" type="number" value={form.targetThroughput} min={1} max={100} onChange={number('targetThroughput')} />
-              <span className="unit">% · 접수 주문 중 완료 비율</span>
+              <label htmlFor="target">목표 출고 처리율 · 접수 주문 중 완료 비율</label>
+              <div className="field">
+                <input id="target" type="number" value={form.targetThroughput} min={1} max={100} onChange={number('targetThroughput')} />
+                <span className="suffix">%</span>
+              </div>
             </div>
             <div className="span2">
               <label htmlFor="budget">최대 구축 예산</label>
-              <input id="budget" type="number" value={form.budgetMan} step={1000} min={0} onChange={number('budgetMan')} />
-              <span className="unit">만원</span>
+              <div className="field">
+                <input id="budget" type="number" value={form.budgetMan} step={1000} min={0} onChange={number('budgetMan')} />
+                <span className="suffix">만원</span>
+              </div>
             </div>
           </div>
 

@@ -13,7 +13,7 @@ export default function FleetStep({ fleet, onChange, model, requesting, error, e
 
   const pct = (n) => ((n - MIN) / (MAX - MIN)) * 100
   const counts = []
-  for (let n = fleet.min; n <= fleet.max; n += fleet.step) counts.push(n)
+  for (let n = fleet.min; n <= fleet.max; n += 1) counts.push(n)
 
   const perUnit = model ? model.price + model.cost : null
   const costMan = (n) => (perUnit == null ? null : Math.round((perUnit * n) / 10000))
@@ -28,8 +28,8 @@ export default function FleetStep({ fleet, onChange, model, requesting, error, e
     if (Number.isNaN(n)) return
     onChange(
       which === 'min'
-        ? { ...fleet, min: clamp(n, MIN, fleet.max) }
-        : { ...fleet, max: clamp(n, fleet.min, MAX) },
+        ? { ...fleet, min: clamp(n, MIN, fleet.max - 1) }
+        : { ...fleet, max: clamp(n, fleet.min + 1, MAX) },
     )
   }
 
@@ -86,7 +86,7 @@ export default function FleetStep({ fleet, onChange, model, requesting, error, e
               id="fleet-min"
               type="number"
               min={MIN}
-              max={fleet.max}
+              max={fleet.max - 1}
               value={fleet.min}
               onChange={(e) => move('min', Number(e.target.value))}
             />
@@ -96,25 +96,16 @@ export default function FleetStep({ fleet, onChange, model, requesting, error, e
             <input
               id="fleet-max"
               type="number"
-              min={fleet.min}
+              min={fleet.min + 1}
               max={MAX}
               value={fleet.max}
               onChange={(e) => move('max', Number(e.target.value))}
             />
           </div>
-          <div>
-            <label htmlFor="fleet-step">간격</label>
-            <select id="fleet-step" value={fleet.step} onChange={(e) => onChange({ ...fleet, step: Number(e.target.value) })}>
-              <option value={1}>1대</option>
-              <option value={2}>2대</option>
-              <option value={3}>3대</option>
-              <option value={4}>4대</option>
-            </select>
-          </div>
         </div>
 
         <p className="fleetnote">
-          RUNS <b>{counts.length}건</b> — {counts.map((n) => `n${n}`).join(' · ')}
+          RUNS <b>{counts.length}건</b> — {fleet.min}대 ~ {fleet.max}대
           <br />
           {model ? (
             <>

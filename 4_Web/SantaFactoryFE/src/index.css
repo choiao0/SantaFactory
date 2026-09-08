@@ -156,6 +156,9 @@ section.step > p.desc { font-size: 18px; line-height: 1.7; max-width: 760px; mar
 }
 .formgrid input:focus, .formgrid select:focus { outline: 2px solid var(--red); }
 .formgrid .unit { font: 500 14px var(--font-mono); color: #77776f; margin-top: 6px; display: block; }
+.field { position: relative; }
+.field input { padding-right: 64px; }
+.field .suffix { position: absolute; right: 14px; top: 50%; transform: translateY(-50%); font: 500 14px var(--font-mono); color: #77776f; letter-spacing: .02em; pointer-events: none; }
 .formgrid .span2 { grid-column: span 2; }
 .timerange { display: flex; align-items: center; gap: 8px; }
 .timerange input { flex: 1; min-width: 0; }
