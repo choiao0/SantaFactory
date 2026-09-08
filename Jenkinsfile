@@ -12,7 +12,7 @@ pipeline {
     environment {
         STATE_DIR  = '/var/lib/jenkins/deploy-state'
         SHA_FILE   = '/var/lib/jenkins/deploy-state/last-deployed.sha'
-        WEB_ROOT   = '/srv/www'
+        COMPOSE    = 'docker compose -f 4_Web/docker-compose.yml'
         KEEP_COUNT = '3'
     }
 
@@ -72,8 +72,9 @@ pipeline {
                 withCredentials([file(credentialsId: 'app-env', variable: 'APP_ENV_FILE')]) {
                     sh '''
                         cp "$APP_ENV_FILE" 4_Web/.env
-                        docker compose -f 4_Web/docker-compose.yml build backend
-                        docker compose -f 4_Web/docker-compose.yml up -d --no-deps backend
+                        $COMPOSE build backend
+                        docker tag santafactory-be:latest santafactory-be:$BUILD_NUMBER
+                        $COMPOSE up -d backend
                     '''
                 }
                 sh '''
@@ -95,17 +96,39 @@ pipeline {
         stage('프론트 빌드·배포') {
             when { expression { env.SKIP_ALL != 'true' && env.BUILD_FE == 'true' } }
             steps {
+                withCredentials([file(credentialsId: 'app-env', variable: 'APP_ENV_FILE')]) {
+                    sh '''
+                        cp "$APP_ENV_FILE" 4_Web/.env
+                        $COMPOSE build frontend
+                        docker tag santafactory-fe:latest santafactory-fe:$BUILD_NUMBER
+                        $COMPOSE up -d frontend
+                    '''
+                }
                 sh '''
-                    docker build -t santafactory-fe:$BUILD_NUMBER 4_Web/SantaFactoryFE
-                    mkdir -p "$WEB_ROOT/santafactory-$BUILD_NUMBER"
-                    docker run --rm -v "$WEB_ROOT/santafactory-$BUILD_NUMBER":/out \
-                        santafactory-fe:$BUILD_NUMBER sh -c "cp -r /app/dist/. /out/"
-                    ln -sfn "$WEB_ROOT/santafactory-$BUILD_NUMBER" "$WEB_ROOT/current.tmp"
-                    mv -T "$WEB_ROOT/current.tmp" "$WEB_ROOT/current"
+                    for i in $(seq 1 15); do
+                        code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3000/ || true)
+                        if [ "$code" = "200" ]; then
+                            echo "frontend 기동 확인 (HTTP $code)"
+                            exit 0
+                        fi
+                        sleep 2
+                    done
+                    echo "frontend 가 30초 안에 응답하지 않음"
+                    docker logs --tail 50 a106-frontend || true
+                    exit 1
                 '''
+            }
+        }
+
+        stage('이미지 정리') {
+            when { expression { env.SKIP_ALL != 'true' } }
+            steps {
                 sh '''
-                    cd "$WEB_ROOT"
-                    ls -1d santafactory-* 2>/dev/null | sort -t- -k2 -n | head -n -"$KEEP_COUNT" | xargs -r rm -rf
+                    for img in santafactory-be santafactory-fe; do
+                        docker images "$img" --format '{{.Tag}}' \
+                            | grep -E '^[0-9]+$' | sort -n | head -n -"$KEEP_COUNT" \
+                            | xargs -r -I{} docker rmi "$img:{}"
+                    done
                     docker image prune -f > /dev/null
                 '''
             }

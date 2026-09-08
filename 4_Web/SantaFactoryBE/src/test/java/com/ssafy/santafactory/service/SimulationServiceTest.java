@@ -27,7 +27,7 @@ class SimulationServiceTest {
     SimulationService simulationService;
 
     private final SimulationRequest base = new SimulationRequest(
-            "est_77", 42L,
+            "est_77", 42L, 21600L, "in,in,out,out,out,out", 48.0, 22.5,
             new SimulationRequest.Warehouse(4, "01:00", "09:00", "13:00", "18:00", 480, 500),
             new SimulationRequest.Amr(0, 1.2, 1.0, 0.02, 100.0, 3600, 0.2, 8),
             List.of(new SimulationRequest.Inbound(5001L, 3L,

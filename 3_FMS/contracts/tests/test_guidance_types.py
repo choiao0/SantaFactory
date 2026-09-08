@@ -2,7 +2,7 @@
 
 범위: θ 11개의 의미·범위 확정분만 검증한다. from_theta 구현이나 PIBT 스코어에
 관한 것은 B트랙 이슈이므로 여기서 다루지 않는다
-(docs/2026-09-01_θ스키마_합의안.md 의 "미합의 / 후속").
+(docs/θ_경로_기준선.md#비용-규약과-주의점).
 """
 
 from dataclasses import fields, replace

@@ -17,6 +17,9 @@ repositories {
     mavenCentral()
 }
 
+// Spring Boot 3.3.5 BOM 이 고정하는 1.19.8 은 최신 Docker Engine(API 1.5x)의 /info 를 400 으로 받는다.
+ext['testcontainers.version'] = '1.21.3'
+
 dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-web'
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
@@ -32,7 +35,12 @@ dependencies {
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
     testCompileOnly 'org.projectlombok:lombok'
     testAnnotationProcessor 'org.projectlombok:lombok'
-    testRuntimeOnly 'com.h2database:h2'
+
+    // 컨텍스트 테스트는 운영과 같은 Postgres 로 돌린다. H2 는 엔티티에서 스키마를 만들어버려서
+    // 손으로 쓴 db/santafactory.sql 과 엔티티가 어긋나도 통과한다 — ddl-auto=validate 가 그걸 잡는다.
+    testImplementation 'org.springframework.boot:spring-boot-testcontainers'
+    testImplementation 'org.testcontainers:junit-jupiter'
+    testImplementation 'org.testcontainers:postgresql'
 }
 
 tasks.named('test') {
