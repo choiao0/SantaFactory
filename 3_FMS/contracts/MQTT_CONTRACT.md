@@ -13,8 +13,8 @@ FMS ↔ AMR 에이전트 ↔ sim-runner ↔ Host ↔ 시뮬 WMS 가 한 브로�
 | 라이선스 | 6.x = BSL 1.1 + 동봉 Community License: "단일 노드 내부 환경 무료 사용", 클러스터·SaaS 재판매는 별도. `emqx ctl license info`: type community, max_sessions 10,000,000, 2029-03-01 까지. Apache 2.0 이 필요하면 5.8.9 (`sha256:35b46f7a…`) | 적용 |
 | 설정 | HOCON `emqx.conf` — 키는 EMQX 6.3.0 실행으로 검증(2026-09-08). `node.data_dir` 필수, `security_profile` 기본 hardened | 적용 |
 | 프로토콜 | MQTT 3.1.1 · clean session · QoS 상한 1 (`mqtt.max_qos_allowed`) · 패킷 1 MB · keepalive 30 s(sim-runner 60 s) | 적용 |
-| 노출 | 1883 만. 로컬은 호스트 1883, EC2 는 NodePort 31883 을 tailnet 에서만(보안 그룹 443 외 차단). 대시보드는 127.0.0.1 / port-forward | 적용 (로컬) / 예정 (EC2) |
-| 인증 | 내장 DB, `user_id_type = username`, 최초 기동 때 `etc/users.csv` 부트스트랩(평문). 익명 거부 | 적용 |
+| 노출 | 1883 만. 로컬은 호스트 1883. EC2 는 보안 그룹이 443·80 만 열고 MQTT 는 tailscale 터널로만 — 현재 compose(`~/emqx/`) `100.100.149.68:1883`, k3s 이전 후 NodePort 31883. 공인 IP 1883/31883 차단 확인(2026-09-08). 대시보드는 127.0.0.1 / port-forward | 적용 (로컬 · EC2 compose) / 예정 (k3s) |
+| 인증 | 내장 DB, `user_id_type = username`, 최초 기동 때 `etc/users.csv` 부트스트랩(평문, 644 — 컨테이너 emqx 사용자가 읽어야 함). 익명 거부. EC2 브로커에 대해 ACL 50항목 · 에이전트 접속·factsheet·LWT 확인(2026-09-08) | 적용 |
 | 인가 | 파일 ACL `etc/acl.conf`, `no_match = deny`, `deny_action = disconnect` (위반 클라이언트는 끊긴다) | 적용 |
 | retained | `connection`·`factsheet`·`spBv1.0/STATE/+` 에만 허용. 그 외 토픽의 retained 발행은 ACL 로 거부 | 적용 |
 
