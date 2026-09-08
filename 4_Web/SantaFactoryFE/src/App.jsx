@@ -7,6 +7,7 @@ import RunsStep from './components/RunsStep.jsx'
 import QuoteStep from './components/QuoteStep.jsx'
 import Footer from './components/Footer.jsx'
 import { useReveal } from './hooks/useReveal.js'
+import { useEstimateStream } from './hooks/useEstimateStream.js'
 import { createEstimate, createWarehouse, getRobots } from './api/estimates.js'
 
 const DEFAULT_FORM = {
@@ -33,7 +34,11 @@ export default function App() {
   const [fleet, setFleet] = useState(DEFAULT_FLEET)
   const [requesting, setRequesting] = useState(false)
   const [requestError, setRequestError] = useState(null)
-  const [estimateId, setEstimateId] = useState(null)
+  const [estimateId, setEstimateId] = useState(() => {
+    const saved = sessionStorage.getItem('estimateId')
+    return saved ? Number(saved) : null
+  })
+  const stream = useEstimateStream(estimateId)
 
   useEffect(() => {
     getRobots()
@@ -58,6 +63,7 @@ export default function App() {
         fleetMax: fleet.max,
       })
       setEstimateId(estimate.estimate_id)
+      sessionStorage.setItem('estimateId', String(estimate.estimate_id))
       document.getElementById('s3')?.scrollIntoView({ behavior: 'smooth' })
     } catch (e) {
       setRequestError(e.message)
@@ -88,8 +94,15 @@ export default function App() {
           estimateId={estimateId}
           onRequest={requestEstimate}
         />
-        <RunsStep />
-        <QuoteStep />
+        <RunsStep estimateId={estimateId} estimate={stream.estimate} connected={stream.connected} error={stream.error} />
+        <QuoteStep
+          estimateId={estimateId}
+          estimate={stream.estimate}
+          verdict={stream.verdict}
+          model={selectedModel}
+          form={form}
+          fleet={fleet}
+        />
       </main>
       <Footer />
     </>
