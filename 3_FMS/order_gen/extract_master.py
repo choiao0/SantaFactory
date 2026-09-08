@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""백엔드 시드 SQL(santafactory_data.sql)의 INSERT 를 파싱해 생성기 마스터 JSON 을 만든다.
+"""백엔드 시드 SQL(Flyway db/seed/R__seed_demo.sql)의 INSERT 를 파싱해 생성기 마스터 JSON 을 만든다.
 
 생성기가 쓰는 필드만 남긴다: stores(store_id, zone_id, outbound_count), products(product_id, store_id, rack_id),
-racks(rack_id, zone_id, field), zones(zone_id, warehouse_id, facility_id). 이름·가격·좌표는 넣지 않는다.
+racks(rack_id, zone_id, field), zones(zone_id, warehouse_id, facility_id), facilities(facility_id, type, x, y).
+좌표는 존이 쓰는 통로 버퍼 스테이션 위치이며 랙 → 버퍼 매핑(map/build_rack_map.py)의 입력이다. 이름·가격은 넣지 않는다.
 
-    python extract_master.py ../../4_Web/SantaFactoryBE/src/main/resources/db/santafactory_data.sql -o master/santafactory_sample.json
+    python extract_master.py ../../4_Web/SantaFactoryBE/src/main/resources/db/seed/R__seed_demo.sql -o master/santafactory_sample.json
 """
 
 import argparse
@@ -31,14 +32,17 @@ def extract_master(sql_path):
                 for a, b, c in re.findall(r"\((\d+),(\d+),(\d+),", _block(sql, "products"))]
     zones = [{"zone_id": int(a), "warehouse_id": int(b), "facility_id": int(c)}
              for a, b, c in re.findall(r"\((\d+)\s*,(\d+),(\d+)\s*,", _block(sql, "zones"))]
-    if not (stores and racks and products and zones):
+    # 존 좌표(m). 랙 → 시뮬 통로 버퍼 매핑(map/build_rack_map.py)이 stations.json 의 aisle_buf 좌표와 대조한다.
+    facilities = [{"facility_id": int(a), "type": t, "x": float(x), "y": float(y)}
+                  for a, t, x, y in re.findall(r"\((\d+)\s*,\s*'([A-Z_]+)'\s*,\s*([\d.]+)\s*,\s*([\d.]+)\)", _block(sql, "facility"))]
+    if not (stores and racks and products and zones and facilities):
         raise ValueError("파싱 결과가 비어 있음 — SQL 형식이 바뀌었는지 확인")
-    return {"stores": stores, "racks": racks, "products": products, "zones": zones}
+    return {"stores": stores, "racks": racks, "products": products, "zones": zones, "facilities": facilities}
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("sql", type=Path, help="santafactory_data.sql 경로")
+    parser.add_argument("sql", type=Path, help="R__seed_demo.sql 경로 (4_Web/SantaFactoryBE/src/main/resources/db/seed/)")
     parser.add_argument("--output", "-o", type=Path, help="저장할 마스터 JSON (기본: stdout)")
     args = parser.parse_args(argv)
     try:

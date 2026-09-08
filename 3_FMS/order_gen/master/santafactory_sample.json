@@ -1,4 +1,246 @@
 {
+  "facilities": [
+    {
+      "facility_id": 1,
+      "type": "ZONE",
+      "x": 35.1,
+      "y": 69.4
+    },
+    {
+      "facility_id": 2,
+      "type": "ZONE",
+      "x": 41.1,
+      "y": 69.4
+    },
+    {
+      "facility_id": 3,
+      "type": "ZONE",
+      "x": 47.1,
+      "y": 69.4
+    },
+    {
+      "facility_id": 4,
+      "type": "ZONE",
+      "x": 53.1,
+      "y": 69.4
+    },
+    {
+      "facility_id": 5,
+      "type": "ZONE",
+      "x": 59.1,
+      "y": 69.4
+    },
+    {
+      "facility_id": 6,
+      "type": "ZONE",
+      "x": 65.1,
+      "y": 69.4
+    },
+    {
+      "facility_id": 7,
+      "type": "ZONE",
+      "x": 71.1,
+      "y": 69.4
+    },
+    {
+      "facility_id": 8,
+      "type": "ZONE",
+      "x": 77.1,
+      "y": 69.4
+    },
+    {
+      "facility_id": 9,
+      "type": "ZONE",
+      "x": 83.1,
+      "y": 69.4
+    },
+    {
+      "facility_id": 10,
+      "type": "ZONE",
+      "x": 89.1,
+      "y": 69.4
+    },
+    {
+      "facility_id": 11,
+      "type": "ZONE",
+      "x": 95.1,
+      "y": 69.4
+    },
+    {
+      "facility_id": 12,
+      "type": "ZONE",
+      "x": 35.1,
+      "y": 46.2
+    },
+    {
+      "facility_id": 13,
+      "type": "ZONE",
+      "x": 41.1,
+      "y": 46.2
+    },
+    {
+      "facility_id": 14,
+      "type": "ZONE",
+      "x": 47.1,
+      "y": 46.2
+    },
+    {
+      "facility_id": 15,
+      "type": "ZONE",
+      "x": 53.1,
+      "y": 46.2
+    },
+    {
+      "facility_id": 16,
+      "type": "ZONE",
+      "x": 59.1,
+      "y": 46.2
+    },
+    {
+      "facility_id": 17,
+      "type": "ZONE",
+      "x": 65.1,
+      "y": 46.2
+    },
+    {
+      "facility_id": 18,
+      "type": "ZONE",
+      "x": 71.1,
+      "y": 46.2
+    },
+    {
+      "facility_id": 19,
+      "type": "ZONE",
+      "x": 77.1,
+      "y": 46.2
+    },
+    {
+      "facility_id": 20,
+      "type": "ZONE",
+      "x": 83.1,
+      "y": 46.2
+    },
+    {
+      "facility_id": 21,
+      "type": "ZONE",
+      "x": 89.1,
+      "y": 46.2
+    },
+    {
+      "facility_id": 22,
+      "type": "ZONE",
+      "x": 95.1,
+      "y": 46.2
+    },
+    {
+      "facility_id": 23,
+      "type": "INBOUND",
+      "x": 31.6,
+      "y": 71.35
+    },
+    {
+      "facility_id": 24,
+      "type": "OUTBOUND",
+      "x": 64.0,
+      "y": 40.4
+    },
+    {
+      "facility_id": 25,
+      "type": "OUTBOUND",
+      "x": 70.0,
+      "y": 40.4
+    },
+    {
+      "facility_id": 26,
+      "type": "OUTBOUND",
+      "x": 76.0,
+      "y": 40.4
+    },
+    {
+      "facility_id": 27,
+      "type": "OUTBOUND",
+      "x": 82.0,
+      "y": 40.4
+    },
+    {
+      "facility_id": 28,
+      "type": "OUTBOUND",
+      "x": 88.0,
+      "y": 40.4
+    },
+    {
+      "facility_id": 29,
+      "type": "CHARGE",
+      "x": 107.8,
+      "y": 50.0
+    },
+    {
+      "facility_id": 30,
+      "type": "CHARGE",
+      "x": 107.8,
+      "y": 53.0
+    },
+    {
+      "facility_id": 31,
+      "type": "CHARGE",
+      "x": 107.8,
+      "y": 56.0
+    },
+    {
+      "facility_id": 32,
+      "type": "CHARGE",
+      "x": 107.8,
+      "y": 59.0
+    },
+    {
+      "facility_id": 33,
+      "type": "CHARGE",
+      "x": 107.8,
+      "y": 62.0
+    },
+    {
+      "facility_id": 34,
+      "type": "CHARGE",
+      "x": 107.8,
+      "y": 65.0
+    },
+    {
+      "facility_id": 35,
+      "type": "CHARGE",
+      "x": 105.5,
+      "y": 50.0
+    },
+    {
+      "facility_id": 36,
+      "type": "CHARGE",
+      "x": 105.5,
+      "y": 53.0
+    },
+    {
+      "facility_id": 37,
+      "type": "CHARGE",
+      "x": 105.5,
+      "y": 56.0
+    },
+    {
+      "facility_id": 38,
+      "type": "CHARGE",
+      "x": 105.5,
+      "y": 59.0
+    },
+    {
+      "facility_id": 39,
+      "type": "CHARGE",
+      "x": 105.5,
+      "y": 62.0
+    },
+    {
+      "facility_id": 40,
+      "type": "CHARGE",
+      "x": 105.5,
+      "y": 65.0
+    }
+  ],
   "products": [
     {
       "product_id": 1,

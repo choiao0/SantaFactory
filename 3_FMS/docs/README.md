@@ -98,7 +98,7 @@ SIM_CHECK=1 SIM_NO_PLOT=1 python sim_v2_tasks.py base 6 40 42 1
 # 회귀·사건층·A트랙
 python checks/check_results_identity.py --quick
 python checks/check_lifelong_battery.py
-python -m pytest ../ai_theta/tests ../contracts/tests -q
+python -m pytest ../ai_theta/tests ../contracts/tests tests -q     # tests = 명시 주문 모드 (-156)
 ```
 
 전수 기준선 비교는 `python checks/check_results_identity.py`로 실행한다.

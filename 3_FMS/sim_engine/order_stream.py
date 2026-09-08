@@ -39,7 +39,8 @@ class OrderStream:
 
     def __init__(self, rng, flow, n_orders, order_gap, st_cell, stations,
                  n_inbound=None, inbound_gap=None, k_line_p=(0.5, 0.3, 0.2),
-                 horizon=None, shifts=("in", "out", "out")):
+                 horizon=None, shifts=("in", "out", "out"),
+                 orders=None, rack_map=None, capacity=None):
         assert flow in ("main", "v1compat"), f"알 수 없는 flow: {flow}"
         self.rng, self.flow, self.st_cell = rng, flow, st_cell
         self.k_line_p = list(k_line_p)
@@ -47,8 +48,12 @@ class OrderStream:
         self.n_pack = len(stations["packing"])
         self.n_inb_st = len(stations["inbound_buf"])
         self.horizon = horizon
+        self.explicit_orders = None                  # 명시 주문 모드(-156)면 [(틱, [(버퍼, 왕복수), …])]
+        self.orders_skipped = 0
         gap_in = order_gap if inbound_gap is None else inbound_gap
-        if horizon is None:
+        if orders is not None:
+            self._init_explicit(flow, orders, rack_map, capacity, n_inbound, horizon, shifts, gap_in)
+        elif horizon is None:
             self._init_finite(flow, n_orders, n_inbound, order_gap, gap_in)
         else:
             self._init_horizon(flow, horizon, shifts, order_gap, gap_in)
@@ -76,6 +81,45 @@ class OrderStream:
             self.inbound_times = np.cumsum(rng.exponential(gap_in, self.n_inbound)).astype(int) + 1
         else:
             self.inbound_times = np.array([], dtype=int)
+
+    def _init_explicit(self, flow, orders, rack_map, capacity, n_inbound, horizon, shifts, gap_in):
+        """명시 주문 모드 (-156, docs/커널_시뮬_구조.md#명시-주문-모드): 큐 명세 §1-1 `outbound[]` 를 그대로 흘린다.
+        도착 틱 = ordered_at_s (1틱 = 1초). 라인 rack_id → rack_map → 버퍼, 같은 버퍼는 qty 를 합쳐 토트로 묶고
+        왕복 수 = ceil(qty 합 / capacity) (capacity 없으면 1 — V1 qty 미반영). 출고 교대 창은 쓰지 않는다(파일 시각이 진실).
+        horizon 밖(t ≥ T) 주문은 버리고 orders_skipped 에 센다. 입고는 기존 규칙(간격·in 창) 그대로."""
+        assert flow == "main", "명시 주문 모드는 main 흐름만"
+        assert rack_map, "명시 주문 모드는 rack_map(map/rack_buffers.json) 필요"
+        assert capacity is None or capacity >= 1, f"capacity 는 1 이상 (상품 개수): {capacity}"
+        parsed = []
+        for od in orders:
+            t = int(od["ordered_at_s"])
+            assert t >= 0, f"ordered_at_s 는 0 이상: {od}"
+            groups = {}
+            for ln in od["lines"]:
+                rid = ln["rack_id"]
+                if rid not in rack_map:
+                    raise KeyError(f"rack_id {rid!r} 가 rack_buffers.json 에 없음 (order {od.get('order_id')})")
+                groups[rack_map[rid]] = groups.get(rack_map[rid], 0) + int(ln.get("qty", 1))
+            trips = [(b, -(-q // capacity) if capacity else 1) for b, q in sorted(groups.items())]
+            parsed.append((t, trips))
+        if horizon is not None:
+            kept = [p for p in parsed if p[0] < horizon]
+            self.orders_skipped = len(parsed) - len(kept)
+            parsed = kept
+        parsed.sort(key=lambda p: p[0])                              # 안정 정렬: 같은 틱은 파일 순서
+        self.explicit_orders = parsed
+        self.n_orders = len(parsed)
+        self.order_times = np.array([p[0] for p in parsed], dtype=int)
+        # 입고: 고정 시간이면 in 창에서 간격 생성, 유한이면 주문 수만큼(기본) 간격 생성 — 간격 모드와 같은 식
+        if horizon is not None:
+            self.windows = shift_windows(horizon, tuple(shifts))
+            self.inbound_times = np.concatenate([self._window_times(s, e, gap_in)
+                                                 for kind, s, e in self.windows if kind == "in"] or [np.array([], dtype=int)])
+        else:
+            self.windows = None
+            n_in = self.n_orders if n_inbound is None else n_inbound
+            self.inbound_times = np.cumsum(self.rng.exponential(gap_in, n_in)).astype(int) + 1
+        self.n_inbound = len(self.inbound_times)
 
     def _init_horizon(self, flow, horizon, shifts, order_gap, gap_in):
         """고정 시간·교대 모드: 창마다 그 종류(out/in)의 도착만. 주문 창 → 입고 창 순으로 뽑는다."""
@@ -125,6 +169,13 @@ class OrderStream:
 
     def _spawn_order(self, oid, t):
         rng = self.rng
+        if self.explicit_orders is not None:
+            # 포장대는 시뮬(WMS 역할)이 배정 — 간격 모드와 같은 1 draw. 버퍼별 왕복 수만큼 출고 태스크.
+            p = int(rng.integers(self.n_pack))
+            out = [self.make_task("out", f"aisle_buf[{b}]", f"packing[{p}]", t, oid)
+                   for b, trips in self.explicit_orders[oid][1] for _ in range(trips)]
+            self.orders[oid] = dict(created=t, remaining=len(out), completed=None)
+            return out
         if self.flow == "v1compat":
             # v1 spawn_chain 과 동일한 4 draw 를 도착 틱에 일괄 소비 (설계 §6)
             a = int(rng.integers(self.n_aisle))

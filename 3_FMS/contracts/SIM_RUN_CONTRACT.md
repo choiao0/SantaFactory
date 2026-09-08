@@ -1,4 +1,4 @@
-# 시뮬 실행 계약 — `sim_engine/sim_v2_tasks.py` 호출 규약 (v2.4, 2026-09-08)
+# 시뮬 실행 계약 — `sim_engine/sim_v2_tasks.py` 호출 규약 (v2.5, 2026-09-09)
 
 > **v2 비호환 변경 (2026-09-04, S15P21A106-143):** 기본 이동 모델이 **헤딩 PIBT**로 바뀌었다. 칸 모델은 `--cell` opt-in.
 > `--heading`은 그대로 받되 무시한다. **`--heading`을 넘기지 않아 칸 모델을 얻던 호출자는 `--cell`을 넘겨야 한다**
@@ -85,6 +85,10 @@ v2.2 조건부 키:
 
 v2.4 항상 키(모드 무관): `inbound_total`(생성된 입고 수 — v1compat 0), `distance_m`(전 로봇 주행 칸 합 × 1.0 m). 견적 워커(`infra/worker/estimate_worker.py`)가 명세 §1-2 `inbound_total`·`distance_total_m`으로 그대로 낸다.
 
+v2.5 명시 주문 모드(-156): `--orders-file=<json>`(큐 명세 §1-1 `outbound[]` — 생성기 출력·요청 메시지·맨 리스트 허용) 이 있으면 주문을 파일에서 흘린다.
+도착 틱 = `ordered_at_s`(1틱 = 1초), `rack_id` → `map/rack_buffers.json` → `aisle_buf[i]`, 같은 버퍼 라인은 토트 1개, `--capacity=<상품 개수>` 가 있으면 왕복 = ceil(qty 합 / capacity).
+`n_orders` 위치 인자와 출고 교대 창은 무시, 입고는 기존 규칙. 조건부 키 `orders_file=1`, `orders_skipped`(horizon 밖 제외 수), `capacity`(줬을 때). 플래그 없는 호출은 v2.4 와 비트 동일.
+
 호출자 규칙: **모르는 키는 무시**(추가는 비호환 변경이 아님), 키 삭제·의미 변경은 이 문서 버전 업으로만.
 
 산출 파일(`sim_engine/results/`): `SIM_NO_PLOT` 없으면 `sim_v2_<tag>_r<n>[_blk]_<flow>[_th][_h][_fh][_hz][_bat]_heat.png`. 배치는 끄고 돌린다.
@@ -159,6 +163,7 @@ SIM_NO_PLOT=1 PYTHONIOENCODING=utf-8 python sim_v2_tasks.py bo17 24 120 42 1 --o
 | **v2.2** | 2026-09-05 | 호환(추가만, -145): **고정 시간 실행** `--horizon`·`--shifts`(입고/출고 교대, 기본 앞 1/3 입고·뒤 2/3 출고)·`--inbound-gap`, **배터리·충전 도크** `--battery`·`--chargers`·`--runtime-h`·`--charge-h`·`--soc`. SUMMARY 조건부 키 §2. 플래그 없는 호출은 v2.1과 비트 동일(기준값 3개·CSV 80행·STALL 덤프·Isaac 내보내기). `run_ticks(kernel, stream, horizon=None)` 시그니처에 선택 인자 추가. Isaac `actions` 어휘에 `"charge"` 추가(배터리 모드에서만 등장) |
 | v2.3 | 2026-09-07 | 규약만(코드·출력 불변): §5 **시드 역할 분리** — 탐색 {42,43,44} / **평가 {101,103,104}**(예비 102) / 기준선 {42,7}. 평가 시드 기준선 CSV `load_sweep_eval.csv` 등재 |
 | v2.4 | 2026-09-08 | 호환(키 추가만, -155): SUMMARY `inbound_total`·`distance_m` 항상 출력. 값·CLI·종료 코드 불변(기준값 3개·동일성 12행 확인). 호출자에 **견적 워커** `infra/worker/estimate_worker.py` 추가([설계](../docs/견적_워커.md)) |
+| v2.5 | 2026-09-09 | 호환(추가만, -156): **명시 주문 모드** `--orders-file`·`--capacity`, 조건부 SUMMARY 키 `orders_file`·`orders_skipped`·`capacity`. `map/rack_buffers.json`(랙 → 버퍼, `build_rack_map.py`) 신설. 플래그 없는 호출은 비트 동일(기준값 3개·동일성 12행 확인) |
 
 관련: [고부하 기준](../docs/θ_경로_기준선.md#고부하-l1l2), [θ 로드맵](../docs/남은과업_계획.md#부록-a-θ-로드맵-단계표),
 [시스템 아키텍처의 계산 예산](../docs/남은과업_계획.md#부록-b-아키텍처에서-고칠-것-5개), A트랙 워커 `../infra/worker/objective.py`.

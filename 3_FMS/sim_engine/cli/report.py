@@ -161,7 +161,11 @@ def report(a, kernel, stream, ctx):
         **(dict(inbound_gap=a.inbound_gap_arg) if a.inbound_gap_arg is not None else {}),
         **lifelong_extra, **bat_extra,
         # 견적 워커용 (계약 v2.4, 키 추가만): 입고 생성 수 · 주행 거리 [m] (1칸 = CELL_M = 1.0 m). docs/견적_워커.md
-        inbound_total=int(stream.n_inbound), distance_m=int(tot["drive"]))
+        inbound_total=int(stream.n_inbound), distance_m=int(tot["drive"]),
+        # 명시 주문 모드 (계약 v2.5, 조건부 키, -156)
+        **(dict(orders_file=1, orders_skipped=int(stream.orders_skipped),
+                **(dict(capacity=int(a.capacity)) if a.capacity is not None else {}))
+           if stream.explicit_orders is not None else {}))
     print("[SUMMARY] " + json.dumps(summary))
 
     tag = _make_tag(a, kernel, lifelong)
