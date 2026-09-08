@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Iterable, Optional, Tuple
 
+from .models import footprint_polygon, swing_polygon
 from .order import OrderBook
 from .topics import PROTOCOL_VERSION
 
@@ -60,6 +61,36 @@ class StateBuilder:
         if pos is not None:
             msg["agvPosition"] = pos
         return msg
+
+    def factsheet(self, p: dict) -> dict:
+        """VDA 5050 2.0.0 factsheet ← 기종 프로파일 dict (models.load_model_profile). retained QoS1, ONLINE 직후."""
+        wheels = [{"type": w["type"], "isActiveDriven": bool(w["is_active_driven"]),
+                   "isActiveSteered": bool(w["is_active_steered"]),
+                   "position": {"x": float(w["position"]["x"]), "y": float(w["position"]["y"])},
+                   "diameter": float(w["diameter"]), "width": float(w["width"])} for w in p["wheels"]]
+        return {**self._header_block(),
+                "typeSpecification": {"seriesName": p["model"], "seriesDescription": p.get("description", ""),
+                                      "agvKinematic": p["kinematic"], "agvClass": p["agv_class"],
+                                      "maxLoadMass": float(p["max_load_kg"]),
+                                      "localizationTypes": ["NATURAL"], "navigationTypes": ["AUTONOMOUS"]},
+                "physicalParameters": {"speedMin": float(p["v_min"]), "speedMax": float(p["v_max"]),
+                                       "accelerationMax": float(p["a_max"]),
+                                       "decelerationMax": float(p.get("d_max", p["a_max"])),
+                                       "heightMin": float(p["height"]), "heightMax": float(p["height"]),
+                                       "width": float(p["width"]), "length": float(p["length"])},
+                "protocolLimits": {"maxStringLens": {}, "maxArrayLens": {},
+                                   "timing": {"minOrderInterval": float(p["order_interval"]),
+                                              "minStateInterval": float(p["state_interval"]),
+                                              "defaultStateInterval": float(p["state_interval"])}},
+                "protocolFeatures": {"optionalParameters": [], "agvActions": [
+                    {"actionType": "cancelOrder", "actionScopes": ["INSTANT"], "actionParameters": [],
+                     "resultDescription": "drop all unreached nodes; lastNode stays"}]},
+                "agvGeometry": {"wheelDefinitions": wheels,
+                                "envelopes2d": [{"set": "footprint", "polygonPoints": footprint_polygon(p),
+                                                 "description": "chassis outline, vehicle frame (x forward)"},
+                                                {"set": "swing", "polygonPoints": swing_polygon(p),
+                                                 "description": "spot-turn swing circle"}]},
+                "loadSpecification": {"loadPositions": [], "loadSets": []}}
 
     def connection(self, connection_state: str) -> dict:
         assert connection_state in ("ONLINE", "OFFLINE", "CONNECTIONBROKEN")
