@@ -1,4 +1,4 @@
-import { formatWon } from '../data/mock.js'
+import { formatWon } from '../utils/format.js'
 
 function hoursBetween(start, end) {
   if (!start || !end) return null
@@ -90,7 +90,7 @@ export default function WarehouseStep({ form, onChange, models, modelsError, mod
           <p className="formsum">
             출고 <b>{form.outboundStart}–{form.outboundEnd}</b>
             {arrivalsPerHour != null && <> · 시간당 <b>{arrivalsPerHour}건</b> 도착</>}
-            {' '}→ 목표 처리율 <b>{form.targetThroughput}%</b> · 예산 <b>{formatWon(form.budgetMan)}</b>
+            {' '}→ 목표 처리율 <b>{form.targetThroughput}%</b> · 예산 <b>{formatWon(form.budgetMan * 10000)}</b>
           </p>
 
           <div className="runcta">
@@ -126,7 +126,7 @@ export default function WarehouseStep({ form, onChange, models, modelsError, mod
                   <dt>배터리</dt>
                   <dd>{m.battery}<span>%</span></dd>
                   <dt>대당 단가 / 설치비</dt>
-                  <dd>{formatWon(m.price / 10000)} / {formatWon(m.cost / 10000)}</dd>
+                  <dd>{formatWon(m.price)} / {formatWon(m.cost)}</dd>
                 </dl>
               </button>
             )

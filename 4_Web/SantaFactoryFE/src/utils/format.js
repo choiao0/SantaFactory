@@ -4,3 +4,19 @@ export function formatDateTime(iso) {
   const pad = (n) => String(n).padStart(2, '0')
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
+
+export function formatWon(won) {
+  if (won == null || Number.isNaN(won)) return '—'
+  const man = Math.round(won / 10000)
+  const eok = Math.floor(man / 10000)
+  const rest = man % 10000
+  if (eok === 0) return `${rest.toLocaleString()}만원`
+  if (rest === 0) return `${eok}억원`
+  return `${eok}억 ${rest.toLocaleString()}만원`
+}
+
+export function formatEok(won) {
+  if (won == null) return ''
+  const eok = won / 100000000
+  return `${Number.isInteger(eok) ? eok : eok.toFixed(1)}억`
+}

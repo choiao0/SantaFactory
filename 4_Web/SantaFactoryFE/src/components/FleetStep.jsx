@@ -1,5 +1,5 @@
 import { useRef } from 'react'
-import { formatWon } from '../data/mock.js'
+import { formatWon } from '../utils/format.js'
 
 const MIN = 1
 const MAX = 28
@@ -16,7 +16,7 @@ export default function FleetStep({ fleet, onChange, model, requesting, error, e
   for (let n = fleet.min; n <= fleet.max; n += 1) counts.push(n)
 
   const perUnit = model ? model.price + model.cost : null
-  const costMan = (n) => (perUnit == null ? null : Math.round((perUnit * n) / 10000))
+  const cost = (n) => (perUnit == null ? null : perUnit * n)
 
   const valueAt = (clientX) => {
     const rect = trackRef.current.getBoundingClientRect()
@@ -109,7 +109,7 @@ export default function FleetStep({ fleet, onChange, model, requesting, error, e
           <br />
           {model ? (
             <>
-              {model.model} 구축비용 <b>{formatWon(costMan(fleet.min))}</b> ~ <b>{formatWon(costMan(fleet.max))}</b>
+              {model.model} 구축비용 <b>{formatWon(cost(fleet.min))}</b> ~ <b>{formatWon(cost(fleet.max))}</b>
             </>
           ) : (
             '01 단계에서 AMR 모델을 먼저 선택하세요'

@@ -101,7 +101,6 @@ export default function App() {
           verdict={stream.verdict}
           model={selectedModel}
           form={form}
-          fleet={fleet}
         />
       </main>
       <Footer />

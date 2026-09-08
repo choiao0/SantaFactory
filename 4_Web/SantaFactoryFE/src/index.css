@@ -400,6 +400,12 @@ details.assume[open] summary { border-bottom: 1px solid #e0ded9; }
   padding: 16px 20px; font-size: 17px; line-height: 1.7; color: #4a4a46;
 }
 .printrow { margin-top: 30px; display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+.printrow a.ghost { display: inline-block; }
+.q-empty {
+  border: 1px dashed #b7b5b0; background: var(--paper); padding: 32px 28px;
+  font: 500 15px var(--font-mono); color: #77776f; letter-spacing: .03em; line-height: 1.9;
+}
+.q-empty .live-dot { margin-right: 6px; }
 
 footer {
   padding: 34px 4.5vw; border-top: 1px solid var(--line);
