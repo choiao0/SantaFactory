@@ -4,19 +4,19 @@
 그대로 Isaac USD 씬으로 세운다. DES와 SIL이 단일 소스를 공유하는 구조의 물리 실체.
 콜라이더는 전부 그리드 rect에서 나오고, 에셋은 시각 전용이다.
 
-## 파일
+## 파일 (2026-09-07 리팩토링 — 구현은 `../apps/`·`../sil_isaac/`·`../scene_builder/`·`../sil_ros/`, 이 폴더의 .py 는 옛 경로 셔임)
 
 | 파일 | 역할 |
 |---|---|
-| `build_scene.py` | 씬 빌더 — 그리드→벽·작업대, 랙 조립, 화물 드레싱, omap V&V, 스크린샷 |
-| `roof_structure.py` | 박공지붕·상부 철골·H형강 기둥 모듈 (DXF 치수선 실측 기하) |
+| `build_scene.py` | 씬 빌더 엔트리 셔임 → `../apps/build_scene.py` (`scene_builder/` 패키지: config·prims·materials·building·roof·racks·stations·offices·vnv·shots·build) |
+| `roof_structure.py` | 셔임 → `scene_builder/roof.py` (박공지붕·철골·H형강 기둥, 치수 상수는 `scene_builder/config.py`) |
 | `warehouse_scene.usd` | 산출 씬 — 커밋본 그대로 열림 (에셋은 NVIDIA S3 원격 참조, 383KB) |
-| `view_scene.py` | WebRTC 스트리밍 뷰어 (헤드리스 서버 관전용) |
-| `http_stream.py` | TCP 전용 HTTP MJPEG 관전 경로 — UDP 차단망(교육장 내부망) 대응 |
-| `export_replay.py` | 맵 → `../isaac_export_t3/` 재생 데이터 생성 (isaac_replay 포맷) |
-| `warehouse_sim.py` | **T3 본편** — 씬 + iw.hub ×N + 물리 라이다, ROS2 개통 (/scan /odom /tf /clock, /cmd_vel 구독). `WSIM_N=3`이면 `/amr01~03/…` 네임스페이스 |
+| `view_scene.py` | 셔임 → `../apps/view_scene.py` (WebRTC 관전 뷰어) |
+| `http_stream.py` | 셔임 → `sil_isaac/viewer/http_stream.py` (TCP MJPEG :8211 — UDP 차단망 대응) |
+| `export_replay.py` | 셔임 → `sil_ros/tools/export_replay.py` (맵 → `../isaac_export_t3/` 재생 데이터, isaac_replay 포맷) |
+| `warehouse_sim.py` | **T3 본편** 셔임 → `../apps/warehouse_sim.py` (`sil_isaac/`: app·robot·sensors·ros2·viewer·scene·runtime). 씬 + iw.hub ×N + 물리 라이다, ROS2 개통. `WSIM_N=3`이면 `/amr01~03/…` 네임스페이스 |
 | `ros2/multi_check.py` | 다중 로봇 개통 검증 — 로봇별 odom·scan·/clock 발행률, /tf 프레임, 지정 로봇만 이동하는지 확인(JSON + exit code) |
-| `ros2/` | localization 스택 — nav2 AMCL + map_server + foxglove_bridge 런치·파라미터 |
+| `ros2/` | AMCL + map_server + foxglove_bridge 런치·파라미터는 그대로. `patrol.py`·`multi_check.py` 는 셔임 → `sil_ros/nodes/` |
 | `out/scene_*.png` | 검수 스크린샷 (외관·트러스·통로·스테이션·사무실 등) |
 
 ## 실행
