@@ -1,0 +1,1550 @@
+{
+  "products": [
+    {
+      "product_id": 1,
+      "rack_id": 1,
+      "store_id": 1
+    },
+    {
+      "product_id": 2,
+      "rack_id": 2,
+      "store_id": 1
+    },
+    {
+      "product_id": 3,
+      "rack_id": 3,
+      "store_id": 1
+    },
+    {
+      "product_id": 4,
+      "rack_id": 4,
+      "store_id": 1
+    },
+    {
+      "product_id": 5,
+      "rack_id": 5,
+      "store_id": 1
+    },
+    {
+      "product_id": 6,
+      "rack_id": 6,
+      "store_id": 1
+    },
+    {
+      "product_id": 7,
+      "rack_id": 7,
+      "store_id": 2
+    },
+    {
+      "product_id": 8,
+      "rack_id": 8,
+      "store_id": 2
+    },
+    {
+      "product_id": 9,
+      "rack_id": 9,
+      "store_id": 2
+    },
+    {
+      "product_id": 10,
+      "rack_id": 10,
+      "store_id": 2
+    },
+    {
+      "product_id": 11,
+      "rack_id": 11,
+      "store_id": 2
+    },
+    {
+      "product_id": 12,
+      "rack_id": 12,
+      "store_id": 2
+    },
+    {
+      "product_id": 13,
+      "rack_id": 13,
+      "store_id": 3
+    },
+    {
+      "product_id": 14,
+      "rack_id": 14,
+      "store_id": 3
+    },
+    {
+      "product_id": 15,
+      "rack_id": 15,
+      "store_id": 3
+    },
+    {
+      "product_id": 16,
+      "rack_id": 16,
+      "store_id": 3
+    },
+    {
+      "product_id": 17,
+      "rack_id": 17,
+      "store_id": 3
+    },
+    {
+      "product_id": 18,
+      "rack_id": 18,
+      "store_id": 3
+    },
+    {
+      "product_id": 19,
+      "rack_id": 19,
+      "store_id": 4
+    },
+    {
+      "product_id": 20,
+      "rack_id": 20,
+      "store_id": 4
+    },
+    {
+      "product_id": 21,
+      "rack_id": 21,
+      "store_id": 4
+    },
+    {
+      "product_id": 22,
+      "rack_id": 22,
+      "store_id": 4
+    },
+    {
+      "product_id": 23,
+      "rack_id": 23,
+      "store_id": 4
+    },
+    {
+      "product_id": 24,
+      "rack_id": 24,
+      "store_id": 4
+    },
+    {
+      "product_id": 25,
+      "rack_id": 25,
+      "store_id": 5
+    },
+    {
+      "product_id": 26,
+      "rack_id": 26,
+      "store_id": 5
+    },
+    {
+      "product_id": 27,
+      "rack_id": 27,
+      "store_id": 5
+    },
+    {
+      "product_id": 28,
+      "rack_id": 28,
+      "store_id": 5
+    },
+    {
+      "product_id": 29,
+      "rack_id": 29,
+      "store_id": 5
+    },
+    {
+      "product_id": 30,
+      "rack_id": 30,
+      "store_id": 5
+    },
+    {
+      "product_id": 31,
+      "rack_id": 31,
+      "store_id": 6
+    },
+    {
+      "product_id": 32,
+      "rack_id": 32,
+      "store_id": 6
+    },
+    {
+      "product_id": 33,
+      "rack_id": 33,
+      "store_id": 6
+    },
+    {
+      "product_id": 34,
+      "rack_id": 34,
+      "store_id": 6
+    },
+    {
+      "product_id": 35,
+      "rack_id": 35,
+      "store_id": 6
+    },
+    {
+      "product_id": 36,
+      "rack_id": 36,
+      "store_id": 6
+    },
+    {
+      "product_id": 37,
+      "rack_id": 37,
+      "store_id": 7
+    },
+    {
+      "product_id": 38,
+      "rack_id": 38,
+      "store_id": 7
+    },
+    {
+      "product_id": 39,
+      "rack_id": 39,
+      "store_id": 7
+    },
+    {
+      "product_id": 40,
+      "rack_id": 40,
+      "store_id": 7
+    },
+    {
+      "product_id": 41,
+      "rack_id": 41,
+      "store_id": 7
+    },
+    {
+      "product_id": 42,
+      "rack_id": 42,
+      "store_id": 7
+    },
+    {
+      "product_id": 43,
+      "rack_id": 43,
+      "store_id": 8
+    },
+    {
+      "product_id": 44,
+      "rack_id": 44,
+      "store_id": 8
+    },
+    {
+      "product_id": 45,
+      "rack_id": 45,
+      "store_id": 8
+    },
+    {
+      "product_id": 46,
+      "rack_id": 46,
+      "store_id": 8
+    },
+    {
+      "product_id": 47,
+      "rack_id": 47,
+      "store_id": 8
+    },
+    {
+      "product_id": 48,
+      "rack_id": 48,
+      "store_id": 8
+    },
+    {
+      "product_id": 49,
+      "rack_id": 49,
+      "store_id": 9
+    },
+    {
+      "product_id": 50,
+      "rack_id": 50,
+      "store_id": 9
+    },
+    {
+      "product_id": 51,
+      "rack_id": 51,
+      "store_id": 9
+    },
+    {
+      "product_id": 52,
+      "rack_id": 52,
+      "store_id": 9
+    },
+    {
+      "product_id": 53,
+      "rack_id": 53,
+      "store_id": 9
+    },
+    {
+      "product_id": 54,
+      "rack_id": 54,
+      "store_id": 9
+    },
+    {
+      "product_id": 55,
+      "rack_id": 55,
+      "store_id": 10
+    },
+    {
+      "product_id": 56,
+      "rack_id": 56,
+      "store_id": 10
+    },
+    {
+      "product_id": 57,
+      "rack_id": 57,
+      "store_id": 10
+    },
+    {
+      "product_id": 58,
+      "rack_id": 58,
+      "store_id": 10
+    },
+    {
+      "product_id": 59,
+      "rack_id": 59,
+      "store_id": 10
+    },
+    {
+      "product_id": 60,
+      "rack_id": 60,
+      "store_id": 10
+    },
+    {
+      "product_id": 61,
+      "rack_id": 61,
+      "store_id": 11
+    },
+    {
+      "product_id": 62,
+      "rack_id": 62,
+      "store_id": 11
+    },
+    {
+      "product_id": 63,
+      "rack_id": 63,
+      "store_id": 11
+    },
+    {
+      "product_id": 64,
+      "rack_id": 64,
+      "store_id": 11
+    },
+    {
+      "product_id": 65,
+      "rack_id": 65,
+      "store_id": 11
+    },
+    {
+      "product_id": 66,
+      "rack_id": 66,
+      "store_id": 11
+    },
+    {
+      "product_id": 67,
+      "rack_id": 67,
+      "store_id": 12
+    },
+    {
+      "product_id": 68,
+      "rack_id": 68,
+      "store_id": 12
+    },
+    {
+      "product_id": 69,
+      "rack_id": 69,
+      "store_id": 12
+    },
+    {
+      "product_id": 70,
+      "rack_id": 70,
+      "store_id": 12
+    },
+    {
+      "product_id": 71,
+      "rack_id": 71,
+      "store_id": 12
+    },
+    {
+      "product_id": 72,
+      "rack_id": 72,
+      "store_id": 12
+    },
+    {
+      "product_id": 73,
+      "rack_id": 73,
+      "store_id": 13
+    },
+    {
+      "product_id": 74,
+      "rack_id": 74,
+      "store_id": 13
+    },
+    {
+      "product_id": 75,
+      "rack_id": 75,
+      "store_id": 13
+    },
+    {
+      "product_id": 76,
+      "rack_id": 76,
+      "store_id": 13
+    },
+    {
+      "product_id": 77,
+      "rack_id": 77,
+      "store_id": 13
+    },
+    {
+      "product_id": 78,
+      "rack_id": 78,
+      "store_id": 13
+    },
+    {
+      "product_id": 79,
+      "rack_id": 79,
+      "store_id": 14
+    },
+    {
+      "product_id": 80,
+      "rack_id": 80,
+      "store_id": 14
+    },
+    {
+      "product_id": 81,
+      "rack_id": 81,
+      "store_id": 14
+    },
+    {
+      "product_id": 82,
+      "rack_id": 82,
+      "store_id": 14
+    },
+    {
+      "product_id": 83,
+      "rack_id": 83,
+      "store_id": 14
+    },
+    {
+      "product_id": 84,
+      "rack_id": 84,
+      "store_id": 14
+    },
+    {
+      "product_id": 85,
+      "rack_id": 85,
+      "store_id": 15
+    },
+    {
+      "product_id": 86,
+      "rack_id": 86,
+      "store_id": 15
+    },
+    {
+      "product_id": 87,
+      "rack_id": 87,
+      "store_id": 15
+    },
+    {
+      "product_id": 88,
+      "rack_id": 88,
+      "store_id": 15
+    },
+    {
+      "product_id": 89,
+      "rack_id": 89,
+      "store_id": 15
+    },
+    {
+      "product_id": 90,
+      "rack_id": 90,
+      "store_id": 15
+    },
+    {
+      "product_id": 91,
+      "rack_id": 91,
+      "store_id": 16
+    },
+    {
+      "product_id": 92,
+      "rack_id": 92,
+      "store_id": 16
+    },
+    {
+      "product_id": 93,
+      "rack_id": 93,
+      "store_id": 16
+    },
+    {
+      "product_id": 94,
+      "rack_id": 94,
+      "store_id": 16
+    },
+    {
+      "product_id": 95,
+      "rack_id": 95,
+      "store_id": 16
+    },
+    {
+      "product_id": 96,
+      "rack_id": 96,
+      "store_id": 16
+    },
+    {
+      "product_id": 97,
+      "rack_id": 97,
+      "store_id": 17
+    },
+    {
+      "product_id": 98,
+      "rack_id": 98,
+      "store_id": 17
+    },
+    {
+      "product_id": 99,
+      "rack_id": 99,
+      "store_id": 17
+    },
+    {
+      "product_id": 100,
+      "rack_id": 100,
+      "store_id": 17
+    },
+    {
+      "product_id": 101,
+      "rack_id": 101,
+      "store_id": 17
+    },
+    {
+      "product_id": 102,
+      "rack_id": 102,
+      "store_id": 17
+    },
+    {
+      "product_id": 103,
+      "rack_id": 103,
+      "store_id": 18
+    },
+    {
+      "product_id": 104,
+      "rack_id": 104,
+      "store_id": 18
+    },
+    {
+      "product_id": 105,
+      "rack_id": 105,
+      "store_id": 18
+    },
+    {
+      "product_id": 106,
+      "rack_id": 106,
+      "store_id": 18
+    },
+    {
+      "product_id": 107,
+      "rack_id": 107,
+      "store_id": 18
+    },
+    {
+      "product_id": 108,
+      "rack_id": 108,
+      "store_id": 18
+    },
+    {
+      "product_id": 109,
+      "rack_id": 109,
+      "store_id": 19
+    },
+    {
+      "product_id": 110,
+      "rack_id": 110,
+      "store_id": 19
+    },
+    {
+      "product_id": 111,
+      "rack_id": 111,
+      "store_id": 19
+    },
+    {
+      "product_id": 112,
+      "rack_id": 112,
+      "store_id": 19
+    },
+    {
+      "product_id": 113,
+      "rack_id": 113,
+      "store_id": 19
+    },
+    {
+      "product_id": 114,
+      "rack_id": 114,
+      "store_id": 19
+    },
+    {
+      "product_id": 115,
+      "rack_id": 115,
+      "store_id": 20
+    },
+    {
+      "product_id": 116,
+      "rack_id": 116,
+      "store_id": 20
+    },
+    {
+      "product_id": 117,
+      "rack_id": 117,
+      "store_id": 20
+    },
+    {
+      "product_id": 118,
+      "rack_id": 118,
+      "store_id": 20
+    },
+    {
+      "product_id": 119,
+      "rack_id": 119,
+      "store_id": 20
+    },
+    {
+      "product_id": 120,
+      "rack_id": 120,
+      "store_id": 20
+    },
+    {
+      "product_id": 121,
+      "rack_id": 121,
+      "store_id": 21
+    },
+    {
+      "product_id": 122,
+      "rack_id": 122,
+      "store_id": 21
+    },
+    {
+      "product_id": 123,
+      "rack_id": 123,
+      "store_id": 21
+    },
+    {
+      "product_id": 124,
+      "rack_id": 124,
+      "store_id": 21
+    },
+    {
+      "product_id": 125,
+      "rack_id": 125,
+      "store_id": 21
+    },
+    {
+      "product_id": 126,
+      "rack_id": 126,
+      "store_id": 21
+    },
+    {
+      "product_id": 127,
+      "rack_id": 127,
+      "store_id": 22
+    },
+    {
+      "product_id": 128,
+      "rack_id": 128,
+      "store_id": 22
+    },
+    {
+      "product_id": 129,
+      "rack_id": 129,
+      "store_id": 22
+    },
+    {
+      "product_id": 130,
+      "rack_id": 130,
+      "store_id": 22
+    },
+    {
+      "product_id": 131,
+      "rack_id": 131,
+      "store_id": 22
+    },
+    {
+      "product_id": 132,
+      "rack_id": 132,
+      "store_id": 22
+    }
+  ],
+  "racks": [
+    {
+      "field": "A1",
+      "rack_id": 1,
+      "zone_id": 1
+    },
+    {
+      "field": "A2",
+      "rack_id": 2,
+      "zone_id": 1
+    },
+    {
+      "field": "A3",
+      "rack_id": 3,
+      "zone_id": 1
+    },
+    {
+      "field": "A4",
+      "rack_id": 4,
+      "zone_id": 1
+    },
+    {
+      "field": "A5",
+      "rack_id": 5,
+      "zone_id": 1
+    },
+    {
+      "field": "A6",
+      "rack_id": 6,
+      "zone_id": 1
+    },
+    {
+      "field": "B1",
+      "rack_id": 7,
+      "zone_id": 2
+    },
+    {
+      "field": "B2",
+      "rack_id": 8,
+      "zone_id": 2
+    },
+    {
+      "field": "B3",
+      "rack_id": 9,
+      "zone_id": 2
+    },
+    {
+      "field": "B4",
+      "rack_id": 10,
+      "zone_id": 2
+    },
+    {
+      "field": "B5",
+      "rack_id": 11,
+      "zone_id": 2
+    },
+    {
+      "field": "B6",
+      "rack_id": 12,
+      "zone_id": 2
+    },
+    {
+      "field": "C1",
+      "rack_id": 13,
+      "zone_id": 3
+    },
+    {
+      "field": "C2",
+      "rack_id": 14,
+      "zone_id": 3
+    },
+    {
+      "field": "C3",
+      "rack_id": 15,
+      "zone_id": 3
+    },
+    {
+      "field": "C4",
+      "rack_id": 16,
+      "zone_id": 3
+    },
+    {
+      "field": "C5",
+      "rack_id": 17,
+      "zone_id": 3
+    },
+    {
+      "field": "C6",
+      "rack_id": 18,
+      "zone_id": 3
+    },
+    {
+      "field": "D1",
+      "rack_id": 19,
+      "zone_id": 4
+    },
+    {
+      "field": "D2",
+      "rack_id": 20,
+      "zone_id": 4
+    },
+    {
+      "field": "D3",
+      "rack_id": 21,
+      "zone_id": 4
+    },
+    {
+      "field": "D4",
+      "rack_id": 22,
+      "zone_id": 4
+    },
+    {
+      "field": "D5",
+      "rack_id": 23,
+      "zone_id": 4
+    },
+    {
+      "field": "D6",
+      "rack_id": 24,
+      "zone_id": 4
+    },
+    {
+      "field": "E1",
+      "rack_id": 25,
+      "zone_id": 5
+    },
+    {
+      "field": "E2",
+      "rack_id": 26,
+      "zone_id": 5
+    },
+    {
+      "field": "E3",
+      "rack_id": 27,
+      "zone_id": 5
+    },
+    {
+      "field": "E4",
+      "rack_id": 28,
+      "zone_id": 5
+    },
+    {
+      "field": "E5",
+      "rack_id": 29,
+      "zone_id": 5
+    },
+    {
+      "field": "E6",
+      "rack_id": 30,
+      "zone_id": 5
+    },
+    {
+      "field": "F1",
+      "rack_id": 31,
+      "zone_id": 6
+    },
+    {
+      "field": "F2",
+      "rack_id": 32,
+      "zone_id": 6
+    },
+    {
+      "field": "F3",
+      "rack_id": 33,
+      "zone_id": 6
+    },
+    {
+      "field": "F4",
+      "rack_id": 34,
+      "zone_id": 6
+    },
+    {
+      "field": "F5",
+      "rack_id": 35,
+      "zone_id": 6
+    },
+    {
+      "field": "F6",
+      "rack_id": 36,
+      "zone_id": 6
+    },
+    {
+      "field": "G1",
+      "rack_id": 37,
+      "zone_id": 7
+    },
+    {
+      "field": "G2",
+      "rack_id": 38,
+      "zone_id": 7
+    },
+    {
+      "field": "G3",
+      "rack_id": 39,
+      "zone_id": 7
+    },
+    {
+      "field": "G4",
+      "rack_id": 40,
+      "zone_id": 7
+    },
+    {
+      "field": "G5",
+      "rack_id": 41,
+      "zone_id": 7
+    },
+    {
+      "field": "G6",
+      "rack_id": 42,
+      "zone_id": 7
+    },
+    {
+      "field": "H1",
+      "rack_id": 43,
+      "zone_id": 8
+    },
+    {
+      "field": "H2",
+      "rack_id": 44,
+      "zone_id": 8
+    },
+    {
+      "field": "H3",
+      "rack_id": 45,
+      "zone_id": 8
+    },
+    {
+      "field": "H4",
+      "rack_id": 46,
+      "zone_id": 8
+    },
+    {
+      "field": "H5",
+      "rack_id": 47,
+      "zone_id": 8
+    },
+    {
+      "field": "H6",
+      "rack_id": 48,
+      "zone_id": 8
+    },
+    {
+      "field": "I1",
+      "rack_id": 49,
+      "zone_id": 9
+    },
+    {
+      "field": "I2",
+      "rack_id": 50,
+      "zone_id": 9
+    },
+    {
+      "field": "I3",
+      "rack_id": 51,
+      "zone_id": 9
+    },
+    {
+      "field": "I4",
+      "rack_id": 52,
+      "zone_id": 9
+    },
+    {
+      "field": "I5",
+      "rack_id": 53,
+      "zone_id": 9
+    },
+    {
+      "field": "I6",
+      "rack_id": 54,
+      "zone_id": 9
+    },
+    {
+      "field": "J1",
+      "rack_id": 55,
+      "zone_id": 10
+    },
+    {
+      "field": "J2",
+      "rack_id": 56,
+      "zone_id": 10
+    },
+    {
+      "field": "J3",
+      "rack_id": 57,
+      "zone_id": 10
+    },
+    {
+      "field": "J4",
+      "rack_id": 58,
+      "zone_id": 10
+    },
+    {
+      "field": "J5",
+      "rack_id": 59,
+      "zone_id": 10
+    },
+    {
+      "field": "J6",
+      "rack_id": 60,
+      "zone_id": 10
+    },
+    {
+      "field": "K1",
+      "rack_id": 61,
+      "zone_id": 11
+    },
+    {
+      "field": "K2",
+      "rack_id": 62,
+      "zone_id": 11
+    },
+    {
+      "field": "K3",
+      "rack_id": 63,
+      "zone_id": 11
+    },
+    {
+      "field": "K4",
+      "rack_id": 64,
+      "zone_id": 11
+    },
+    {
+      "field": "K5",
+      "rack_id": 65,
+      "zone_id": 11
+    },
+    {
+      "field": "K6",
+      "rack_id": 66,
+      "zone_id": 11
+    },
+    {
+      "field": "L1",
+      "rack_id": 67,
+      "zone_id": 12
+    },
+    {
+      "field": "L2",
+      "rack_id": 68,
+      "zone_id": 12
+    },
+    {
+      "field": "L3",
+      "rack_id": 69,
+      "zone_id": 12
+    },
+    {
+      "field": "L4",
+      "rack_id": 70,
+      "zone_id": 12
+    },
+    {
+      "field": "L5",
+      "rack_id": 71,
+      "zone_id": 12
+    },
+    {
+      "field": "L6",
+      "rack_id": 72,
+      "zone_id": 12
+    },
+    {
+      "field": "M1",
+      "rack_id": 73,
+      "zone_id": 13
+    },
+    {
+      "field": "M2",
+      "rack_id": 74,
+      "zone_id": 13
+    },
+    {
+      "field": "M3",
+      "rack_id": 75,
+      "zone_id": 13
+    },
+    {
+      "field": "M4",
+      "rack_id": 76,
+      "zone_id": 13
+    },
+    {
+      "field": "M5",
+      "rack_id": 77,
+      "zone_id": 13
+    },
+    {
+      "field": "M6",
+      "rack_id": 78,
+      "zone_id": 13
+    },
+    {
+      "field": "N1",
+      "rack_id": 79,
+      "zone_id": 14
+    },
+    {
+      "field": "N2",
+      "rack_id": 80,
+      "zone_id": 14
+    },
+    {
+      "field": "N3",
+      "rack_id": 81,
+      "zone_id": 14
+    },
+    {
+      "field": "N4",
+      "rack_id": 82,
+      "zone_id": 14
+    },
+    {
+      "field": "N5",
+      "rack_id": 83,
+      "zone_id": 14
+    },
+    {
+      "field": "N6",
+      "rack_id": 84,
+      "zone_id": 14
+    },
+    {
+      "field": "O1",
+      "rack_id": 85,
+      "zone_id": 15
+    },
+    {
+      "field": "O2",
+      "rack_id": 86,
+      "zone_id": 15
+    },
+    {
+      "field": "O3",
+      "rack_id": 87,
+      "zone_id": 15
+    },
+    {
+      "field": "O4",
+      "rack_id": 88,
+      "zone_id": 15
+    },
+    {
+      "field": "O5",
+      "rack_id": 89,
+      "zone_id": 15
+    },
+    {
+      "field": "O6",
+      "rack_id": 90,
+      "zone_id": 15
+    },
+    {
+      "field": "P1",
+      "rack_id": 91,
+      "zone_id": 16
+    },
+    {
+      "field": "P2",
+      "rack_id": 92,
+      "zone_id": 16
+    },
+    {
+      "field": "P3",
+      "rack_id": 93,
+      "zone_id": 16
+    },
+    {
+      "field": "P4",
+      "rack_id": 94,
+      "zone_id": 16
+    },
+    {
+      "field": "P5",
+      "rack_id": 95,
+      "zone_id": 16
+    },
+    {
+      "field": "P6",
+      "rack_id": 96,
+      "zone_id": 16
+    },
+    {
+      "field": "Q1",
+      "rack_id": 97,
+      "zone_id": 17
+    },
+    {
+      "field": "Q2",
+      "rack_id": 98,
+      "zone_id": 17
+    },
+    {
+      "field": "Q3",
+      "rack_id": 99,
+      "zone_id": 17
+    },
+    {
+      "field": "Q4",
+      "rack_id": 100,
+      "zone_id": 17
+    },
+    {
+      "field": "Q5",
+      "rack_id": 101,
+      "zone_id": 17
+    },
+    {
+      "field": "Q6",
+      "rack_id": 102,
+      "zone_id": 17
+    },
+    {
+      "field": "R1",
+      "rack_id": 103,
+      "zone_id": 18
+    },
+    {
+      "field": "R2",
+      "rack_id": 104,
+      "zone_id": 18
+    },
+    {
+      "field": "R3",
+      "rack_id": 105,
+      "zone_id": 18
+    },
+    {
+      "field": "R4",
+      "rack_id": 106,
+      "zone_id": 18
+    },
+    {
+      "field": "R5",
+      "rack_id": 107,
+      "zone_id": 18
+    },
+    {
+      "field": "R6",
+      "rack_id": 108,
+      "zone_id": 18
+    },
+    {
+      "field": "S1",
+      "rack_id": 109,
+      "zone_id": 19
+    },
+    {
+      "field": "S2",
+      "rack_id": 110,
+      "zone_id": 19
+    },
+    {
+      "field": "S3",
+      "rack_id": 111,
+      "zone_id": 19
+    },
+    {
+      "field": "S4",
+      "rack_id": 112,
+      "zone_id": 19
+    },
+    {
+      "field": "S5",
+      "rack_id": 113,
+      "zone_id": 19
+    },
+    {
+      "field": "S6",
+      "rack_id": 114,
+      "zone_id": 19
+    },
+    {
+      "field": "T1",
+      "rack_id": 115,
+      "zone_id": 20
+    },
+    {
+      "field": "T2",
+      "rack_id": 116,
+      "zone_id": 20
+    },
+    {
+      "field": "T3",
+      "rack_id": 117,
+      "zone_id": 20
+    },
+    {
+      "field": "T4",
+      "rack_id": 118,
+      "zone_id": 20
+    },
+    {
+      "field": "T5",
+      "rack_id": 119,
+      "zone_id": 20
+    },
+    {
+      "field": "T6",
+      "rack_id": 120,
+      "zone_id": 20
+    },
+    {
+      "field": "U1",
+      "rack_id": 121,
+      "zone_id": 21
+    },
+    {
+      "field": "U2",
+      "rack_id": 122,
+      "zone_id": 21
+    },
+    {
+      "field": "U3",
+      "rack_id": 123,
+      "zone_id": 21
+    },
+    {
+      "field": "U4",
+      "rack_id": 124,
+      "zone_id": 21
+    },
+    {
+      "field": "U5",
+      "rack_id": 125,
+      "zone_id": 21
+    },
+    {
+      "field": "U6",
+      "rack_id": 126,
+      "zone_id": 21
+    },
+    {
+      "field": "V1",
+      "rack_id": 127,
+      "zone_id": 22
+    },
+    {
+      "field": "V2",
+      "rack_id": 128,
+      "zone_id": 22
+    },
+    {
+      "field": "V3",
+      "rack_id": 129,
+      "zone_id": 22
+    },
+    {
+      "field": "V4",
+      "rack_id": 130,
+      "zone_id": 22
+    },
+    {
+      "field": "V5",
+      "rack_id": 131,
+      "zone_id": 22
+    },
+    {
+      "field": "V6",
+      "rack_id": 132,
+      "zone_id": 22
+    }
+  ],
+  "stores": [
+    {
+      "outbound_count": 72,
+      "store_id": 1,
+      "zone_id": 1
+    },
+    {
+      "outbound_count": 64,
+      "store_id": 2,
+      "zone_id": 2
+    },
+    {
+      "outbound_count": 56,
+      "store_id": 3,
+      "zone_id": 3
+    },
+    {
+      "outbound_count": 48,
+      "store_id": 4,
+      "zone_id": 4
+    },
+    {
+      "outbound_count": 32,
+      "store_id": 5,
+      "zone_id": 5
+    },
+    {
+      "outbound_count": 32,
+      "store_id": 6,
+      "zone_id": 6
+    },
+    {
+      "outbound_count": 48,
+      "store_id": 7,
+      "zone_id": 7
+    },
+    {
+      "outbound_count": 40,
+      "store_id": 8,
+      "zone_id": 8
+    },
+    {
+      "outbound_count": 32,
+      "store_id": 9,
+      "zone_id": 9
+    },
+    {
+      "outbound_count": 24,
+      "store_id": 10,
+      "zone_id": 10
+    },
+    {
+      "outbound_count": 48,
+      "store_id": 11,
+      "zone_id": 11
+    },
+    {
+      "outbound_count": 40,
+      "store_id": 12,
+      "zone_id": 12
+    },
+    {
+      "outbound_count": 24,
+      "store_id": 13,
+      "zone_id": 13
+    },
+    {
+      "outbound_count": 24,
+      "store_id": 14,
+      "zone_id": 14
+    },
+    {
+      "outbound_count": 48,
+      "store_id": 15,
+      "zone_id": 15
+    },
+    {
+      "outbound_count": 40,
+      "store_id": 16,
+      "zone_id": 16
+    },
+    {
+      "outbound_count": 24,
+      "store_id": 17,
+      "zone_id": 17
+    },
+    {
+      "outbound_count": 32,
+      "store_id": 18,
+      "zone_id": 18
+    },
+    {
+      "outbound_count": 24,
+      "store_id": 19,
+      "zone_id": 19
+    },
+    {
+      "outbound_count": 16,
+      "store_id": 20,
+      "zone_id": 20
+    },
+    {
+      "outbound_count": 16,
+      "store_id": 21,
+      "zone_id": 21
+    },
+    {
+      "outbound_count": 16,
+      "store_id": 22,
+      "zone_id": 22
+    }
+  ],
+  "zones": [
+    {
+      "facility_id": 1,
+      "warehouse_id": 1,
+      "zone_id": 1
+    },
+    {
+      "facility_id": 2,
+      "warehouse_id": 1,
+      "zone_id": 2
+    },
+    {
+      "facility_id": 3,
+      "warehouse_id": 1,
+      "zone_id": 3
+    },
+    {
+      "facility_id": 4,
+      "warehouse_id": 1,
+      "zone_id": 4
+    },
+    {
+      "facility_id": 5,
+      "warehouse_id": 1,
+      "zone_id": 5
+    },
+    {
+      "facility_id": 6,
+      "warehouse_id": 1,
+      "zone_id": 6
+    },
+    {
+      "facility_id": 7,
+      "warehouse_id": 1,
+      "zone_id": 7
+    },
+    {
+      "facility_id": 8,
+      "warehouse_id": 1,
+      "zone_id": 8
+    },
+    {
+      "facility_id": 9,
+      "warehouse_id": 1,
+      "zone_id": 9
+    },
+    {
+      "facility_id": 10,
+      "warehouse_id": 1,
+      "zone_id": 10
+    },
+    {
+      "facility_id": 11,
+      "warehouse_id": 1,
+      "zone_id": 11
+    },
+    {
+      "facility_id": 12,
+      "warehouse_id": 1,
+      "zone_id": 12
+    },
+    {
+      "facility_id": 13,
+      "warehouse_id": 1,
+      "zone_id": 13
+    },
+    {
+      "facility_id": 14,
+      "warehouse_id": 1,
+      "zone_id": 14
+    },
+    {
+      "facility_id": 15,
+      "warehouse_id": 1,
+      "zone_id": 15
+    },
+    {
+      "facility_id": 16,
+      "warehouse_id": 1,
+      "zone_id": 16
+    },
+    {
+      "facility_id": 17,
+      "warehouse_id": 1,
+      "zone_id": 17
+    },
+    {
+      "facility_id": 18,
+      "warehouse_id": 1,
+      "zone_id": 18
+    },
+    {
+      "facility_id": 19,
+      "warehouse_id": 1,
+      "zone_id": 19
+    },
+    {
+      "facility_id": 20,
+      "warehouse_id": 1,
+      "zone_id": 20
+    },
+    {
+      "facility_id": 21,
+      "warehouse_id": 1,
+      "zone_id": 21
+    },
+    {
+      "facility_id": 22,
+      "warehouse_id": 1,
+      "zone_id": 22
+    }
+  ]
+}
