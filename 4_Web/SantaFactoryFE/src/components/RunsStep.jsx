@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { BOTS, DOCK, ESTIMATE_STATUS_LABEL, GRID, RACK, RUN_STATUS_LABEL, STATION, buildLayout } from '../data/mock.js'
+import { BOTS, DOCK, ESTIMATE_STATUS_LABEL, GRID, RACK, RUN_STATUS_LABEL, STATION, buildLayout } from '../data/replay.js'
 import { formatDateTime } from '../utils/format.js'
 
 const CELL_CLASS = { [RACK]: 'c1', [STATION]: 'c2', [DOCK]: 'c3' }
