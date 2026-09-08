@@ -3,6 +3,8 @@ package com.ssafy.santafactory.service.estimate;
 import com.ssafy.santafactory.dto.estimate.EstimateCreateRequest;
 import com.ssafy.santafactory.dto.estimate.EstimateCreateResponse;
 import com.ssafy.santafactory.dto.estimate.EstimateDetailResponse;
+import com.ssafy.santafactory.service.estimate.EstimateEvents.EstimateFinished;
+import com.ssafy.santafactory.service.estimate.EstimateEvents.RunUpdated;
 import com.ssafy.santafactory.dto.estimate.EstimateSummaryResponse;
 import com.ssafy.santafactory.dto.simulation.SimulationRequest;
 import com.ssafy.santafactory.dto.simulation.SimulationResponse;
@@ -21,6 +23,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -46,8 +49,8 @@ public class EstimateService {
     /** 시뮬 시각 필드는 "HH:mm" 문자열이다 (명세 §1-1). */
     private static final DateTimeFormatter HH_MM = DateTimeFormatter.ofPattern("HH:mm");
 
-    /** 시뮬은 결정론이라 시드를 고정해 두면 같은 견적이 같은 결과를 낸다. 시드 개수는 미확정. */
-    private static final long FIXED_SEED = 42L;
+    /** 시뮬 평가 시드 */
+    private static final long FIXED_SEED = 101L;
 
     /** 아직 결과를 기다리는 상태 — TIMEOUT 스윕 대상. */
     private static final List<RunStatus> PENDING = List.of(RunStatus.QUEUED, RunStatus.RUNNING);
@@ -59,6 +62,7 @@ public class EstimateService {
     private final CostCalculator costCalculator;
     private final EstimateEvaluator evaluator;
     private final EstimateProperties properties;
+    private final ApplicationEventPublisher eventPublisher;
 
     // ── 생성 ─────────────────────────────────────────────────────────────────
 
@@ -80,9 +84,9 @@ public class EstimateService {
         Estimate estimate = estimateRepository.save(Estimate.open(
                 warehouse, request.amrModelOrDefault(), targetThroughput, targetUtilization, budgetLimit));
 
-        int maxAmrCount = costCalculator.maxAmrCount(budgetLimit);
+        List<Integer> amrCounts = amrCounts(request, budgetLimit);
+        int maxAmrCount = amrCounts.get(amrCounts.size() - 1);
         String baseRunId = "est_" + estimate.getId();
-        List<Integer> amrCounts = IntStream.rangeClosed(1, maxAmrCount).boxed().toList();
 
         for (int amrCount : amrCounts) {
             scenarioRepository.save(SimScenario.queued(
@@ -93,6 +97,28 @@ public class EstimateService {
         log.info("견적 생성: estimateId={}, 최대 {}대, 목표 처리율 {}%, 가동률 {}%, 예산 {}원",
                 estimate.getId(), maxAmrCount, targetThroughput, targetUtilization, budgetLimit);
         return new EstimateCreateResponse(estimate.getId(), maxAmrCount, runIds);
+    }
+
+    /**
+     * 돌릴 대수 목록.
+     *
+     * <p>프론트가 범위(min·max·step)를 보내면 그 범위를, 안 보내면 1대부터 예산으로 살 수 있는
+     * 대수까지 전부. 어느 쪽이든 충전 존 상한({@code max-amr-count})을 넘는 대수는 자른다 — 넘겨
+     * 발행하면 시뮬이 배치 단계에서 죽는다. 범위 최소가 상한보다 크면 돌릴 게 없으므로 400 이다.
+     */
+    private List<Integer> amrCounts(EstimateCreateRequest request, long budgetLimit) {
+        if (!request.hasFleetRange()) {
+            return IntStream.rangeClosed(1, costCalculator.maxAmrCount(budgetLimit)).boxed().toList();
+        }
+        int cap = properties.maxAmrCount();
+        List<Integer> counts = IntStream.iterate(request.fleetMin(), n -> n <= Math.min(request.fleetMax(), cap),
+                        n -> n + request.fleetStepOrDefault())
+                .boxed().toList();
+        if (counts.isEmpty()) {
+            log.warn("대수 범위가 상한을 넘음: min={}, max={}, cap={}", request.fleetMin(), request.fleetMax(), cap);
+            throw new GlobalException(ErrorCode.VALIDATION_ERROR);
+        }
+        return counts;
     }
 
     /**
@@ -178,6 +204,9 @@ public class EstimateService {
                 .orElseThrow(() -> new GlobalException(ErrorCode.ESTIMATE_NOT_FOUND));
         estimate.cancel();
         log.info("견적 취소: estimateId={}, status={}", estimateId, estimate.getStatus());
+        if (estimate.isCancelled()) {
+            eventPublisher.publishEvent(finishedEvent(estimate));
+        }
     }
 
     // ── 결과 반영 ────────────────────────────────────────────────────────────
@@ -200,6 +229,7 @@ public class EstimateService {
         } else {
             applyKpi(run, response.kpi());
         }
+        eventPublisher.publishEvent(new RunUpdated(run.getEstimate().getId(), EstimateDetailResponse.Run.from(run)));
 
         finalizeIfComplete(run.getEstimate());
     }
@@ -223,6 +253,8 @@ public class EstimateService {
         }
 
         stuck.forEach(SimScenario::markTimeout);
+        stuck.forEach(run -> eventPublisher.publishEvent(
+                new RunUpdated(run.getEstimate().getId(), EstimateDetailResponse.Run.from(run))));
         // 같은 견적의 run 들은 한 영속성 컨텍스트에서 같은 인스턴스라 distinct 로 중복 판정을 막는다
         stuck.stream().map(SimScenario::getEstimate).distinct().forEach(this::finalizeIfComplete);
 
@@ -311,6 +343,12 @@ public class EstimateService {
         log.info("견적 판정 확정: estimateId={}, 권장={}대, 무릎={}대, 사유={}, 상태={}",
                 estimate.getId(), verdict.recommendedCount(), verdict.kneeCount(),
                 verdict.reasonCode(), estimate.getStatus());
+        eventPublisher.publishEvent(finishedEvent(estimate));
+    }
+
+    private EstimateFinished finishedEvent(Estimate estimate) {
+        return new EstimateFinished(estimate.getId(), estimate.getStatus(),
+                estimate.getRecommendedCount(), estimate.getKneeCount(), estimate.getReasonCode());
     }
 
     private RunResult toRunResult(SimScenario run) {
