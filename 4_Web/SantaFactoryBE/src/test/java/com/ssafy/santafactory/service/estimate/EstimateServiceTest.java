@@ -20,6 +20,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
+import org.springframework.context.ApplicationEventPublisher;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
 
@@ -57,13 +58,16 @@ class EstimateServiceTest {
     @Mock
     SimulationService simulationService;
 
+    @Mock
+    ApplicationEventPublisher eventPublisher;
+
     private final CostCalculator costCalculator = new CostCalculator(PROPS);
     private EstimateService service;
 
     private EstimateService service() {
         if (service == null) {
             service = new EstimateService(estimateRepository, scenarioRepository, warehouseRepository,
-                    simulationService, costCalculator, new EstimateEvaluator(), PROPS);
+                    simulationService, costCalculator, new EstimateEvaluator(), PROPS, eventPublisher);
         }
         return service;
     }

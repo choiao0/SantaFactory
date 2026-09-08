@@ -3,6 +3,8 @@ package com.ssafy.santafactory.service.estimate;
 import com.ssafy.santafactory.dto.estimate.EstimateCreateRequest;
 import com.ssafy.santafactory.dto.estimate.EstimateCreateResponse;
 import com.ssafy.santafactory.dto.estimate.EstimateDetailResponse;
+import com.ssafy.santafactory.service.estimate.EstimateEvents.EstimateFinished;
+import com.ssafy.santafactory.service.estimate.EstimateEvents.RunUpdated;
 import com.ssafy.santafactory.dto.estimate.EstimateSummaryResponse;
 import com.ssafy.santafactory.dto.simulation.SimulationRequest;
 import com.ssafy.santafactory.dto.simulation.SimulationResponse;
@@ -21,6 +23,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -59,6 +62,7 @@ public class EstimateService {
     private final CostCalculator costCalculator;
     private final EstimateEvaluator evaluator;
     private final EstimateProperties properties;
+    private final ApplicationEventPublisher eventPublisher;
 
     // ── 생성 ─────────────────────────────────────────────────────────────────
 
@@ -178,6 +182,9 @@ public class EstimateService {
                 .orElseThrow(() -> new GlobalException(ErrorCode.ESTIMATE_NOT_FOUND));
         estimate.cancel();
         log.info("견적 취소: estimateId={}, status={}", estimateId, estimate.getStatus());
+        if (estimate.isCancelled()) {
+            eventPublisher.publishEvent(finishedEvent(estimate));
+        }
     }
 
     // ── 결과 반영 ────────────────────────────────────────────────────────────
@@ -200,6 +207,7 @@ public class EstimateService {
         } else {
             applyKpi(run, response.kpi());
         }
+        eventPublisher.publishEvent(new RunUpdated(run.getEstimate().getId(), EstimateDetailResponse.Run.from(run)));
 
         finalizeIfComplete(run.getEstimate());
     }
@@ -223,6 +231,8 @@ public class EstimateService {
         }
 
         stuck.forEach(SimScenario::markTimeout);
+        stuck.forEach(run -> eventPublisher.publishEvent(
+                new RunUpdated(run.getEstimate().getId(), EstimateDetailResponse.Run.from(run))));
         // 같은 견적의 run 들은 한 영속성 컨텍스트에서 같은 인스턴스라 distinct 로 중복 판정을 막는다
         stuck.stream().map(SimScenario::getEstimate).distinct().forEach(this::finalizeIfComplete);
 
@@ -311,6 +321,12 @@ public class EstimateService {
         log.info("견적 판정 확정: estimateId={}, 권장={}대, 무릎={}대, 사유={}, 상태={}",
                 estimate.getId(), verdict.recommendedCount(), verdict.kneeCount(),
                 verdict.reasonCode(), estimate.getStatus());
+        eventPublisher.publishEvent(finishedEvent(estimate));
+    }
+
+    private EstimateFinished finishedEvent(Estimate estimate) {
+        return new EstimateFinished(estimate.getId(), estimate.getStatus(),
+                estimate.getRecommendedCount(), estimate.getKneeCount(), estimate.getReasonCode());
     }
 
     private RunResult toRunResult(SimScenario run) {
