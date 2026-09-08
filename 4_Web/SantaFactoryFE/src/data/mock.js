@@ -114,3 +114,54 @@ export const BOTS = [
   { x: 16, y: 12, state: 'move', path: 'h' },
   { x: 1, y: 8, state: 'work', path: 'i' },
 ]
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 아래는 백엔드 GET /api/estimates/{id} 응답과 같은 모양이다 (camelize 후).
+// 위쪽 ESTIMATE/RUNS 는 다른 단계 컴포넌트가 아직 쓰는 목업이라 그대로 둔다.
+//
+// 백엔드 의미에 주의:
+//   throughput  = 접수 주문 중 완료 비율 [%]  (건/시가 아니다. 판정이 이 값을 쓴다)
+//   utilization = AMR 가동률 [%] 0~100       (0~1 이 아니다)
+//   outbound    = 일일 출고 건수 [건/일]
+//   totalCost   = 대당 단가·설치비까지 합산된 구축비 [원]
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** 대당 단가 1,550만 = AMR 1,500만 + 설치 50만 (application.yml estimate.*). */
+const UNIT_COST = 15_500_000
+
+const CURVE = [
+  //  n  처리율%  가동률%
+  [1, 12.0, 98.0], [2, 24.0, 97.0], [3, 35.0, 96.0], [4, 46.0, 94.0],
+  [5, 56.0, 92.0], [6, 65.0, 90.0], [7, 73.0, 88.0], [8, 80.0, 86.0],
+  [9, 85.0, 85.0], [10, 89.0, 84.0], [11, 92.0, 83.0], [12, 96.0, 82.0],
+  [13, 97.0, 80.0], [14, 98.0, 79.0], [15, 98.5, 76.0], [16, 99.0, 73.0],
+  [17, null, null], [18, 99.4, 67.0], [19, 99.5, 64.0], [20, 99.6, 61.0],
+]
+
+/** 하루 출고 800건 기준으로 처리율에서 환산. */
+const dailyOutbound = (throughput) => Math.round((throughput / 100) * 800)
+
+export const MOCK_ESTIMATE = {
+  estimateId: 77,
+  status: 'PARTIAL',           // n17 이 실패해서 DONE 이 아니다
+  amrModel: 'iw.hub',
+  targetThroughput: 95.0,
+  targetUtilization: 80.0,
+  budgetLimit: 300_000_000,
+  recommendedCount: 12,        // 96 ≥ 95 · 82 ≥ 80 · 1.86억 ≤ 3억 을 처음 만족
+  kneeCount: 13,
+  reasonCode: null,
+  createdAt: '2026-09-08T14:20:00',
+  completedAt: '2026-09-08T14:33:12',
+  elapsedSeconds: 792,
+  runs: CURVE.map(([n, throughput, utilization]) => ({
+    runId: `est_77_n${n}`,
+    amrCount: n,
+    status: throughput === null ? 'TIMEOUT' : 'DONE',
+    throughput,
+    utilization,
+    outbound: throughput === null ? null : dailyOutbound(throughput),
+    totalCost: UNIT_COST * n,
+    error: throughput === null ? '결과가 오지 않아 TIMEOUT 처리됨 (30분)' : null,
+  })),
+}
