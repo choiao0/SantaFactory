@@ -16,6 +16,7 @@ import json
 import os
 import re
 import sys
+import tempfile
 import time
 
 from objective import SimFailed, run_once
@@ -40,8 +41,9 @@ def log(msg):
 # ------------------------------------------------------------
 # 요청 → sim_v2 인자
 # ------------------------------------------------------------
-def to_sim_args(req):
-    """명세 §1-1 요청 dict → run_once 키워드 인자. 잘못된 요청은 ValueError (시뮬을 돌리지 않는다)."""
+def to_sim_args(req, orders_path=None):
+    """명세 §1-1 요청 dict → run_once 키워드 인자. 잘못된 요청은 ValueError (시뮬을 돌리지 않는다).
+    orders_path: 요청 outbound[] 를 써 둔 파일 (handle 이 만든다) → --orders-file (-156)."""
     if not isinstance(req, dict):
         raise ValueError("요청 본문이 JSON 객체가 아님")
     run_id = req.get("run_id")
@@ -67,8 +69,16 @@ def to_sim_args(req):
     for k in ("speed_empty", "speed_loaded"):
         if amr.get(k) not in (None, 1.0):
             log(f"{run_id}: amr.{k}={amr[k]} 는 V1 에서 무시 (커널 속도 1.0 m/s 고정)")
-    if req.get("inbound") or req.get("outbound"):
-        log(f"{run_id}: 명시 inbound/outbound 리스트는 V1 에서 무시 (간격 기반 생성)")
+    if req.get("inbound"):
+        log(f"{run_id}: 명시 inbound 리스트는 V1 에서 무시 (간격 기반 생성, 입고 시나리오 보류)")
+    # 명시 출고 주문 (-156): outbound[] 가 있으면 파일로 넘겨 시뮬이 그대로 흘린다. 시각은 시뮬 시작 기준 초(명세 §3-1).
+    if req.get("outbound") and orders_path:
+        extra.append(f"--orders-file={orders_path}")
+        cap = amr.get("capacity")
+        if cap is not None:
+            if isinstance(cap, bool) or not isinstance(cap, int) or cap < 1:
+                raise ValueError(f"amr.capacity 는 1 이상 정수 (상품 개수): {cap!r}")
+            extra.append(f"--capacity={cap}")
     return dict(tag=re.sub(r"[^A-Za-z0-9_.-]", "_", run_id), n_robots=n, n_orders=0,
                 seed=int(req.get("seed") if req.get("seed") is not None else 42),
                 theta_path=THETA_PATH or None, extra_args=tuple(extra))
@@ -93,18 +103,26 @@ def to_kpi(s):
 
 def handle(body):
     """요청 바이트/문자열 → 결과 dict. 어떤 경우에도 예외 대신 failed 결과를 돌려준다 (명세 §1-3: 실패도 발행)."""
-    run_id = "?"
+    run_id, orders_path = "?", None
     try:
         req = json.loads(body)
         run_id = req.get("run_id", "?") if isinstance(req, dict) else "?"
-        kw = to_sim_args(req)
+        if isinstance(req, dict) and req.get("outbound"):
+            fd, orders_path = tempfile.mkstemp(prefix="orders_", suffix=".json")
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump({"outbound": req["outbound"]}, f)
+        kw = to_sim_args(req, orders_path)
         t0 = time.perf_counter()
         summary = run_once(SIM_ENGINE_DIR, timeout_s=TIMEOUT_S, **kw)
-        log(f"{run_id}: n={kw['n_robots']} 완료 {time.perf_counter() - t0:.1f}s")
+        log(f"{run_id}: n={kw['n_robots']} 완료 {time.perf_counter() - t0:.1f}s"
+            + (f" (명시 주문 {len(req['outbound'])}건, 제외 {summary.get('orders_skipped', 0)})" if orders_path else ""))
         return dict(run_id=run_id, status="done", error=None, kpi=to_kpi(summary))
     except (ValueError, KeyError, SimFailed, json.JSONDecodeError) as e:
         log(f"{run_id}: 실패 — {e}")
         return dict(run_id=run_id, status="failed", error=str(e)[:2000], kpi=None)
+    finally:
+        if orders_path and os.path.exists(orders_path):
+            os.remove(orders_path)
 
 
 # ------------------------------------------------------------

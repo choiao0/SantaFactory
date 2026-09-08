@@ -22,6 +22,8 @@ FMS 엔진 맵(벽있음, 8/31 복사본)과 Isaac 씬 맵(2_Simulation v5.8, �
 | `occupancy_grid_wall_ref.npy` | 벽있음 원판 (= 8/31 엔진 복사본). 생성 입력 |
 | `stations_wall_ref.json` | 스테이션 원판. 생성 입력 |
 | `charge_zone.json` | 충전 존 좌표(m) + 규약 메타. 생성 입력 (`stations.json`에도 합쳐짐, `load_charge_zone`은 이 파일을 읽음) |
+| **`rack_buffers.json`** | WMS 랙 `"A2"` → `aisle_buf[i]` 매핑 132개 (-156). `build_rack_map.py` 산출물, `load_rack_map`이 읽음. [규칙](../docs/맵_충전존.md#랙--통로-버퍼-매핑) |
+| `build_rack_map.py` | 위 표 생성: 존 facility 좌표 == aisle_buf 좌표 정확 일치(마스터 `order_gen/master/santafactory_sample.json` 입력). 백엔드 시드가 바뀌면 다시 실행 |
 | `map_diff_wall_vs_v58.png` | 두 원본 비교 — 빨강: 벽있음만 통행(=Isaac에 물체, 이번 합성으로 막힘), 파랑: v5.8만 통행(벽있음 유지로 여전히 막힘) |
 | `charge_zone_east.png` | 충전 존 위치 그림 |
 
