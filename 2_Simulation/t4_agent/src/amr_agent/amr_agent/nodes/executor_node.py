@@ -22,7 +22,7 @@ from std_msgs.msg import String
 
 from amr_agent_msgs.action import MovePrimitive
 
-from ..vda5050.order import Edge, Node as VNode, Order, OrderBook, OrderError, wrap
+from ..vda5050.order import Edge, Node as VNode, Order, OrderBook, OrderError, OrderUpdateError, wrap
 from ..vda5050.state import StateBuilder, make_error
 
 
@@ -92,11 +92,18 @@ class OrderExecutor(Node):
         if d.get("serialNumber") and str(d["serialNumber"]) != self.serial:
             self._reject("validationError", f"serialNumber {d['serialNumber']} != {self.serial}")
             return
+        refs = [("orderId", order.order_id), ("orderUpdateId", str(order.order_update_id))]
         try:
             how = self.book.receive(order, self.pose[:2] if self.pose else None, self.first_node_tol)
+        except OrderUpdateError as e:
+            self._reject("orderUpdateError", str(e), refs)
+            return
         except OrderError as e:
-            self._reject("orderError", str(e), [("orderId", order.order_id),
-                                                ("orderUpdateId", str(order.order_update_id))])
+            self._reject("orderError", str(e), refs)
+            return
+        if how == "duplicate":       # FMS 재발행 (계약 §4.3) — 오류 없이 무시, state 만 다시 낸다
+            self.get_logger().info(f"order {order.order_id}#{order.order_update_id} duplicate — ignored")
+            self._publish_state()
             return
         self.errors = []
         self.get_logger().info(f"order {order.order_id}#{order.order_update_id} {how}: "
