@@ -20,6 +20,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
+import org.springframework.context.ApplicationEventPublisher;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
 
@@ -57,13 +58,16 @@ class EstimateServiceTest {
     @Mock
     SimulationService simulationService;
 
+    @Mock
+    ApplicationEventPublisher eventPublisher;
+
     private final CostCalculator costCalculator = new CostCalculator(PROPS);
     private EstimateService service;
 
     private EstimateService service() {
         if (service == null) {
             service = new EstimateService(estimateRepository, scenarioRepository, warehouseRepository,
-                    simulationService, costCalculator, new EstimateEvaluator(), PROPS);
+                    simulationService, costCalculator, new EstimateEvaluator(), PROPS, eventPublisher);
         }
         return service;
     }
@@ -77,7 +81,7 @@ class EstimateServiceTest {
         when(simulationService.publishRuns(any(), any())).thenReturn(List.of("est_77_n1"));
 
         EstimateCreateResponse response = service().create(
-                new EstimateCreateRequest(1L, null, null, null, null));
+                new EstimateCreateRequest(1L, null, null, null, null, null, null, null));
 
         // 예산 3억 ÷ 대당 1,550만 = 19대 + 여유 1 = 20대. 충전 존 상한 28 보다 작아 예산이 먼저 걸린다
         assertThat(response.estimateId()).isEqualTo(77L);
@@ -92,12 +96,57 @@ class EstimateServiceTest {
     }
 
     @Test
+    void a_fleet_range_from_the_request_replaces_the_budget_based_sweep() {
+        givenWarehouse(1L);
+        givenSavedEstimateId(77L);
+        when(simulationService.publishRuns(any(), any())).thenReturn(List.of());
+
+        EstimateCreateResponse response = service().create(
+                new EstimateCreateRequest(1L, null, null, null, null, 3, 15, 2));
+
+        ArgumentCaptor<List<Integer>> counts = ArgumentCaptor.captor();
+        verify(simulationService).publishRuns(any(), counts.capture());
+        assertThat(counts.getValue()).containsExactly(3, 5, 7, 9, 11, 13, 15);
+        assertThat(response.maxAmrCount()).isEqualTo(15);
+        verify(scenarioRepository, times(7)).save(any());
+    }
+
+    @Test
+    void a_fleet_range_is_cut_at_the_charging_zone_cap() {
+        givenWarehouse(1L);
+        givenSavedEstimateId(77L);
+        when(simulationService.publishRuns(any(), any())).thenReturn(List.of());
+
+        // 상한 28 을 넘는 30·35 는 발행하면 시뮬이 배치에서 죽으므로 잘라낸다
+        EstimateCreateResponse response = service().create(
+                new EstimateCreateRequest(1L, null, null, null, null, 20, 35, 5));
+
+        ArgumentCaptor<List<Integer>> counts = ArgumentCaptor.captor();
+        verify(simulationService).publishRuns(any(), counts.capture());
+        assertThat(counts.getValue()).containsExactly(20, 25);
+        assertThat(response.maxAmrCount()).isEqualTo(25);
+    }
+
+    @Test
+    void a_fleet_range_entirely_above_the_cap_is_rejected() {
+        givenWarehouse(1L);
+        givenSavedEstimateId(77L);
+
+        assertThatThrownBy(() -> service().create(
+                new EstimateCreateRequest(1L, null, null, null, null, 30, 40, null)))
+                .isInstanceOf(GlobalException.class)
+                .extracting(e -> ((GlobalException) e).getErrorCode())
+                .isEqualTo(ErrorCode.VALIDATION_ERROR);
+        verify(simulationService, never()).publishRuns(any(), any());
+    }
+
+    @Test
     void run_rows_carry_the_queue_key_and_the_cost_of_their_fleet_size() {
         givenWarehouse(1L);
         givenSavedEstimateId(77L);
         when(simulationService.publishRuns(any(), any())).thenReturn(List.of());
 
-        service().create(new EstimateCreateRequest(1L, null, null, null, 50_000_000L));
+        service().create(new EstimateCreateRequest(1L, null, null, null, 50_000_000L, null, null, null));
 
         ArgumentCaptor<SimScenario> saved = ArgumentCaptor.captor();
         verify(scenarioRepository, times(4)).save(saved.capture());   // 5천만 / 1550만 = 3대 + 여유 1
@@ -114,12 +163,13 @@ class EstimateServiceTest {
         givenSavedEstimateId(77L);
         when(simulationService.publishRuns(any(), any())).thenReturn(List.of());
 
-        service().create(new EstimateCreateRequest(1L, null, null, null, null));
+        service().create(new EstimateCreateRequest(1L, null, null, null, null, null, null, null));
 
         ArgumentCaptor<SimulationRequest> base = ArgumentCaptor.captor();
         verify(simulationService).publishRuns(base.capture(), any());
         SimulationRequest sent = base.getValue();
         // 실행 시간을 명시하지 않으면 시뮬이 유한 주문 모드로 돌아 처리율이 전 대수 100 % 가 된다
+        assertThat(sent.seed()).isEqualTo(101L);                          // 평가 시드, API 로 받지 않는다
         assertThat(sent.horizonS()).isEqualTo(21600L);                    // 6시간
         assertThat(sent.shifts()).isEqualTo("in,in,out,out,out,out");     // 입고 2h + 출고 4h
         assertThat(sent.inboundGapS()).isEqualTo(48.0);                   // 600건 / 8시간
@@ -140,7 +190,7 @@ class EstimateServiceTest {
         givenSavedEstimateId(77L);
         when(simulationService.publishRuns(any(), any())).thenReturn(List.of());
 
-        service().create(new EstimateCreateRequest(1L, null, null, null, null));
+        service().create(new EstimateCreateRequest(1L, null, null, null, null, null, null, null));
 
         ArgumentCaptor<SimulationRequest> base = ArgumentCaptor.captor();
         verify(simulationService).publishRuns(base.capture(), any());
@@ -155,7 +205,7 @@ class EstimateServiceTest {
         when(estimateRepository.save(saved.capture())).thenAnswer(call -> withId(call.getArgument(0), 77L));
         when(simulationService.publishRuns(any(), any())).thenReturn(List.of());
 
-        service().create(new EstimateCreateRequest(1L, "geek.p40", 88.0, 70.0, 100_000_000L));
+        service().create(new EstimateCreateRequest(1L, "geek.p40", 88.0, 70.0, 100_000_000L, null, null, null));
 
         assertThat(saved.getValue().getAmrModel()).isEqualTo("geek.p40");
         assertThat(saved.getValue().getTargetThroughput()).isEqualTo(88.0);
@@ -167,7 +217,7 @@ class EstimateServiceTest {
     void rejects_an_unknown_warehouse() {
         when(warehouseRepository.findById(99L)).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> service().create(new EstimateCreateRequest(99L, null, null, null, null)))
+        assertThatThrownBy(() -> service().create(new EstimateCreateRequest(99L, null, null, null, null, null, null, null)))
                 .isInstanceOf(GlobalException.class)
                 .hasFieldOrPropertyWithValue("errorCode", ErrorCode.WAREHOUSE_NOT_FOUND);
     }
