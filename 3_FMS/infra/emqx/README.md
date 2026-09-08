@@ -60,6 +60,13 @@ mosquitto_pub -h localhost -u amr01 -P "$MQTT_PW_AMR" -q 1 -r -t uagv/v2/idealwo
 | QoS | QoS 2 발행 거부 (`mqtt.max_qos_allowed = 1`) |
 | 라이선스 | Community License 포함: 단일 노드 내부 사용 무료, max_sessions 10,000,000, 2029-03-01 까지. 클러스터(2 노드+)는 별도 |
 
+## 배포에서 걸린 것 (EC2 2026-09-08)
+
+- `users.csv` 가 root 600 이면 컨테이너의 emqx 사용자(uid 1000)가 못 읽어 계정 0개로 뜬다 — 익명은 물론 모든 계정이 "Not authorized". 스크립트가 644 로 만들고, `sudo` 로 돌렸어도 644 를 유지한다.
+- `bootstrap_users.sh` 를 `docker compose up` 뒤에 돌리면 계정이 안 들어간다(최초 기동 때만 읽음). `down -v` 후 다시 `up`.
+- 수동 복사 시 실행 권한이 빠지면 `sudo bash bootstrap_users.sh` 로 돌린다. 숨김 파일 `.env.example`·`.gitignore` 도 같이 옮긴다.
+- EC2 위치 `~/emqx/` (k3s 이전 전 임시). GPU 서버에서의 주소는 tailnet `100.100.149.68:1883` — 공인 IP 로는 보안 그룹(443·80)이 막는다.
+
 ## 6.3 에서 걸린 것
 
 - `node.data_dir` 가 필수다 — 이미지 기본 emqx.conf 를 마운트로 덮으면 직접 적어야 한다(`"data"`).
