@@ -220,6 +220,8 @@ section.step > p.desc { font-size: 18px; line-height: 1.7; max-width: 760px; mar
 .fleetnote { font: 500 15px var(--font-mono); letter-spacing: .02em; line-height: 1.8; color: #9a9a96; margin: 20px 0 0; }
 .fleetnote b { color: #eee; }
 .runcta { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; margin-top: 24px; }
+.form-error { font: 500 14px var(--font-mono); color: #ff6b6b; letter-spacing: .02em; margin: 0; }
+.section-light .form-error { color: var(--red-dark); }
 
 .runs-head {
   display: flex; justify-content: space-between; align-items: center;
