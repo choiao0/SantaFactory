@@ -1,8 +1,12 @@
 spring:
   # datasource 는 PostgresSupport 가 Testcontainers 로 주입한다 (운영과 같은 Postgres).
+  flyway:
+    # 데모 시드(db/seed)를 뺀다. EstimateFlowIT 가 DELETE FROM warehouses 로 자기 창고를
+    # 심는데, 시드가 들어와 있으면 zones 의 FK 때문에 실패한다.
+    locations: classpath:db/migration
   jpa:
     hibernate:
-      # 엔티티가 요구하는 테이블·컬럼이 db/santafactory.sql 에 있는지 검사한다.
+      # 엔티티가 요구하는 테이블·컬럼이 마이그레이션 결과에 있는지 검사한다.
       # 어긋나면 컨텍스트 로딩이 실패한다 — 이게 이 설정의 목적이다.
       ddl-auto: validate
   rabbitmq:

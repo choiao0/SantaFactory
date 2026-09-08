@@ -18,7 +18,10 @@ repositories {
 }
 
 // Spring Boot 3.3.5 BOM 이 고정하는 1.19.8 은 최신 Docker Engine(API 1.5x)의 /info 를 400 으로 받는다.
-ext['testcontainers.version'] = '1.21.3'
+// 1.21.3 도 Docker Engine 29.x 에서 같은 400 이 나서(2026-09-08, S15P21A106-168 작업 중 재발)
+// 1.21.4 로 올렸다. Docker 를 올린 뒤 Testcontainers 가 "Could not find a valid Docker
+// environment" 로 죽으면 이 값을 올리는 게 먼저다.
+ext['testcontainers.version'] = '1.21.4'
 
 dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-web'
@@ -32,12 +35,17 @@ dependencies {
 
     runtimeOnly 'org.postgresql:postgresql'
 
+    // 스키마의 주인은 Flyway 다 (ddl-auto=validate). Flyway 10 부터 DB 별 지원이 모듈로
+    // 쪼개져서 flyway-core 만으로는 부팅 때 Postgres 를 못 잡는다 — 두 개가 한 벌이다.
+    implementation 'org.flywaydb:flyway-core'
+    implementation 'org.flywaydb:flyway-database-postgresql'
+
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
     testCompileOnly 'org.projectlombok:lombok'
     testAnnotationProcessor 'org.projectlombok:lombok'
 
     // 컨텍스트 테스트는 운영과 같은 Postgres 로 돌린다. H2 는 엔티티에서 스키마를 만들어버려서
-    // 손으로 쓴 db/santafactory.sql 과 엔티티가 어긋나도 통과한다 — ddl-auto=validate 가 그걸 잡는다.
+    // 마이그레이션과 엔티티가 어긋나도 통과한다 — ddl-auto=validate 가 그걸 잡는다.
     testImplementation 'org.springframework.boot:spring-boot-testcontainers'
     testImplementation 'org.testcontainers:junit-jupiter'
     testImplementation 'org.testcontainers:postgresql'
