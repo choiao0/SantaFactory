@@ -1,16 +1,6 @@
 import { useEffect, useState } from 'react'
-import {
-  BOTS,
-  DOCK,
-  ESTIMATE,
-  ESTIMATE_STATUS_LABEL,
-  RACK,
-  RUNS,
-  RUN_STATUS_LABEL,
-  STATION,
-  GRID,
-  buildLayout,
-} from '../data/mock.js'
+import { BOTS, DOCK, ESTIMATE_STATUS_LABEL, GRID, RACK, RUN_STATUS_LABEL, STATION, buildLayout } from '../data/mock.js'
+import { formatDateTime } from '../utils/format.js'
 
 const CELL_CLASS = { [RACK]: 'c1', [STATION]: 'c2', [DOCK]: 'c3' }
 
@@ -20,18 +10,18 @@ function RunCard({ run }) {
   const failed = run.status === 'FAILED' || run.status === 'TIMEOUT'
   return (
     <div className={`run ${run.status}`}>
-      <span className="n">{run.n}<span>대</span></span>
+      <span className="n">{run.amr_count}<span>대</span></span>
       {run.status === 'DONE' && (
         <span className="metric">
-          처리량 <b>{run.throughput.toFixed(1)}</b>/h
+          처리율 <b>{run.throughput?.toFixed(1)}%</b>
           <br />
-          가동률 <b>{Math.round(run.utilization * 100)}%</b>
+          가동률 <b>{run.utilization?.toFixed(0)}%</b>
         </span>
       )}
       {failed && (
         <>
-          <span className="fail">{FAIL_LABEL[run.status]}</span>
-          <button type="button" className="ghost sm">재실행</button>
+          <span className="fail" title={run.error ?? ''}>{FAIL_LABEL[run.status]}</span>
+          <button type="button" className="ghost sm" disabled title="재실행 API 연동 예정">재실행</button>
         </>
       )}
       {(run.status === 'QUEUED' || run.status === 'RUNNING') && (
@@ -52,7 +42,7 @@ function formatClock(sec) {
   return `T+${h}:${m}:${s}`
 }
 
-function ReplayBoard() {
+function ReplayBoard({ runLabel, amrCount }) {
   const cells = buildLayout()
   const cellPct = 100 / GRID.width
   const rowPct = 100 / GRID.length
@@ -78,7 +68,7 @@ function ReplayBoard() {
       <div className="rp-bar">
         <h4>
           REPRESENTATIVE RUN
-          <span>est_{ESTIMATE.id}_n{ESTIMATE.recommended} · SEED {ESTIMATE.seed}</span>
+          <span>{runLabel} · SEED 101</span>
         </h4>
         <div className="rp-ctrl">
           <span className="rp-clock">{formatClock(clock)}</span>
@@ -95,8 +85,8 @@ function ReplayBoard() {
           <span>TOP VIEW · SIMPY QUOTE ENGINE</span>
           <span>{GRID.width} × {GRID.length} · 1 CELL = 1 m</span>
         </div>
-        <div className="hud tl"><b>{ESTIMATE.recommended}</b> AMR · ACTIVE 8 · CHARGING 0</div>
-        <div className="hud tr">ORDERS <b>212</b> / 500 · LEAD <b>3m 28s</b></div>
+        <div className="hud tl"><b>{amrCount ?? '—'}</b> AMR · PREVIEW</div>
+        <div className="hud tr">위치 로그 연동 예정 · 샘플 재생</div>
         <div className="replay" style={boardStyle}>
           {cells.map((c, i) => (
             <div key={i} className={`cell ${CELL_CLASS[c] ?? ''}`} />
@@ -128,8 +118,12 @@ function ReplayBoard() {
   )
 }
 
-export default function RunsStep() {
-  const done = RUNS.filter((r) => r.status === 'DONE').length
+export default function RunsStep({ estimateId, estimate, connected, error }) {
+  const runs = estimate?.runs ?? []
+  const finished = runs.filter((r) => r.status !== 'QUEUED' && r.status !== 'RUNNING').length
+  const representative = estimate?.recommended_count ?? runs.at(-1)?.amr_count ?? null
+  const runLabel = estimate ? `est_${estimate.estimate_id}_n${representative ?? '?'}` : 'est_?_n?'
+
   return (
     <section className="step section-dark reveal" id="s3">
       <div className="eyebrow red">
@@ -137,24 +131,42 @@ export default function RunsStep() {
         03 — RUNS
       </div>
       <h2>Watch the sweep.</h2>
-      <p className="desc">대수마다 run 하나가 큐에 들어가 순서대로 계산됩니다. 실패한 run은 개별 재실행할 수 있습니다.</p>
+      <p className="desc">대수마다 run 하나가 큐에 들어가 순서대로 계산됩니다. 결과가 도착하는 대로 카드가 갱신됩니다.</p>
 
-      <div className="runs-head">
-        <span className="mono">
-          ESTIMATE #{ESTIMATE.id} · {ESTIMATE.createdAt}<b>{done} / {RUNS.length} DONE</b>
-        </span>
-        <div className="runs-legend">
-          <span><i className="DONE" />완료</span>
-          <span><i className="FAILED" />실패</span>
-          <span><i className="QUEUED" />대기</span>
-          <span className={`status ${ESTIMATE.status}`}>{ESTIMATE_STATUS_LABEL[ESTIMATE.status]}</span>
-        </div>
-      </div>
-      <div className="runlist">
-        {RUNS.map((r) => <RunCard key={r.n} run={r} />)}
-      </div>
+      {estimateId == null && (
+        <div className="runs-empty">02 단계에서 견적을 요청하면 run 진행 상황이 여기에 표시됩니다.</div>
+      )}
 
-      <ReplayBoard />
+      {estimateId != null && !estimate && !error && (
+        <div className="runs-empty">ESTIMATE #{estimateId} · 진행 상황 연결 중…</div>
+      )}
+
+      {error && <div className="runs-empty form-error">{error}</div>}
+
+      {estimate && (
+        <>
+          <div className="runs-head">
+            <span className="mono">
+              ESTIMATE #{estimate.estimate_id} · {formatDateTime(estimate.created_at)}
+              <b>{finished} / {runs.length} DONE</b>
+            </span>
+            <div className="runs-legend">
+              <span><i className="DONE" />완료</span>
+              <span><i className="FAILED" />실패</span>
+              <span><i className="QUEUED" />대기</span>
+              <span className={`status ${estimate.status}`}>
+                {ESTIMATE_STATUS_LABEL[estimate.status]}
+                {connected && estimate.status === 'RUNNING' && ' · LIVE'}
+              </span>
+            </div>
+          </div>
+          <div className="runlist">
+            {runs.map((r) => <RunCard key={r.run_id} run={r} />)}
+          </div>
+        </>
+      )}
+
+      <ReplayBoard runLabel={runLabel} amrCount={representative} />
     </section>
   )
 }
