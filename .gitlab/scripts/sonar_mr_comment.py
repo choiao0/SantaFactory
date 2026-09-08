@@ -363,7 +363,8 @@ SonarQube 메시지:
             "model": model,
             "instructions": system_prompt,
             "input": prompt,
-            "max_output_tokens": 300,
+            "reasoning": {"effort": "minimal"},
+            "max_output_tokens": 1000,
         }
     ).encode("utf-8")
     result = request_json(
