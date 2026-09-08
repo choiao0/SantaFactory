@@ -95,6 +95,21 @@ def load_charge_zone(free, map_dir=None):
     return mask
 
 
+def load_rack_map(map_dir=None):
+    """`<map_dir>/rack_buffers.json` 의 랙 필드("A2") → aisle_buf 인덱스 dict. 없으면 None.
+
+    WMS 명시 주문(OrderStream orders=)의 rack_id 를 시뮬 픽업 지점으로 바꾸는 유일한 표.
+    생성 규칙·검증은 map/build_rack_map.py (존 좌표 == aisle_buf 좌표 정확 일치, -156).
+    """
+    if map_dir is None:
+        map_dir = MAP_DIR
+    path = os.path.join(map_dir, "rack_buffers.json")
+    if not os.path.exists(path):
+        return None
+    with open(path, encoding="utf-8") as f:
+        return {k: int(v) for k, v in json.load(f)["racks"].items()}
+
+
 def zone_cells(free, zone_mask):
     """존 안 통행 가능 칸을 열 오름차순(통로 쪽 c103부터) → 행 오름차순으로.
     make_homes_zone 의 채움 순서이자 sim_v2 zone_goal 의 후보 순서(동률 결정론)."""

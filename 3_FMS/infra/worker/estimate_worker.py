@@ -16,6 +16,7 @@ import json
 import os
 import re
 import sys
+import tempfile
 import time
 
 from objective import SimFailed, run_once
@@ -40,8 +41,8 @@ def log(msg):
 # ------------------------------------------------------------
 # 요청 → sim_v2 인자
 # ------------------------------------------------------------
-def to_sim_args(req):
-    """명세 §1-1 요청 dict → run_once 키워드 인자. 잘못된 요청은 ValueError (시뮬을 돌리지 않는다)."""
+def _require_core(req):
+    """run_id · amr.count · horizon_s 검증 → (run_id, amr, n, horizon_ticks)."""
     if not isinstance(req, dict):
         raise ValueError("요청 본문이 JSON 객체가 아님")
     run_id = req.get("run_id")
@@ -54,23 +55,57 @@ def to_sim_args(req):
     horizon_s = req.get("horizon_s")
     if not isinstance(horizon_s, (int, float)) or horizon_s <= 0:
         raise ValueError(f"horizon_s 는 양수 (고정 시간 실행 필수, 명세 §1-1): {horizon_s!r}")
-    extra = [f"--horizon={int(round(horizon_s / DT))}"]
-    if req.get("shifts"):
-        extra.append(f"--shifts={req['shifts']}")
+    return run_id, amr, n, int(round(horizon_s / DT))
+
+
+def _gap_flags(req):
+    """outbound_gap_s / inbound_gap_s → --order-gap / --inbound-gap (초 = 틱)."""
+    flags = []
     for key, flag in (("outbound_gap_s", "order-gap"), ("inbound_gap_s", "inbound-gap")):
         v = req.get(key)
-        if v is not None:
-            if not isinstance(v, (int, float)) or v <= 0:
-                raise ValueError(f"{key} 는 양수: {v!r}")
-            extra.append(f"--{flag}={v / DT:g}")
-    # V1 에서 읽지 않는 필드 — 값이 오면 로그만 (결과에 영향 없음). docs/견적_워커.md
+        if v is None:
+            continue
+        if not isinstance(v, (int, float)) or v <= 0:
+            raise ValueError(f"{key} 는 양수: {v!r}")
+        flags.append(f"--{flag}={v / DT:g}")
+    return flags
+
+
+def _log_ignored(req, amr, run_id):
+    """V1 에서 읽지 않는 필드 — 값이 오면 로그만 (결과에 영향 없음). docs/견적_워커.md"""
     for k in ("speed_empty", "speed_loaded"):
         if amr.get(k) not in (None, 1.0):
             log(f"{run_id}: amr.{k}={amr[k]} 는 V1 에서 무시 (커널 속도 1.0 m/s 고정)")
-    if req.get("inbound") or req.get("outbound"):
-        log(f"{run_id}: 명시 inbound/outbound 리스트는 V1 에서 무시 (간격 기반 생성)")
+    if req.get("inbound"):
+        log(f"{run_id}: 명시 inbound 리스트는 V1 에서 무시 (간격 기반 생성, 입고 시나리오 보류)")
+
+
+def _orders_flags(req, amr, orders_path):
+    """명시 출고 주문 (-156): outbound[] 가 있으면 --orders-file, amr.capacity 가 정수면 --capacity (상품 개수)."""
+    if not (req.get("outbound") and orders_path):
+        return []
+    flags = [f"--orders-file={orders_path}"]
+    cap = amr.get("capacity")
+    if cap is None:
+        return flags
+    if isinstance(cap, bool) or not isinstance(cap, int) or cap < 1:
+        raise ValueError(f"amr.capacity 는 1 이상 정수 (상품 개수): {cap!r}")
+    return flags + [f"--capacity={cap}"]
+
+
+def to_sim_args(req, orders_path=None):
+    """명세 §1-1 요청 dict → run_once 키워드 인자. 잘못된 요청은 ValueError (시뮬을 돌리지 않는다).
+    orders_path: 요청 outbound[] 를 써 둔 파일 (handle 이 만든다) → --orders-file (-156)."""
+    run_id, amr, n, horizon = _require_core(req)
+    extra = [f"--horizon={horizon}"]
+    if req.get("shifts"):
+        extra.append(f"--shifts={req['shifts']}")
+    extra += _gap_flags(req)
+    _log_ignored(req, amr, run_id)
+    extra += _orders_flags(req, amr, orders_path)
+    seed = req.get("seed")
     return dict(tag=re.sub(r"[^A-Za-z0-9_.-]", "_", run_id), n_robots=n, n_orders=0,
-                seed=int(req.get("seed") if req.get("seed") is not None else 42),
+                seed=int(seed) if seed is not None else 42,
                 theta_path=THETA_PATH or None, extra_args=tuple(extra))
 
 
@@ -93,18 +128,26 @@ def to_kpi(s):
 
 def handle(body):
     """요청 바이트/문자열 → 결과 dict. 어떤 경우에도 예외 대신 failed 결과를 돌려준다 (명세 §1-3: 실패도 발행)."""
-    run_id = "?"
+    run_id, orders_path = "?", None
     try:
         req = json.loads(body)
         run_id = req.get("run_id", "?") if isinstance(req, dict) else "?"
-        kw = to_sim_args(req)
+        if isinstance(req, dict) and req.get("outbound"):
+            fd, orders_path = tempfile.mkstemp(prefix="orders_", suffix=".json")
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump({"outbound": req["outbound"]}, f)
+        kw = to_sim_args(req, orders_path)
         t0 = time.perf_counter()
         summary = run_once(SIM_ENGINE_DIR, timeout_s=TIMEOUT_S, **kw)
-        log(f"{run_id}: n={kw['n_robots']} 완료 {time.perf_counter() - t0:.1f}s")
+        log(f"{run_id}: n={kw['n_robots']} 완료 {time.perf_counter() - t0:.1f}s"
+            + (f" (명시 주문 {len(req['outbound'])}건, 제외 {summary.get('orders_skipped', 0)})" if orders_path else ""))
         return dict(run_id=run_id, status="done", error=None, kpi=to_kpi(summary))
     except (ValueError, KeyError, SimFailed, json.JSONDecodeError) as e:
         log(f"{run_id}: 실패 — {e}")
         return dict(run_id=run_id, status="failed", error=str(e)[:2000], kpi=None)
+    finally:
+        if orders_path and os.path.exists(orders_path):
+            os.remove(orders_path)
 
 
 # ------------------------------------------------------------

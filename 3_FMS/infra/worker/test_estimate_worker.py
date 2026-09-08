@@ -92,3 +92,19 @@ def test_consume_publishes_then_acks(monkeypatch):
     with pytest.raises(StopIteration):
         w.consume()
     assert calls == [("qos", 1), ("publish", "sim.result", "failed"), ("ack", 7)]
+
+
+def test_explicit_orders_and_capacity_flags():
+    """outbound[] 가 있으면 --orders-file, amr.capacity 가 정수면 --capacity. 비어 있거나 null 이면 둘 다 없음 (-156)."""
+    req = {**REQ, "outbound": [{"order_id": 1, "ordered_at_s": 3, "lines": [{"product_id": 7, "rack_id": "A2", "qty": 1}]}]}
+    extra = w.to_sim_args(req, orders_path="/tmp/o.json")["extra_args"]
+    assert "--orders-file=/tmp/o.json" in extra
+    assert "--capacity=8" in extra
+    no_cap = w.to_sim_args({**req, "amr": {"count": 3, "capacity": None}}, orders_path="/tmp/o.json")["extra_args"]
+    assert "--orders-file=/tmp/o.json" in no_cap
+    assert not any(f.startswith("--capacity") for f in no_cap)
+    empty = w.to_sim_args(REQ, orders_path="/tmp/o.json")["extra_args"]          # outbound: [] → 간격 모드
+    assert not any(f.startswith("--orders-file") for f in empty)
+    assert not any(f.startswith("--capacity") for f in empty)
+    with pytest.raises(ValueError, match="capacity"):
+        w.to_sim_args({**req, "amr": {"count": 3, "capacity": 0}}, orders_path="/tmp/o.json")

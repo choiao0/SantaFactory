@@ -106,6 +106,16 @@ def _battery_section(a, kernel, T_END):
                 dock_util=round(dock_util, 3))
 
 
+def _explicit_section(a, stream):
+    """명시 주문 모드 SUMMARY 조각 (계약 v2.5, 조건부 키, -156). 간격 모드면 {}."""
+    if stream.explicit_orders is None:
+        return {}
+    extra = dict(orders_file=1, orders_skipped=int(stream.orders_skipped))
+    if a.capacity is not None:
+        extra["capacity"] = int(a.capacity)
+    return extra
+
+
 def _make_tag(a, kernel, lifelong):
     """히트맵·DIRFLOW 파일 이름 태그."""
     return (f"sim_v2_{a.variant}_r{a.n_robots}{'_blk' if a.aisle_block else ''}_{a.flow}"
@@ -161,7 +171,8 @@ def report(a, kernel, stream, ctx):
         **(dict(inbound_gap=a.inbound_gap_arg) if a.inbound_gap_arg is not None else {}),
         **lifelong_extra, **bat_extra,
         # 견적 워커용 (계약 v2.4, 키 추가만): 입고 생성 수 · 주행 거리 [m] (1칸 = CELL_M = 1.0 m). docs/견적_워커.md
-        inbound_total=int(stream.n_inbound), distance_m=int(tot["drive"]))
+        inbound_total=int(stream.n_inbound), distance_m=int(tot["drive"]),
+        **_explicit_section(a, stream))
     print("[SUMMARY] " + json.dumps(summary))
 
     tag = _make_tag(a, kernel, lifelong)

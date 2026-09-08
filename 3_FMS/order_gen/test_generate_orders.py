@@ -111,3 +111,21 @@ class OrderGeneratorTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SliceOrdersTest(unittest.TestCase):
+    def test_window_filter_and_shift(self):
+        import slice_orders
+        data = {"meta": {"seed": 1}, "outbound": [
+            {"order_id": 1, "ordered_at_s": 6 * 3600 + 59 * 60, "lines": []},
+            {"order_id": 2, "ordered_at_s": 7 * 3600, "lines": []},
+            {"order_id": 3, "ordered_at_s": 8 * 3600 + 1800, "lines": []},
+            {"order_id": 4, "ordered_at_s": 9 * 3600, "lines": []},
+        ]}
+        out = slice_orders.slice_orders(data, slice_orders.to_seconds("07:00"), slice_orders.to_seconds("09:00"))
+        self.assertEqual([o["order_id"] for o in out["outbound"]], [2, 3])
+        self.assertEqual([o["ordered_at_s"] for o in out["outbound"]], [0, 5400])
+        self.assertEqual((out["meta"]["horizon_s"], out["meta"]["orders_in_window"], out["meta"]["orders_total"], out["meta"]["seed"]),
+                         (7200, 2, 4, 1))
+        with self.assertRaises(ValueError):
+            slice_orders.slice_orders(data, 3600, 3600)

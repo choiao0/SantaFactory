@@ -38,6 +38,7 @@ Lifelong MAPF 해석, ROS/Isaac 연결 순서와 계약 기준값 3개를 확인
 
 신발 창고 공개 데이터(Mendeley pf2w725pw3)에서 라인 수·수량·SKU 편중·웨이브 시각 분포를 추출해 우리 매장·상품·랙 위에
 하루치 `outbound[]`(명세 §1-1 형식)를 만든다. 릴리스 기본 웨이브, ABC 는 인기 가중치만, 입고 보류. 이슈 S15P21A106-153.
+시뮬 연결(-156): `--orders-file`·`--capacity`, 랙 → 버퍼 매핑 `map/rack_buffers.json`, `slice_orders.py` 시간창 자르기, 첫 비교 표는 커널·시뮬 구조 문서에.
 
 ### [남은 과업 계획](남은과업_계획.md)
 
@@ -98,7 +99,7 @@ SIM_CHECK=1 SIM_NO_PLOT=1 python sim_v2_tasks.py base 6 40 42 1
 # 회귀·사건층·A트랙
 python checks/check_results_identity.py --quick
 python checks/check_lifelong_battery.py
-python -m pytest ../ai_theta/tests ../contracts/tests -q
+python -m pytest ../ai_theta/tests ../contracts/tests tests -q     # tests = 명시 주문 모드 (-156)
 ```
 
 전수 기준선 비교는 `python checks/check_results_identity.py`로 실행한다.
