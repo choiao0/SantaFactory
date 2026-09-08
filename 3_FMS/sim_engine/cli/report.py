@@ -159,7 +159,9 @@ def report(a, kernel, stream, ctx):
         **zone_extra,
         **(dict(order_gap=a.order_gap) if a.order_gap_arg is not None else {}),   # v1compat SUMMARY 불변
         **(dict(inbound_gap=a.inbound_gap_arg) if a.inbound_gap_arg is not None else {}),
-        **lifelong_extra, **bat_extra)
+        **lifelong_extra, **bat_extra,
+        # 견적 워커용 (계약 v2.4, 키 추가만): 입고 생성 수 · 주행 거리 [m] (1칸 = CELL_M = 1.0 m). docs/견적_워커.md
+        inbound_total=int(stream.n_inbound), distance_m=int(tot["drive"]))
     print("[SUMMARY] " + json.dumps(summary))
 
     tag = _make_tag(a, kernel, lifelong)
