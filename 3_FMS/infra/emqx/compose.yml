@@ -1,0 +1,37 @@
+# 3_FMS/infra/emqx/compose.yml — MQTT 백본 브로커, 로컬 개발·CI 용. EC2 는 4_Web/k8s/emqx/ (같은 emqx.conf·acl.conf·digest).
+#
+#   cd 3_FMS/infra/emqx
+#   cp .env.example .env          # 쿠키·대시보드 비밀번호·계정 비밀번호를 채운다 (한 번만)
+#   ./bootstrap_users.sh          # .env → users.csv (최초 기동 때 한 번 읽힘)
+#   docker compose up -d
+#   cd ../.. && python3 -m pytest contracts/tests/test_acl_matrix.py -q      # ACL 행렬 확인
+#
+# 계정을 바꾸려면 users.csv 를 다시 만들고 `docker compose down -v && docker compose up -d` (볼륨의 내장 DB 초기화)
+# 또는 대시보드(127.0.0.1:18083) / REST 로 수정한다. 이미지 digest 는 계약 §0 · k3s Deployment 와 세 곳 일치.
+name: backbone
+
+services:
+  emqx:
+    # 6.3.0 GA 2026-09-03 (Hub: latest = 6 = 6.3 = 6.3.0 같은 digest). 라이선스 BSL 1.1 — Apache 2.0 이 필요하면 emqx/emqx:5.8.9
+    image: emqx/emqx:6.3.0@sha256:3b6d9c0c419930074b7e0e6cba07baceea584b2094d22f16ff02f6c075c3d5b8
+    container_name: emqx
+    restart: unless-stopped
+    environment:
+      EMQX_NODE__COOKIE: ${EMQX_NODE_COOKIE:?.env 에 EMQX_NODE_COOKIE 를 설정하세요}
+      EMQX_DASHBOARD__DEFAULT_PASSWORD: ${EMQX_DASHBOARD_PASSWORD:?.env 에 EMQX_DASHBOARD_PASSWORD 를 설정하세요}
+    ports:
+      - "1883:1883"                      # MQTT — GPU 서버(tailnet) 가 붙는다
+      - "127.0.0.1:18083:18083"          # 대시보드 — 로컬 전용, 배포 시 노출 금지
+    volumes:
+      - ./emqx.conf:/opt/emqx/etc/emqx.conf:ro
+      - ./acl.conf:/opt/emqx/etc/acl.conf:ro
+      - ./users.csv:/opt/emqx/etc/users.csv:ro     # bootstrap_users.sh 산출물 (.gitignore)
+      - emqx-data:/opt/emqx/data                   # retained 메시지 · 내장 사용자 DB
+    healthcheck:
+      test: ["CMD", "emqx", "ctl", "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+volumes:
+  emqx-data: {}
