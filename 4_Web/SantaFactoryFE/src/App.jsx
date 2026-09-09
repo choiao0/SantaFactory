@@ -5,6 +5,7 @@ import WarehouseStep from './components/WarehouseStep.jsx'
 import FleetStep from './components/FleetStep.jsx'
 import RunsStep from './components/RunsStep.jsx'
 import QuoteStep from './components/QuoteStep.jsx'
+import VerifyStep from './components/VerifyStep.jsx'
 import Footer from './components/Footer.jsx'
 import { useReveal } from './hooks/useReveal.js'
 import { useEstimateStream } from './hooks/useEstimateStream.js'
@@ -102,6 +103,7 @@ export default function App() {
           model={selectedModel}
           form={form}
         />
+        <VerifyStep estimateId={estimateId} ready={Boolean(stream.verdict)} />
       </main>
       <Footer />
     </>
