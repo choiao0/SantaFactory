@@ -138,6 +138,7 @@ FMS ↔ AMR 에이전트 ↔ sim-runner ↔ Host ↔ 시뮬 WMS 가 한 브로�
 | `Runner/Heartbeat` | Int64 ms | 5 s 주기 |
 | `Runner/RTF` · `IsaacInstances` · `RamMB` · `VramMB` | Double · Int32 | 5 s 샘플, 변화 시 |
 | `Runner/LastError` | String | ERROR 이유 |
+| `Runner/ScenarioSha` | String | 받은 scenario 의 sha256 (정규형). 런 없으면 `""`. Host 가 요청의 sha 와 대조 |
 | `Run Control/Start` · `Run Control/Stop` | Text(JSON) · Boolean | NCMD 용. NBIRTH 에 `""` · `false` 로 선언 |
 | **Device amr01… (state 거울)** | | |
 | `Robot/Model` · `Robot/Connection` · `Robot/LastNodeId` | String | factsheet seriesName / ONLINE · OFFLINE · CONNECTIONBROKEN / 틱 ack |
@@ -150,7 +151,7 @@ FMS ↔ AMR 에이전트 ↔ sim-runner ↔ Host ↔ 시뮬 WMS 가 한 브로�
 
 | 메트릭 | 값 | sim-runner 동작 |
 |---|---|---|
-| `Run Control/Start` | JSON `{run_id, scenario_pkg, n_robots, models[{serial, manufacturer, model}], ros_domain_id, timeout_s}` | Isaac + 에이전트 기동 → ready → DBIRTH ×N → RUNNING (실패 ERROR + LastError). 멱등: 같은 run_id 가 이미 RUNNING 이면 무시하고 상태만 재보고 (RabbitMQ 재전달 대비) |
+| `Run Control/Start` | JSON `{run_id, scenario_pkg, n_robots, models[{serial, manufacturer, model}], ros_domain_id, timeout_s, scenario?, scenario_sha256?}` (scenario 는 SIM_VERIFY_CONTRACT §2, 512 KB 이하) | Isaac + 에이전트 기동 → ready(전원 ONLINE + 포즈 수신) → DBIRTH ×N → RUNNING (실패 ERROR + LastError). 멱등: 같은 run_id 가 이미 RUNNING 이면 무시하고 상태만 재보고 (RabbitMQ 재전달 대비) |
 | `Run Control/Stop` | true | 에이전트 SIGTERM(OFFLINE) → DDEATH ×N → Isaac 종료 → IDLE |
 | `Node Control/Rebirth` | true | NBIRTH + 살아 있는 DBIRTH 재발행 |
 
