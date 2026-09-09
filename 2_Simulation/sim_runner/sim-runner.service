@@ -1,0 +1,24 @@
+# sim-runner — Sparkplug Edge sim-runner-gpu01 (MQTT_CONTRACT §5). GPU 서버 사용자 유닛.
+#   mkdir -p ~/.config/systemd/user && cp sim-runner.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload && systemctl --user enable --now sim-runner
+#   loginctl enable-linger $USER            # 로그아웃해도 살아 있게
+#   journalctl --user -u sim-runner -f
+# 브로커 주소·비밀번호는 EnvironmentFile(팀 .env, 600) 에서만 온다. 실모드 Isaac 명령은 SIM_RUNNER_ISAAC_CMD.
+[Unit]
+Description=SANTA sim-runner (Sparkplug Edge, Isaac run control)
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/workspace/S15P21A106/2_Simulation
+EnvironmentFile=%h/workspace/S15P21A106/3_FMS/infra/emqx/.env
+Environment=SIM_RUNNER_ISAAC_CMD=%h/isaacsim/python.sh %h/workspace/S15P21A106/2_Simulation/t3_warehouse/warehouse_sim.py
+ExecStart=/usr/bin/python3 -m sim_runner --mode real --state-dir %h/.local/state/sim_runner
+Restart=always
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=50
+
+[Install]
+WantedBy=default.target

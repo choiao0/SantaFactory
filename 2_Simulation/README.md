@@ -14,6 +14,8 @@ SimPy DES가 낸 "최적 구성"이 실제 로봇 스택에서 성립하는지 �
 | `isaac_replay.py` + `isaac_export_t3/` | 그리드 시뮬 궤적을 실물 씬에서 재생 (WebRTC) | 도구 |
 | [`t4_agent/`](t4_agent/) | ROS 2 AMR 에이전트 — VDA 5050 MQTT 브리지 + order executor(틱당 노드 1개 스티칭·`lastNodeId` ack) + 그리드 프리미티브(스팟턴 · 직진 · 후진 1칸) + fake robot/fake FMS | 뼈대 완료 — Isaac 없이 배리어 틱 E2E 통과(7틱, 정지 오차 4 mm) |
 
+| [`sim_runner/`](sim_runner/) | GPU 서버 상시 Sparkplug B Edge 데몬 `sim-runner-gpu01` — host-orch 의 NCMD Start/Stop 으로 에이전트 ×N(+Isaac) 기동·정리, VDA state 를 `Robot/*` DDATA 로 거울, 하트비트·RTF·RAM·VRAM. `--fake` 로 Isaac 없이 동작, `tools/spb_tap.py` 가 host-orch 대역 | fake 모드 EC2 브로커 E2E 통과 (9/8) |
+
 노드·토픽 구조(FMS 틱 ↔ VDA 5050 매핑, 실행 방법, 남은 일)는 [`t4_agent/README.md`](t4_agent/README.md) 참조.
 
 ## 코드 구조 (2026-09-07 리팩토링)

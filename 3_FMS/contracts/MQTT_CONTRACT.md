@@ -117,7 +117,7 @@ FMS ↔ AMR 에이전트 ↔ sim-runner ↔ Host ↔ 시뮬 WMS 가 한 브로�
 | `biz/v1/order` | `orderId` · `runId` · `createdAt` · `type` ∈ inbound · outbound · `lines[{sku, qty, fromStation, toStation}]` · `priority` |
 | `biz/v1/event` | `eventId` · `runId` · `at` · `type` ∈ task_assigned · task_done · order_shipped · robot_error · stall · `orderId` · `taskId` · `robot{manufacturer, serial}` |
 
-## 5. Sparkplug B 3.0 (`spBv1.0`, protobuf) — 예정
+## 5. Sparkplug B 3.0 (`spBv1.0`, protobuf) — sim-runner 적용 2026-09-08 (`2_Simulation/sim_runner/`, fake 모드 EC2 검증) · host-orch · fms-core 예정
 
 ### 5.1 아이덴티티
 
@@ -158,7 +158,9 @@ FMS ↔ AMR 에이전트 ↔ sim-runner ↔ Host ↔ 시뮬 WMS 가 한 브로�
 
 - Will = NDEATH(bdSeq) QoS1 → 접속 후 NBIRTH(bdSeq, seq 0, 전 메트릭). 재접속마다 bdSeq +1. seq 0~255 순환, 갭이면 Host 가 Rebirth NCMD.
 - Host STATE online 갱신을 보면 Edge 는 NBIRTH · DBIRTH 재발행. Host 는 NDEATH(bdSeq 일치)의 노드를 offline, 그 디바이스 전부 stale.
-- 하트비트 5 s, 3회 결측 = 런 실패 → Stop. timeout_s 경과 또는 Host STATE offline 15 s → sim-runner 스스로 Stop.
+- 하트비트 5 s, 3회 결측 = 런 실패 → Stop. timeout_s 경과 · Host STATE offline 15 s · 런 프로세스 사망 → sim-runner 스스로 정지하고 `Runner/State` ERROR + `LastError`(사유). ERROR 는 IDLE 처럼 다음 Start 를 받고, Start 가 `LastError` 를 비운다.
+- Stop 순서(적용): DDEATH ×N 즉시 → 에이전트 SIGINT(브리지가 OFFLINE 발행) → 5 s 뒤 SIGTERM → 3 s 뒤 SIGKILL → Isaac 같은 사다리(유예 20 s) → IDLE. bdSeq 는 `~/.local/state/sim_runner/bdseq` 에 보존.
+- Start 의 `models[]` 가 비면 `amr01…` 순번 시리얼 · manufacturer `idealworks` · model `iw_hub`. sim-runner 는 factsheet 를 못 보므로(ACL) `Robot/Model` 은 이 목록에서 온다. 같은 run_id 는 무시하고 상태만 재보고, 다른 run_id 는 `LastError` "busy" 로 거절(상태 불변).
 
 ## 6. 변경 절차
 
