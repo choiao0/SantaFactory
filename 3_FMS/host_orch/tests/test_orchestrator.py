@@ -326,3 +326,52 @@ class TestCoordinatorRedelivery:
             c.submit(req_json(run_id=f"r{i}"))
 
         assert len(c.recent) == O.Coordinator.RECENT_MAX and "r0" not in c.recent
+
+
+class TestScenario:
+    SCENARIO = {"seed": 42, "map_version": "v6.0", "orders": {"outbound": [{"order_id": 1, "ordered_at_s": 5,
+                                                                             "lines": [{"rack_id": "A3", "qty": 2}]}]}}
+
+    def test_request_carries_scenario_and_sha_into_start(self):
+        r = O.VerifyRequest.from_json(req_json(scenario=self.SCENARIO))
+
+        assert r.scenario == self.SCENARIO and r.scenario_sha256 == O.scenario_sha256(self.SCENARIO)
+        cmd = r.start_command()
+        assert cmd["scenario"] == self.SCENARIO and cmd["scenario_sha256"] == r.scenario_sha256
+        assert "scenario" not in O.VerifyRequest.from_json(req_json()).start_command()
+
+    def test_scenario_must_be_object_and_small(self):
+        with pytest.raises(ValueError):
+            O.VerifyRequest.from_json(req_json(scenario="text"))
+        with pytest.raises(ValueError):
+            O.VerifyRequest.from_json(req_json(scenario={"blob": "x" * (O.MAX_SCENARIO_BYTES + 1)}))
+
+    def test_result_reports_scenario_ack_only_when_runner_echoes_the_sha(self):
+        req = O.VerifyRequest.from_json(req_json(scenario=self.SCENARIO, window_s=10))
+        job, cmd = O.Job(req, "sim-runner-gpu01", O.JobConfig(), 0.0), Cmd()
+        job.step(node("IDLE"), 0.0, cmd)
+        n = node("RUNNING", "verify-1", last_seen=1.0)
+        n.metrics[O.SCENARIO_SHA] = req.scenario_sha256
+        n.metrics[O.ISAAC] = 1
+        job.step(n, 1.0, cmd)
+        job.step(node("RUNNING", "verify-1", last_seen=12.0), 12.0, cmd)
+        job.step(node("IDLE", "", last_seen=13.0), 13.0, cmd)
+
+        v = job.result()["verify"]
+        assert v["scenario_ack"] is True and v["scenario_sha256"] == req.scenario_sha256 and v["isaac_instances"] == 1
+
+    def test_scenario_ack_false_when_runner_did_not_echo(self):
+        req = O.VerifyRequest.from_json(req_json(scenario=self.SCENARIO, window_s=10))
+        job, cmd = O.Job(req, "sim-runner-gpu01", O.JobConfig(), 0.0), Cmd()
+        job.step(node("IDLE"), 0.0, cmd)
+        job.step(node("RUNNING", "verify-1", last_seen=1.0), 1.0, cmd)
+        job.step(node("RUNNING", "verify-1", last_seen=12.0), 12.0, cmd)
+        job.step(node("IDLE", "", last_seen=13.0), 13.0, cmd)
+
+        assert job.result()["verify"]["scenario_ack"] is False
+
+    def test_no_scenario_means_no_ack_claim(self):
+        job, cmd = make_job()
+        job.step(node("IDLE"), 0.0, cmd)
+
+        assert job.result()["verify"]["scenario_ack"] is False and job.result()["verify"]["scenario_sha256"] is None

@@ -6,6 +6,7 @@ Coordinator 가 tracker 이벤트·tick 을 Job.step 으로 넘긴다. 순수 �
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import time
@@ -18,6 +19,8 @@ from .tracker import HostTracker, Node
 
 STATE, RUN_ID, HEARTBEAT, RTF = "Runner/State", "Runner/RunId", "Runner/Heartbeat", "Runner/RTF"
 RAM, VRAM, LAST_ERROR = "Runner/RamMB", "Runner/VramMB", "Runner/LastError"
+ISAAC = "Runner/IsaacInstances"
+SCENARIO_SHA = "Runner/ScenarioSha"
 CMD_START, CMD_STOP, REBIRTH = "Run Control/Start", "Run Control/Stop", "Node Control/Rebirth"
 IDLE, STARTING, RUNNING, STOPPING, ERROR = "IDLE", "STARTING", "RUNNING", "STOPPING", "ERROR"
 
@@ -25,10 +28,20 @@ SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 MAX_ROBOTS = 64
 DEFAULT_WINDOW_S = 600.0
 START_MARGIN_S = 300.0          # sim-runner 쪽 timeout_s = window + 여유(기동 + 정지)
+MAX_SCENARIO_BYTES = 512 * 1024   # sim-runner 와 같은 상한 (MQTT 패킷 1 MB 아래)
 
 
 def iso(ts: float) -> str:
     return datetime.fromtimestamp(ts, timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def canonical_json(obj: Any) -> bytes:
+    """sha 정규형 — sim_runner.procs.canonical_json 과 같은 규칙이어야 sha 가 맞는다."""
+    return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+
+
+def scenario_sha256(obj: Any) -> str:
+    return hashlib.sha256(canonical_json(obj)).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -45,6 +58,8 @@ class VerifyRequest:
     estimate_id: Optional[int] = None
     seed: Optional[int] = None
     priority: int = 0
+    scenario: Optional[dict] = None
+    scenario_sha256: Optional[str] = None
     raw: dict = field(default_factory=dict, compare=False)
 
     @staticmethod
@@ -80,16 +95,28 @@ class VerifyRequest:
         for m in models:
             if not isinstance(m, dict) or not isinstance(m.get("serial"), str) or not SAFE_ID.match(m["serial"]):
                 raise ValueError("each models[] entry needs a safe serial")
+        scenario = d.get("scenario")
+        sha = None
+        if scenario is not None:
+            if not isinstance(scenario, dict):
+                raise ValueError("scenario must be a JSON object")
+            size = len(canonical_json(scenario))
+            if size > MAX_SCENARIO_BYTES:
+                raise ValueError(f"scenario too large: {size} B > {MAX_SCENARIO_BYTES}")
+            sha = scenario_sha256(scenario)
         return VerifyRequest(run_id, n, str(d.get("scenario_pkg") or ""), tuple(models), domain, float(window),
                              float(timeout) if timeout is not None else None,
                              _opt_str(d.get("source_run_id")), _opt_int(d.get("estimate_id")),
-                             _opt_int(d.get("seed")), _opt_int(d.get("priority")) or 0, dict(d))
+                             _opt_int(d.get("seed")), _opt_int(d.get("priority")) or 0, scenario, sha, dict(d))
 
     def start_command(self) -> dict:
-        """NCMD Run Control/Start JSON (MQTT_CONTRACT §5.3)."""
-        return {"run_id": self.run_id, "scenario_pkg": self.scenario_pkg, "n_robots": self.n_robots,
-                "models": [dict(m) for m in self.models], "ros_domain_id": self.ros_domain_id,
-                "timeout_s": self.timeout_s if self.timeout_s is not None else self.window_s + START_MARGIN_S}
+        """NCMD Run Control/Start JSON (MQTT_CONTRACT §5.3). scenario 는 sha 와 함께 실어 sim-runner 가 대조한다."""
+        cmd = {"run_id": self.run_id, "scenario_pkg": self.scenario_pkg, "n_robots": self.n_robots,
+               "models": [dict(m) for m in self.models], "ros_domain_id": self.ros_domain_id,
+               "timeout_s": self.timeout_s if self.timeout_s is not None else self.window_s + START_MARGIN_S}
+        if self.scenario is not None:
+            cmd["scenario"], cmd["scenario_sha256"] = self.scenario, self.scenario_sha256
+        return cmd
 
 
 def _is_int(v: Any) -> bool:
@@ -123,9 +150,17 @@ class Stats:
     rtf_samples: list = field(default_factory=list)
     ram_mb_max: int = 0
     vram_mb_max: int = 0
+    isaac_max: int = 0
+    runner_scenario_sha: str = ""
 
     def observe(self, node: Node) -> None:
         self.robots_online = max(self.robots_online, len(node.alive_devices()))
+        sha = node.get(SCENARIO_SHA)
+        if isinstance(sha, str) and sha:
+            self.runner_scenario_sha = sha
+        isaac = node.get(ISAAC)
+        if isinstance(isaac, int) and isaac > self.isaac_max:
+            self.isaac_max = isaac
         rtf = node.get(RTF)
         if isinstance(rtf, (int, float)) and rtf > 0:
             self.rtf_samples.append(float(rtf))
@@ -243,6 +278,10 @@ class Job:
                            "ended_at": iso(self.ended_at) if self.ended_at is not None else None,
                            "rtf_mean": round(sum(s.rtf_samples) / len(s.rtf_samples), 3) if s.rtf_samples else None,
                            "ram_mb_max": s.ram_mb_max or None, "vram_mb_max": s.vram_mb_max or None,
+                           "isaac_instances": s.isaac_max,
+                           "scenario_sha256": self.req.scenario_sha256,
+                           "scenario_ack": (self.req.scenario_sha256 is not None
+                                            and s.runner_scenario_sha == self.req.scenario_sha256),
                            "reason": self.reason},
                 "kpi": None, "artifacts": None,
                 "source_run_id": self.req.source_run_id, "estimate_id": self.req.estimate_id}
