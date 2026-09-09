@@ -24,6 +24,7 @@ FMS 엔진 맵(벽있음, 8/31 복사본)과 Isaac 씬 맵(2_Simulation v5.8, �
 | `charge_zone.json` | 충전 존 좌표(m) + 규약 메타. 생성 입력 (`stations.json`에도 합쳐짐, `load_charge_zone`은 이 파일을 읽음) |
 | **`rack_buffers.json`** | WMS 랙 `"A2"` → `aisle_buf[i]` 매핑 132개 (-156). `build_rack_map.py` 산출물, `load_rack_map`이 읽음. [규칙](../docs/맵_충전존.md#랙--통로-버퍼-매핑) |
 | `build_rack_map.py` | 위 표 생성: 존 facility 좌표 == aisle_buf 좌표 정확 일치(마스터 `order_gen/master/santafactory_sample.json` 입력). 백엔드 시드가 바뀌면 다시 실행 |
+| **`synth_warehouse.py`** | **합성 창고 생성기** (-139). 파라미터 → 맵 세트 한 벌(위 파일들 + `topology.json`). 산출물은 `synth/`(gitignore). [문서](../docs/합성_창고_생성기.md) |
 | `map_diff_wall_vs_v58.png` | 두 원본 비교 — 빨강: 벽있음만 통행(=Isaac에 물체, 이번 합성으로 막힘), 파랑: v5.8만 통행(벽있음 유지로 여전히 막힘) |
 | `charge_zone_east.png` | 충전 존 위치 그림 |
 
@@ -48,6 +49,21 @@ FMS 엔진 맵(벽있음, 8/31 복사본)과 Isaac 씬 맵(2_Simulation v5.8, �
 ```
 python check_map_set.py ../../2_Simulation/t3_warehouse_map/map     # 세트 수신 후 대조
 ```
+
+## 합성 창고 (S15P21A106-139)
+
+`synth_warehouse.py` 는 같은 형식의 맵 세트를 파라미터로 만든다. 공식 맵과 다른 점은 **자기
+토폴로지를 `topology.json` 으로 같이 들고 다닌다**는 것뿐이고, `map_loader` 는 그 파일이 있으면
+거기서, 없으면 wallA 상수에서 통로·밴드 좌표를 읽는다 (이 폴더에는 없다 → 공식 맵 동작 불변).
+
+```bash
+python synth_warehouse.py racks synth --n 112     # 격자 전부 (2.3 s, 97 MB). 라벨링은 이 중 25개부터
+python synth_warehouse.py wallA /tmp/wallA        # 실측 프로파일 재현
+python synth_warehouse.py check /tmp/wallA        # 공식 맵과 링 영역 대조 → 차이 0
+```
+
+`synth/` 는 gitignore 대상이다 — 위 명령이 결정적으로 다시 만든다. 자세한 것은
+[합성 창고 생성기](../docs/합성_창고_생성기.md).
 
 ## 충전 존 좌표 (m, 원본 0.1 m 맵 좌표계, 기존 stations 규약과 동일)
 
