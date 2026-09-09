@@ -22,7 +22,8 @@ FMS 파트는 두 트랙으로 나눠 진행한다.
 ├── ai_theta/      # A안 — 입력 텐서 → θ 예측 모델
 ├── sim_engine/    # B안 — PIBT 이동계층, from_theta, Fleet 벤치마크·견적 엔진 기반
 ├── map/           # FMS 공식 맵·스테이션·충전 존과 동기화 도구
-├── infra/         # θ 탐색 워커·실행 환경과 산출 θ
+├── infra/         # θ 탐색 워커·견적 워커·EMQX 브로커 구성과 산출 θ
+├── host_orch/     # Sparkplug Primary Host + sim.verify 큐 소비자 (Isaac 검증 런 오케스트레이션, EC2 상시)
 └── docs/          # 주제별 설계·결정·기준선과 작업 계획
 ```
 
