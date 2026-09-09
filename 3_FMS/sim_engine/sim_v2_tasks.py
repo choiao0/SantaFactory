@@ -53,7 +53,7 @@ from cli.export_isaac import export_isaac
 from cli.plot import plot_heat
 from fms_kernel import FmsKernel, KernelConfig, StallError
 from map_loader import (load_map, make_homes, CELL_M, OFFSET_M, MAP_DIR, load_charge_zone,
-                        make_homes_zone, load_rack_map)
+                        make_homes_zone, load_rack_map, load_topology_spec)
 from order_stream import OrderStream
 from pibt_core import DIRS, TURN_TICKS
 
@@ -78,13 +78,18 @@ def _parse_positional(argv):
         n_orders=int(pos[2]) if len(pos) > 2 else 40,
         seed=int(pos[3]) if len(pos) > 3 else 42,
         aisle_block=bool(int(pos[4])) if len(pos) > 4 else False,
-        flow="main", theta_path=None, warnings=[])
+        flow="main", theta_path=None, map_dir=None, warnings=[])
     for f in argv:
         if f.startswith("--flow="):
             a.flow = f.split("=", 1)[1]
         elif f.startswith("--theta="):
             a.theta_path = f.split("=", 1)[1]
+        elif f.startswith("--map-dir="):
+            # 맵 세트 폴더 (기본 = 공식 맵 3_FMS/map). 합성 창고를 돌릴 때만 쓴다 (-139).
+            a.map_dir = f.split("=", 1)[1]
     assert a.flow in ("main", "v1compat"), f"알 수 없는 flow: {a.flow}"
+    if a.map_dir is not None:
+        assert os.path.isdir(a.map_dir), f"--map-dir 폴더가 없다: {a.map_dir}"
     return a, pos
 
 
@@ -196,23 +201,29 @@ def load_orders_file(path):
 # ------------------------------------------------------------
 def build(a):
     """맵·비용·홈을 준비해 (kernel, stream, ctx) 를 만든다. 경고는 a.warnings 에 순서대로 쌓인다."""
-    free, st_cell, stations = load_map(aisle_block=a.aisle_block)      # 공식 맵 3_FMS/map
+    map_dir = a.map_dir or MAP_DIR                                     # 기본 = 공식 맵 3_FMS/map
+    free, st_cell, stations = load_map(map_dir, aisle_block=a.aisle_block)
     H, W = free.shape
-    homes = make_homes(free, st_cell, a.n_robots)
-    zone_mask = None
+    zone_mask, homes = None, None
     if a.zone:
-        zm = load_charge_zone(free)
+        zm = load_charge_zone(free, map_dir)
         if zm is None:
-            a.warnings.append("[WARN] 충전 존: 3_FMS/map/charge_zone.json 없음 → 고정 홈 폴백")
+            a.warnings.append(f"[WARN] 충전 존: {map_dir}/charge_zone.json 없음 → 고정 홈 폴백")
             a.zone = False
         else:
             zone_mask = zm & free
             homes = make_homes_zone(free, zone_mask, a.n_robots)
+    if homes is None:
+        # 존을 쓸 때는 고정 홈을 만들지 않는다 — 어차피 버리던 값인데, 충전기 수가 6이 아닌
+        # 합성 창고에서는 make_homes 가 여기서 터졌다 (-139). 존 경로 결과는 그대로다.
+        homes = make_homes(free, st_cell, a.n_robots)
 
     # 통행 비용 — 기본 uniform 1.0. --theta=<json>이면 from_theta(θ) 출력 (B-2).
+    # 토폴로지 좌표는 맵 세트에서 온다 (합성 창고는 topology.json, 공식 맵은 wallA 상수 — -139).
     if a.theta_path:
         from from_theta import extract_topology, from_theta, load_theta
-        g = from_theta(free, extract_topology(free, st_cell), load_theta(a.theta_path))
+        topo = extract_topology(free, st_cell, spec=load_topology_spec(map_dir))
+        g = from_theta(free, topo, load_theta(a.theta_path))
         edge_cost = g.edge_cost.astype(np.float64)
         wait_cost = g.wait_cost.astype(np.float64)
     else:
@@ -222,8 +233,9 @@ def build(a):
     rng = np.random.default_rng(a.seed)
     explicit = {}
     if a.orders_file is not None:
-        rack_map = load_rack_map()
-        assert rack_map, "map/rack_buffers.json 없음 — map/build_rack_map.py 로 생성"
+        rack_map = load_rack_map(map_dir)
+        assert rack_map, f"{map_dir}/rack_buffers.json 없음 — map/build_rack_map.py 로 생성 " \
+                         "(합성 창고는 WMS 마스터가 없어 명시 주문 모드를 못 쓴다 — -139)"
         explicit = dict(orders=load_orders_file(a.orders_file), rack_map=rack_map, capacity=a.capacity)
     stream = OrderStream(rng, a.flow, a.n_orders, a.order_gap, st_cell, stations, inbound_gap=a.inbound_gap_arg,
                          k_line_p=K_LINE_P, horizon=a.horizon, shifts=a.shifts, **explicit)

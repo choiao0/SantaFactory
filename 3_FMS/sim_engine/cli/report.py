@@ -167,6 +167,8 @@ def report(a, kernel, stream, ctx):
         **(dict(heading=1, rot_steps=int(tot["rot"]), rev_steps=int(tot["rev"]),
                 replan_steps=int(tot["replan"])) if kernel.heading else {}),
         **zone_extra,
+        # 합성 창고 (-139): 어느 맵 세트로 잰 값인지 없으면 재현이 안 된다. 공식 맵이면 키가 안 붙는다.
+        **(dict(map_dir=os.path.basename(os.path.normpath(a.map_dir))) if getattr(a, "map_dir", None) else {}),
         **(dict(order_gap=a.order_gap) if a.order_gap_arg is not None else {}),   # v1compat SUMMARY 불변
         **(dict(inbound_gap=a.inbound_gap_arg) if a.inbound_gap_arg is not None else {}),
         **lifelong_extra, **bat_extra,
