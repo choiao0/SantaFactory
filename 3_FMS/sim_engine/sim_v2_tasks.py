@@ -100,6 +100,7 @@ def _parse_model(a, argv):
     # 충전 존 복귀 = main 흐름 기본값 (2026-09-03 결정). 기존 고정 홈 12칸은 --fixed-homes opt-in.
     # v1compat 은 패리티 때문에 항상 고정 홈. (--zone 은 호환용 무시)
     a.zone = "--fixed-homes" not in argv and a.flow != "v1compat"
+    a.lanes = "--no-lanes" not in argv and a.flow != "v1compat"
     # 주문 도착 간격 평균 [틱] (지수분포). 기본 50 = B-0 이후 전 기준선. --order-gap=<틱> 으로 부하 조절
     # (고부하 스윕, docs/θ_경로_기준선.md#고부하-l1l2). v1compat 은 패리티 때문에 항상 50.
     a.order_gap_arg = next((float(f.split("=", 1)[1]) for f in argv if f.startswith("--order-gap=")), None)
@@ -213,10 +214,16 @@ def build(a):
             zone_mask = zm & free
             homes = make_homes_zone(free, zone_mask, a.n_robots)
 
-    # 통행 비용 — 기본 uniform 1.0. --theta=<json>이면 from_theta(θ) 출력 (B-2).
-    if a.theta_path:
-        from from_theta import extract_topology, from_theta, load_theta
-        g = from_theta(free, extract_topology(free, st_cell), load_theta(a.theta_path))
+    # 통행 비용 — v3 main 기본은 차선 3.0. 구 θ 파일의 누락 필드에도 런타임 기본을 적용한다.
+    if a.theta_path or a.lanes:
+        from from_theta import GuidanceTheta, extract_topology, from_theta, load_theta
+        theta = load_theta(a.theta_path, (3.0, 3.0) if a.lanes else None) \
+            if a.theta_path else GuidanceTheta.neutral()
+        if a.lanes and not a.theta_path:
+            theta.lane_gain = theta.pocket_gain = 3.0
+        if not a.lanes:
+            theta.lane_gain = theta.pocket_gain = 1.0
+        g = from_theta(free, extract_topology(free, st_cell), theta.validate())
         edge_cost = g.edge_cost.astype(np.float64)
         wait_cost = g.wait_cost.astype(np.float64)
     else:
@@ -246,7 +253,7 @@ def build(a):
         bat = dict(battery=True, dock_cells=docks, soc_init=soc_init, drain_drive=drain_drive,
                    drain_idle=0.25 * drain_drive, charge_rate=1.0 / (a.charge_h * 3600 / DT),
                    soc_low=a.soc[0], soc_go=a.soc[1], soc_leave=a.soc[2], soc_yield=(a.soc[0] + a.soc[1]) / 2)
-    cfg = KernelConfig(heading=a.heading, zone=a.zone, theta=bool(a.theta_path), check=a.check,
+    cfg = KernelConfig(heading=a.heading, zone=a.zone, theta=bool(a.theta_path or a.lanes), check=a.check,
                        dock_prio=a.dock_prio, export=a.export, service_steps=SERVICE_STEPS,
                        capacity=a.capacity, svc_per_tote=a.svc_per_tote,
                        turn_ticks=TURN_TICKS, stall_warn_only=a.horizon is not None, **bat)

@@ -45,12 +45,15 @@ HOME_PREFIXES = ("charger", "charge_q")   # 홈은 작업자리가 아님 → st
 class Topology:
     """from_theta가 소비하는 wallA 토폴로지 (설계 §2, §3-3)."""
 
-    def __init__(self, v_aisle_rank, main_aisle, loop_fwd, junction, station_dir):
+    def __init__(self, v_aisle_rank, main_aisle, loop_fwd, junction, station_dir,
+                 lane_dir, pocket):
         self.v_aisle_rank = v_aisle_rank   # (H,W) int16, -1=통로 아님. 세로 통로 id(=rank)
         self.main_aisle = main_aisle       # (H,W) bool
         self.loop_fwd = loop_fwd           # (H,W) int8, 시계방향 접선, -1=아님
         self.junction = junction           # (H,W) bool  — 교차로(통로 목)
         self.station_dir = station_dir     # (H,W) int8, 도킹 칸의 entry_dir(station→통로), -1=아님
+        self.lane_dir = lane_dir           # (H,W) int8, 출발·복귀 차선 허용 방향, -1=차선 아님
+        self.pocket = pocket               # (H,W) bool, 버퍼 정차 주머니 줄
 
     @property
     def station(self):
@@ -133,7 +136,28 @@ def extract_topology(free, st_cell, verbose=False):
                 print(f"[from_theta] {name} {rc}: entry_dir 결정 불가 → station 규칙 미적용")
             continue
         sdir[rc] = d
-    return Topology(rank, main, loop, junc, sdir)
+    # 버퍼 줄 → 주머니, 안쪽 첫 줄 → 출발, 한 줄 간격 뒤 → 복귀.
+    # 남/북과 열 범위는 좌표로 박지 않고 버퍼 행과 기존 링 방향에서 추론한다.
+    lane = np.full((H, W), -1, dtype=np.int8)
+    pocket = np.zeros((H, W), dtype=bool)
+    buf_rows = sorted({rc[0] for name, rc in st_cell.items() if name.startswith("aisle_buf[")})
+    center = sum(buf_rows) / len(buf_rows) if buf_rows else 0
+    for r in buf_rows:
+        inner = -1 if r < center else 1
+        dirs, counts = np.unique(loop[r][loop[r] >= 0], return_counts=True)
+        if not len(dirs):
+            continue
+        depart_dir = int(dirs[np.argmax(counts)])
+        pocket[r] = free[r] & (loop[r] == depart_dir)
+        depart_r = r + inner
+        lane[depart_r, free[depart_r] & (loop[depart_r] == depart_dir)] = depart_dir
+        return_dir = (depart_dir + 2) % 4
+        return_r, fallback_r = r + 3 * inner, r + 4 * inner
+        base = free[return_r] & (loop[return_r] == depart_dir)
+        lane[return_r, base] = return_dir
+        missing = pocket[r] & ~base & free[fallback_r] & (loop[fallback_r] == depart_dir)
+        lane[fallback_r, missing] = return_dir
+    return Topology(rank, main, loop, junc, sdir, lane, pocket)
 
 
 def _shift(a, d, fill):
@@ -151,7 +175,8 @@ def edge_masks(free, topo, theta):
     H, W = free.shape
     m = {k: np.zeros((H, W, 4), dtype=bool) for k in
          ("station_in", "station_out", "loop_gain", "junction_penalty",
-          "aisle_alt_boost", "aisle_alt_gain", "main_aisle_gain")}
+          "aisle_alt_boost", "aisle_alt_gain", "main_aisle_gain",
+          "lane_gain", "pocket_gain")}
     rank = topo.v_aisle_rank
     group = (rank // theta.aisle_period + theta.aisle_phase) % 2
     pref_dir = np.where(group == 0, 0, 2)                  # 세로 통로: 그룹0=북, 그룹1=남
@@ -178,6 +203,11 @@ def edge_masks(free, topo, theta):
             m["aisle_alt_gain"][..., d] = same & (pref_dir != d)
         # main_aisle_gain (항상): 양 끝 main_aisle
         m["main_aisle_gain"][..., d] = both & topo.main_aisle & _shift(topo.main_aisle, d, False)
+        same_lane = both & (topo.lane_dir >= 0) & \
+            (topo.lane_dir == _shift(topo.lane_dir, d, np.int8(-1)))
+        m["lane_gain"][..., d] = same_lane & (topo.lane_dir == (d + 2) % 4)
+        if d in (1, 3):
+            m["pocket_gain"][..., d] = both & topo.pocket & _shift(topo.pocket, d, False)
     return m
 
 
@@ -193,13 +223,18 @@ def from_theta(free, topo, theta):
             ec[sel] *= getattr(theta, name)
             applied |= sel
     ec[m["main_aisle_gain"]] *= theta.main_aisle_gain
+    ec[m["lane_gain"]] *= theta.lane_gain
+    ec[m["pocket_gain"]] *= theta.pocket_gain
     wc = np.full((H, W), theta.wait_cost, dtype=np.float32)
     return Guidance(edge_cost=np.clip(ec, COST_MIN, COST_MAX),
                     wait_cost=np.clip(wc, COST_MIN, COST_MAX))
 
 
-def load_theta(path):
-    """json(GuidanceTheta 필드 11개) → GuidanceTheta. 계약 v2 범위·범주를 validate()로 검사."""
+def load_theta(path, lane_defaults=None):
+    """json → GuidanceTheta. lane_defaults는 v3 런타임에서 구 11필드 파일에만 적용한다."""
     with open(path, encoding="utf-8") as f:
         d = json.load(f)
+    if lane_defaults is not None:
+        d.setdefault("lane_gain", lane_defaults[0])
+        d.setdefault("pocket_gain", lane_defaults[1])
     return GuidanceTheta(**d).validate()
