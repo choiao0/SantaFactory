@@ -9,6 +9,9 @@
 >
 > **v2.3 규약 추가 (2026-09-07, 시드 합의):** **평가 시드 집합 = {101, 103, 104}**(예비 102). θ 성과 보고·B-5·견적 KPI는 이 시드로 채점하고,
 > 탐색(BO) 시드 {42, 43, 44}·기준선 CSV 시드 {42, 7}과 **섞지 않는다**. 코드·출력 불변 — §5 참고.
+>
+> **v2.6 비호환 변경 (2026-09-09, S15P21A106-177):** `--capacity` 단위를 상품 수에서 **왕복당 토트 수(1~6)**로 변경.
+> `--tote-units`·`--svc-per-tote`와 SUMMARY 토트·왕복·주문 리드타임 키를 추가했다. 플래그 없는 기존 KPI 값은 비트 동일.
 
 대상: 시뮬을 **프로세스로 호출하는 쪽** — A트랙 θ 탐색 워커(`infra/worker/objective.py`), 견적 엔진 배치 워커, fleet 스윕 스크립트.
 θ 스키마가 `guidance_types.py`로 고정된 것과 같은 이유로, 시뮬 호출 방법도 여기 고정한다. **이 문서에 없는 인자·출력 키에 의존하지 말 것.**
@@ -37,6 +40,9 @@ python sim_v2_tasks.py <tag> <n_robots> <n_orders> <seed> <aisle_block> [--flow=
 |---|---|---|
 | `--flow=main` | 입고+출고 흐름. **기본** | v1compat은 B-1e 패리티 전용(A* 비교), θ 탐색에 쓰지 말 것 |
 | `--theta=<json>` | θ 11개 JSON(`GuidanceTheta` 필드명). 없으면 uniform 비용(기준선) | 범주형은 정수 |
+| `--capacity=<1..6>` | 출고 왕복당 함께 싣는 토트 수 | 기본 1(동승 없음) |
+| `--tote-units=<정수>` | 버퍼별 `ceil(qty 합 / tote_units)`로 주문 토트 수 계산 | 없으면 버퍼당 1토트 |
+| `--svc-per-tote=<틱>` | 픽업·하역 각각 `토트 수 × 값`을 기본 서비스 시간에 가산 | 기본 0 |
 | (기본) | **헤딩 PIBT**(2칸 차체·회전·후진·라이브니스 5종). v2부터 플래그 없이 기본 | SUMMARY에 `heading=1` |
 | `--cell` | 칸 모델(점로봇). 기준선 CSV 재현·A/B 비교축 전용 | v1compat은 플래그와 무관하게 항상 칸 |
 | `--heading` | **호환용, 무시** (v1 호출자가 넘기던 플래그) | v1compat에서 넘기면 `[WARN]` 한 줄 |
@@ -86,8 +92,9 @@ v2.2 조건부 키:
 v2.4 항상 키(모드 무관): `inbound_total`(생성된 입고 수 — v1compat 0), `distance_m`(전 로봇 주행 칸 합 × 1.0 m). 견적 워커(`infra/worker/estimate_worker.py`)가 명세 §1-2 `inbound_total`·`distance_total_m`으로 그대로 낸다.
 
 v2.5 명시 주문 모드(-156): `--orders-file=<json>`(큐 명세 §1-1 `outbound[]` — 생성기 출력·요청 메시지·맨 리스트 허용) 이 있으면 주문을 파일에서 흘린다.
-도착 틱 = `ordered_at_s`(1틱 = 1초), `rack_id` → `map/rack_buffers.json` → `aisle_buf[i]`, 같은 버퍼 라인은 토트 1개, `--capacity=<상품 개수>` 가 있으면 왕복 = ceil(qty 합 / capacity).
-`n_orders` 위치 인자와 출고 교대 창은 무시, 입고는 기존 규칙. 조건부 키 `orders_file=1`, `orders_skipped`(horizon 밖 제외 수), `capacity`(줬을 때). 플래그 없는 호출은 v2.4 와 비트 동일.
+v2.6부터 도착 틱 = `ordered_at_s`(1틱 = 1초), `rack_id` → `map/rack_buffers.json` → `aisle_buf[i]`, 토트 수는 버퍼별 `ceil(qty 합 / tote_units)`이며 합계 6 초과 주문은 제외한다.
+`n_orders` 위치 인자와 출고 교대 창은 무시, 입고는 기존 규칙. 항상 키 `capacity`, `tote_units`(미지정 시 null), `totes`(생성 출고 토트), `trips`(완료 출고 왕복),
+`orders_oversize`, `order_lead_mean_s`, `order_lead_p90_s`; 명시 주문 조건부 키 `orders_file=1`, `orders_skipped`. 기존 `lead_*`는 태스크 기준으로 유지한다.
 
 호출자 규칙: **모르는 키는 무시**(추가는 비호환 변경이 아님), 키 삭제·의미 변경은 이 문서 버전 업으로만.
 
@@ -164,6 +171,7 @@ SIM_NO_PLOT=1 PYTHONIOENCODING=utf-8 python sim_v2_tasks.py bo17 24 120 42 1 --o
 | v2.3 | 2026-09-07 | 규약만(코드·출력 불변): §5 **시드 역할 분리** — 탐색 {42,43,44} / **평가 {101,103,104}**(예비 102) / 기준선 {42,7}. 평가 시드 기준선 CSV `load_sweep_eval.csv` 등재 |
 | v2.4 | 2026-09-08 | 호환(키 추가만, -155): SUMMARY `inbound_total`·`distance_m` 항상 출력. 값·CLI·종료 코드 불변(기준값 3개·동일성 12행 확인). 호출자에 **견적 워커** `infra/worker/estimate_worker.py` 추가([설계](../docs/견적_워커.md)) |
 | v2.5 | 2026-09-09 | 호환(추가만, -156): **명시 주문 모드** `--orders-file`·`--capacity`, 조건부 SUMMARY 키 `orders_file`·`orders_skipped`·`capacity`. `map/rack_buffers.json`(랙 → 버퍼, `build_rack_map.py`) 신설. 플래그 없는 호출은 비트 동일(기준값 3개·동일성 12행 확인) |
+| **v2.6** | 2026-09-09 | **비호환**(-177): `capacity` 단위 상품 수→토트 수. `tote_units`·`svc_per_tote`, 동승 완료, 6토트 초과 제외, 토트·왕복·주문 리드타임 SUMMARY 추가. `capacity=1`, `svc_per_tote=0`, `tote_units` 미지정 시 기존 KPI 비트 동일 |
 
 관련: [고부하 기준](../docs/θ_경로_기준선.md#고부하-l1l2), [θ 로드맵](../docs/남은과업_계획.md#부록-a-θ-로드맵-단계표),
 [시스템 아키텍처의 계산 예산](../docs/남은과업_계획.md#부록-b-아키텍처에서-고칠-것-5개), A트랙 워커 `../infra/worker/objective.py`.

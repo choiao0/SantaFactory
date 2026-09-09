@@ -43,6 +43,8 @@ class KernelConfig:
     dock_prio: bool = True        # 라이브니스 장치 ⑤ 도킹 칸 이탈 최우선 (SIM_NO_DOCK_PRIO 로 끔)
     export: bool = False          # Isaac 내보내기용 틱 로그 기록 (SIM_EXPORT_ISAAC)
     service_steps: int = 4        # 도킹 서비스 틱 (40/11 s ÷ DT)
+    capacity: int = 1             # 출고 왕복당 토트 수
+    svc_per_tote: int = 0         # 픽업·하역 각각 토트당 추가 틱
     turn_ticks: int = TURN_TICKS  # 90° 회전 틱
     dock_clear: int = 3           # 장치 ⑤ 유지 거리 (체비쇼프, 로봇 길이)
     stall_ticks: int = 1500       # 워치독: 이 틱 동안 완료 태스크 수 무변화 → StallError
@@ -68,6 +70,8 @@ class FmsKernel(BatteryMixin, MetricsMixin):
         self.H, self.W = free.shape
         self.edge_cost, self.wait_cost = edge_cost, wait_cost
         self.cfg = cfg
+        assert 1 <= cfg.capacity <= 6 and cfg.svc_per_tote >= 0, \
+            f"capacity 1~6, svc_per_tote >= 0: {cfg.capacity}, {cfg.svc_per_tote}"
         self.heading = cfg.heading
         self.zone = bool(cfg.zone and zone_mask is not None)
         self.zone_mask = zone_mask if self.zone else None
@@ -93,6 +97,7 @@ class FmsKernel(BatteryMixin, MetricsMixin):
         self.dir_flow = np.zeros((self.H, self.W, 4), dtype=int)   # 출발칸×방향 이동 수 (NAV만, B-2 계측)
         self.waiting = []                       # 배차 대기 태스크 (FIFO)
         self.tasks_done = []
+        self.trips = 0                            # 완료된 출고 왕복 수
         self.n_submitted = 0
         self._progress = [0, 0]                 # (완료 수, 그때 t) — 워치독
         self.export_log = {}
@@ -188,7 +193,8 @@ class FmsKernel(BatteryMixin, MetricsMixin):
 
     def _begin_service(self, rb, t, kind):
         rb["state"] = SVC_PICK if kind == "pick" else SVC_DROP
-        rb["svc_end"] = t + self.cfg.service_steps
+        n_totes = 1 + len(rb["task"].get("riders", ()))
+        rb["svc_end"] = t + self.cfg.service_steps + n_totes * self.cfg.svc_per_tote
         rb["goal"] = rb["pos"]
 
     def _body_cells(self, rb):
@@ -234,12 +240,23 @@ class FmsKernel(BatteryMixin, MetricsMixin):
         for task in list(self.waiting):
             if not eligible:
                 break
+            if task not in self.waiting:             # 앞 태스크의 동승 토트로 이미 적재됨
+                continue
             fr, fc = task["frm"]
             rid = min(eligible, key=lambda i: abs(robots[i]["pos"][0] - fr) + abs(robots[i]["pos"][1] - fc))
             rb = robots[rid]
             rb["state"], rb["task"], rb["goal"] = TO_PICK, task, task["frm"]
             task["assigned"] = t
             self.waiting.remove(task)
+            if task["kind"] == "out" and self.cfg.capacity > 1:
+                riders = [tk for tk in self.waiting
+                          if tk["kind"] == "out" and tk["frm"] == task["frm"]][:self.cfg.capacity - 1]
+                for tk in riders:
+                    tk["assigned"] = t
+                    tk["to"], tk["to_name"] = task["to"], task["to_name"]
+                    self.waiting.remove(tk)
+                if riders:
+                    task["riders"] = riders
             eligible.remove(rid)
             if rb["pos"] == rb["goal"]:              # 제자리 배차(pack 승계 등) 즉시 도킹
                 self._begin_service(rb, t, "pick")
@@ -283,11 +300,14 @@ class FmsKernel(BatteryMixin, MetricsMixin):
 
     def _complete_drop(self, rb, t):
         task = rb["task"]
-        task["completed"] = t
-        self.tasks_done.append(task)
-        if self.on_task_completed is not None:
-            for follow in self.on_task_completed(task, t) or ():
-                self.submit_task(follow)
+        for tote in (task, *task.get("riders", ())):
+            tote["completed"] = t
+            self.tasks_done.append(tote)
+            if self.on_task_completed is not None:
+                for follow in self.on_task_completed(tote, t) or ():
+                    self.submit_task(follow)
+        if task["kind"] == "out":
+            self.trips += 1
         rb["state"], rb["task"] = FREED, None
 
     def move(self, t):

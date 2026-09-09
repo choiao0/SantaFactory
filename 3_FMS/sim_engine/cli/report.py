@@ -106,13 +106,13 @@ def _battery_section(a, kernel, T_END):
                 dock_util=round(dock_util, 3))
 
 
-def _explicit_section(a, stream):
-    """명시 주문 모드 SUMMARY 조각 (계약 v2.5, 조건부 키, -156). 간격 모드면 {}."""
-    if stream.explicit_orders is None:
-        return {}
-    extra = dict(orders_file=1, orders_skipped=int(stream.orders_skipped))
-    if a.capacity is not None:
-        extra["capacity"] = int(a.capacity)
+def _tote_section(a, kernel, stream):
+    """토트 적재 SUMMARY(v2.6). 명시 주문 전용 키만 조건부로 덧붙인다."""
+    extra = dict(capacity=int(a.capacity), tote_units=a.tote_units,
+                 totes=int(stream.totes_total), trips=int(kernel.trips),
+                 orders_oversize=int(stream.orders_oversize))
+    if stream.explicit_orders is not None:
+        extra.update(orders_file=1, orders_skipped=int(stream.orders_skipped))
     return extra
 
 
@@ -140,6 +140,8 @@ def report(a, kernel, stream, ctx):
     util_incl = (tot["drive"] + tot["wait"] + tot["svc"] + tot["rot"]) / (a.n_robots * T_END)
     conflict_wait = tot["wait"] / max(busy_v1, 1)
     orders_done = sum(1 for od in stream.orders.values() if od["completed"] is not None)
+    order_lat = np.array([od["completed"] - od["created"] for od in stream.orders.values()
+                          if od["completed"] is not None]) * DT
     orders_ph = (orders_done if lifelong else a.n_orders) / sim_hours
 
     print(_header_line(a, kernel, stream, ctx, lifelong))
@@ -157,6 +159,8 @@ def report(a, kernel, stream, ctx):
         orders_per_h=round(orders_ph, 1),
         lead_mean_s=round(_mean(lat_total), 1),
         lead_p90_s=round(_p90(lat_total), 1),
+        order_lead_mean_s=round(_mean(order_lat), 1),
+        order_lead_p90_s=round(_p90(order_lat), 1),
         queue_mean_s=round(_mean(lat_queue), 1),
         drive_mean_s=round(_mean(lat_drive), 1),
         util=round(float(util), 3),
@@ -172,7 +176,7 @@ def report(a, kernel, stream, ctx):
         **lifelong_extra, **bat_extra,
         # 견적 워커용 (계약 v2.4, 키 추가만): 입고 생성 수 · 주행 거리 [m] (1칸 = CELL_M = 1.0 m). docs/견적_워커.md
         inbound_total=int(stream.n_inbound), distance_m=int(tot["drive"]),
-        **_explicit_section(a, stream))
+        **_tote_section(a, kernel, stream))
     print("[SUMMARY] " + json.dumps(summary))
 
     tag = _make_tag(a, kernel, lifelong)

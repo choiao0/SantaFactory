@@ -11,7 +11,7 @@ REQ = {
     "run_id": "est_77_n3", "seed": 42,
     "horizon_s": 21600, "shifts": "in,in,out,out,out,out", "inbound_gap_s": 48.0, "outbound_gap_s": 22.5,
     "warehouse": {"worker_count": 4, "inbound_avg": 480, "outbound_avg": 500},
-    "amr": {"count": 3, "speed_empty": 1.2, "speed_loaded": 1.0, "capacity": 8},
+    "amr": {"count": 3, "speed_empty": 1.2, "speed_loaded": 1.0, "capacity": 6},
     "inbound": [], "outbound": [],
 }
 
@@ -20,7 +20,7 @@ SUMMARY = {
     "variant": "est_77_n3", "n_robots": 20, "n_orders": 116, "seed": 42, "makespan_steps": 3600,
     "tasks_per_h": 202.0, "orders_per_h": 104.0, "lead_mean_s": 180.4, "lead_p90_s": 274.0, "queue_mean_s": 9.1,
     "util": 0.598, "util_incl_service": 0.63, "conflict_wait": 0.1, "orders_done": 104, "tasks_in": 30,
-    "inbound_total": 33, "distance_m": 41200,
+    "inbound_total": 33, "distance_m": 41200, "order_lead_mean_s": 190.0, "order_lead_p90_s": 290.0,
 }
 
 KPI_KEYS = {"orders_total", "orders_completed", "inbound_total", "inbound_completed", "makespan_s",
@@ -58,6 +58,7 @@ def test_summary_to_kpi():
     assert (kpi["orders_total"], kpi["orders_completed"]) == (116, 104)
     assert (kpi["inbound_total"], kpi["inbound_completed"]) == (33, 30)
     assert kpi["makespan_s"] == 3600 and kpi["amr_utilization"] == 0.63
+    assert (kpi["lead_time_mean_s"], kpi["lead_time_p90_s"]) == (190.0, 290.0)
     assert kpi["distance_total_m"] == 41200 and kpi["charge_downtime_s"] == 0
 
 
@@ -99,10 +100,11 @@ def test_explicit_orders_and_capacity_flags():
     req = {**REQ, "outbound": [{"order_id": 1, "ordered_at_s": 3, "lines": [{"product_id": 7, "rack_id": "A2", "qty": 1}]}]}
     extra = w.to_sim_args(req, orders_path="/tmp/o.json")["extra_args"]
     assert "--orders-file=/tmp/o.json" in extra
-    assert "--capacity=8" in extra
+    assert {"--capacity=6", "--tote-units=8", "--svc-per-tote=5"} <= set(extra)
     no_cap = w.to_sim_args({**req, "amr": {"count": 3, "capacity": None}}, orders_path="/tmp/o.json")["extra_args"]
     assert "--orders-file=/tmp/o.json" in no_cap
     assert not any(f.startswith("--capacity") for f in no_cap)
+    assert "--tote-units=8" in no_cap and "--svc-per-tote=5" in no_cap
     empty = w.to_sim_args(REQ)["extra_args"]                                     # 주문 파일 없음 → 간격 모드
     assert not any(f.startswith("--orders-file") for f in empty)
     assert not any(f.startswith("--capacity") for f in empty)
