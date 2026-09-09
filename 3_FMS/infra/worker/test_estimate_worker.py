@@ -105,6 +105,9 @@ def test_explicit_orders_and_capacity_flags():
     assert "--orders-file=/tmp/o.json" in no_cap
     assert not any(f.startswith("--capacity") for f in no_cap)
     assert "--tote-units=8" in no_cap and "--svc-per-tote=5" in no_cap
+    null_units = w.to_sim_args({**req, "amr": {"count": 3, "capacity": None, "tote_units": None}},
+                               orders_path="/tmp/o.json")["extra_args"]     # 백엔드 실제 형식: 키는 있고 값은 null
+    assert "--tote-units=8" in null_units
     empty = w.to_sim_args(REQ)["extra_args"]                                     # 주문 파일 없음 → 간격 모드
     assert not any(f.startswith("--orders-file") for f in empty)
     assert not any(f.startswith("--capacity") for f in empty)
