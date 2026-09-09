@@ -86,6 +86,10 @@ public class Estimate {
     @Column(name = "completed_at")
     private LocalDateTime completedAt;
 
+    /** 물리 검증(Isaac) 리플레이 영상 URL. 검증 전이거나 실패해 영상이 없으면 null. */
+    @Column(name = "verify_video_url", length = 500)
+    private String verifyVideoUrl;
+
     private Estimate(Warehouse warehouse, String amrModel,
                      double targetThroughput, double targetUtilization, long budgetLimit) {
         this.warehouse = warehouse;
@@ -137,6 +141,11 @@ public class Estimate {
 
     public boolean isCancelled() {
         return status == EstimateStatus.CANCELLED;
+    }
+
+    /** 물리 검증 결과로 받은 리플레이 영상 URL을 반영한다. */
+    public void applyVerifyVideo(String url) {
+        this.verifyVideoUrl = url;
     }
 
     /** 견적 소요시간(초). 아직 완료 전이면 null — 90초 목표 측정에 쓴다. */
