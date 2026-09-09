@@ -4,10 +4,10 @@ FMS 파트는 두 트랙으로 나눠 진행한다.
 
 | 트랙 | 담당 | 산출물 | 위치 |
 |---|---|---|---|
-| A안 | AI팀 | 창고 생김새 + 짐 흐름 + 운영 조건 → 통행 규칙 파라미터 θ(11개) | [`ai_theta/`](ai_theta/) |
+| A안 | AI팀 | 창고 생김새 + 짐 흐름 + 운영 조건 → 통행 규칙 파라미터 θ(13개) | [`ai_theta/`](ai_theta/) |
 | B안 | 알고리즘/엔지니어링팀 | PIBT 이동계층, θ → 통행 비용, Fleet 벤치마크, **06 견적 계산 엔진** | [`sim_engine/`](sim_engine/) |
 
-두 트랙을 잇는 인터페이스는 둘이다 — **θ 11개 벡터**([`contracts/guidance_types.py`](contracts/guidance_types.py))와
+두 트랙을 잇는 인터페이스는 둘이다 — **θ 13개 벡터**([`contracts/guidance_types.py`](contracts/guidance_types.py))와
 **시뮬 실행 계약**([`contracts/SIM_RUN_CONTRACT.md`](contracts/SIM_RUN_CONTRACT.md): θ 탐색 워커·견적 엔진이 `sim_v2`를 부르는 방법).
 θ 스키마는 [`contracts/`](contracts/)에 고정해두고,
 θ의 개수·순서·범위를 바꿀 때는 양쪽 합의가 먼저다.
