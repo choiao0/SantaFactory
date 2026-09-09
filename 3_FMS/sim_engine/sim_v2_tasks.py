@@ -103,6 +103,10 @@ def _parse_model(a, argv):
     # v3: 차선·양보는 헤딩 main 전용. 칸 모델(--cell)은 A/B 기준 축이라 건드리지 않는다(기준값 2970/127.3 유지).
     a.lanes = "--no-lanes" not in argv and a.heading and a.flow != "v1compat"
     a.yield_rule = "--no-yield" not in argv and a.heading and a.flow != "v1compat"
+    # 차선 비용은 θ(A트랙 계약, 11개) 밖의 운영 규칙이다. 기본 2.0 (2·3·5 A/B: 5 는 평가 시드 102 에서 새 STALL, 3·2 완주).
+    a.lane_gain = _opt(argv, "lane-gain", float, 2.0)
+    a.pocket_gain = _opt(argv, "pocket-gain", float, 2.0)
+    assert a.lane_gain >= 1.0 and a.pocket_gain >= 1.0, f"--lane-gain/--pocket-gain 은 1.0 이상: {a.lane_gain}, {a.pocket_gain}"
     # 주문 도착 간격 평균 [틱] (지수분포). 기본 50 = B-0 이후 전 기준선. --order-gap=<틱> 으로 부하 조절
     # (고부하 스윕, docs/θ_경로_기준선.md#고부하-l1l2). v1compat 은 패리티 때문에 항상 50.
     a.order_gap_arg = next((float(f.split("=", 1)[1]) for f in argv if f.startswith("--order-gap=")), None)
@@ -216,20 +220,16 @@ def build(a):
             zone_mask = zm & free
             homes = make_homes_zone(free, zone_mask, a.n_robots)
 
-    # 통행 비용 — v3 헤딩 main 기본은 차선 gain 2.0 (2·3·5 A/B: 5 는 평가 시드 102 에서 새 STALL, 3·2 완주 → 안정적인 2).
-    # 구 θ 파일(11필드)의 누락 필드에도 같은 런타임 기본을 적용한다.
+    # 통행 비용 — θ(11개, A트랙 계약)로 조립한 뒤 차선 비용(--lane-gain/--pocket-gain, θ 밖)을 곱한다 (-177).
+    # --no-lanes 또는 칸 모델이면 둘 다 1.0 = v2 와 비트 동일.
     topo = None
     if a.theta_path or a.lanes or a.yield_rule:
         from from_theta import GuidanceTheta, extract_topology, from_theta, load_theta
         topo = extract_topology(free, st_cell)
     if a.theta_path or a.lanes:
-        theta = load_theta(a.theta_path, (2.0, 2.0) if a.lanes else None) \
-            if a.theta_path else GuidanceTheta.neutral()
-        if a.lanes and not a.theta_path:
-            theta.lane_gain = theta.pocket_gain = 2.0
-        if not a.lanes:
-            theta.lane_gain = theta.pocket_gain = 1.0
-        g = from_theta(free, topo, theta.validate())
+        theta = load_theta(a.theta_path) if a.theta_path else GuidanceTheta.neutral()
+        lane_gain, pocket_gain = (a.lane_gain, a.pocket_gain) if a.lanes else (1.0, 1.0)
+        g = from_theta(free, topo, theta, lane_gain=lane_gain, pocket_gain=pocket_gain)
         edge_cost = g.edge_cost.astype(np.float64)
         wait_cost = g.wait_cost.astype(np.float64)
     else:

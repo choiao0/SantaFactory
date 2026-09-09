@@ -14,8 +14,8 @@
 > `--tote-units`·`--svc-per-tote`와 SUMMARY 토트·왕복·주문 리드타임 키를 추가했다. 플래그 없는 기존 KPI 값은 비트 동일.
 >
 > **v3 결과 변경 (2026-09-09, S15P21A106-177):** main 헤딩 모델에 규칙 기반 차선과 지속 정면 조우 양보를 기본 적용한다.
-> `--no-lanes`·`--no-yield`로 각각 끌 수 있다. θ는 `lane_gain`·`pocket_gain`이 추가된 13필드이며, 구 11필드 JSON은
-> 런타임 기본 **2.0**으로 보완된다(2·3·5 A/B: 5 는 평가 시드 102 의 L1 12·20대에서 새 STALL, 3·2 완주 → 안정적인 2).
+> `--no-lanes`·`--no-yield`로 각각 끌 수 있다. 차선 비용은 **θ 밖**의 시뮬 인자 `--lane-gain`·`--pocket-gain`(기본 2.0)이다 —
+> θ 스키마(A트랙 계약, 11개·v2)는 바뀌지 않는다. 2.0 근거: 2·3·5 A/B 에서 5 는 평가 시드 102 의 L1 12·20대에서 새 STALL, 3·2 완주 → 안정적인 2.
 > **헤딩 main 전용** — 칸 모델(`--cell`)과 v1compat 은 A/B 기준 축이라 적용하지 않는다. 패리티·기준선 비교는 두 스위치를 모두 끈다.
 
 대상: 시뮬을 **프로세스로 호출하는 쪽** — A트랙 θ 탐색 워커(`infra/worker/objective.py`), 견적 엔진 배치 워커, fleet 스윕 스크립트.
@@ -46,11 +46,12 @@ python sim_v2_tasks.py <tag> <n_robots> <n_orders> <seed> <aisle_block> [--flow=
 | 플래그 | 의미 | 비고 |
 |---|---|---|
 | `--flow=main` | 입고+출고 흐름. **기본** | v1compat은 B-1e 패리티 전용(A* 비교), θ 탐색에 쓰지 말 것 |
-| `--theta=<json>` | θ 13개 JSON(`GuidanceTheta` 필드명). 구 11필드 파일도 읽음 | 범주형은 정수. 헤딩 main 기본 차선 gain 2 |
+| `--theta=<json>` | θ 11개 JSON(`GuidanceTheta` 필드명). 없으면 중립 θ | 범주형은 정수 |
+| `--lane-gain=<≥1.0>` `--pocket-gain=<≥1.0>` | 차선 줄 역방향·주머니 줄 통과 비용 배수(θ 밖, -177) | 기본 2.0. `--no-lanes` = 둘 다 1.0 |
 | `--capacity=<1..6>` | 출고 왕복당 함께 싣는 토트 수 | 기본 1(동승 없음) |
 | `--tote-units=<정수>` | 버퍼별 `ceil(qty 합 / tote_units)`로 주문 토트 수 계산 | 없으면 버퍼당 1토트 |
 | `--svc-per-tote=<틱>` | 픽업·하역 각각 `토트 수 × 값`을 기본 서비스 시간에 가산 | 기본 0 |
-| `--no-lanes` | 규칙 기반 출발·복귀 차선과 버퍼 주머니 비용을 끔 | main 기본 ON. θ `lane_gain=pocket_gain=1`과 같음 |
+| `--no-lanes` | 규칙 기반 출발·복귀 차선과 버퍼 주머니 비용을 끔 | 헤딩 main 기본 ON. `--lane-gain=1 --pocket-gain=1`과 같음 |
 | `--no-yield` | 8틱 이상 지속된 정면 조우의 양보 규칙을 끔 | main 헤딩 기본 ON |
 | (기본) | **헤딩 PIBT**(2칸 차체·회전·후진·라이브니스 5종). v2부터 플래그 없이 기본 | SUMMARY에 `heading=1` |
 | `--cell` | 칸 모델(점로봇). 기준선 CSV 재현·A/B 비교축 전용 | v1compat은 플래그와 무관하게 항상 칸 |
@@ -187,7 +188,7 @@ SIM_NO_PLOT=1 PYTHONIOENCODING=utf-8 python sim_v2_tasks.py bo17 24 120 42 1 --o
 | v2.4 | 2026-09-08 | 호환(키 추가만, -155): SUMMARY `inbound_total`·`distance_m` 항상 출력. 값·CLI·종료 코드 불변(기준값 3개·동일성 12행 확인). 호출자에 **견적 워커** `infra/worker/estimate_worker.py` 추가([설계](../docs/견적_워커.md)) |
 | v2.5 | 2026-09-09 | 호환(추가만, -156): **명시 주문 모드** `--orders-file`·`--capacity`, 조건부 SUMMARY 키 `orders_file`·`orders_skipped`·`capacity`. `map/rack_buffers.json`(랙 → 버퍼, `build_rack_map.py`) 신설. 플래그 없는 호출은 비트 동일(기준값 3개·동일성 12행 확인) |
 | **v2.6** | 2026-09-09 | **비호환**(-177): `capacity` 단위 상품 수→토트 수. `tote_units`·`svc_per_tote`, 동승 완료, 6토트 초과 제외, 토트·왕복·주문 리드타임 SUMMARY 추가. `capacity=1`, `svc_per_tote=0`, `tote_units` 미지정 시 기존 KPI 비트 동일 |
-| **v3** | 2026-09-09 | **결과 변경**(-177): main 기본 차선·양보, `--no-lanes`·`--no-yield`, SUMMARY `lanes`·`yield_rule`·`yield_events`. θ v3 = 기존 11필드 + `lane_gain`·`pocket_gain`; 구 JSON 호환. 기준선은 두 스위치를 끄면 비트 동일 |
+| **v3** | 2026-09-09 | **결과 변경**(-177): 헤딩 main 기본 차선(`--lane-gain`·`--pocket-gain` 2.0, θ 밖)·양보, `--no-lanes`·`--no-yield`, SUMMARY `lanes`·`yield_rule`·`yield_events`. θ 스키마는 11개 v2 그대로. 기준선은 두 스위치를 끄면 비트 동일 |
 
 관련: [고부하 기준](../docs/θ_경로_기준선.md#고부하-l1l2), [θ 로드맵](../docs/남은과업_계획.md#부록-a-θ-로드맵-단계표),
 [시스템 아키텍처의 계산 예산](../docs/남은과업_계획.md#부록-b-아키텍처에서-고칠-것-5개), A트랙 워커 `../infra/worker/objective.py`.
