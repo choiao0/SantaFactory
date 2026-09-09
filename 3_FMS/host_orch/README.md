@@ -8,7 +8,7 @@ EC2 에 상시로 떠서 (1) `spBv1.0/STATE/host-orch` 로 자기 생사를 알�
 | 파일 | 역할 |
 |---|---|
 | `tracker.py` | Primary Host 상태 — 노드·디바이스 메트릭, 별칭, seq 검사 → needs_rebirth, NDEATH(bdSeq 일치) → offline |
-| `orchestrator.py` | `VerifyRequest` 검증, `Job` 상태기계 STARTING → RUNNING → STOPPING → DONE\|FAILED, 결과 JSON, `Coordinator`(잡 1개 + Rebirth 발송) |
+| `orchestrator.py` | `VerifyRequest` 검증(`scenario` sha256 포함), `Job` 상태기계 STARTING → RUNNING → STOPPING → DONE\|FAILED, 결과 JSON(`scenario_ack`), `Coordinator`(잡 1개 + Rebirth 발송, 재전달 멱등) |
 | `amqp.py` | pika 소비 루프 — prefetch 1, 잡이 끝날 때까지 0.5 s tick, 결과 발행 뒤 ack. `publish_request` · `drain` 은 테스트용 |
 | `mqtt_host.py` | paho — STATE online retained + 유언 offline, `spBv1.0/santa/#` 구독, NCMD 발행 |
 | `app.py` | 배선 + CLI (`python3 -m host_orch`). `--once` 는 AMQP 없이 요청 1건 |
@@ -30,7 +30,13 @@ python3 -c "from host_orch.amqp import drain, amqp_url; print(drain(amqp_url(), 
 ```
 
 GPU 박스에서 개발할 때 RabbitMQ 는 EC2 에서 127.0.0.1 바인딩이라 `ssh -N -L 5672:127.0.0.1:5672 ubuntu@100.100.149.68` 터널로 붙는다 (`infra/.env` 의 RABBITMQ_HOST=127.0.0.1).
-EC2 에서 돌릴 때는 `pip install pika paho-mqtt protobuf` (infra/requirements.txt) 후 같은 명령. k3s 매니페스트는 10 단계.
+EC2 배포(compose, k3s 전까지): `infra/host_orch.Dockerfile` + `infra/compose.host-orch.yml`. RabbitMQ 네트워크(santafactory_default)와 EMQX 네트워크(backbone_default)에
+같이 들어가 서비스 이름으로 붙는다. 자격증명은 `infra/.env`(RABBITMQ_USER/PASSWORD) + `infra/emqx/.env`(MQTT_PW_HOST_ORCH), 둘 다 gitignored.
+
+```bash
+# EC2 에 트리 복사 (host_orch/ + infra/{host_orch.Dockerfile,compose.host-orch.yml,.env,emqx/.env}) 뒤
+cd ~/host-orch/3_FMS/infra && docker compose -f compose.host-orch.yml up -d --build && docker compose -f compose.host-orch.yml logs -f
+```
 
 옵션: `--node sim-runner-gpu01`(NCMD 대상) · `--start-timeout-s 180` · `--stop-timeout-s 60` · `--request-queue/--result-queue` · `--group santa` · `--host-id host-orch`.
 
@@ -46,7 +52,11 @@ EC2 에서 돌릴 때는 `pip install pika paho-mqtt protobuf` (infra/requiremen
 | RUNNING 중 sim-runner kill -9 | NDEATH(bdSeq 일치) 수신 → `failed`, `error "sim-runner went offline during the run"`, `reason "runner NDEATH"`, 4 s |
 | DES 큐 | `sim.request/result` 와 소비자(견적 워커) 무관 — 건드리지 않음 |
 
-단위 테스트 57개 (`host_orch/tests`), 브로커 불필요. 리뷰 반영 뒤 E2E 재실행 10:25 동일 결과.
+단위 테스트 62개 (`host_orch/tests`), 브로커 불필요. 리뷰 반영 뒤 E2E 재실행 10:25 동일 결과.
+
+**EC2 배포 뒤 실모드 (2026-09-09 11:10)**: `a106-host-orch`(compose, `~/host-orch/3_FMS`) 가 emqx·rabbitmq 서비스 이름으로 접속.
+요청(`n_robots 2, window_s 60, scenario` = 주문 생성기 seed 42 산출물 66 KB) → NCMD Start → GPU 박스 sim-runner `--mode real` 이 Isaac 을 띄워 19 s 뒤 RUNNING →
+창 60 s → Stop → 결과 `done`, `scenario_ack true`, `isaac_instances 1`, `rtf_mean 1.0`, `vram_mb_max 5379`. 총 103 s. 터널은 요청 투입·결과 회수에만 썼다.
 
 ## 남은 것
 

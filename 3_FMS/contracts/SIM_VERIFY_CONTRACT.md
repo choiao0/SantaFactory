@@ -28,9 +28,19 @@
   "source_run_id": "est_77_n3",         // DES run_id (추적용, 결과에 그대로 돌려준다)
   "estimate_id": 77,                    // 견적 id (추적용, 결과에 그대로)
   "seed": 42,                           // 선택. fms-core · WMS 연동 뒤 사용
-  "priority": 0                         // 선택. x-max-priority 는 미구현
+  "priority": 0,                        // 선택. x-max-priority 는 미구현
+  "scenario": {                         // 선택. 런 입력 묶음 — 정규형 JSON 512 KB 이하 (MQTT 패킷 1 MB 아래)
+    "seed": 42, "map_version": "v6.0",
+    "orders": { "meta": {…}, "outbound": [ {"order_id": 1, "ordered_at_s": 23659, "store_id": 1,
+                                            "lines": [{"product_id": 3, "qty": 2, "rack_id": "A3"}]} ] },   // 주문 생성기 산출물 그대로 (DES 워커가 쓴 것)
+    "spawn": "36,40.8;39,40.8"          // 선택. 로봇 초기 위치 → Isaac WSIM_SPAWN
+  }
 }
 ```
+
+`scenario` 는 host-orch 가 정규형(키 정렬·공백 없음)으로 sha256 을 계산해 NCMD Start 에 `scenario_sha256` 과 함께 싣고, sim-runner 는 같은 규칙으로
+다시 계산해 다르면 런을 거부한다. sim-runner 는 `<state>/runs/<run_id>/scenario.json` 에 떨어뜨리고 Isaac·에이전트에 `SIM_SCENARIO_PATH`·`SIM_SCENARIO_SHA256` 환경변수로 알린다.
+주문 500건 산출물 ≈ 66 KB. 이 안에 못 들어가는 입력(영상·리플레이)은 아티팩트 키로.
 
 DES 요청의 `horizon_s · shifts · inbound_gap_s · outbound_gap_s · warehouse · amr · inbound · outbound` 는 fms-core/WMS 연동 뒤 이 메시지에
 그대로 실린다(pass-through). host-orch 는 모르는 필드를 버리지 않고 `raw` 로 보관만 한다.
@@ -47,7 +57,8 @@ DES 요청의 `horizon_s · shifts · inbound_gap_s · outbound_gap_s · warehou
     "n_robots": 3, "robots_online": 3,  // DBIRTH 로 본 최대 동시 로봇 수
     "window_s": 600, "elapsed_s": 600.4,
     "started_at": "2026-09-09T02:10:00.000Z", "ended_at": "2026-09-09T02:20:00.400Z",
-    "rtf_mean": 1.02, "ram_mb_max": 5120, "vram_mb_max": 9800,
+    "rtf_mean": 1.02, "ram_mb_max": 5120, "vram_mb_max": 9800, "isaac_instances": 1,
+    "scenario_sha256": "…64hex…", "scenario_ack": true,   // sim-runner 가 NDATA `Runner/ScenarioSha` 로 같은 sha 를 되돌렸는가 = 데이터 도달 증명
     "reason": "window elapsed"          // window elapsed | heartbeat lost | runner ended the run | runner NDEATH | start timeout | stop timeout
   },
   "kpi": null,                          // fms-core 연동 뒤 DES 와 같은 kpi 블록
@@ -64,7 +75,7 @@ DES 요청의 `horizon_s · shifts · inbound_gap_s · outbound_gap_s · warehou
 |---|---|
 | 요청 수신 | sim-runner 가 NBIRTH 로 보이고 IDLE/ERROR 면 NCMD Start. 다른 run_id 로 바쁘면 기다렸다가 start_timeout(180 s) 에 failed |
 | Start 반영 없음 | 15 s 마다 재전송 (sim-runner 는 같은 run_id 멱등, QoS 0 유실 대비) |
-| RUNNING · RunId 일치 | 창 시작. `Runner/RTF · RamMB · VramMB`, DBIRTH 수를 모은다 |
+| RUNNING · RunId 일치 | 창 시작. `Runner/RTF · RamMB · VramMB · IsaacInstances · ScenarioSha`, DBIRTH 수를 모은다 |
 | 창 종료 | NCMD Stop → sim-runner IDLE 확인 → `done`. Stop 무응답 60 s → 재전송 1회 → failed "stop timeout" |
 | sim-runner 가 먼저 접음 (ERROR · RunId 비움) | failed, `error` = `Runner/LastError` |
 | NDEATH (bdSeq 일치) | failed "runner NDEATH" |
