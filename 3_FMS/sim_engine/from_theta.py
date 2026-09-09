@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # ============================================================
-# B-2: from_theta() — θ 13개를 칸별 통행 비용(Guidance)으로 변환 (스키마 v3)
+# B-2: from_theta() — θ 11개를 칸별 통행 비용(Guidance)으로 변환 (스키마 v2) + 차선 비용(θ 밖, -177)
 # (설계: docs/θ_경로_기준선.md#from_theta-조립-규칙,
 #  계약: contracts/guidance_types.py, 실행 기본값: contracts/SIM_RUN_CONTRACT.md)
 #
@@ -218,8 +218,10 @@ def edge_masks(free, topo, theta):
     return m
 
 
-def from_theta(free, topo, theta):
-    """GuidanceTheta → Guidance (스키마 v3 배타 조립, 마지막에 한 번 clamp)."""
+def from_theta(free, topo, theta, lane_gain=1.0, pocket_gain=1.0):
+    """GuidanceTheta → Guidance (스키마 v2 배타 조립, 마지막에 한 번 clamp).
+    lane_gain·pocket_gain 은 θ 가 아니라 시뮬 운영 규칙(-177 차선)이다 — θ 스키마(A트랙 계약)는 11개 그대로 두고,
+    θ 조립이 끝난 비용 위에 곱한다. 1.0 이면 차선 없음(v2 와 비트 동일)."""
     H, W = free.shape
     m = edge_masks(free, topo, theta)
     ec = np.ones((H, W, 4), dtype=np.float32)
@@ -230,18 +232,15 @@ def from_theta(free, topo, theta):
             ec[sel] *= getattr(theta, name)
             applied |= sel
     ec[m["main_aisle_gain"]] *= theta.main_aisle_gain
-    ec[m["lane_gain"]] *= theta.lane_gain
-    ec[m["pocket_gain"]] *= theta.pocket_gain
+    ec[m["lane_gain"]] *= lane_gain                 # 차선 줄 역방향 이동
+    ec[m["pocket_gain"]] *= pocket_gain             # 버퍼 정차 주머니 줄 통과
     wc = np.full((H, W), theta.wait_cost, dtype=np.float32)
     return Guidance(edge_cost=np.clip(ec, COST_MIN, COST_MAX),
                     wait_cost=np.clip(wc, COST_MIN, COST_MAX))
 
 
-def load_theta(path, lane_defaults=None):
-    """json → GuidanceTheta. lane_defaults는 v3 런타임에서 구 11필드 파일에만 적용한다."""
+def load_theta(path):
+    """json(GuidanceTheta 필드 11개) → GuidanceTheta. 계약 v2 범위·범주를 validate()로 검사."""
     with open(path, encoding="utf-8") as f:
         d = json.load(f)
-    if lane_defaults is not None:
-        d.setdefault("lane_gain", lane_defaults[0])
-        d.setdefault("pocket_gain", lane_defaults[1])
     return GuidanceTheta(**d).validate()
