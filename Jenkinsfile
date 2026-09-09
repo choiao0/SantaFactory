@@ -172,7 +172,7 @@ pipeline {
             steps {
                 withCredentials([file(credentialsId: 'emqx-env', variable: 'EMQX_ENV_FILE')]) {
                     sh '''
-                        cp -f "$EMQX_ENV_FILE" 3_FMS/infra/emqx/.env
+                        tr -d '\\r' < "$EMQX_ENV_FILE" > 3_FMS/infra/emqx/.env
                         3_FMS/infra/emqx/bootstrap_users.sh
                         $COMPOSE_EMQX up -d
                     '''
