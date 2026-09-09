@@ -121,6 +121,7 @@ def _make_tag(a, kernel, lifelong):
     return (f"sim_v2_{a.variant}_r{a.n_robots}{'_blk' if a.aisle_block else ''}_{a.flow}"
             f"{'_th' if a.theta_path else ''}{'_h' if kernel.heading else ''}"
             f"{'_ln' if a.lanes else ''}"
+            f"{'_yr' if a.yield_rule else ''}"
             f"{'_fh' if (a.flow == 'main' and not kernel.zone) else ''}"
             f"{'_hz' if lifelong else ''}{'_bat' if a.battery else ''}")
 
@@ -155,7 +156,8 @@ def report(a, kernel, stream, ctx):
 
     summary = dict(
         variant=a.variant, n_robots=a.n_robots, n_orders=a.n_orders, seed=a.seed,
-        aisle_block=int(a.aisle_block), flow=a.flow, lanes=int(a.lanes), makespan_steps=int(T_END),
+        aisle_block=int(a.aisle_block), flow=a.flow, lanes=int(a.lanes),
+        yield_rule=int(a.yield_rule), yield_events=len(kernel.yield_events), makespan_steps=int(T_END),
         tasks_per_h=round(n_tasks / sim_hours, 1),
         orders_per_h=round(orders_ph, 1),
         lead_mean_s=round(_mean(lat_total), 1),

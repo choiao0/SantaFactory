@@ -18,6 +18,8 @@
 # ============================================================
 import numpy as np
 
+from kernel.core import MAX_TOTES_PER_TRIP
+
 
 def shift_windows(horizon, shifts):
     """교대 토큰열 → [(kind, start, end)] (틱, [start, end)). T 를 len(shifts) 등분하고 연속된 같은 토큰은 한 창으로 합친다.
@@ -109,8 +111,9 @@ class OrderStream:
             kept = [p for p in parsed if p[0] < horizon]
             self.orders_skipped = len(parsed) - len(kept)
             parsed = kept
-        self.orders_oversize = sum(sum(n for _, n in p[1]) > 6 for p in parsed)
-        parsed = [p for p in parsed if sum(n for _, n in p[1]) <= 6]
+        # 로봇 한 대 적재(MAX_TOTES_PER_TRIP)를 넘는 주문은 팔레트 흐름으로 보고 시뮬 밖으로 뺀다(-177 결정). 개수만 기록.
+        self.orders_oversize = sum(sum(n for _, n in p[1]) > MAX_TOTES_PER_TRIP for p in parsed)
+        parsed = [p for p in parsed if sum(n for _, n in p[1]) <= MAX_TOTES_PER_TRIP]
         parsed.sort(key=lambda p: p[0])                              # 안정 정렬: 같은 틱은 파일 순서
         self.explicit_orders = parsed
         self.n_orders = len(parsed)

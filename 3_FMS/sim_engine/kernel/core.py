@@ -21,7 +21,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from map_loader import zone_cells
-from pibt_core import (DIRS, TURN_TICKS, Replanner, Stagnation,
+from pibt_core import (DIRS, TURN_TICKS, Replanner, Stagnation, candidates_h,
                        dist_map, dist_map_h, occupied, stay_map_h, step,
                        step_h, swing_cells, valid_state, wait_bias)
 
@@ -32,6 +32,9 @@ from .states import (CHARGING, FREED, HOLD, IDLE, NAV, ON_TASK, PARKABLE, RANK, 
 
 class StallError(RuntimeError):
     """워치독(stall_ticks 무진전). str(e) = 진단 덤프 텍스트 ([STALL] 줄 + 로봇 상태 + 후보 덤프 + 최근 이력)."""
+
+
+MAX_TOTES_PER_TRIP = 6        # 선반형 AMR 3단 × 2 토트 (-177). 주문도 이 수를 넘으면 시뮬 밖(팔레트 흐름)
 
 
 @dataclass
@@ -45,6 +48,9 @@ class KernelConfig:
     service_steps: int = 4        # 도킹 서비스 틱 (40/11 s ÷ DT)
     capacity: int = 1             # 출고 왕복당 토트 수
     svc_per_tote: int = 0         # 픽업·하역 각각 토트당 추가 틱
+    yield_rule: bool = False      # 헤딩 정면 조우 양보
+    yield_ticks: int = 20         # 양보 임시 목표 유지 상한
+    yield_after: int = 8          # 이 틱 이상 실제로 막힌 정면 조우만 양보 대상 (PIBT 가 스스로 푸는 마주침은 제외)
     turn_ticks: int = TURN_TICKS  # 90° 회전 틱
     dock_clear: int = 3           # 장치 ⑤ 유지 거리 (체비쇼프, 로봇 길이)
     stall_ticks: int = 1500       # 워치독: 이 틱 동안 완료 태스크 수 무변화 → StallError
@@ -65,17 +71,18 @@ class KernelConfig:
 
 class FmsKernel(BatteryMixin, MetricsMixin):
     def __init__(self, free, st_cell, edge_cost, wait_cost, homes, n_robots, cfg,
-                 zone_mask=None, on_task_completed=None):
+                 zone_mask=None, on_task_completed=None, lane_dir=None):
         self.free, self.st_cell = free, st_cell
         self.H, self.W = free.shape
         self.edge_cost, self.wait_cost = edge_cost, wait_cost
         self.cfg = cfg
-        assert 1 <= cfg.capacity <= 6 and cfg.svc_per_tote >= 0, \
-            f"capacity 1~6, svc_per_tote >= 0: {cfg.capacity}, {cfg.svc_per_tote}"
+        assert 1 <= cfg.capacity <= MAX_TOTES_PER_TRIP and cfg.svc_per_tote >= 0, \
+            f"capacity 1~{MAX_TOTES_PER_TRIP}, svc_per_tote >= 0: {cfg.capacity}, {cfg.svc_per_tote}"
         self.heading = cfg.heading
         self.zone = bool(cfg.zone and zone_mask is not None)
         self.zone_mask = zone_mask if self.zone else None
         self.zone_cells = zone_cells(free, zone_mask) if self.zone else []
+        self.lane_dir = lane_dir
         self.zone_stats = dict(wait=0, retargets=0, degraded=0, occ=[])   # 구현 설계 §4. occ = 틱별 존 안 로봇 수
         self.on_task_completed = on_task_completed
         self.station_cells = frozenset(st_cell.values())
@@ -98,6 +105,7 @@ class FmsKernel(BatteryMixin, MetricsMixin):
         self.waiting = []                       # 배차 대기 태스크 (FIFO)
         self.tasks_done = []
         self.trips = 0                            # 완료된 출고 왕복 수
+        self.yield_events = []                    # 정면 조우 진단 이벤트
         self.n_submitted = 0
         self._progress = [0, 0]                 # (완료 수, 그때 t) — 워치독
         self.export_log = {}
@@ -130,6 +138,7 @@ class FmsKernel(BatteryMixin, MetricsMixin):
                                     drive=0, wait=0, pushed=0, svc=0, turns=0, heading=None,
                                     h=None, busy=0, swing=set(), rot=0, rev=0, replan=0,
                                     turns_idle=0, goal_prev=None, goal_t=0, idle_moves=0, leave_from=None,
+                                    yield_peer=None, yield_target=None, yield_until=-1, yield_hold=False,
                                     soc=1.0, charge_n=0, chg=0, soc_empty=0)
             if self.battery:
                 self.robots[rid]["soc"] = float(cfg.soc_init[rid])
@@ -401,11 +410,16 @@ class FmsKernel(BatteryMixin, MetricsMixin):
         self._stamp_goal_changes(t)
         if cfg.dock_prio:
             self._update_dock_leave()
-        prio = self._priority_h(t)
         states = {rid: (robots[rid]["pos"][0], robots[rid]["pos"][1], robots[rid]["h"]) for rid in rids}
+        if cfg.yield_rule:
+            self._refresh_yields(t, states)
+        prio = self._priority_h(t)
         extra = {rid: robots[rid]["swing"] for rid in rids if robots[rid]["busy"] > 0}
         dists = self._dists_h(t, states, extra)
-        bias = {rid: wait_bias(self._stag.get(rid)) for rid in rids}
+        if cfg.yield_rule and self._detect_headons(t, states, prio, dists):
+            prio = self._priority_h(t)
+            dists = self._dists_h(t, states, extra)
+        bias = {rid: 0.0 if robots[rid]["yield_peer"] is not None else wait_bias(self._stag.get(rid)) for rid in rids}
         new, cells = step_h(states, dists, self.edge_cost, self.wait_cost, free, prio,
                             self.turn_cost, extra, bias)
         if cfg.check:
@@ -441,12 +455,136 @@ class FmsKernel(BatteryMixin, MetricsMixin):
             if lf is None and rb["state"] in NAV and rb["pos"] in self.station_cells and rb["pos"] != rb["goal"]:
                 rb["leave_from"] = rb["pos"]
 
+    @staticmethod
+    def _front_path(state, n=3):
+        r, c, h = state
+        dr, dc = DIRS[h]
+        return [(r + i * dr, c + i * dc) for i in range(1, n + 1)]
+
+    def _planned_cells(self, state, dist, n=3):
+        """정적 거리장의 최저비용 액션을 따라 다음 이동 칸 n개를 뽑는다(대기는 제외)."""
+        out, cur = [], state
+        for _ in range(n * 4):
+            choices = [st for st, _ in candidates_h(cur, dist, self.edge_cost, self.wait_cost,
+                                                      self.free, self.turn_cost, bias=1.0) if st != cur]
+            if not choices:
+                break
+            nxt = choices[0]
+            if nxt[:2] != cur[:2]:
+                out.append(nxt[:2])
+                if len(out) == n:
+                    break
+            cur = nxt
+        return out
+
+    def _clear_yield(self, rid):
+        rb = self.robots[rid]
+        rb["yield_peer"], rb["yield_target"], rb["yield_until"], rb["yield_hold"] = None, None, -1, False
+        rb["waitc"] = 0
+        self._stag.update(rid, rb["goal"], self.dmap_h(rb["goal"])[rb["pos"][0], rb["pos"][1], rb["h"]])
+
+    def _refresh_yields(self, t, states):
+        for rid in self.rids:
+            rb = self.robots[rid]
+            peer = rb["yield_peer"]
+            if peer is None:
+                continue
+            peer_rb = self.robots[peer]
+            peer_goal = peer_rb["yield_target"] if peer_rb["yield_peer"] is not None else peer_rb["goal"]
+            danger = set(occupied(states[peer])) | set(
+                self._planned_cells(states[peer], self.dmap_h(peer_goal)))
+            if t >= rb["yield_until"] or rb["pos"] not in danger:
+                self._clear_yield(rid)
+
+    def _escape_cell_ok(self, target, forbidden, occupied_now):
+        """대피 칸 조건: 맵 안 통행 가능, 상대 차체·경로 밖, 지금 비어 있고, 어느 방향으로든 차체가 들어간다."""
+        if target in forbidden or target in occupied_now:
+            return False
+        if not (0 <= target[0] < self.H and 0 <= target[1] < self.W and self.free[target]):
+            return False
+        return any(valid_state(self.free, (target[0], target[1], hh)) for hh in range(4))
+
+    def _side_targets(self, s, forbidden, occupied_now):
+        """옆 칸 후보 [(반대 차선 여부, 좌우 순서, 칸)]. 4틱 안에 닿는 칸만. min() 이 반대 차선 아닌 쪽·왼쪽을 먼저 고른다."""
+        r, c, h = s
+        sides = []
+        for order, d in enumerate(((h - 1) % 4, (h + 1) % 4)):
+            dr, dc = DIRS[d]
+            target = (r + dr, c + dc)
+            if not self._escape_cell_ok(target, forbidden, occupied_now):
+                continue
+            escape = float(self.dmap_h(target)[s])
+            if escape < 0 or escape > 4:
+                continue
+            lane = int(self.lane_dir[target]) if self.lane_dir is not None else -1
+            sides.append((lane >= 0 and lane != h, order, target))
+        return sides
+
+    def _yield_target(self, loser, winner, states, winner_path):
+        """(대피 칸, 제자리 여부). 옆 칸 먼저(반대 차선 아닌 쪽 우선) → 뒤 한 칸 → 제자리 정지(계급 0 으로 상대가 재계획)."""
+        s, other = states[loser], states[winner]
+        forbidden = set(occupied(other)) | set(winner_path)
+        occupied_now = {cell for rid, state in states.items() if rid != loser for cell in occupied(state)}
+        sides = self._side_targets(s, forbidden, occupied_now)
+        if sides:
+            return min(sides)[2], False
+        r, c, h = s
+        dr, dc = DIRS[h]
+        back = (r - dr, c - dc)
+        if self._escape_cell_ok(back, forbidden, occupied_now):
+            return back, False
+        return self.robots[loser]["pos"], True
+
+    def _headon_peer(self, rid, states, body_owner):
+        """rid 바로 앞 칸에 반대 방향으로 선 이동 중 로봇 id. yield_after 틱 이상 실제로 막힌 경우만, 없으면 None."""
+        rb, s = self.robots[rid], states[rid]
+        if rb["state"] not in NAV or rb["busy"] or rb["yield_peer"] is not None:
+            return None
+        peer = body_owner.get(self._front_path(s, 1)[0])
+        if peer is None or peer == rid:
+            return None
+        other = self.robots[peer]
+        if other["state"] not in NAV or other["busy"] or states[peer][2] != (s[2] + 2) % 4:
+            return None
+        if max(rb["waitc"], other["waitc"]) < self.cfg.yield_after:   # PIBT 가 스스로 푸는 일회성 마주침은 제외
+            return None
+        return peer
+
+    def _start_yield(self, t, loser, winner, states, winner_path):
+        target, hold = self._yield_target(loser, winner, states, winner_path)
+        yb = self.robots[loser]
+        yb["yield_peer"], yb["yield_target"] = winner, target
+        yb["yield_until"], yb["yield_hold"] = t + self.cfg.yield_ticks, hold
+        self.yield_events.append(dict(t=t, yielder=loser, peer=winner,
+                                      action="hold" if hold else "sidestep", target=target))
+
+    def _detect_headons(self, t, states, priority, dists):
+        """정면 한 칸 조우(서로의 계획 경로가 상대 칸을 지남)를 찾아 낮은 우선순위 로봇에 임시 회피 목표를 건다. 걸었으면 True."""
+        order = {rid: i for i, rid in enumerate(priority)}
+        body_owner = {cell: rid for rid, state in states.items() for cell in occupied(state)}
+        seen, changed = set(), False
+        for rid in priority:
+            peer = self._headon_peer(rid, states, body_owner)
+            if peer is None or frozenset((rid, peer)) in seen:
+                continue
+            peer_path = self._planned_cells(states[peer], dists[peer])
+            own_path = self._planned_cells(states[rid], dists[rid])
+            if self.robots[rid]["pos"] not in peer_path or self.robots[peer]["pos"] not in own_path:
+                continue
+            seen.add(frozenset((rid, peer)))
+            winner, loser = (rid, peer) if order[rid] < order[peer] else (peer, rid)
+            if self.robots[loser]["yield_peer"] is not None:
+                continue
+            self._start_yield(t, loser, winner, states, own_path if winner == rid else peer_path)
+            changed = True
+        return changed
+
     def _priority_h(self, t):
         robots = self.robots
 
         def _rank(r):
             rb = robots[r]
-            if rb["busy"] or rb["leave_from"] is not None:
+            if rb["busy"] or rb["leave_from"] is not None or rb["yield_hold"]:
                 return 0
             return RANK[rb["state"]]
         return sorted(self.rids, key=lambda r: (_rank(r), -(t - robots[r]["goal_t"]), r))
@@ -458,6 +596,8 @@ class FmsKernel(BatteryMixin, MetricsMixin):
             rb = self.robots[rid]
             if rb["state"] in HOLD or rb["busy"] > 0:
                 dists[rid] = stay_map_h(self.free, states[rid])
+            elif rb["yield_peer"] is not None:
+                dists[rid] = self.dmap_h(rb["yield_target"])
             elif rb["pos"] != rb["goal"]:
                 base = self.dmap_h(rb["goal"])
                 dists[rid] = self._replan.dist_for(rid, t, states, extra, rb["goal"], base, self._stag.get(rid))
@@ -508,7 +648,8 @@ class FmsKernel(BatteryMixin, MetricsMixin):
             rb["waitc"] = 0
         else:
             rb["wait"] += 1
-            rb["waitc"] += 1
+            if rb["yield_peer"] is None:
+                rb["waitc"] += 1
             self.wait_count[p0] += 1
 
     def _apply_heading_move(self, rb, s0, s1, gd):
@@ -537,6 +678,8 @@ class FmsKernel(BatteryMixin, MetricsMixin):
     def _update_stagnation_h(self, new):
         for rid in self.rids:
             rb = self.robots[rid]
+            if rb["yield_peer"] is not None:
+                continue
             if rb["state"] in HOLD:
                 self._stag.update(rid, rb["goal"], 0.0)
             else:
