@@ -1,21 +1,22 @@
-import { useRef, useState } from 'react'
-import { ESTIMATE, formatWon, totalCost } from '../data/mock.js'
+import { useRef } from 'react'
+import { formatWon } from '../utils/format.js'
 
 const MIN = 1
-const MAX = 20
-const TICKS = [1, 3, 5, 7, 9, 11, 13, 15, 17, 20]
+const MAX = 28
+const TICKS = [1, 4, 8, 12, 16, 20, 24, 28]
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v))
 
-export default function FleetStep() {
-  const [range, setRange] = useState({ min: ESTIMATE.fleetMin, max: ESTIMATE.fleetMax })
-  const [step, setStep] = useState(ESTIMATE.fleetStep)
+export default function FleetStep({ fleet, onChange, model, requesting, error, estimateId, onRequest }) {
   const trackRef = useRef(null)
   const dragging = useRef(null)
 
   const pct = (n) => ((n - MIN) / (MAX - MIN)) * 100
   const counts = []
-  for (let n = range.min; n <= range.max; n += step) counts.push(n)
+  for (let n = fleet.min; n <= fleet.max; n += 1) counts.push(n)
+
+  const perUnit = model ? model.price + model.cost : null
+  const cost = (n) => (perUnit == null ? null : perUnit * n)
 
   const valueAt = (clientX) => {
     const rect = trackRef.current.getBoundingClientRect()
@@ -24,16 +25,17 @@ export default function FleetStep() {
   }
 
   const move = (which, n) => {
-    setRange((r) =>
+    if (Number.isNaN(n)) return
+    onChange(
       which === 'min'
-        ? { ...r, min: clamp(n, MIN, r.max) }
-        : { ...r, max: clamp(n, r.min, MAX) },
+        ? { ...fleet, min: clamp(n, MIN, fleet.max - 1) }
+        : { ...fleet, max: clamp(n, fleet.min + 1, MAX) },
     )
   }
 
   const onPointerDown = (e) => {
     const n = valueAt(e.clientX)
-    const which = Math.abs(n - range.min) <= Math.abs(n - range.max) ? 'min' : 'max'
+    const which = Math.abs(n - fleet.min) <= Math.abs(n - fleet.max) ? 'min' : 'max'
     dragging.current = which
     move(which, n)
     e.currentTarget.setPointerCapture(e.pointerId)
@@ -45,6 +47,8 @@ export default function FleetStep() {
     dragging.current = null
   }
 
+  const canRequest = Boolean(model) && counts.length > 0 && !requesting
+
   return (
     <section className="step section-dark reveal" id="s2">
       <div className="eyebrow red">
@@ -55,7 +59,7 @@ export default function FleetStep() {
       <p className="desc">비교할 AMR 대수 범위를 정합니다. 대수 하나가 시뮬레이션 run 하나입니다.</p>
 
       <div className="fleetbox">
-        <div className="mono dim">FLEET SIZE SWEEP</div>
+        <div className="mono dim">FLEET SIZE SWEEP · 최대 {MAX}대</div>
         <div
           className="range"
           ref={trackRef}
@@ -65,11 +69,11 @@ export default function FleetStep() {
           onPointerCancel={onPointerUp}
         >
           <div className="track" />
-          <div className="fill" style={{ left: `${pct(range.min)}%`, width: `${pct(range.max) - pct(range.min)}%` }} />
-          <div className="knob" style={{ left: `${pct(range.min)}%` }} />
-          <div className="knob" style={{ left: `${pct(range.max)}%` }} />
+          <div className="fill" style={{ left: `${pct(fleet.min)}%`, width: `${pct(fleet.max) - pct(fleet.min)}%` }} />
+          <div className="knob" style={{ left: `${pct(fleet.min)}%` }} />
+          <div className="knob" style={{ left: `${pct(fleet.max)}%` }} />
           {TICKS.map((n) => (
-            <span key={n} className={`tick${n >= range.min && n <= range.max ? ' on' : ''}`} style={{ left: `${pct(n)}%` }}>
+            <span key={n} className={`tick${n >= fleet.min && n <= fleet.max ? ' on' : ''}`} style={{ left: `${pct(n)}%` }}>
               {n}
             </span>
           ))}
@@ -82,8 +86,8 @@ export default function FleetStep() {
               id="fleet-min"
               type="number"
               min={MIN}
-              max={range.max}
-              value={range.min}
+              max={fleet.max - 1}
+              value={fleet.min}
               onChange={(e) => move('min', Number(e.target.value))}
             />
           </div>
@@ -92,30 +96,34 @@ export default function FleetStep() {
             <input
               id="fleet-max"
               type="number"
-              min={range.min}
+              min={fleet.min + 1}
               max={MAX}
-              value={range.max}
+              value={fleet.max}
               onChange={(e) => move('max', Number(e.target.value))}
             />
-          </div>
-          <div>
-            <label htmlFor="fleet-step">간격</label>
-            <select id="fleet-step" value={step} onChange={(e) => setStep(Number(e.target.value))}>
-              <option value={1}>1대</option>
-              <option value={2}>2대</option>
-              <option value={3}>3대</option>
-            </select>
           </div>
         </div>
 
         <p className="fleetnote">
-          RUNS <b>{counts.length}건</b> — {counts.map((n) => `n${n}`).join(' · ')}
+          RUNS <b>{counts.length}건</b> — {fleet.min}대 ~ {fleet.max}대
           <br />
-          구축비용 <b>{formatWon(totalCost(range.min))}</b> ~ <b>{formatWon(totalCost(range.max))}</b>
+          {model ? (
+            <>
+              {model.model} 구축비용 <b>{formatWon(cost(fleet.min))}</b> ~ <b>{formatWon(cost(fleet.max))}</b>
+            </>
+          ) : (
+            '01 단계에서 AMR 모델을 먼저 선택하세요'
+          )}
         </p>
 
         <div className="runcta">
-          <button type="button" className="button">견적 요청 — {counts.length} RUNS ↗</button>
+          <button type="button" className="button" disabled={!canRequest} onClick={onRequest}>
+            {requesting ? '요청 중…' : `견적 요청 — ${counts.length} RUNS ↗`}
+          </button>
+          {estimateId != null && !error && (
+            <span className="mono dim">ESTIMATE #{estimateId} 접수 · 아래에서 진행 상황을 확인하세요</span>
+          )}
+          {error && <span className="form-error">요청 실패: {error}</span>}
         </div>
       </div>
     </section>

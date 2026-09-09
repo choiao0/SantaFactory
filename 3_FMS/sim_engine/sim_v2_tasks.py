@@ -19,6 +19,7 @@
 #                              [--inbound-gap=<틱>] (입고 간격만 따로, 기본 = order-gap)
 #                              [--horizon=<틱>] [--shifts=in,out,out]                     (고정 시간·교대, -145 §1)
 #                              [--battery] [--chargers=6] [--runtime-h=8] [--charge-h=1.5] [--soc=20,80,95]  (배터리, -145 §2)
+#                              [--orders-file=<json>] [--capacity=<상품 개수>]                     (명시 주문, -156)
 #   기본 = 헤딩 모델 (상태 (r,c,h), 자기+뒤 칸 2칸 점유, 90° 회전 = TURN_TICKS 틱, 회전 중 스윙 칸
 #              예약, 라이브니스 장치 5종). docs/이동계층_PIBT.md#라이브니스-장치-5종
 #   --cell:    칸 모델(점로봇) opt-in — 기준선 CSV 재현·A/B 비교축. (--heading 은 호환용, 무시)
@@ -30,6 +31,9 @@
 #              --shifts 로 T 를 등분해 창마다 in(입고)/out(출고) 한 종류만 도착 (기본 in,out,out = 앞 1/3 입고, 뒤 2/3 출고).
 #   --battery: SoC 틱 모델 + 충전 도크(charger[0..k) 칸). 임무 없는 로봇이 soc<low 면 강제, soc<go 면 기회 충전.
 #              main + 존 전용 (--fixed-homes·v1compat 과 함께 못 씀). docs/커널_시뮬_구조.md#배터리와-충전-도크
+#   --orders-file: WMS 명시 주문(큐 명세 §1-1 outbound[]) 을 그대로 흘림. 도착 틱 = ordered_at_s, rack_id → map/rack_buffers.json,
+#              같은 버퍼 라인은 토트로 묶고 --capacity 가 있으면 왕복 = ceil(qty합/capacity). 주문수 인자 무시, 출고 교대 창 무시,
+#              horizon 밖 주문은 제외(SUMMARY orders_skipped). 입고는 기존 규칙. docs/커널_시뮬_구조.md#명시-주문-모드
 # 환경: SIM_NO_PLOT=1 히트맵 생략, SIM_CHECK=1 매 틱 충돌 전수 검사(느림),
 #       SIM_DIRFLOW=1 방향별 이동 카운트 npz 저장 (B-2 검증용), SIM_NO_DOCK_PRIO=1 장치 ⑤ 끄기,
 #       SIM_EXPORT_ISAAC=1 Isaac 리플레이 내보내기 (isaac_export_<태그>/)
@@ -49,7 +53,7 @@ from cli.export_isaac import export_isaac
 from cli.plot import plot_heat
 from fms_kernel import FmsKernel, KernelConfig, StallError
 from map_loader import (load_map, make_homes, CELL_M, OFFSET_M, MAP_DIR, load_charge_zone,
-                        make_homes_zone)
+                        make_homes_zone, load_rack_map)
 from order_stream import OrderStream
 from pibt_core import DIRS, TURN_TICKS
 
@@ -154,6 +158,19 @@ def _parse_battery(a, argv):
         assert len(a.soc) == 3 and 0 < a.soc[0] < a.soc[1] < a.soc[2] <= 1.0, f"--soc 는 low<go<leave (%) : {soc}"
 
 
+def _parse_orders(a, argv):
+    """명시 주문 (-156): --orders-file=<json> (생성기 출력 {meta, outbound} 또는 요청 메시지 {…, outbound}), --capacity=<상품 개수>."""
+    a.orders_file = _opt(argv, "orders-file", str)
+    a.capacity = _opt(argv, "capacity", int)
+    if a.orders_file is not None:
+        assert a.flow == "main", "--orders-file 은 main 흐름만"
+    if a.capacity is not None:
+        assert a.capacity >= 1, f"--capacity 는 1 이상: {a.capacity}"
+        if a.orders_file is None:
+            a.warnings.append("[WARN] --capacity 는 --orders-file 없이는 무시 (간격 모드는 qty 없음)")
+            a.capacity = None
+
+
 def parse_args(argv):
     """sys.argv[1:] → 네임스페이스. 경고 문구는 .warnings 에 (셸이 출력 — 순서 보존)."""
     a, pos = _parse_positional(argv)
@@ -161,7 +178,17 @@ def parse_args(argv):
     _parse_env(a)
     _parse_lifelong(a, argv, pos)
     _parse_battery(a, argv)
+    _parse_orders(a, argv)
     return a
+
+
+def load_orders_file(path):
+    """--orders-file JSON → outbound 리스트. 생성기 출력({meta, outbound})·요청 메시지({…, outbound})·맨 리스트 모두 허용."""
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+    orders = data["outbound"] if isinstance(data, dict) else data
+    assert isinstance(orders, list), f"--orders-file: outbound 리스트를 찾을 수 없음: {path}"
+    return orders
 
 
 # ------------------------------------------------------------
@@ -193,10 +220,17 @@ def build(a):
         wait_cost = np.ones((H, W), dtype=np.float64)
 
     rng = np.random.default_rng(a.seed)
+    explicit = {}
+    if a.orders_file is not None:
+        rack_map = load_rack_map()
+        assert rack_map, "map/rack_buffers.json 없음 — map/build_rack_map.py 로 생성"
+        explicit = dict(orders=load_orders_file(a.orders_file), rack_map=rack_map, capacity=a.capacity)
     stream = OrderStream(rng, a.flow, a.n_orders, a.order_gap, st_cell, stations, inbound_gap=a.inbound_gap_arg,
-                         k_line_p=K_LINE_P, horizon=a.horizon, shifts=a.shifts)
-    if a.horizon is not None:
-        a.n_orders = stream.n_orders                # 고정 시간 모드: 실제 생성된 주문 수 (SUMMARY 에코)
+                         k_line_p=K_LINE_P, horizon=a.horizon, shifts=a.shifts, **explicit)
+    if a.horizon is not None or explicit:
+        a.n_orders = stream.n_orders                # 고정 시간·명시 모드: 실제 주문 수 (SUMMARY 에코)
+        if explicit and stream.orders_skipped:
+            a.warnings.append(f"[WARN] --orders-file: horizon 밖 주문 {stream.orders_skipped}건 제외")
     # 배터리 (-145 §2-1): 초기 SoC 는 **별도 rng**(시드 [seed, 0x145])로 뽑는다 — 주문 구성 난수는 도착 틱마다 실행 중에
     # 소비되므로 스트림 rng 를 건드리면 배터리 on/off 가 같은 시드에서 다른 주문을 받게 된다 (2026-09-06 검토).
     # 주행 1틱 소모 = 1/(가동 틱 × (0.7 + 0.3×0.25)) : "주행 70 %·유휴 30 % 혼합에서 runtime_h" 정규화, 정지 = 1/4.

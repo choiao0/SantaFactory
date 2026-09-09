@@ -7,20 +7,21 @@ import org.testcontainers.containers.PostgreSQLContainer;
 /**
  * 컨텍스트를 띄우는 테스트의 공통 부모 — 운영과 같은 Postgres 를 쓴다.
  *
- * <p>{@code ddl-auto=validate}(test/resources/application.yml)로 붙기 때문에
- * <b>엔티티와 손으로 쓴 {@code db/santafactory.sql} 이 어긋나면 컨텍스트 로딩이 실패한다.</b>
+ * <p>스키마는 <b>Flyway 가 운영과 똑같은 마이그레이션으로</b> 만든다. 여기에
+ * {@code ddl-auto=validate}(test/resources/application.yml)로 붙기 때문에
+ * <b>엔티티와 마이그레이션이 어긋나면 컨텍스트 로딩이 실패한다.</b>
  * H2 는 엔티티에서 스키마를 만들어버려서 이 검증이 구조적으로 불가능했다.
+ *
+ * <p>데모 시드({@code db/seed})는 테스트에서 제외된다 — 이유는 {@code R__seed_demo.sql} 주석 참고.
  *
  * <p>DB 를 잡는 순서:
  * <ol>
  *   <li>{@code DB_URL} 환경변수가 있으면 그 DB 를 쓴다 — docker-compose 로 이미 띄운 경우.
- *       스키마는 {@code db/santafactory.sql} 이 적용돼 있어야 한다.</li>
- *   <li>없으면 Testcontainers 로 직접 띄우고 초기 스크립트로 스키마를 만든다 (Docker 필요).</li>
+ *       <b>Flyway 가 그 DB 에 실제로 마이그레이션을 적용한다</b>(시드는 제외).</li>
+ *   <li>없으면 Testcontainers 로 빈 Postgres 를 띄운다 (Docker 필요).</li>
  * </ol>
  */
 public abstract class PostgresSupport {
-
-    private static final String SCHEMA_SCRIPT = "db/santafactory.sql";
 
     private static final String JDBC_URL;
     private static final String USERNAME;
@@ -33,8 +34,8 @@ public abstract class PostgresSupport {
             USERNAME = envOrDefault("DB_USERNAME", "postgres");
             PASSWORD = envOrDefault("DB_PASSWORD", "postgres");
         } else {
-            PostgreSQLContainer<?> container = new PostgreSQLContainer<>("postgres:16-alpine")
-                    .withInitScript(SCHEMA_SCRIPT);
+            // 초기 스크립트를 주지 않는다 — 스키마는 Flyway 가 컨텍스트 로딩 때 만든다.
+            PostgreSQLContainer<?> container = new PostgreSQLContainer<>("postgres:16-alpine");
             container.start();   // JVM 종료 시 Ryuk 이 정리한다
             JDBC_URL = container.getJdbcUrl();
             USERNAME = container.getUsername();

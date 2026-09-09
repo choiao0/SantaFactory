@@ -28,7 +28,7 @@ SIM_EXPORT_ISAAC=1 SIM_NO_PLOT=1 python sim_v2_tasks.py base 12 40 42 1         
 SIM_NO_PLOT=1 python simpy_harness.py base 6 40 42 1                                    # (simpy 설치 시) SUMMARY 가 위 CLI 와 비트 동일해야 함
 SIM_CHECK=1 SIM_NO_PLOT=1 python sim_v2_tasks.py hz 24 0 42 1 --horizon=21600 --order-gap=15 --battery   # 고정 시간 6h·교대·배터리 (-145) — [5] 배터리 줄
 python checks/check_lifelong_battery.py                                                 # 고정 시간·교대·배터리 불변 검사 7항목 (~20초)
-python -m pytest ../ai_theta/tests -q                                                   # A트랙 (map_loader·from_theta 를 import)
+python -m pytest ../ai_theta/tests tests -q                                             # A트랙 (map_loader·from_theta 를 import) + 명시 주문 모드 6개 (-156)
 python checks/pibt_dist_identity_check.py                                               # 거리장 vs 참조 구현 비트 동일 (~1분)
 python checks/check_results_identity.py --quick                                         # 기준선 CSV 대표 12행 재실행 동일 (~2분; 전수는 옵션 없이)
 ```
@@ -37,6 +37,7 @@ python checks/check_results_identity.py --quick                                 
 |---|---|
 | `pibt_core.py`, `pibt/` | 기존 import를 보존하는 파사드 + PIBT 구현. `cell`·`liveness`·`geometry`·`hgraph`·`heading`으로 분리하며 `_dist_map_h_ref`도 재수출 |
 | `checks/pibt_dist_identity_check.py`, `checks/check_results_identity.py` | **결과 동일성 검사** — 거리장 vs 참조 구현(비트 동일) / 기준선 CSV(b0z·load) 재실행 비교. 코어·거리장 수정 시 필수 |
+| `tests/test_order_stream_explicit.py` | **명시 주문 모드**(-156) — 도착 틱 = ordered_at_s, 같은 버퍼 토트 합침, 버퍼 분리·적재량 왕복, 모르는 랙 실패, horizon 밖 제외, 결정론. 실맵·`rack_buffers.json` 사용 |
 | `checks/check_lifelong_battery.py` | **고정 시간·교대·배터리 불변 검사** (-145) — 유한 모드 시각표 불변, 교대 창 밖 도착 0, 배터리 매 틱 불변(SoC 범위·도크 소유·배차 제외), CLI vs 하네스 패리티, 0 간격 거부·고정 시간 워치독 계속 실행 |
 | `map_loader.py` | 맵 로드(**`3_FMS/map` 공식 맵**, 2026-09-03 동기화)/1.0m 다운샘플/스테이션 (**로드 규칙 단일 소스**: `OBSTACLE_VALUES`, `AISLE_ROWS`) + 충전 존 `load_charge_zone`·`make_homes_zone` (A트랙 `build_input.py`도 import — 단일 소스) |
 | **`fms_kernel.py`, `kernel/`** | 기존 import를 보존하는 파사드 + **FMS 결정 커널**. `core` 상태머신·배차·이동·워치독, `battery.BatteryMixin`, `metrics.MetricsMixin`, `states`(로봇 상태·계급 상수)로 분리 |

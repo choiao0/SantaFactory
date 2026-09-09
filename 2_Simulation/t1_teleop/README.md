@@ -1,5 +1,7 @@
 # T1 — iw.hub 텔레옵 (Isaac Sim × ROS2 브리지 개통)
 
+> 2026-09-07 리팩토링: 구현은 `../apps/teleop_sim.py` + `../sil_isaac/`. 이 폴더의 `teleop_sim.py`·`measure_accel.py` 는 옛 경로 셔임(실행 방법 동일). 운동학 상수는 `sil_isaac/robot/profile.py`(반경 0.08·트랙 0.58 실측값)로 정정됨 — 아래 0.835 m/s 상한은 옛 상수(0.115/0.413)의 결과.
+
 iw.hub 1대를 간단 씬(Grid)에 띄우고, ROS2 `/cmd_vel`로 구동하며 `/clock`·`/odom`을 발행한다.
 SIL 로드맵 T1 — 스크립트 내장 주행을 ROS2 토픽 제어로 교체해 브리지 파이프라인을 개통한 것.
 

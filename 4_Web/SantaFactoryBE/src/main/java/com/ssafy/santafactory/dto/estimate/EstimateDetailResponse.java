@@ -48,7 +48,7 @@ public record EstimateDetailResponse(
             String error
     ) {
 
-        static Run from(SimScenario scenario) {
+        public static Run from(SimScenario scenario) {
             return new Run(
                     scenario.getRunId(),
                     scenario.getAmrCount(),

@@ -1,6 +1,6 @@
 # 3_FMS/docs
 
-현재 유효한 FMS 설계와 실측을 주제별 문서 5개로 정리한다. 날짜 기록은 원문 근거로 로컬에
+현재 유효한 FMS 설계와 실측을 주제별 문서 7개로 정리한다. 날짜 기록은 원문 근거로 로컬에
 보관하지만 git 추적 대상이 아니며, 새 링크는 아래 문서의 구체적인 절을 가리킨다.
 
 ## 주제 문서
@@ -28,6 +28,17 @@ Lifelong MAPF 해석, ROS/Isaac 연결 순서와 계약 기준값 3개를 확인
 θ 11개 스키마와 비용 규약, `from_theta`의 배타 조립·가중 거리장 연결을 설명한다.
 감도 결론과 시드 역할, B0→B0′→B0″ 계보, 고부하·대수별 θ·B-5 수치를 모았다.
 3~4대 절감, wallA 대수 축 θ 한 벌 판정과 견적 엔진 입력·results 파일 지도가 있다.
+
+### [견적 워커](견적_워커.md)
+
+백엔드 큐 명세 v0.3을 우리 커널에 붙이는 방법: 요청 필드 → 시뮬 인자, SUMMARY → KPI 14키, 실패 처리, 배포 자리.
+백엔드와 맞출 항목(대수 상한 8, 시드 42, 가동률 정의)을 모았다. 이슈 S15P21A106-155.
+
+### [주문 생성기](주문_생성기.md)
+
+신발 창고 공개 데이터(Mendeley pf2w725pw3)에서 라인 수·수량·SKU 편중·웨이브 시각 분포를 추출해 우리 매장·상품·랙 위에
+하루치 `outbound[]`(명세 §1-1 형식)를 만든다. 릴리스 기본 웨이브, ABC 는 인기 가중치만, 입고 보류. 이슈 S15P21A106-153.
+시뮬 연결(-156): `--orders-file`·`--capacity`, 랙 → 버퍼 매핑 `map/rack_buffers.json`, `slice_orders.py` 시간창 자르기, 첫 비교 표는 커널·시뮬 구조 문서에.
 
 ### [남은 과업 계획](남은과업_계획.md)
 
@@ -88,7 +99,7 @@ SIM_CHECK=1 SIM_NO_PLOT=1 python sim_v2_tasks.py base 6 40 42 1
 # 회귀·사건층·A트랙
 python checks/check_results_identity.py --quick
 python checks/check_lifelong_battery.py
-python -m pytest ../ai_theta/tests ../contracts/tests -q
+python -m pytest ../ai_theta/tests ../contracts/tests tests -q     # tests = 명시 주문 모드 (-156)
 ```
 
 전수 기준선 비교는 `python checks/check_results_identity.py`로 실행한다.

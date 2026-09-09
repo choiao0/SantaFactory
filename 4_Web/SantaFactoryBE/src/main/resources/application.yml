@@ -5,9 +5,15 @@ spring:
     url: ${DB_URL:jdbc:postgresql://localhost:5432/santafactory}
     username: ${DB_USERNAME:postgres}
     password: ${DB_PASSWORD:postgres}
+  flyway:
+    # 앱은 스키마(migration) + 데모 시드(seed)를 함께 적용한다. 테스트는 migration 만
+    # 읽는다 (test/resources/application.yml) — 이유는 R__seed_demo.sql 주석 참고.
+    locations: classpath:db/migration,classpath:db/seed
   jpa:
     hibernate:
-      ddl-auto: update
+      # 스키마는 Flyway 가 만든다. 여기서는 엔티티가 요구하는 테이블·컬럼이 마이그레이션
+      # 결과에 있는지만 검사한다 — 어긋나면 부팅이 실패한다. 이게 이 설정의 목적이다.
+      ddl-auto: validate
     show-sql: true
     properties:
       hibernate:
@@ -31,7 +37,11 @@ estimate:
   install-per-unit: 500000
   # 충전기 단가는 DB·ERD 어디에도 없어 팀 미정 (0이면 비용에 미반영)
   charger-price: 0
-  max-amr-count: 8
+  # 충전 존 초기 배치 용량. 동쪽 존 106칸이지만 2칸 차체를 간격 2로 세워야 해서 약 1/4 밀도다.
+  # 이 값을 넘겨 발행하면 시뮬이 배치 단계에서 assert 로 죽는다(map_loader.make_homes_zone).
+  # 맵에 존이 추가되면(3_FMS/docs/2026-09-04_고부하_무릎_판정.md §4) 이 값도 같이 올릴 것.
+  # 출처: 3_FMS/contracts/SIM_RUN_CONTRACT.md §1 — "충전 존 초기 배치 상한 28, 견적 제약으로 취급"
+  max-amr-count: 28
   max-chargers: 6
   amr-per-charger: 4
   amr-count-margin: 1

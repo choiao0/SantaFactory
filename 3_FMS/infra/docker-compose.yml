@@ -111,5 +111,11 @@ services:
           memory: 2G
     # 기본 CMD 는 버전 출력. 실제 탐색은 run 으로 명령을 준다.
 
+  # 견적 워커는 compose.estimate.yml 로 옮겼다 (S15P21A106-157).
+  # EC2 에는 워커만 올리기로 해서 시뮬 코드를 이미지에 굽는 별도 이미지
+  # (estimate.Dockerfile / fms-estimate-worker)가 됐고, 여기 남겨두면
+  # 쓰지도 않는 POSTGRES_PASSWORD 를 배포 서버에서 채워야 한다.
+  #   docker compose -f compose.estimate.yml up -d --build
+
 volumes:
   optuna-db:

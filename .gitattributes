@@ -1,3 +1,7 @@
 # 셸 스크립트(훅 포함)는 CRLF로 체크아웃되면 실행이 깨지므로 항상 LF를 유지한다
 .githooks/** text eol=lf
 *.sh text eol=lf
+gradlew text eol=lf
+
+# SQL 마이그레이션은 Flyway 체크섬 안정성을 위해 어디서든 LF 로 체크아웃한다
+*.sql text eol=lf

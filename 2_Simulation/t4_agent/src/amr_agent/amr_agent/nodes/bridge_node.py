@@ -4,6 +4,8 @@ MQTT  uagv/v2/{manufacturer}/{serial}/order          → ROS `order`            
 MQTT  uagv/v2/{manufacturer}/{serial}/instantActions → ROS `instant_actions`  (std_msgs/String, JSON)
 ROS   `state` (JSON)                                  → MQTT .../state
 MQTT  .../connection: ONLINE (retained) on connect, OFFLINE on shutdown, CONNECTIONBROKEN as LWT.
+MQTT  .../factsheet: retained QoS1 right after ONLINE, built from config/models/<model>.yaml (contract §4.2).
+Broker account: mqtt_username/mqtt_password = the serial's EMQX account (acl.conf allows only uagv/v2/+/<serial>/…).
 """
 from __future__ import annotations
 
@@ -17,6 +19,7 @@ from rclpy.node import Node
 from std_msgs.msg import String
 
 from ..vda5050 import topics as T
+from ..vda5050.models import ModelProfileError, load_model_profile
 from ..vda5050.state import StateBuilder
 
 
@@ -27,6 +30,7 @@ class Vda5050Bridge(Node):
             ("serial", "amr01"), ("manufacturer", "santa"),
             ("mqtt_host", "localhost"), ("mqtt_port", 1883), ("mqtt_username", ""),
             ("mqtt_password", ""), ("mqtt_keepalive", 30), ("republish_s", 2.0),
+            ("model", "iw_hub"), ("model_profile", ""),
         ])
         g = {x.name: x.value for x in p}
         self.serial, self.manufacturer = g["serial"], g["manufacturer"]
@@ -34,7 +38,13 @@ class Vda5050Bridge(Node):
         self.t_instant = T.topic(self.manufacturer, self.serial, T.INSTANT_ACTIONS)
         self.t_state = T.topic(self.manufacturer, self.serial, T.STATE)
         self.t_conn = T.topic(self.manufacturer, self.serial, T.CONNECTION)
+        self.t_facts = T.topic(self.manufacturer, self.serial, T.FACTSHEET)
         self.sb = StateBuilder(self.manufacturer, self.serial)
+        try:
+            self.profile = load_model_profile(g["model"], g["model_profile"] or None)
+        except ModelProfileError as e:
+            self.profile = None
+            self.get_logger().error(f"factsheet disabled: {e}")
         self.inbox: "queue.Queue[tuple[str, str]]" = queue.Queue()
         self.last_state = None
         self.last_state_t = 0.0
@@ -59,7 +69,8 @@ class Vda5050Bridge(Node):
         self.client.reconnect_delay_set(1, 10)
         self.client.connect_async(g["mqtt_host"], int(g["mqtt_port"]), int(g["mqtt_keepalive"]))
         self.client.loop_start()
-        self.get_logger().info(f"bridge up — {g['mqtt_host']}:{g['mqtt_port']} base={T.base(self.manufacturer, self.serial)}")
+        self.get_logger().info(f"bridge up — {g['mqtt_host']}:{g['mqtt_port']} user={g['mqtt_username'] or '(none)'} "
+                               f"base={T.base(self.manufacturer, self.serial)} model={g['model']}")
 
     # ---- MQTT thread -------------------------------------------------------------
     def _on_connect(self, client, _userdata, _flags, reason_code, _props=None) -> None:
@@ -67,8 +78,10 @@ class Vda5050Bridge(Node):
             self.get_logger().error(f"MQTT connect failed: {reason_code}")
             return
         client.publish(self.t_conn, json.dumps(self.sb.connection("ONLINE")), qos=1, retain=True)
+        if self.profile is not None:
+            client.publish(self.t_facts, json.dumps(self.sb.factsheet(self.profile)), qos=1, retain=True)
         client.subscribe([(self.t_order, 0), (self.t_instant, 0)])
-        self.get_logger().info("MQTT connected — ONLINE published, order/instantActions subscribed")
+        self.get_logger().info("MQTT connected — ONLINE + factsheet published, order/instantActions subscribed")
 
     def _on_disconnect(self, _client, _userdata, _flags, reason_code, _props=None) -> None:
         self.get_logger().warn(f"MQTT disconnected: {reason_code}")
