@@ -62,9 +62,9 @@ def load_theta_space(fms_root):
 
 
 def suggest_theta(trial, continuous, categorical, pinned):
-    """θ 13개(v3: 11 + lane_gain·pocket_gain). pinned 에 있는 이름은 제안하지 않고 그 값으로 고정한다.
+    """θ 11개. pinned 에 있는 이름은 제안하지 않고 그 값으로 고정한다.
 
-    θ 스키마는 13개를 다 요구하므로(계약 guidance_types) 제외한 파라미터도
+    θ 스키마는 11개를 다 요구하므로(계약 guidance_types) 제외한 파라미터도
     값은 있어야 한다. 중립값으로 고정해 "탐색하지 않음"과 "없음"을 구분한다 —
     Optuna 에 제안시키면 평평한 축을 헤매고, 빼 버리면 θ json 이 스키마를 어긴다.
     """
@@ -114,7 +114,7 @@ def dump_best(study, args, schema_version, neutral_names):
     if not args.out:
         return None
     os.makedirs(args.out, exist_ok=True)
-    # best_trial.params 에는 고정한 θ 가 없다. 스키마 13개를 채워야 한다.
+    # best_trial.params 에는 고정한 θ 가 없다. 스키마 11개를 채워야 한다.
     theta = {**args.pinned, **study.best_trial.params}
     for name in ("aisle_period", "aisle_phase", "loop_dir"):
         if name in theta:

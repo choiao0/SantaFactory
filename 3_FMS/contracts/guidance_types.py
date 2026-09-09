@@ -3,7 +3,7 @@ from numbers import Integral, Real
 
 import numpy as np
 
-THETA_SCHEMA_VERSION = 3
+THETA_SCHEMA_VERSION = 2
 
 # loop_dir 값의 의미 — θ 스키마의 일부다.
 LOOP_DIR_CW = 0
@@ -25,16 +25,13 @@ THETA_CONTINUOUS_RANGES = {
     "station_in": (0.5, 1.0),        # v2: 0.4 -> 0.5 (같은 이유)
     "station_out": (1.0, 3.0),
     "wait_cost": (0.5, 3.0),
-    "lane_gain": (1.0, 5.0),
-    "pocket_gain": (1.0, 5.0),
 }
 THETA_CATEGORICAL_VALUES = {
     "aisle_period": (1, 2, 3),
     "aisle_phase": (0, 1),
     "loop_dir": (0, 1),
 }
-THETA_FIELD_ORDER = tuple(k for k in THETA_CONTINUOUS_RANGES if k not in ("lane_gain", "pocket_gain")) + \
-    tuple(THETA_CATEGORICAL_VALUES) + ("lane_gain", "pocket_gain")
+THETA_FIELD_ORDER = tuple(THETA_CONTINUOUS_RANGES) + tuple(THETA_CATEGORICAL_VALUES)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -63,7 +60,7 @@ EDGE_RULE_PRECEDENCE = (
     ("intersection_entry", ("junction_penalty",)),
     ("aisle_interior", ("aisle_alt_gain", "aisle_alt_boost")),
 )
-EDGE_RULE_ALWAYS = ("main_aisle_gain", "lane_gain", "pocket_gain")
+EDGE_RULE_ALWAYS = ("main_aisle_gain",)
 
 
 @dataclass
@@ -78,7 +75,7 @@ class GuidanceInput:
 
 @dataclass
 class GuidanceTheta:
-    """AI가 내놓는 것 — 통행 규칙 파라미터 θ 13개."""
+    """AI가 내놓는 것 — 통행 규칙 파라미터 θ 11개."""
 
     # 연속 파라미터 8개
     # aisle 계열 4개(aisle_alt_gain·aisle_alt_boost·aisle_period·aisle_phase)는 기준선(aisle_block=1, 입구버퍼)에서
@@ -96,10 +93,6 @@ class GuidanceTheta:
     aisle_period: int  # 1, 2, 3 중 하나 — 몇 통로마다 방향을 뒤집을지
     aisle_phase: int   # 0 또는 1 — 첫 통로를 북쪽으로 할지 남쪽으로 할지
     loop_dir: int      # 0=시계, 1=반시계
-
-    # v3 추가. 끝에 기본값을 둬 기존 11필드 JSON을 그대로 읽는다.
-    lane_gain: float = COST_NEUTRAL    # 분리 차선 역주행 벌금
-    pocket_gain: float = COST_NEUTRAL  # 버퍼 정차 주머니 통과 벌금
 
     @classmethod
     def neutral(cls):
@@ -121,8 +114,6 @@ class GuidanceTheta:
             aisle_period=1,
             aisle_phase=0,
             loop_dir=LOOP_DIR_CW,
-            lane_gain=COST_NEUTRAL,
-            pocket_gain=COST_NEUTRAL,
         )
 
     def validate(self):
@@ -143,7 +134,7 @@ class GuidanceTheta:
         return self
 
     def as_vector(self):
-        """명세 §11-3의 고정 순서로 13개 값을 반환한다."""
+        """명세 §11-3의 고정 순서로 11개 값을 반환한다."""
         self.validate()
         return [getattr(self, name) for name in THETA_FIELD_ORDER]
 
@@ -160,8 +151,7 @@ def max_realizable_edge_cost(theta):
     때는 max(1.0, main_aisle_gain) 을 쓴다.
     """
     strongest = max([COST_NEUTRAL] + _rule_multipliers(theta))
-    lane_or_pocket = max(COST_NEUTRAL, theta.lane_gain, theta.pocket_gain)
-    return min(COST_MAX, strongest * max(COST_NEUTRAL, theta.main_aisle_gain) * lane_or_pocket)
+    return min(COST_MAX, strongest * max(COST_NEUTRAL, theta.main_aisle_gain))
 
 
 def min_realizable_edge_cost(theta):

@@ -1,6 +1,6 @@
 """AI입출력명세서 §11의 GuidanceTheta 계약 테스트.
 
-범위: θ 13개의 의미·범위 확정분만 검증한다. from_theta 구현이나 PIBT 스코어에
+범위: θ 11개의 의미·범위 확정분만 검증한다. from_theta 구현이나 PIBT 스코어에
 관한 것은 B트랙 이슈이므로 여기서 다루지 않는다
 (docs/θ_경로_기준선.md#비용-규약과-주의점).
 """
@@ -56,7 +56,7 @@ class GuidanceThetaContractTest(unittest.TestCase):
         self.assertEqual(dataclass_order, THETA_FIELD_ORDER)
         self.assertEqual(
             theta_at_lower_bounds().as_vector(),
-            [1.0, 0.5, 1.0, 0.5, 1.0, 0.5, 1.0, 0.5, 1, 0, 0, 1.0, 1.0],
+            [1.0, 0.5, 1.0, 0.5, 1.0, 0.5, 1.0, 0.5, 1, 0, 0],
         )
 
     def test_all_continuous_boundaries_are_allowed(self):
@@ -127,9 +127,12 @@ class ThetaRangeSanityTest(unittest.TestCase):
 class RealizableCostBoundTest(unittest.TestCase):
     """배타 규칙(EDGE_RULE_PRECEDENCE)이 실제로 상한 포화를 없애는지 확인한다."""
 
-    def test_v3_lane_multiplier_can_reach_upper_clamp(self):
+    def test_upper_clamp_is_never_reached_under_precedence_rules(self):
+        # 배타 규칙 없이 겹쳐 곱하면 3.5 * 3.0 * 1.2 = 12.6 으로 5.0을 넘는다.
+        # 규칙을 적용하면 최악이 3.5 * 1.2 = 4.2 라 상한에 닿지 않는다.
         worst = theta_at_upper_bounds()
-        self.assertEqual(max_realizable_edge_cost(worst), COST_MAX)
+        self.assertAlmostEqual(max_realizable_edge_cost(worst), 4.2, places=6)
+        self.assertLess(max_realizable_edge_cost(worst), COST_MAX)
 
     def test_lower_clamp_saturation_is_still_possible(self):
         # 알려진 잔여 문제: 큰 통로 내부 순방향 간선은 0.5 * 0.5 = 0.25 로 잘린다.

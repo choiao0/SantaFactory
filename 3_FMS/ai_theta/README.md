@@ -1,9 +1,6 @@
 # ai_theta/ — A안 (AI팀)
 
-창고 생김새(18ch) + 짐 흐름(6ch) + 통로 구조(15ch) + 운영 조건(9개) → 통행 규칙 파라미터 θ 13개(연속 10 + 범주형 3)를 예측한다.
-
-v3에서 `lane_gain`·`pocket_gain`이 추가됐다. 스키마 중립값은 둘 다 1.0이고 구 11필드 산출물도 로드된다.
-시뮬 main 기본은 둘 다 5.0이므로 A트랙은 새 필드를 포함해 재탐색할지 결정해야 한다.
+창고 생김새(18ch) + 짐 흐름(6ch) + 통로 구조(15ch) + 운영 조건(9개) → 통행 규칙 파라미터 θ 11개(연속 8 + 범주형 3)를 예측한다.
 
 입출력 계약: [`../contracts/guidance_types.py`](../contracts/guidance_types.py) (`GuidanceInput` → `GuidanceTheta`)
 상세 스펙: [`5_Docs/AI/AI입출력명세서.md`](../../5_Docs/AI/AI입출력명세서.md)
