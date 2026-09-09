@@ -1,13 +1,25 @@
-import { useState } from 'react'
-import { AMR_MODELS, formatWon } from '../data/mock.js'
+import { formatWon } from '../utils/format.js'
 
-export default function WarehouseStep() {
-  const [selected, setSelected] = useState([AMR_MODELS[0].id])
-  const toggle = (id) =>
-    setSelected((cur) => {
-      if (cur.includes(id)) return cur.length > 1 ? cur.filter((v) => v !== id) : cur
-      return [...cur, id]
-    })
+function hoursBetween(start, end) {
+  if (!start || !end) return null
+  const [sh, sm] = start.split(':').map(Number)
+  const [eh, em] = end.split(':').map(Number)
+  let minutes = eh * 60 + em - (sh * 60 + sm)
+  if (minutes <= 0) minutes += 24 * 60
+  return minutes / 60
+}
+
+export default function WarehouseStep({ form, onChange, models, modelsError, model, onSelectModel }) {
+  const number = (key) => (e) => onChange({ [key]: e.target.value === '' ? '' : Number(e.target.value) })
+  const text = (key) => (e) => onChange({ [key]: e.target.value })
+  const digits = (key) => (e) => {
+    const v = e.target.value.replace(/[^0-9]/g, '')
+    onChange({ [key]: v === '' ? '' : Number(v) })
+  }
+
+  const outboundHours = hoursBetween(form.outboundStart, form.outboundEnd)
+  const arrivalsPerHour = outboundHours ? Math.round(form.outboundAvg / outboundHours) : null
+
   return (
     <section className="step section-light reveal" id="s1">
       <div className="eyebrow red">
@@ -15,63 +27,70 @@ export default function WarehouseStep() {
         01 — WAREHOUSE
       </div>
       <h2>Define the operation.</h2>
-      <p className="desc">창고 운영 조건과 목표, 예산을 입력하고 비교할 AMR 모델을 선택합니다. 모델은 여러 개 고를 수 있습니다.</p>
+      <p className="desc">창고 운영 조건과 목표, 예산을 입력하고 시뮬레이션에 쓸 AMR 모델을 선택합니다.</p>
 
       <div className="duo">
         <form onSubmit={(e) => e.preventDefault()}>
           <div className="formgrid">
-            <div>
+            <div className="span2">
               <label htmlFor="workers">작업자 수</label>
-              <input id="workers" type="number" defaultValue={4} min={1} />
-              <span className="unit">명</span>
+              <div className="field">
+                <input id="workers" type="number" value={form.workerCount} min={1} onChange={number('workerCount')} />
+                <span className="suffix">명</span>
+              </div>
             </div>
             <div>
               <label htmlFor="inbound-avg">일 평균 입고</label>
-              <input id="inbound-avg" type="number" defaultValue={480} min={0} />
-              <span className="unit">건 / 일</span>
+              <div className="field">
+                <input id="inbound-avg" type="text" inputMode="numeric" value={form.inboundAvg} onChange={digits('inboundAvg')} />
+                <span className="suffix">건/일</span>
+              </div>
             </div>
             <div>
               <label htmlFor="outbound-avg">일 평균 출고 주문</label>
-              <input id="outbound-avg" type="number" defaultValue={500} min={0} />
-              <span className="unit">건 / 일</span>
-            </div>
-            <div>
-              <label htmlFor="seed">시드</label>
-              <input id="seed" type="number" defaultValue={42} />
-              <span className="unit">재현용 난수</span>
+              <div className="field">
+                <input id="outbound-avg" type="text" inputMode="numeric" value={form.outboundAvg} onChange={digits('outboundAvg')} />
+                <span className="suffix">건/일</span>
+              </div>
             </div>
 
             <div className="span2">
               <label htmlFor="inbound-start">입고 시간대</label>
               <div className="timerange">
-                <input id="inbound-start" type="time" defaultValue="01:00" />
+                <input id="inbound-start" type="time" value={form.inboundStart} onChange={text('inboundStart')} />
                 <span>–</span>
-                <input id="inbound-end" type="time" defaultValue="09:00" />
+                <input id="inbound-end" type="time" value={form.inboundEnd} onChange={text('inboundEnd')} />
               </div>
             </div>
             <div className="span2">
               <label htmlFor="outbound-start">출고 시간대</label>
               <div className="timerange">
-                <input id="outbound-start" type="time" defaultValue="13:00" />
+                <input id="outbound-start" type="time" value={form.outboundStart} onChange={text('outboundStart')} />
                 <span>–</span>
-                <input id="outbound-end" type="time" defaultValue="18:00" />
+                <input id="outbound-end" type="time" value={form.outboundEnd} onChange={text('outboundEnd')} />
               </div>
             </div>
 
             <div className="span2">
-              <label htmlFor="target">목표 처리량</label>
-              <input id="target" type="number" defaultValue={90} min={1} />
-              <span className="unit">주문 / 시</span>
+              <label htmlFor="target">목표 출고 처리율 · 접수 주문 중 완료 비율</label>
+              <div className="field">
+                <input id="target" type="number" value={form.targetThroughput} min={1} max={100} onChange={number('targetThroughput')} />
+                <span className="suffix">%</span>
+              </div>
             </div>
             <div className="span2">
               <label htmlFor="budget">최대 구축 예산</label>
-              <input id="budget" type="number" defaultValue={60000} step={1000} min={0} />
-              <span className="unit">만원</span>
+              <div className="field">
+                <input id="budget" type="number" value={form.budgetMan} step={1000} min={0} onChange={number('budgetMan')} />
+                <span className="suffix">만원</span>
+              </div>
             </div>
           </div>
 
           <p className="formsum">
-            출고 피크 <b>13:00–18:00</b> · 시간당 <b>100건</b> 도착 → 목표 <b>90건/시</b> · 예산 <b>{formatWon(60000)}</b>
+            출고 <b>{form.outboundStart}–{form.outboundEnd}</b>
+            {arrivalsPerHour != null && <> · 시간당 <b>{arrivalsPerHour}건</b> 도착</>}
+            {' '}→ 목표 처리율 <b>{form.targetThroughput}%</b> · 예산 <b>{formatWon(form.budgetMan * 10000)}</b>
           </p>
 
           <div className="runcta">
@@ -82,30 +101,32 @@ export default function WarehouseStep() {
         <aside className="models">
           <div className="models-head">
             <span className="mono dim">AMR MODEL</span>
-            <span className="mono dim">복수 선택 가능 · {selected.length}개 선택</span>
+            <span className="mono dim">단일 모델 · 1개 선택</span>
           </div>
-          {AMR_MODELS.map((m) => {
-            const on = selected.includes(m.id)
+          {modelsError && <p className="form-error">모델 목록을 불러오지 못했습니다. {modelsError}</p>}
+          {!modelsError && models.length === 0 && <p className="mono dim">모델 목록을 불러오는 중…</p>}
+          {models.map((m) => {
+            const on = m.model === model
             return (
               <button
                 type="button"
-                key={m.id}
+                key={m.model}
                 className={`spec selectable${on ? ' on' : ''}`}
-                onClick={() => toggle(m.id)}
+                onClick={() => onSelectModel(m.model)}
                 aria-pressed={on}
               >
                 <span className="lock">{on ? '✓ SELECTED' : 'SELECT'}</span>
                 <h4>{m.model}</h4>
-                <div className="sub">{m.vendor} · {m.note}</div>
+                <div className="sub">AMR · 사양 · 단가</div>
                 <dl>
-                  <dt>속도 (공차 / 적재)</dt>
-                  <dd>{m.speedEmpty} / {m.speedLoaded}<span>m/s</span></dd>
+                  <dt>속도</dt>
+                  <dd>{m.speed}<span>m/s</span></dd>
                   <dt>적재 용량</dt>
-                  <dd>{m.capacity}<span>토트</span></dd>
-                  <dt>충전 임계 / 시간</dt>
-                  <dd>{m.chargeThreshold * 100}% / {m.chargeTime / 60}<span>분</span></dd>
-                  <dt>대당 단가</dt>
-                  <dd>{formatWon(m.price)}</dd>
+                  <dd>{m.capacity}<span>kg</span></dd>
+                  <dt>배터리</dt>
+                  <dd>{m.battery}<span>%</span></dd>
+                  <dt>대당 단가 / 설치비</dt>
+                  <dd>{formatWon(m.price)} / {formatWon(m.cost)}</dd>
                 </dl>
               </button>
             )

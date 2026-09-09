@@ -14,8 +14,9 @@ import jakarta.validation.constraints.PositiveOrZero;
  * <p>목표 3개와 기종은 비워 보내면 창고의 기본값을 쓴다. 목표·예산은 시뮬에 넘기지 않는다 —
  * 시뮬은 "몇 대로 돌려라"만 알면 되고 판정은 백엔드가 한다.
  *
- * <p>대수 범위(fleetMin·fleetMax·fleetStep)는 02 FLEET 화면에서 고른 값이다. 셋 중 min·max 가 오면
- * 그 범위만 돌리고, 없으면 기존처럼 1대부터 예산으로 살 수 있는 대수까지 전부 돌린다.
+ * <p>대수 범위(fleetMin·fleetMax)는 02 FLEET 화면에서 고른 값이다. 둘 다 오면 그 범위를 1대 간격으로
+ * 전부 돌리고, 없으면 기존처럼 1대부터 예산으로 살 수 있는 대수까지 돌린다. 권장 대수가 "조건을 만족하는
+ * 최소 대수"라 대수를 건너뛰면 정밀도가 떨어지므로 간격은 두지 않는다.
  * 어느 쪽이든 충전 존 상한({@code estimate.max-amr-count})은 넘지 않는다.
  *
  * @param warehouseId        운영조건·레이아웃 출처
@@ -25,7 +26,6 @@ import jakarta.validation.constraints.PositiveOrZero;
  * @param budgetLimit        목표 구축 비용(원). 없으면 창고 값
  * @param fleetMin           비교할 최소 대수. 없으면 1
  * @param fleetMax           비교할 최대 대수. 없으면 예산 기반 산정
- * @param fleetStep          대수 간격. 없으면 1
  */
 @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
 public record EstimateCreateRequest(
@@ -35,8 +35,7 @@ public record EstimateCreateRequest(
         @Positive Double targetUtilization,
         @PositiveOrZero Long budgetLimit,
         @Positive Integer fleetMin,
-        @Positive Integer fleetMax,
-        @Positive Integer fleetStep
+        @Positive Integer fleetMax
 ) {
     private static final String DEFAULT_AMR_MODEL = "iw.hub";
 
@@ -48,10 +47,6 @@ public record EstimateCreateRequest(
     @JsonIgnore
     public boolean hasFleetRange() {
         return fleetMin != null && fleetMax != null;
-    }
-
-    public int fleetStepOrDefault() {
-        return fleetStep == null ? 1 : fleetStep;
     }
 
     /** min ≤ max 이어야 한다. 한쪽만 오면 범위로 보지 않으므로 검사하지 않는다. */
