@@ -103,8 +103,39 @@ def test_explicit_orders_and_capacity_flags():
     no_cap = w.to_sim_args({**req, "amr": {"count": 3, "capacity": None}}, orders_path="/tmp/o.json")["extra_args"]
     assert "--orders-file=/tmp/o.json" in no_cap
     assert not any(f.startswith("--capacity") for f in no_cap)
-    empty = w.to_sim_args(REQ, orders_path="/tmp/o.json")["extra_args"]          # outbound: [] → 간격 모드
+    empty = w.to_sim_args(REQ)["extra_args"]                                     # 주문 파일 없음 → 간격 모드
     assert not any(f.startswith("--orders-file") for f in empty)
     assert not any(f.startswith("--capacity") for f in empty)
     with pytest.raises(ValueError, match="capacity"):
         w.to_sim_args({**req, "amr": {"count": 3, "capacity": 0}}, orders_path="/tmp/o.json")
+
+
+# ------------------------------------------------------------
+# 주문 자체 생성 (-158) — 이미지 안 order_gen 의 실제 프로파일·마스터로 돈다 (결정론)
+# ------------------------------------------------------------
+def test_generated_orders_mapped_to_outbound_window():
+    """출고 시간대 13:00~18:00 → 하루치 500건이 전부 그 창에 비례 매핑되고, horizon 6h 창 [13:00, 19:00) 에 다 들어온다."""
+    req = {**REQ, "warehouse": {**REQ["warehouse"], "outbound_start": "13:00", "outbound_end": "18:00"}}
+    gen = w._generate_orders(req)
+    times = [o["ordered_at_s"] for o in gen["outbound"]]
+    assert len(times) == 500
+    assert min(times) == 0
+    assert max(times) < 5 * 3600
+    assert times == sorted(times)
+    assert gen["meta"]["rescaled_to_s"] == [13 * 3600, 18 * 3600]
+    assert w._generate_orders(req)["outbound"] == gen["outbound"]           # 같은 seed → 같은 주문
+
+
+def test_generated_orders_default_window_and_priority(tmp_path):
+    """출고 시간대가 없으면 매핑 없이 07:00 부터 horizon 만큼(일부만 남음). outbound[] 가 오면 생성하지 않는다."""
+    gen = w._generate_orders(REQ)
+    assert 0 < len(gen["outbound"]) < 500
+    assert gen["meta"]["window_start_s"] == 7 * 3600
+    explicit = {**REQ, "outbound": [{"order_id": 1, "ordered_at_s": 3, "lines": [{"product_id": 7, "rack_id": "A2", "qty": 1}]}]}
+    path, n = w._orders_file(explicit)
+    try:
+        assert n == 1
+        assert json.load(open(path, encoding="utf-8"))["outbound"][0]["order_id"] == 1
+    finally:
+        import os
+        os.remove(path)

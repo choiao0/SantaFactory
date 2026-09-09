@@ -129,3 +129,17 @@ class SliceOrdersTest(unittest.TestCase):
                          (7200, 2, 4, 1))
         with self.assertRaises(ValueError):
             slice_orders.slice_orders(data, 3600, 3600)
+
+    def test_rescale_keeps_order_and_fills_window(self):
+        import slice_orders
+        data = {"meta": {}, "outbound": [{"order_id": i, "ordered_at_s": t, "lines": []}
+                                         for i, t in enumerate([7 * 3600, 7 * 3600 + 1800, 15 * 3600 - 1], 1)]}
+        out = slice_orders.rescale_orders(data, 13 * 3600, 18 * 3600)
+        times = [o["ordered_at_s"] for o in out["outbound"]]
+        self.assertEqual(times[0], 13 * 3600)                    # 첫 주문 = 창 시작
+        self.assertLess(times[-1], 18 * 3600)                    # 마지막 주문 < 창 끝
+        self.assertEqual(times, sorted(times))
+        self.assertEqual(out["meta"]["rescaled_from_s"], [7 * 3600, 15 * 3600])
+        self.assertEqual(slice_orders.rescale_orders({"outbound": []}, 0, 10)["outbound"], [])
+        with self.assertRaises(ValueError):
+            slice_orders.rescale_orders(data, 18 * 3600, 13 * 3600)
