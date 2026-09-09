@@ -18,6 +18,8 @@
 # ============================================================
 import numpy as np
 
+from kernel.core import MAX_TOTES_PER_TRIP
+
 
 def shift_windows(horizon, shifts):
     """교대 토큰열 → [(kind, start, end)] (틱, [start, end)). T 를 len(shifts) 등분하고 연속된 같은 토큰은 한 창으로 합친다.
@@ -40,7 +42,7 @@ class OrderStream:
     def __init__(self, rng, flow, n_orders, order_gap, st_cell, stations,
                  n_inbound=None, inbound_gap=None, k_line_p=(0.5, 0.3, 0.2),
                  horizon=None, shifts=("in", "out", "out"),
-                 orders=None, rack_map=None, capacity=None):
+                 orders=None, rack_map=None, tote_units=None):
         assert flow in ("main", "v1compat"), f"알 수 없는 flow: {flow}"
         self.rng, self.flow, self.st_cell = rng, flow, st_cell
         self.k_line_p = list(k_line_p)
@@ -50,9 +52,11 @@ class OrderStream:
         self.horizon = horizon
         self.explicit_orders = None                  # 명시 주문 모드(-156)면 [(틱, [(버퍼, 왕복수), …])]
         self.orders_skipped = 0
+        self.orders_oversize = 0
+        self.totes_total = 0
         gap_in = order_gap if inbound_gap is None else inbound_gap
         if orders is not None:
-            self._init_explicit(flow, orders, rack_map, capacity, n_inbound, horizon, shifts, gap_in)
+            self._init_explicit(flow, orders, rack_map, tote_units, n_inbound, horizon, shifts, gap_in)
         elif horizon is None:
             self._init_finite(flow, n_orders, n_inbound, order_gap, gap_in)
         else:
@@ -82,14 +86,15 @@ class OrderStream:
         else:
             self.inbound_times = np.array([], dtype=int)
 
-    def _init_explicit(self, flow, orders, rack_map, capacity, n_inbound, horizon, shifts, gap_in):
+    def _init_explicit(self, flow, orders, rack_map, tote_units, n_inbound, horizon, shifts, gap_in):
         """명시 주문 모드 (-156, docs/커널_시뮬_구조.md#명시-주문-모드): 큐 명세 §1-1 `outbound[]` 를 그대로 흘린다.
         도착 틱 = ordered_at_s (1틱 = 1초). 라인 rack_id → rack_map → 버퍼, 같은 버퍼는 qty 를 합쳐 토트로 묶고
-        왕복 수 = ceil(qty 합 / capacity) (capacity 없으면 1 — V1 qty 미반영). 출고 교대 창은 쓰지 않는다(파일 시각이 진실).
+        토트 수 = ceil(qty 합 / tote_units) (없으면 버퍼당 1). 주문 합계가 6토트를 넘으면 제외한다.
+        출고 교대 창은 쓰지 않는다(파일 시각이 진실).
         horizon 밖(t ≥ T) 주문은 버리고 orders_skipped 에 센다. 입고는 기존 규칙(간격·in 창) 그대로."""
         assert flow == "main", "명시 주문 모드는 main 흐름만"
         assert rack_map, "명시 주문 모드는 rack_map(map/rack_buffers.json) 필요"
-        assert capacity is None or capacity >= 1, f"capacity 는 1 이상 (상품 개수): {capacity}"
+        assert tote_units is None or tote_units >= 1, f"tote_units 는 1 이상 (상품 개수): {tote_units}"
         parsed = []
         for od in orders:
             t = int(od["ordered_at_s"])
@@ -100,12 +105,15 @@ class OrderStream:
                 if rid not in rack_map:
                     raise KeyError(f"rack_id {rid!r} 가 rack_buffers.json 에 없음 (order {od.get('order_id')})")
                 groups[rack_map[rid]] = groups.get(rack_map[rid], 0) + int(ln.get("qty", 1))
-            trips = [(b, -(-q // capacity) if capacity else 1) for b, q in sorted(groups.items())]
-            parsed.append((t, trips))
+            totes = [(b, -(-q // tote_units) if tote_units else 1) for b, q in sorted(groups.items())]
+            parsed.append((t, totes))
         if horizon is not None:
             kept = [p for p in parsed if p[0] < horizon]
             self.orders_skipped = len(parsed) - len(kept)
             parsed = kept
+        # 로봇 한 대 적재(MAX_TOTES_PER_TRIP)를 넘는 주문은 팔레트 흐름으로 보고 시뮬 밖으로 뺀다(-177 결정). 개수만 기록.
+        self.orders_oversize = sum(sum(n for _, n in p[1]) > MAX_TOTES_PER_TRIP for p in parsed)
+        parsed = [p for p in parsed if sum(n for _, n in p[1]) <= MAX_TOTES_PER_TRIP]
         parsed.sort(key=lambda p: p[0])                              # 안정 정렬: 같은 틱은 파일 순서
         self.explicit_orders = parsed
         self.n_orders = len(parsed)
@@ -173,8 +181,9 @@ class OrderStream:
             # 포장대는 시뮬(WMS 역할)이 배정 — 간격 모드와 같은 1 draw. 버퍼별 왕복 수만큼 출고 태스크.
             p = int(rng.integers(self.n_pack))
             out = [self.make_task("out", f"aisle_buf[{b}]", f"packing[{p}]", t, oid)
-                   for b, trips in self.explicit_orders[oid][1] for _ in range(trips)]
+                   for b, totes in self.explicit_orders[oid][1] for _ in range(totes)]
             self.orders[oid] = dict(created=t, remaining=len(out), completed=None)
+            self.totes_total += len(out)
             return out
         if self.flow == "v1compat":
             # v1 spawn_chain 과 동일한 4 draw 를 도착 틱에 일괄 소비 (설계 §6)
@@ -193,6 +202,7 @@ class OrderStream:
         uniq = list(dict.fromkeys(aisles))                                # 같은 통로 라인은 토트 1개로 합침
         out = [self.make_task("out", f"aisle_buf[{a}]", f"packing[{p}]", t, oid) for a in uniq]
         self.orders[oid] = dict(created=t, remaining=len(uniq), completed=None)
+        self.totes_total += len(out)
         return out
 
     def _spawn_inbound(self, t):

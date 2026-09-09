@@ -257,8 +257,19 @@ function draw() {
   for (const rid of RIDS) {
     const p = pose(rid, t); counts[p.a]++;
     const [dr, dc] = DIRS[p.h];
-    if (D.twoCell) { ctx.fillStyle = css("--robot-rear"); ctx.fillRect(px(p.c - dc) + 1, py(p.r - dr) + 1, CELL - 2, CELL - 2); }
-    ctx.fillStyle = css(ACT_VARS[p.a]); ctx.fillRect(px(p.c) + 0.5, py(p.r) + 0.5, CELL - 1, CELL - 1);
+    if (D.twoCell) {
+      const [len, wid] = D.meta.robot_dim_m || [1.50, 0.92];
+      const axleToCenter = len / 2 - 0.39;
+      const x = px(p.c) + CELL / 2 - dc * axleToCenter * CELL;
+      const y = py(p.r) + CELL / 2 + dr * axleToCenter * CELL;
+      ctx.save(); ctx.translate(x, y); ctx.rotate(Math.atan2(-dr, dc));
+      ctx.fillStyle = css(ACT_VARS[p.a]);
+      ctx.fillRect(-len * CELL / 2, -wid * CELL / 2, len * CELL, wid * CELL);
+      ctx.strokeStyle = css("--robot-rear"); ctx.lineWidth = 0.8; ctx.strokeRect(-len * CELL / 2, -wid * CELL / 2, len * CELL, wid * CELL);
+      ctx.restore();
+    } else {
+      ctx.fillStyle = css(ACT_VARS[p.a]); ctx.fillRect(px(p.c) + 0.5, py(p.r) + 0.5, CELL - 1, CELL - 1);
+    }
     ctx.fillStyle = "rgba(255,255,255,0.92)"; ctx.beginPath();
     ctx.arc(px(p.c) + CELL / 2 + dc * CELL * 0.28, py(p.r) + CELL / 2 - dr * CELL * 0.28, 1.3, 0, Math.PI * 2); ctx.fill();
     if (labelsEl.checked) { ctx.font = `500 9px ${css("--mono")}`; ctx.fillStyle = css("--text"); ctx.textBaseline = "bottom"; ctx.fillText(rid, px(p.c) + CELL + 1, py(p.r) - 1); }
@@ -288,9 +299,10 @@ function load(scene, traj, label) {
   const last = done.length ? Math.max(...done.map(k => k.completed)) : D.T - 1;
   const orders = new Set(D.tasks.map(k => k.order).filter(o => o != null)).size;
   const m = D.meta;
+  const orderNote = orders ? ` (주문 ${orders}건)` : "";
   metaEl.innerHTML = [
     ["run", m.variant || label || "—"], ["모델", m.model === "heading" ? `헤딩 PIBT (2칸 차체·회전 ${m.turn_ticks ?? 1}틱)` : "칸 모델"],
-    ["로봇", `${RIDS.length}대`], ["태스크", `${D.tasks.length}개${orders ? ` (주문 ${orders}건)` : ""}`],
+    ["로봇", `${RIDS.length}대 · ${(m.robot_dim_m || [1.50, 0.92]).slice(0, 2).join("×")} m`], ["태스크", `${D.tasks.length}개` + orderNote],
     ["격자", `1.0 m · 1 틱 = ${m.dt} s`], ["makespan", `${last}틱 = ${(last * m.dt / 60).toFixed(1)}분`],
     ["처리량", done.length ? `${(done.length / (last * m.dt / 3600)).toFixed(0)} tasks/h` : "—"],
   ].map(([k, v]) => `<span><span class="k">${k}</span><b>${v}</b></span>`).join("");

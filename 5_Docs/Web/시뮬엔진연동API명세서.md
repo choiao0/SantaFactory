@@ -1,6 +1,9 @@
 # 시뮬 엔진 연동 API 명세서
 
-**버전** v0.3 · **대상** 웹 백엔드 / 시뮬 엔진(B트랙) 파트 · **갱신일** 2026-09-07
+**버전** v0.4 · **대상** 웹 백엔드 / 시뮬 엔진(B트랙) 파트 · **갱신일** 2026-09-09
+
+> v0.4: `amr.capacity` 단위를 왕복당 **토트 수(1~6)**로 확정하고 `amr.tote_units`를 추가했다.
+> 백엔드 기본 로봇은 `capacity: 6`, `tote_units: 8`을 권장한다. 결과 판정에는 주문 `lead_time_p90_s` 상한이 필요하다.
 
 > v0.3 (호환, 추가만): 요청에 **실행 조건 4개**(`horizon_s`·`shifts`·`inbound_gap_s`·`outbound_gap_s`) 추가 — §1-1.
 > 고정 시간 실행을 요청에 명시해 "유한 주문 모드로 돌면 견적이 틀린다"는 가정을 계약에 남겼다.
@@ -77,7 +80,8 @@
     "battery": 100.0,
     "charge_time": 3600,
     "charge_threshold": 0.2,
-    "capacity": 8
+    "capacity": 6,
+    "tote_units": 8
   },
 
   "inbound": [
@@ -111,6 +115,14 @@
 | `shifts` | 입고/출고 교대 토큰열. `--shifts`로 그대로 전달. 전체 시간을 토큰 수로 등분한다 | 백엔드 설정 (기본 `in,in,out,out,out,out` → 입고 2h + 출고 4h) |
 | `inbound_gap_s` | 입고 도착 간격(초) 평균 → `--inbound-gap` | 창고 `inbound_avg` ÷ 입고 작업창 |
 | `outbound_gap_s` | 출고 도착 간격(초) 평균 → `--order-gap` | 창고 `outbound_avg` ÷ 출고 작업창 |
+
+**AMR 적재 필드 (2026-09-09 변경)**
+
+| 필드 | 의미 | 워커 매핑 |
+|---|---|---|
+| `amr.capacity` | 왕복당 함께 싣는 토트 수(1~6) | `--capacity`; 로봇 시드의 기존 200은 6으로 변경 요청 |
+| `amr.tote_units` | 토트 하나에 담는 상품 수 | `--tote-units`; 누락 시 워커 기본 8 |
+| 서비스 시간 | 요청 필드 없음 | 픽업·하역 각각 `--svc-per-tote=5` 고정 |
 
 > ⚠️ **`horizon_s`를 무시하면 견적이 틀린 답을 낸다.** 유한 주문 모드(주문을 다 처리하고 종료)로 돌면
 > `orders_completed == orders_total`이라 처리율이 전 대수 100 %가 되고, 그러면 가동률이 가장 높은 최소
