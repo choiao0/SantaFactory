@@ -142,7 +142,7 @@ def extract_topology(free, st_cell, verbose=False):
     pocket = np.zeros((H, W), dtype=bool)
     buf_rows = sorted({rc[0] for name, rc in st_cell.items() if name.startswith("aisle_buf[")})
     buf_cols = [rc[1] for name, rc in st_cell.items() if name.startswith("aisle_buf[")]
-    connector_cols = np.where(np.any((loop == 0) | (loop == 2), axis=0))[0]
+    connector_cols = np.nonzero(np.any((loop == 0) | (loop == 2), axis=0))[0]   # 남북 방향 순환로가 있는 열 = 연결 기둥
     left = max((c for c in connector_cols if c < min(buf_cols)), default=0)
     right = min((c for c in connector_cols if c > max(buf_cols)), default=W - 2) + 1
     span = np.zeros(W, dtype=bool)

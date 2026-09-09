@@ -299,9 +299,10 @@ function load(scene, traj, label) {
   const last = done.length ? Math.max(...done.map(k => k.completed)) : D.T - 1;
   const orders = new Set(D.tasks.map(k => k.order).filter(o => o != null)).size;
   const m = D.meta;
+  const orderNote = orders ? ` (주문 ${orders}건)` : "";
   metaEl.innerHTML = [
     ["run", m.variant || label || "—"], ["모델", m.model === "heading" ? `헤딩 PIBT (2칸 차체·회전 ${m.turn_ticks ?? 1}틱)` : "칸 모델"],
-    ["로봇", `${RIDS.length}대 · ${(m.robot_dim_m || [1.50, 0.92]).slice(0, 2).join("×")} m`], ["태스크", `${D.tasks.length}개${orders ? ` (주문 ${orders}건)` : ""}`],
+    ["로봇", `${RIDS.length}대 · ${(m.robot_dim_m || [1.50, 0.92]).slice(0, 2).join("×")} m`], ["태스크", `${D.tasks.length}개` + orderNote],
     ["격자", `1.0 m · 1 틱 = ${m.dt} s`], ["makespan", `${last}틱 = ${(last * m.dt / 60).toFixed(1)}분`],
     ["처리량", done.length ? `${(done.length / (last * m.dt / 3600)).toFixed(0)} tasks/h` : "—"],
   ].map(([k, v]) => `<span><span class="k">${k}</span><b>${v}</b></span>`).join("");
