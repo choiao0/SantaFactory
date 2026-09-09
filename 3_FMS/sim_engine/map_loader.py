@@ -11,13 +11,15 @@ import os
 
 import numpy as np
 
+from topology_spec import WALL_A, load_spec  # noqa: F401  (통로·밴드 좌표, -139)
+
 CELL_M, OFFSET_M = 1.0, 0.4
 K, OX = round(CELL_M / 0.1), round(OFFSET_M / 0.1)
 # 0.1 m 원본 셀값 중 장애물 (1 구조물·기둥 / 2 랙 / 5 컨베이어 / 6 바닥 파렛트).
 OBSTACLE_VALUES = (1, 2, 5, 6)
 # 랙 사이 세로 통로의 행 범위 [47, 68) — 통로차단(aisle_block) 구간이자 from_theta.VA_ROWS.
-# 2026-09-03 맵 동기화 실측(랙 c±2 막힘 행 47~67).
-AISLE_ROWS = (47, 68)
+# 2026-09-03 맵 동기화 실측(랙 c±2 막힘 행 47~67). 2026-09-08(-139): 값은 wallA 스펙에서 온다.
+AISLE_ROWS = WALL_A.va_rows
 
 # 공식 맵 폴더 (3_FMS/map). charge_zone.json 이 여기 있고, 맵 세트 수신 후에는
 # occupancy_grid/stations 도 여기서 읽는다 (docs/맵_충전존.md#fms-정답지-생성-절차).
@@ -42,13 +44,26 @@ def load_map(base_dir=None, aisle_block=False):
     H, W = coarse.shape
 
     if aisle_block:
-        # 렉 사이 통로 내부 = 피커 전용 구역, 로봇 통행 금지. 행 범위 = 랙 행(AISLE_ROWS).
+        # 렉 사이 통로 내부 = 피커 전용 구역, 로봇 통행 금지. 행 범위 = 랙 행(va_rows).
         # 2026-09-03 맵 동기화: 랙 1 m 연장으로 [48,68) → [47,68) (실측 c±2 막힘 행 47~67)
-        for k in range(11):
-            c = int((35.1 + 6 * k + OFFSET_M) / CELL_M)
-            free[AISLE_ROWS[0]:AISLE_ROWS[1], c - 1:c + 2] = False
+        # 2026-09-08(-139): 좌표를 맵 세트의 topology.json 에서 받는다. 공식 맵은 그 파일이
+        # 없어 wallA 상수로 떨어지므로 결과는 이전과 비트 동일하다.
+        spec = load_topology_spec(base_dir)
+        r0, r1 = spec.va_rows
+        for center in spec.va_centers:
+            c0, c1 = spec.aisle_cols(center)
+            free[r0:r1, c0:c1] = False
 
     return free, _station_cells(stations, free), stations
+
+
+def load_topology_spec(map_dir=None):
+    """`<map_dir>/topology.json` → TopologySpec, 없으면 wallA 상수 (topology_spec.WALL_A).
+
+    맵 로드 규칙의 단일 소스가 여기라서 토폴로지 스펙도 여기를 통해 읽는다 — from_theta·
+    build_input 이 각자 파일을 찾으면 격자와 토폴로지가 다른 세트에서 올 수 있다.
+    """
+    return load_spec(MAP_DIR if map_dir is None else map_dir)
 
 
 def _station_cells(stations, free):
@@ -132,19 +147,34 @@ def make_homes_zone(free, zone_mask, n_robots, spacing=2):
     return homes
 
 
+def _kind_list(st_cell, kind):
+    """`kind[i]` 칸을 i 순서로 (있는 만큼)."""
+    out = []
+    while f"{kind}[{len(out)}]" in st_cell:
+        out.append(st_cell[f"{kind}[{len(out)}]"])
+    return out
+
+
 def make_homes(free, st_cell, n_robots):
-    """로봇 홈 = 충전기/대기열 셀, 12대 초과분은 충전존 인근 여유 칸 (v1 동일)."""
-    H, W = free.shape
-    homes = [st_cell[f"charger[{i}]"] for i in range(6)] + \
-            [st_cell[f"charge_q[{i}]"] for i in range(6)]
+    """로봇 홈 = 충전기/대기열 셀, 초과분은 충전존 인근 여유 칸 (v1 동일).
+
+    충전기·대기열 개수는 맵 세트에서 온다 — wallA 는 6+6=12 라 기존과 같다 (-139).
+    초과분 채우기(_fill_extra_homes)는 wallA 좌표 창을 쓰므로 합성 창고에서는 못 쓴다.
+    합성 창고는 충전 존 복귀(기본값, --fixed-homes 없음)로 돌려야 한다.
+    """
+    homes = _kind_list(st_cell, "charger") + _kind_list(st_cell, "charge_q")
     if n_robots > len(homes):
         _fill_extra_homes(free, st_cell, homes, n_robots)
-    assert n_robots <= len(homes), f"홈 슬롯 부족: {len(homes)}"
+    assert n_robots <= len(homes), \
+        f"홈 슬롯 부족: {len(homes)} < {n_robots} (합성 창고면 --fixed-homes 를 빼고 충전 존으로)"
     return homes[:n_robots]
 
 
 def _fill_extra_homes(free, st_cell, homes, n_robots):
-    """12대 초과분: 충전존 인근(행 45~76, 열 100~111) free 칸 중 기존 홈과 맨해튼 ≥ 2 인 칸을 행 우선으로 채운다 (v1 동일)."""
+    """12대 초과분: 충전존 인근(행 45~76, 열 100~111) free 칸 중 기존 홈과 맨해튼 ≥ 2 인 칸을 행 우선으로 채운다 (v1 동일).
+
+    좌표 창이 wallA 전용이다. 여기 값을 바꾸면 --fixed-homes 12대 초과 기준선이 전부 바뀌므로
+    합성 창고를 위해 일반화하지 않았다 (-139) — 합성 창고는 충전 존 경로를 쓴다."""
     H, W = free.shape
     taken = set(homes) | set(st_cell.values())
     for r in range(45, min(77, H)):
