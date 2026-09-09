@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 # ============================================================
-# B-2: from_theta() — θ 11개를 칸별 통행 비용(Guidance)으로 변환 (스키마 v2)
+# B-2: from_theta() — θ 13개를 칸별 통행 비용(Guidance)으로 변환 (스키마 v3)
 # (설계: docs/θ_경로_기준선.md#from_theta-조립-규칙,
-#  합의: docs/θ_경로_기준선.md#θ-11개-스키마, 계약: contracts/guidance_types.py)
+#  계약: contracts/guidance_types.py, 실행 기본값: contracts/SIM_RUN_CONTRACT.md)
 #
 # 조립 규칙 (합의안 "비용 조립 규칙"):
 #   1. 모든 간선 1.0
@@ -95,7 +95,7 @@ def extract_topology(free, st_cell, verbose=False):
 
     귀결(θ 감도 실험 2026-09-04 §5): 기준선(aisle_block=1, 입구버퍼 인수인계)에서는 rank 를 매기는 세로 통로 칸이
     전부 막혀 있어 aisle 계열 θ 4개(aisle_alt_gain·aisle_alt_boost·aisle_period·aisle_phase)가 **무효**(중립과 비트 동일).
-    코드 결함이 아니라 운영 모델의 결과이며, 스키마는 11개 그대로 두고 BO 탐색 공간에서만 제외한다.
+    코드 결함이 아니라 운영 모델의 결과이며, 기존 aisle 필드는 BO 탐색 공간에서만 제외한다.
     슬롯 앞 정차(Locus식)로 바꾸면 코드 수정 없이 되살아난다."""
     H, W = free.shape
     rank = np.full((H, W), -1, dtype=np.int16)
@@ -141,21 +141,28 @@ def extract_topology(free, st_cell, verbose=False):
     lane = np.full((H, W), -1, dtype=np.int8)
     pocket = np.zeros((H, W), dtype=bool)
     buf_rows = sorted({rc[0] for name, rc in st_cell.items() if name.startswith("aisle_buf[")})
+    buf_cols = [rc[1] for name, rc in st_cell.items() if name.startswith("aisle_buf[")]
+    connector_cols = np.where(np.any((loop == 0) | (loop == 2), axis=0))[0]
+    left = max((c for c in connector_cols if c < min(buf_cols)), default=0)
+    right = min((c for c in connector_cols if c > max(buf_cols)), default=W - 2) + 1
+    span = np.zeros(W, dtype=bool)
+    span[left:right + 1] = True
     center = sum(buf_rows) / len(buf_rows) if buf_rows else 0
     for r in buf_rows:
         inner = -1 if r < center else 1
         dirs, counts = np.unique(loop[r][loop[r] >= 0], return_counts=True)
         if not len(dirs):
             continue
-        depart_dir = int(dirs[np.argmax(counts)])
-        pocket[r] = free[r] & (loop[r] == depart_dir)
+        band_dir = int(dirs[np.argmax(counts)])
+        depart_dir = (band_dir + 2) % 4
+        pocket[r] = free[r] & (loop[r] == band_dir) & span
         depart_r = r + inner
-        lane[depart_r, free[depart_r] & (loop[depart_r] == depart_dir)] = depart_dir
-        return_dir = (depart_dir + 2) % 4
+        lane[depart_r, free[depart_r] & (loop[depart_r] == band_dir) & span] = depart_dir
+        return_dir = band_dir
         return_r, fallback_r = r + 3 * inner, r + 4 * inner
-        base = free[return_r] & (loop[return_r] == depart_dir)
+        base = free[return_r] & (loop[return_r] == band_dir) & span
         lane[return_r, base] = return_dir
-        missing = pocket[r] & ~base & free[fallback_r] & (loop[fallback_r] == depart_dir)
+        missing = pocket[r] & ~base & free[fallback_r] & (loop[fallback_r] == band_dir) & span
         lane[fallback_r, missing] = return_dir
     return Topology(rank, main, loop, junc, sdir, lane, pocket)
 
@@ -212,7 +219,7 @@ def edge_masks(free, topo, theta):
 
 
 def from_theta(free, topo, theta):
-    """GuidanceTheta → Guidance (스키마 v2 배타 조립, 마지막에 한 번 clamp)."""
+    """GuidanceTheta → Guidance (스키마 v3 배타 조립, 마지막에 한 번 clamp)."""
     H, W = free.shape
     m = edge_masks(free, topo, theta)
     ec = np.ones((H, W, 4), dtype=np.float32)

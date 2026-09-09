@@ -22,10 +22,10 @@ def test_topology_derives_pocket_departure_and_return_rows():
     rows = sorted({rc[0] for name, rc in st.items() if name.startswith("aisle_buf[")})
     assert rows == [46, 69]
     assert topo.pocket[46].any() and topo.pocket[69].any()
-    assert set(np.unique(topo.lane_dir[45])) >= {-1, 3}   # 남쪽 출발 = 서
-    assert set(np.unique(topo.lane_dir[43])) >= {-1, 1}   # 남쪽 복귀 = 동
-    assert set(np.unique(topo.lane_dir[70])) >= {-1, 1}   # 북쪽 출발 = 동
-    assert set(np.unique(topo.lane_dir[72])) >= {-1, 3}   # 북쪽 복귀 = 서
+    assert set(np.unique(topo.lane_dir[45])) >= {-1, 1}   # 남쪽 출발 = 동
+    assert set(np.unique(topo.lane_dir[43])) >= {-1, 3}   # 남쪽 복귀 = 서
+    assert set(np.unique(topo.lane_dir[70])) >= {-1, 3}   # 북쪽 출발 = 서
+    assert set(np.unique(topo.lane_dir[72])) >= {-1, 1}   # 북쪽 복귀 = 동
 
 
 def test_lane_and_pocket_gains_touch_only_their_masks():
