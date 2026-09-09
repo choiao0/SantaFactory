@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -27,6 +28,7 @@ ISAAC_GRACE_S = 20.0
 TERM_GRACE_S = 3.0
 SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")   # run_id · serial: 로그 파일명 · 토픽에 들어간다
 RUN_ENV_MARK = "SIM_RUN_ID"
+MAX_SCENARIO_BYTES = 512 * 1024      # MQTT 패킷 상한 1 MB(계약 §0) 아래. 주문 500건 ≈ 66 KB
 
 
 @dataclass(frozen=True)
@@ -36,15 +38,26 @@ class RobotSpec:
     model: str = DEFAULT_MODEL
 
 
+def canonical_json(obj: Any) -> bytes:
+    """sha 계산·파일 저장용 정규형 (키 정렬, 공백 없음). host-orch 와 같은 규칙."""
+    return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+
+
+def scenario_sha256(obj: Any) -> str:
+    return hashlib.sha256(canonical_json(obj)).hexdigest()
+
+
 @dataclass(frozen=True)
 class RunSpec:
-    """NCMD `Run Control/Start` JSON (MQTT_CONTRACT §5.3)."""
+    """NCMD `Run Control/Start` JSON (MQTT_CONTRACT §5.3). scenario = 주문 스크립트 등 런 입력(있으면 파일로 떨어뜨린다)."""
     run_id: str
     n_robots: int
     robots: tuple
     scenario_pkg: str = ""
     ros_domain_id: int = 0
     timeout_s: float = DEFAULT_TIMEOUT_S
+    scenario: Optional[dict] = None
+    scenario_sha256: Optional[str] = None
 
     @staticmethod
     def from_json(text: str) -> "RunSpec":
@@ -70,8 +83,27 @@ class RunSpec:
         timeout = d.get("timeout_s", DEFAULT_TIMEOUT_S)
         if not isinstance(timeout, (int, float)) or isinstance(timeout, bool) or timeout <= 0:
             raise ValueError("timeout_s must be a positive number")
+        scenario, sha = _scenario(d.get("scenario"), d.get("scenario_sha256"))
         return RunSpec(run_id.strip(), n, _robots(d.get("models"), n), str(d.get("scenario_pkg", "") or ""),
-                       domain, float(timeout))
+                       domain, float(timeout), scenario, sha)
+
+
+def _scenario(obj: Any, given_sha: Any) -> tuple:
+    """scenario 는 dict, 정규형 512 KB 이하, scenario_sha256 이 오면 일치해야 한다(전송 중 변형 검출)."""
+    if obj is None:
+        return None, None
+    if not isinstance(obj, dict):
+        raise ValueError("scenario must be a JSON object")
+    raw = canonical_json(obj)
+    if len(raw) > MAX_SCENARIO_BYTES:
+        raise ValueError(f"scenario too large: {len(raw)} B > {MAX_SCENARIO_BYTES}")
+    sha = hashlib.sha256(raw).hexdigest()
+    if given_sha is not None and given_sha != sha:
+        raise ValueError("scenario_sha256 mismatch — payload altered in transit")
+    spawn = obj.get("spawn")
+    if spawn is not None and not isinstance(spawn, str):
+        raise ValueError("scenario.spawn must be a string 'x,y;x,y;…'")
+    return obj, sha
 
 
 def _robots(models: Any, n: int) -> tuple:
@@ -124,11 +156,17 @@ def isaac_cmd(env: LaunchEnv) -> list:
     return ["bash", "-c", env.isaac_cmd]
 
 
-def run_env(spec: RunSpec, base: Optional[dict] = None) -> dict:
+def run_env(spec: RunSpec, base: Optional[dict] = None, scenario_path: Optional[str] = None) -> dict:
+    """자식(Isaac · 에이전트) 환경. 시나리오는 파일 경로 + sha 로, spawn 은 WSIM_SPAWN 으로 넘긴다."""
     e = dict(os.environ if base is None else base)
     e["ROS_DOMAIN_ID"] = str(spec.ros_domain_id)
     e["WSIM_N"] = str(spec.n_robots)
     e[RUN_ENV_MARK] = spec.run_id
+    if scenario_path:
+        e["SIM_SCENARIO_PATH"] = scenario_path
+        e["SIM_SCENARIO_SHA256"] = spec.scenario_sha256 or ""
+    if spec.scenario and spec.scenario.get("spawn"):
+        e["WSIM_SPAWN"] = spec.scenario["spawn"]
     return e
 
 
@@ -211,15 +249,30 @@ class ProcessManager:
     """런 하나의 프로세스들. 실모드는 Isaac 먼저(예열 시간) → 에이전트, 정지는 에이전트 → Isaac."""
 
     def __init__(self, env: LaunchEnv, fake: bool, spawn: Callable = subprocess.Popen,
-                 send: Callable[[Any, int], None] = killpg_or_pid, log_dir: Optional[str] = None):
+                 send: Callable[[Any, int], None] = killpg_or_pid, log_dir: Optional[str] = None,
+                 runs_dir: Optional[str] = None):
         self.env, self.fake, self.spawn, self.send, self.log_dir = env, fake, spawn, send, log_dir
+        self.runs_dir = runs_dir
         self.agents: list[Managed] = []
         self.isaac: Optional[Managed] = None
         self.spec: Optional[RunSpec] = None
+        self.scenario_path: Optional[str] = None
         self._isaac_started_at: Optional[float] = None
+
+    def write_scenario(self, spec: RunSpec) -> Optional[str]:
+        """scenario 를 <runs_dir>/<run_id>/scenario.json 에 정규형으로 쓴다. 없으면 None."""
+        if spec.scenario is None or not self.runs_dir:
+            return None
+        d = os.path.join(self.runs_dir, spec.run_id)
+        os.makedirs(d, exist_ok=True)
+        path = os.path.join(d, "scenario.json")
+        with open(path, "wb") as f:
+            f.write(canonical_json(spec.scenario))
+        return path
 
     def start(self, spec: RunSpec, now: float) -> None:
         self.spec = spec
+        self.scenario_path = self.write_scenario(spec)
         if self.fake:
             self._start_agents(spec)
             return
@@ -240,12 +293,13 @@ class ProcessManager:
                                AGENT_GRACE_S) for i, r in enumerate(spec.robots)]
 
     def _spawn(self, name: str, argv: list, spec: RunSpec) -> Any:
+        env = run_env(spec, scenario_path=self.scenario_path)
         if not self.log_dir:
-            return self.spawn(argv, env=run_env(spec), start_new_session=True, stdout=subprocess.DEVNULL,
+            return self.spawn(argv, env=env, start_new_session=True, stdout=subprocess.DEVNULL,
                               stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
         os.makedirs(self.log_dir, exist_ok=True)
         with open(os.path.join(self.log_dir, f"{spec.run_id}.{name}.log"), "ab") as out:   # 자식이 fd 를 물려받는다
-            return self.spawn(argv, env=run_env(spec), start_new_session=True, stdout=out, stderr=subprocess.STDOUT,
+            return self.spawn(argv, env=env, start_new_session=True, stdout=out, stderr=subprocess.STDOUT,
                               stdin=subprocess.DEVNULL)
 
     def agents_started(self) -> bool:

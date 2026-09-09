@@ -68,6 +68,10 @@ class RobotMirror:
     _reported: dict = field(default_factory=dict)
     _rtf: deque = field(default_factory=deque)
 
+    @property
+    def has_pose(self) -> bool:
+        return self.x is not None and self.y is not None
+
     def values(self) -> dict[str, Any]:
         return {MODEL: self.model, CONNECTION: self.connection, LAST_NODE: self.last_node_id,
                 POSE_X: self.x, POSE_Y: self.y, YAW: self.yaw, BATTERY: self.battery, AMCL_ERR: None}
@@ -163,6 +167,13 @@ class Fleet:
 
     def all_online(self) -> bool:
         return len(self.online()) == len(self.robots)
+
+    def ready(self) -> list:
+        """ONLINE 이고 포즈(state.agvPosition)가 한 번이라도 온 로봇 — 실모드에선 Isaac 이 odom 을 내야 생긴다."""
+        return [s for s, r in self.robots.items() if r.connection == "ONLINE" and r.has_pose]
+
+    def all_ready(self) -> bool:
+        return len(self.ready()) == len(self.robots)
 
     def rtf(self) -> Optional[float]:
         samples = [v for v in (r.rtf() for r in self.robots.values()) if v is not None]

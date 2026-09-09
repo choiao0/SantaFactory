@@ -72,6 +72,7 @@ class Harness:
         self.session = spb.EdgeSession(str(tmp_path / "bdseq"))
         self.session.new_session()
         env = P.LaunchEnv("broker", 1883, "pw", isaac_cmd="isaac", isaac_warmup_s=0)
+        self.runs_dir = str(tmp_path / "runs")
         self.telemetry = {"ram": 100, "vram": 2000}
         self.runner = R.Runner(R.RunnerConfig(**cfg), self.session, lambda: self._procs(env, fake), self.pub,
                                ram_mb=lambda pids: self.telemetry["ram"], vram_mb=lambda: self.telemetry["vram"])
@@ -81,7 +82,8 @@ class Harness:
             p = FakePopen(argv, **kw)
             self.spawned.append(p)
             return p
-        return P.ProcessManager(env, fake=fake, spawn=spawn, send=lambda proc, sig: proc.signals.append(sig))
+        return P.ProcessManager(env, fake=fake, spawn=spawn, send=lambda proc, sig: proc.signals.append(sig),
+                                runs_dir=self.runs_dir)
 
     def connect(self, now=0.0):
         self.runner.on_connected(now)
@@ -94,9 +96,15 @@ class Harness:
         for s in serials:
             self.runner.on_vda(*vda_connection(s), 0.0)
 
+    def all_ready(self, serials=("amr01", "amr02")):
+        """ONLINE + 포즈 한 번 (실모드에선 Isaac odom 이 와야 생기는 조건)."""
+        for s in serials:
+            self.runner.on_vda(*vda_connection(s), 0.0)
+            self.runner.on_vda(*vda_state(s), 0.0)
+
     def run_until_running(self, now=1.0, serials=("amr01", "amr02")):
         self.start(now=0.0, n=len(serials))
-        self.all_online(serials)
+        self.all_ready(serials)
         self.runner.tick(now)
         assert self.runner.state == R.RUNNING
         self.pub.clear()

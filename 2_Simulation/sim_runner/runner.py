@@ -24,6 +24,7 @@ BDSEQ, REBIRTH = "bdSeq", "Node Control/Rebirth"
 STATE, RUN_ID, HEARTBEAT, RTF = "Runner/State", "Runner/RunId", "Runner/Heartbeat", "Runner/RTF"
 ISAAC, RAM, VRAM, LAST_ERROR = "Runner/IsaacInstances", "Runner/RamMB", "Runner/VramMB", "Runner/LastError"
 CMD_START, CMD_STOP = "Run Control/Start", "Run Control/Stop"
+SCENARIO_SHA = "Runner/ScenarioSha"
 
 NODE_METRICS = {d.name: d for d in (
     MetricDef(BDSEQ, spb.INT64, 0, 0), MetricDef(REBIRTH, spb.BOOLEAN, 1, False),
@@ -31,7 +32,7 @@ NODE_METRICS = {d.name: d for d in (
     MetricDef(HEARTBEAT, spb.INT64, 4, 0), MetricDef(RTF, spb.DOUBLE, 5, 0.0),
     MetricDef(ISAAC, spb.INT32, 6, 0), MetricDef(RAM, spb.INT32, 7, 0), MetricDef(VRAM, spb.INT32, 8, 0),
     MetricDef(LAST_ERROR, spb.STRING, 9, ""), MetricDef(CMD_START, spb.TEXT, 10, ""),
-    MetricDef(CMD_STOP, spb.BOOLEAN, 11, False))}
+    MetricDef(CMD_STOP, spb.BOOLEAN, 11, False), MetricDef(SCENARIO_SHA, spb.STRING, 12, ""))}
 
 DEVICE_ALIAS_BASE, DEVICE_ALIAS_STRIDE = 100, 16      # 별칭은 노드+디바이스 전체에서 유일해야 한다
 _DEVICE_TYPES = ((M.MODEL, spb.STRING), (M.CONNECTION, spb.STRING), (M.LAST_NODE, spb.STRING),
@@ -181,8 +182,9 @@ class Runner:
         except (OSError, RuntimeError) as e:
             self._set_state(ERROR, {LAST_ERROR: f"launch failed: {e}", RUN_ID: ""})
             return
-        log.info("run %s: launching %d agents", spec.run_id, spec.n_robots)
-        self._set_state(STARTING, {RUN_ID: spec.run_id, LAST_ERROR: ""})
+        log.info("run %s: launching %d agents (scenario %s)", spec.run_id, spec.n_robots,
+                 (spec.scenario_sha256 or "none")[:12])
+        self._set_state(STARTING, {RUN_ID: spec.run_id, LAST_ERROR: "", SCENARIO_SHA: spec.scenario_sha256 or ""})
 
     def handle_stop(self, now: float) -> None:
         if self.state in (STARTING, RUNNING):
@@ -214,7 +216,7 @@ class Runner:
         elif self.state == RUNNING:
             self._tick_running(now)
         elif self.state == STOPPING and self.procs.poll_stop(now):
-            self._set_state(self.final_state, {RUN_ID: ""})
+            self._set_state(self.final_state, {RUN_ID: "", SCENARIO_SHA: ""})
         if now - self.last_heartbeat >= self.cfg.heartbeat_s:
             self.last_heartbeat = now
             self.publish_ndata({HEARTBEAT: int(now * 1000), **self._telemetry_changes()})
@@ -224,14 +226,15 @@ class Runner:
         dead = self.procs.dead()
         if dead:
             self._fail(now, f"process died during start: {','.join(dead)}")
-        elif self.fleet.all_online():
+        elif self.fleet.all_ready():
             for serial in self.fleet.robots:
                 self.publish_dbirth(serial)
                 self.devices_born.append(serial)
-            log.info("run %s: %d agents ONLINE → RUNNING", self.spec.run_id, len(self.devices_born))
+            log.info("run %s: %d agents ONLINE with pose → RUNNING", self.spec.run_id, len(self.devices_born))
             self._set_state(RUNNING)
         elif now - self.started_at > self.cfg.ready_timeout_s:
-            self._fail(now, f"ready timeout {self.cfg.ready_timeout_s:g}s: online={self.fleet.online()}")
+            self._fail(now, f"ready timeout {self.cfg.ready_timeout_s:g}s: online={self.fleet.online()} "
+                            f"posed={self.fleet.ready()}")
 
     def _tick_running(self, now: float) -> None:
         dead = self.procs.dead()
