@@ -89,6 +89,7 @@ class FmsKernel(BatteryMixin, MetricsMixin):
             self._init_headings(free, homes)
             self._check_goal_spacing(st_cell, homes, n_robots)
         self.visit_count = np.zeros((self.H, self.W), dtype=int)
+        self.wait_count = np.zeros((self.H, self.W), dtype=int)    # NAV 제자리 대기 — checks/wait_map.py
         self.dir_flow = np.zeros((self.H, self.W, 4), dtype=int)   # 출발칸×방향 이동 수 (NAV만, B-2 계측)
         self.waiting = []                       # 배차 대기 태스크 (FIFO)
         self.tasks_done = []
@@ -488,6 +489,7 @@ class FmsKernel(BatteryMixin, MetricsMixin):
         else:
             rb["wait"] += 1
             rb["waitc"] += 1
+            self.wait_count[p0] += 1
 
     def _apply_heading_move(self, rb, s0, s1, gd):
         """로봇 1대 상태 반영 (s0 → s1). 반환: STALL 진단용 snap (s0, busy, 액션, 상태) — busy 는 갱신 전 값."""
@@ -556,6 +558,7 @@ class FmsKernel(BatteryMixin, MetricsMixin):
         else:
             rb["wait"] += 1
             rb["waitc"] += 1
+            self.wait_count[p0] += 1
 
     def _update_cell_heading(self, rb, p0, p1):
         """칸 모델: 이동 방향으로 heading 갱신, 방향이 바뀌면 turns +1, 임무 주행이면 방향별 흐름 집계."""
