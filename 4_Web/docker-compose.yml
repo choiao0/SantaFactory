@@ -74,8 +74,8 @@ services:
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
     command: server /data --console-address ":9001"
     ports:
-      - "9000:9000"                # S3 API — GPU 서버(tailnet)가 검증 영상을 올린다 (emqx 1883과 같은 이유로 공인 바인딩)
-      - "127.0.0.1:9001:9001"      # 콘솔 — 로컬 전용, 배포 시 노출 금지
+      - "9002:9000"                # GPU(tailnet) 연결용 공인 바인딩
+      - "127.0.0.1:9001:9001"      # 콘솔은 로컬 전용
     volumes:
       - minio-data:/data
     healthcheck:
