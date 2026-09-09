@@ -7,6 +7,7 @@ import com.ssafy.santafactory.dto.estimate.EstimateSummaryResponse;
 import com.ssafy.santafactory.global.common.ApiResponse;
 import com.ssafy.santafactory.service.estimate.EstimateEventStream;
 import com.ssafy.santafactory.service.estimate.EstimateService;
+import com.ssafy.santafactory.service.estimate.VerifyEventStream;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -36,6 +37,7 @@ public class EstimateController {
 
     private final EstimateService estimateService;
     private final EstimateEventStream eventStream;
+    private final VerifyEventStream verifyEventStream;
 
     @Operation(summary = "견적 요청 생성",
             description = "창고 운영조건 + 목표 + 예산으로 대수별 run 을 만들어 시뮬 엔진에 전부 발행한다. "
@@ -73,6 +75,16 @@ public class EstimateController {
         return ResponseEntity.ok()
                 .header("X-Accel-Buffering", "no")
                 .body(eventStream.subscribe(estimateId));
+    }
+
+    @Operation(summary = "물리 검증 결과 스트림 (SSE)",
+            description = "영상이 이미 있으면 snapshot 으로 바로 보내고 닫는다. 없으면 결과가 올 때까지 "
+                    + "열어두고 verify.done 을 보낸 뒤 닫는다. 견적 진행 스트림과는 별도 채널이다.")
+    @GetMapping(value = "/{estimateId}/verify", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public ResponseEntity<SseEmitter> verifyStream(@PathVariable Long estimateId) {
+        return ResponseEntity.ok()
+                .header("X-Accel-Buffering", "no")
+                .body(verifyEventStream.subscribe(estimateId));
     }
 
     @Operation(summary = "견적 취소",

@@ -15,6 +15,7 @@ import com.ssafy.santafactory.dto.estimate.EstimateDetailResponse;
 import com.ssafy.santafactory.entity.estimate.EstimateStatus;
 import com.ssafy.santafactory.service.estimate.EstimateEventStream;
 import com.ssafy.santafactory.service.estimate.EstimateService;
+import com.ssafy.santafactory.service.estimate.VerifyEventStream;
 import java.time.LocalDateTime;
 import java.util.List;
 import org.junit.jupiter.api.Test;
@@ -37,6 +38,9 @@ class EstimateControllerTest {
 
     @MockBean
     EstimateEventStream eventStream;
+
+    @MockBean
+    VerifyEventStream verifyEventStream;
 
     private static final EstimateDetailResponse DETAIL = new EstimateDetailResponse(
             77L, EstimateStatus.RUNNING, "iw.hub", 95.0, 80.0, 300_000_000L,
