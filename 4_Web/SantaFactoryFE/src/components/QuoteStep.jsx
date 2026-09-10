@@ -211,7 +211,7 @@ export default function QuoteStep({ estimateId, estimate, verdict, model, form }
     <section className="step paper" id="quote">
       <div className="eyebrow red">
         <span className="live-dot" />
-        04 — QUOTE
+        05 — QUOTE
       </div>
       <h2>Choose on the curve.</h2>
       <p className="desc">목표 출고 처리율과 가동률을 만족하면서 예산 안에 드는 최소 대수를 권장 구성으로 표시합니다.</p>

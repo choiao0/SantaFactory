@@ -4,10 +4,12 @@ import com.ssafy.santafactory.dto.estimate.EstimateCreateRequest;
 import com.ssafy.santafactory.dto.estimate.EstimateCreateResponse;
 import com.ssafy.santafactory.dto.estimate.EstimateDetailResponse;
 import com.ssafy.santafactory.service.estimate.EstimateEvents.EstimateFinished;
+import com.ssafy.santafactory.service.estimate.EstimateEvents.EstimateVerified;
 import com.ssafy.santafactory.service.estimate.EstimateEvents.RunUpdated;
 import com.ssafy.santafactory.dto.estimate.EstimateSummaryResponse;
 import com.ssafy.santafactory.dto.simulation.SimulationRequest;
 import com.ssafy.santafactory.dto.simulation.SimulationResponse;
+import com.ssafy.santafactory.dto.simulation.VerifyResultResponse;
 import com.ssafy.santafactory.entity.estimate.Estimate;
 import com.ssafy.santafactory.entity.estimate.RunStatus;
 import com.ssafy.santafactory.entity.simulation.SimScenario;
@@ -231,6 +233,36 @@ public class EstimateService {
         eventPublisher.publishEvent(new RunUpdated(run.getEstimate().getId(), EstimateDetailResponse.Run.from(run)));
 
         finalizeIfComplete(run.getEstimate());
+    }
+
+    // ── 물리 검증 결과 반영 ──────────────────────────────────────────────────
+
+    /**
+     * 물리 검증(Isaac) 결과를 반영한다. 영상 URL 이 있으면 저장하고, 성패와 무관하게 SSE 로 알린다.
+     *
+     * <p>모르는 견적 id 는 무시한다. 같은 결과가 두 번 와도(명세 §1-3과 동일한 중복 허용) 같은 값을
+     * 다시 쓸 뿐이라 별도 처리 없이 안전하다 — DES 의 run 처럼 상태를 갖는 하위 엔티티가 없어서다.
+     */
+    @Transactional
+    public void applyVerifyResult(VerifyResultResponse response) {
+        if (response.estimateId() == null) {
+            log.warn("estimate_id 없는 검증 결과 무시: runId={}", response.runId());
+            return;
+        }
+        Estimate estimate = estimateRepository.findById(response.estimateId()).orElse(null);
+        if (estimate == null) {
+            log.warn("모르는 견적의 검증 결과 무시: estimateId={}, runId={}",
+                    response.estimateId(), response.runId());
+            return;
+        }
+        String videoUrl = response.artifacts() != null ? response.artifacts().video() : null;
+        if (videoUrl != null) {
+            estimate.applyVerifyVideo(videoUrl);
+        }
+        log.info("물리 검증 결과 반영: estimateId={}, status={}, video={}",
+                estimate.getId(), response.status(), videoUrl);
+        eventPublisher.publishEvent(
+                new EstimateVerified(estimate.getId(), response.status(), videoUrl, response.error()));
     }
 
     /**

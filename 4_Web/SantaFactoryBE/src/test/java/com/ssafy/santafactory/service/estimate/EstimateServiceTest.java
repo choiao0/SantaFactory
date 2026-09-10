@@ -4,6 +4,7 @@ import com.ssafy.santafactory.dto.estimate.EstimateCreateRequest;
 import com.ssafy.santafactory.dto.estimate.EstimateCreateResponse;
 import com.ssafy.santafactory.dto.simulation.SimulationRequest;
 import com.ssafy.santafactory.dto.simulation.SimulationResponse;
+import com.ssafy.santafactory.dto.simulation.VerifyResultResponse;
 import com.ssafy.santafactory.entity.estimate.Estimate;
 import com.ssafy.santafactory.entity.estimate.EstimateStatus;
 import com.ssafy.santafactory.entity.estimate.ReasonCode;
@@ -372,6 +373,54 @@ class EstimateServiceTest {
         assertThat(estimate.getReasonCode()).isEqualTo(ReasonCode.ALL_FAILED);
     }
 
+    // ── 물리 검증 결과 반영 ──────────────────────────────────────────────────
+
+    @Test
+    void ignores_a_verify_result_without_an_estimate_id() {
+        assertThatCode(() -> service().applyVerifyResult(verifyDone("v1", null, "https://minio/v1.mp4")))
+                .doesNotThrowAnyException();
+
+        verify(estimateRepository, never()).findById(any());
+    }
+
+    @Test
+    void ignores_a_verify_result_for_an_unknown_estimate() {
+        when(estimateRepository.findById(99L)).thenReturn(Optional.empty());
+
+        assertThatCode(() -> service().applyVerifyResult(verifyDone("v1", 99L, "https://minio/v1.mp4")))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    void stores_the_video_url_and_publishes_the_result() {
+        Estimate estimate = withId(estimate(85.0, 90.0, 1_000_000_000L), 77L);
+        when(estimateRepository.findById(77L)).thenReturn(Optional.of(estimate));
+
+        service().applyVerifyResult(verifyDone("v1", 77L, "https://minio/v1.mp4"));
+
+        assertThat(estimate.getVerifyVideoUrl()).isEqualTo("https://minio/v1.mp4");
+        ArgumentCaptor<EstimateEvents.EstimateVerified> event = ArgumentCaptor.captor();
+        verify(eventPublisher).publishEvent(event.capture());
+        assertThat(event.getValue().estimateId()).isEqualTo(77L);
+        assertThat(event.getValue().status()).isEqualTo("done");
+        assertThat(event.getValue().videoUrl()).isEqualTo("https://minio/v1.mp4");
+    }
+
+    @Test
+    void a_failed_verification_publishes_the_result_without_a_video_url() {
+        Estimate estimate = withId(estimate(85.0, 90.0, 1_000_000_000L), 77L);
+        when(estimateRepository.findById(77L)).thenReturn(Optional.of(estimate));
+
+        service().applyVerifyResult(new VerifyResultResponse("v1", "failed", "start timeout", 77L, null));
+
+        assertThat(estimate.getVerifyVideoUrl()).isNull();
+        ArgumentCaptor<EstimateEvents.EstimateVerified> event = ArgumentCaptor.captor();
+        verify(eventPublisher).publishEvent(event.capture());
+        assertThat(event.getValue().status()).isEqualTo("failed");
+        assertThat(event.getValue().videoUrl()).isNull();
+        assertThat(event.getValue().error()).isEqualTo("start timeout");
+    }
+
     // ── TIMEOUT 스윕 ─────────────────────────────────────────────────────────
 
     @Test
@@ -479,5 +528,10 @@ class EstimateServiceTest {
 
     private SimulationResponse failed(String runId, String error) {
         return new SimulationResponse(runId, "failed", error, null);
+    }
+
+    private VerifyResultResponse verifyDone(String runId, Long estimateId, String videoUrl) {
+        return new VerifyResultResponse(runId, "done", null, estimateId,
+                new VerifyResultResponse.Artifacts(videoUrl));
     }
 }

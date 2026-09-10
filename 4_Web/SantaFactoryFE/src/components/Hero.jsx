@@ -2,7 +2,8 @@ const STEPS = [
   ['#s1', '01 — WAREHOUSE', '운영 조건 입력'],
   ['#s2', '02 — FLEET', '대수 범위 선택'],
   ['#s3', '03 — RUNS', '대수별 시뮬레이션'],
-  ['#quote', '04 — QUOTE', '적정 대수 · 견적'],
+  ['#verify', '04 — VERIFY', '물리 시뮬 검증'],
+  ['#quote', '05 — QUOTE', '적정 대수 · 견적'],
 ]
 
 export default function Hero() {
@@ -22,7 +23,7 @@ export default function Hero() {
         <br/>
         목표 처리량을 만족하는 최소 대수와 예상 구축비용을 제시합니다.
       </p>
-      <span className="badge">REQUEST → QUEUE → SIMULATE → QUOTE</span>
+      <span className="badge">REQUEST → QUEUE → SIMULATE → VERIFY → QUOTE</span>
       <div className="philos">
         <b>선택은 고객이, 근거는 시스템이</b>
       </div>

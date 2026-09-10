@@ -2,6 +2,7 @@ const LINKS = [
   ['#s1', 'WAREHOUSE'],
   ['#s2', 'FLEET'],
   ['#s3', 'RUNS'],
+  ['#verify', 'VERIFY'],
   ['#quote', 'QUOTE'],
 ]
 
