@@ -74,7 +74,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--node-id", default="fms-core", help="edge_node_id = username = clientId")
     p.add_argument("--planner", default="kernel", help="주행 로직 (fms_core.planner.PLANNERS)")
     p.add_argument("--planner-opt", action="append", metavar="KEY=VALUE",
-                   help="플래너 옵션 (kernel: aisle_block · theta_path · fixed_homes · horizon_ticks …)")
+                   help="플래너 옵션 (kernel: aisle_block · theta_path · lanes · yield_rule · fixed_homes · horizon_ticks …)")
     p.add_argument("--tick-s", type=float, default=1.0, help="틱 최소 길이 [s] (= DES DT)")
     p.add_argument("--ack-timeout-s", type=float, default=30.0, help="노드 하나 도착 상한 [s]")
     p.add_argument("--ready-timeout-s", type=float, default=420.0, help="Start 뒤 전원 ONLINE+포즈 상한 [s]")

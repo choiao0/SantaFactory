@@ -21,8 +21,28 @@ FMS_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))          #
 SIM_ENGINE_DIR = os.environ.get("SIM_ENGINE_DIR") or os.path.join(FMS_DIR, "sim_engine")
 MAX_TICKS = 199_000              # 커널 move() 의 틱 상한(200,000) 아래 — 한 런은 그보다 훨씬 짧다
 SERVICE_TIME_S = 40 / 11         # sim_v2_tasks.SERVICE_TIME_S 와 같은 값 (그 모듈은 matplotlib 을 끌어와 import 하지 않는다)
-DEFAULT_ORDER_GAP = 50           # 명시 주문 모드에서는 입고 간격 기본값으로만 쓰인다 (sim_v2 기본 50)
 EVENT_TYPES = ("task_assigned", "task_done", "order_shipped", "stall")
+
+# ---- DES 견적과 같은 조건 (S15P21A106-185) ------------------------------------------------
+# 검증 런의 KPI 는 견적 KPI 와 비교하려고 내는 값이다. 아래 기본값이 견적 워커
+# (infra/worker/estimate_worker.py + objective.run_once)와 어긋나면 그 비교가 무의미해진다.
+# 값을 바꾸기 전에 fms_core/tests/test_des_parity.py 를 보라 — 워커 코드에서 기준을 읽어 대조한다.
+DES_AISLE_BLOCK = True           # run_once(aisle_block=1) — 랙 내부 통로 칸을 막고 돈다
+DEFAULT_THETA = os.path.join(FMS_DIR, "infra", "out", "theta_wallA_r24_g15.json")   # 워커 THETA_PATH 기본값
+LANE_GAIN = POCKET_GAIN = 2.0    # 차선·주머니 비용 (sim_v2 --lane-gain/--pocket-gain 기본, v3 헤딩 main 기본 ON)
+
+
+def theta_path(options: dict | None = None) -> str | None:
+    """쓸 θ 파일 경로. 없으면 None = 중립 θ.
+
+    기본값은 견적 워커와 같다 — 환경변수 `THETA_PATH`, 없으면 `infra/out/theta_wallA_r24_g15.json`("" 이면 중립).
+    한 런만 다르게 하려면 `--planner-opt theta_path=<경로>`(빈 문자열이면 중립).
+    """
+    if options and "theta_path" in options:
+        path = options.get("theta_path")
+    else:
+        path = os.environ.get("THETA_PATH", DEFAULT_THETA)
+    return str(path) if path else None
 
 
 def ensure_sim_engine() -> str:
@@ -31,7 +51,7 @@ def ensure_sim_engine() -> str:
     return SIM_ENGINE_DIR
 
 
-def des_homes(n_robots: int, aisle_block: bool = False) -> list:
+def des_homes(n_robots: int, aisle_block: bool = DES_AISLE_BLOCK) -> list:
     """DES 견적과 같은 초기 배치(충전 존, 간격 2) — Isaac spawn 문자열을 만들 때 쓴다."""
     ensure_sim_engine()
     from map_loader import load_charge_zone, load_map, make_homes, make_homes_zone
@@ -54,27 +74,32 @@ class KernelPlanner:
         from pibt_core import TURN_TICKS
 
         opts = spec.options
-        free, st_cell, stations = load_map(aisle_block=bool(opts.get("aisle_block", False)))
+        free, st_cell, stations = load_map(aisle_block=bool(opts.get("aisle_block", DES_AISLE_BLOCK)))
         _validate_homes(free, spec.homes, spec.n_robots)
         zone_mask = load_charge_zone(free)
         zone = zone_mask is not None and not opts.get("fixed_homes", False)
         zone_mask = (zone_mask & free) if zone else None
-        edge_cost, wait_cost = _costs(free, st_cell, opts.get("theta_path"))
+        lanes = bool(opts.get("lanes", True))
+        yield_rule = bool(opts.get("yield_rule", True))
+        theta_file, warnings = _theta_file(opts)
+        edge_cost, wait_cost, lane_dir = _costs(free, st_cell, theta_file, lanes, yield_rule)
         rack_map = load_rack_map()
         if not rack_map:
             raise RuntimeError("map/rack_buffers.json 없음 — 명시 주문을 픽업 지점으로 바꿀 수 없다")
         so = stream_options(spec.scenario)
         orders = scenario_orders(spec.scenario)
         horizon = int(opts.get("horizon_ticks", MAX_TICKS))
-        self.stream = OrderStream(np.random.default_rng(so["seed"]), "main", 0, float(opts.get("order_gap", DEFAULT_ORDER_GAP)),
+        # 계약 v2.6: tote_units 는 주문 라인 qty 를 토트로 나누는 단위(스트림), capacity 는 왕복당 토트 수(커널).
+        self.stream = OrderStream(np.random.default_rng(so["seed"]), "main", 0, float(opts.get("order_gap", so["order_gap"])),
                                   st_cell, stations, inbound_gap=so["inbound_gap"], horizon=horizon, shifts=so["shifts"],
-                                  orders=orders, rack_map=rack_map, capacity=so["capacity"])
-        cfg = KernelConfig(heading=True, zone=zone, theta=bool(opts.get("theta_path")), service_steps=round(SERVICE_TIME_S / DT),
+                                  orders=orders, rack_map=rack_map, tote_units=so["tote_units"])
+        cfg = KernelConfig(heading=True, zone=zone, theta=bool(theta_file or lanes), service_steps=round(SERVICE_TIME_S / DT),
+                           capacity=so["capacity"], svc_per_tote=so["svc_per_tote"], yield_rule=yield_rule,
                            turn_ticks=TURN_TICKS, stall_warn_only=True)
         self.kernel = FmsKernel(free, st_cell, edge_cost, wait_cost, list(spec.homes), spec.n_robots, cfg,
-                                zone_mask=zone_mask, on_task_completed=self.stream.on_completed)
+                                zone_mask=zone_mask, on_task_completed=self.stream.on_completed, lane_dir=lane_dir)
         self.n_robots = spec.n_robots
-        self.warnings = list(self.kernel.warnings)
+        self.warnings = warnings + list(self.kernel.warnings)
         self._events: list = []
         self._done_seen = 0
         self._stall_seen = 0
@@ -154,10 +179,31 @@ def _validate_homes(free, homes: tuple, n_robots: int) -> None:
         seen.add((r, c))
 
 
-def _costs(free, st_cell, theta_path):
+def _theta_file(options: dict | None) -> tuple:
+    """(θ 경로 또는 None, 경고 목록). 파일이 없으면 실행을 막지 않고 중립 θ 로 간다 — 다만 견적과 경로가 달라진다."""
+    path = theta_path(options)
+    if path and not os.path.isfile(path):
+        return None, [f"[WARN] θ 파일이 없어 중립 θ 로 진행 — 견적과 경로가 달라진다: {path}"]
+    return path, []
+
+
+def _costs(free: np.ndarray, st_cell: dict, theta_file: str | None,
+           lanes: bool = True, yield_rule: bool = True) -> tuple:
+    """통행 비용·차선 방향 — sim_v2_tasks.build() 와 같은 순서로 조립한다 (θ 조립 뒤 차선 가중을 곱한다, -177).
+
+    차선·양보는 v3 에서 헤딩 main 의 기본값이 됐다. 둘 다 끄면 v2 와 비트 동일하지만 견적과 달라진다.
+    합성 창고(--map-dir)는 토폴로지 스펙이 따로 필요하고 명시 주문(rack_buffers.json)도 없어 검증 런 대상이 아니다.
+    """
     H, W = free.shape
-    if not theta_path:
-        return np.ones((H, W, 4), dtype=np.float64), np.ones((H, W), dtype=np.float64)
-    from from_theta import extract_topology, from_theta, load_theta
-    g = from_theta(free, extract_topology(free, st_cell), load_theta(theta_path))
-    return g.edge_cost.astype(np.float64), g.wait_cost.astype(np.float64)
+    topo = None
+    if theta_file or lanes or yield_rule:
+        from from_theta import extract_topology
+        topo = extract_topology(free, st_cell)                  # 공식 맵 = wallA 상수 (sim_v2 의 spec 생략과 같다)
+    if theta_file or lanes:
+        from from_theta import GuidanceTheta, from_theta, load_theta
+        theta = load_theta(theta_file) if theta_file else GuidanceTheta.neutral()
+        lane_gain, pocket_gain = (LANE_GAIN, POCKET_GAIN) if lanes else (1.0, 1.0)
+        g = from_theta(free, topo, theta, lane_gain=lane_gain, pocket_gain=pocket_gain)
+        return g.edge_cost.astype(np.float64), g.wait_cost.astype(np.float64), topo.lane_dir
+    return (np.ones((H, W, 4), dtype=np.float64), np.ones((H, W), dtype=np.float64),
+            None if topo is None else topo.lane_dir)

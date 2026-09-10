@@ -269,9 +269,11 @@ class Conductor:
         spec = PlannerSpec(self.spec.run_id, self.spec.n_robots, homes, self.spec.scenario, dict(self.cfg.planner_options))
         try:
             self.planner = self.planner_factory(self.cfg.planner, spec)
-        except (ValueError, RuntimeError, AssertionError, KeyError) as e:
+        except (ValueError, RuntimeError, AssertionError, KeyError, OSError) as e:   # OSError: θ·맵 파일 읽기 실패
             self._fail(now, f"planner build failed: {e}")
             return
+        for warning in getattr(self.planner, "warnings", ()):    # 예: θ 파일 없음 → 중립 θ (견적과 경로가 달라진다)
+            log.warning("run %s: planner %s", self.spec.run_id, warning)
         views = self.planner.robots()
         for link, view in zip(links, views):
             self._publish_order(link, link.initial_order(link.x, link.y, link.yaw, now))

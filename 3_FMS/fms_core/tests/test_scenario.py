@@ -65,15 +65,39 @@ class TestScenarioOrders:
             S.scenario_orders(sc)
 
 
+def test_max_totes_matches_the_kernel():
+    """적재 상한(1~6)은 커널 상수의 사본이다 — 어긋나면 커널이 받는 요청을 fms-core 가 먼저 거절한다.
+    sim_engine 만 있으면 도는 자리에 둔다(견적 패리티 테스트는 matplotlib 이 없으면 통째로 skip 된다)."""
+    from fms_core.kernel_planner import ensure_sim_engine
+    ensure_sim_engine()
+    from kernel.core import MAX_TOTES_PER_TRIP as KERNEL_MAX
+    assert S.MAX_TOTES_PER_TRIP == KERNEL_MAX
+
+
 class TestStreamOptions:
-    def test_defaults_outbound_only(self):
-        assert S.stream_options({}) == {"seed": 42, "capacity": None, "inbound_gap": None, "shifts": ("out",)}
+    def test_defaults_match_the_estimate_worker(self):
+        """필드가 없으면 견적 워커와 같은 기본값 — 왕복당 1토트, 토트당 8개, 토트당 서비스 5틱 (계약 v2.6)."""
+        assert S.stream_options({}) == {"seed": 42, "capacity": 1, "tote_units": 8, "svc_per_tote": 5,
+                                        "order_gap": 50.0, "inbound_gap": None, "shifts": ("out",)}
 
     def test_des_passthrough(self):
-        o = S.stream_options({"seed": 7, "amr": {"capacity": 8}, "inbound_gap_s": 48.0, "shifts": "in,in,out"})
-        assert o == {"seed": 7, "capacity": 8, "inbound_gap": 48.0, "shifts": ("in", "in", "out")}
+        o = S.stream_options({"seed": 7, "amr": {"capacity": 3, "tote_units": 12},
+                              "inbound_gap_s": 48.0, "shifts": "in,in,out"})
+        assert o == {"seed": 7, "capacity": 3, "tote_units": 12, "svc_per_tote": 5,
+                     "order_gap": 50.0, "inbound_gap": 48.0, "shifts": ("in", "in", "out")}
 
-    @pytest.mark.parametrize("sc", [{"seed": "x"}, {"capacity": 0}, {"inbound_gap_s": 0}, {"inbound_gap_s": 5, "shifts": "in,x"}])
+    def test_outbound_gap_passthrough(self):
+        """입고 창의 간격 기본값이 여기서 온다 (sim_v2 --order-gap, 1초 = 1틱)."""
+        assert S.stream_options({"outbound_gap_s": 30.0})["order_gap"] == 30.0
+
+    def test_null_amr_fields_fall_back(self):
+        """백엔드는 채우지 않은 amr 필드를 null 로 보낸다 (estimate_worker._orders_flags 와 같은 처리)."""
+        o = S.stream_options({"amr": {"capacity": None, "tote_units": None}})
+        assert o["capacity"] == 1 and o["tote_units"] == 8
+
+    @pytest.mark.parametrize("sc", [{"seed": "x"}, {"capacity": 0}, {"capacity": 7}, {"capacity": True},
+                                    {"amr": {"tote_units": 0}}, {"inbound_gap_s": 0}, {"outbound_gap_s": 0},
+                                    {"inbound_gap_s": 5, "shifts": "in,x"}])
     def test_rejects(self, sc):
         with pytest.raises(ValueError):
             S.stream_options(sc)
