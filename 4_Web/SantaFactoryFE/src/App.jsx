@@ -96,6 +96,7 @@ export default function App() {
           onRequest={requestEstimate}
         />
         <RunsStep estimateId={estimateId} estimate={stream.estimate} connected={stream.connected} error={stream.error} />
+        <VerifyStep estimateId={estimateId} ready={Boolean(stream.verdict)} />
         <QuoteStep
           estimateId={estimateId}
           estimate={stream.estimate}
@@ -103,7 +104,6 @@ export default function App() {
           model={selectedModel}
           form={form}
         />
-        <VerifyStep estimateId={estimateId} ready={Boolean(stream.verdict)} />
       </main>
       <Footer />
     </>
