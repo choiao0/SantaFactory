@@ -50,6 +50,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--host-id", default="host-orch", help="host_id = username = clientId")
     p.add_argument("--group", default="santa")
     p.add_argument("--node", default="sim-runner-gpu01", help="NCMD 를 보낼 sim-runner edge_node_id")
+    p.add_argument("--fms-node", default=os.environ.get("HOST_ORCH_FMS_NODE", ""),
+                   help="fms-core edge_node_id (기본 $HOST_ORCH_FMS_NODE, 비면 fms-core 없이 sim-runner 만 굴린다)")
     p.add_argument("--amqp-url", help="기본 $RABBITMQ_URL 또는 RABBITMQ_HOST/USER/PASSWORD")
     p.add_argument("--request-queue", default=REQUEST_QUEUE)
     p.add_argument("--result-queue", default=RESULT_QUEUE)
@@ -72,15 +74,19 @@ class App:
         self.mqtt_port = args.mqtt_port or int(os.environ.get("MQTT_PORT") or 1883)
         self.lock = threading.RLock()
         self.tracker = HostTracker(args.group)
-        self.client = HostClient(args.host_id, password, args.group, self._on_mqtt, self.lock)
+        self.client = HostClient(args.host_id, password, args.group, self._on_mqtt, self.lock,
+                                 extra_subscriptions=(("biz/v1/#", 1),))      # fms-core kpi_summary (acl: biz/v1/#)
         self.coord = Coordinator(self.tracker, self.client.send_ncmd, args.node,
-                                 JobConfig(start_timeout_s=args.start_timeout_s, stop_timeout_s=args.stop_timeout_s))
+                                 JobConfig(start_timeout_s=args.start_timeout_s, stop_timeout_s=args.stop_timeout_s),
+                                 fms_node_id=args.fms_node or None)
         self.stop_event = threading.Event()
 
     def _on_mqtt(self, topic: str, payload: bytes) -> None:
         for ev in self.coord.on_mqtt(topic, payload):
             if ev.kind in ("nbirth", "ndeath", "seq_gap", "unknown_node", "stale_death"):
-                log.info("%s %s %s", ev.kind, ev.node, self.coord.runner_snapshot() if ev.node == self.args.node else "")
+                snap = self.coord.runner_snapshot() if ev.node == self.args.node else (
+                    self.coord.fms_snapshot() if ev.node == self.coord.fms_node_id else "")
+                log.info("%s %s %s", ev.kind, ev.node, snap)
 
     def serve(self) -> int:
         self.client.connect(self.mqtt_host, self.mqtt_port)
@@ -88,7 +94,8 @@ class App:
                             self.args.request_queue, self.args.result_queue)
         for sig in (signal.SIGINT, signal.SIGTERM):
             signal.signal(sig, lambda *_: (self.stop_event.set(), consumer.stop_event.set()))
-        log.info("host-orch up — MQTT %s:%d, runner %s", self.mqtt_host, self.mqtt_port, self.args.node)
+        log.info("host-orch up — MQTT %s:%d, runner %s, fms %s", self.mqtt_host, self.mqtt_port, self.args.node,
+                 self.coord.fms_node_id or "(none)")
         try:
             consumer.run_forever()
         finally:

@@ -94,3 +94,16 @@ def test_message_handler_isolates_exceptions():
         topic, payload = "spBv1.0/santa/NDATA/x", b""
 
     h._on_message(None, None, Msg())        # 예외가 새면 paho 스레드가 죽는다
+
+
+def test_biz_event_subscription_is_inside_the_acl_allow_list():
+    """app.py 가 붙이는 biz/v1/# (fms-core kpi_summary) 도 acl.conf 의 host-orch subscribe 안이어야 한다."""
+    acl = os.path.join(os.path.dirname(H.__file__), "..", "infra", "emqx", "acl.conf")
+    text = open(acl, encoding="utf-8").read()
+    block = text[text.index('{allow, {username, "host-orch"}, subscribe'):]
+    allowed = [s.strip().strip('"') for s in block[:block.index("]}.")].split("[")[1].split(",")]
+    h = H.HostClient("host-orch", "pw", "santa", lambda *_: None, threading.RLock(), extra_subscriptions=(("biz/v1/#", 1),))
+
+    for topic, _qos in h.subscriptions():
+        probe = topic.replace("#", "event/x")
+        assert any(_filter_matches(a.strip(), probe) for a in allowed), topic
