@@ -1,0 +1,48 @@
+{
+ "schema": "topology_spec/v1",
+ "va_rows": [
+  47,
+  72
+ ],
+ "band_s_rows": [
+  40,
+  47
+ ],
+ "band_n_rows": [
+  72,
+  78
+ ],
+ "band_w_cols": [
+  20,
+  32
+ ],
+ "band_e_cols": [
+  117,
+  127
+ ],
+ "junction_rows": [
+  46,
+  72
+ ],
+ "va_centers": [
+  35,
+  41,
+  47,
+  53,
+  59,
+  65,
+  71,
+  77,
+  83,
+  89,
+  95,
+  101,
+  107,
+  113
+ ],
+ "va_half_width": 1,
+ "home_prefixes": [
+  "charger",
+  "charge_q"
+ ]
+}

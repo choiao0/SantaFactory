@@ -1,0 +1,135 @@
+{
+ "name": "r16p7l29",
+ "n_aisles": 16,
+ "aisle_pitch": 7,
+ "aisle_half_width": 1,
+ "aisle_len": 29,
+ "band_s": 7,
+ "band_n": 6,
+ "band_w": 12,
+ "band_e": 10,
+ "origin": [
+  40,
+  20
+ ],
+ "margin": 2,
+ "raw_shape": null,
+ "extra_blocks": [],
+ "station_lines": [
+  {
+   "kind": "induction",
+   "side": "S",
+   "inset": 0,
+   "count": 2,
+   "first": null,
+   "step": null
+  },
+  {
+   "kind": "packing",
+   "side": "S",
+   "inset": 0,
+   "count": 5,
+   "first": null,
+   "step": null
+  },
+  {
+   "kind": "vas",
+   "side": "S",
+   "inset": 0,
+   "count": 3,
+   "first": null,
+   "step": null
+  },
+  {
+   "kind": "consol",
+   "side": "S",
+   "inset": 3,
+   "count": 2,
+   "first": null,
+   "step": null
+  },
+  {
+   "kind": "input",
+   "side": "S",
+   "inset": 3,
+   "count": 1,
+   "first": null,
+   "step": null
+  },
+  {
+   "kind": "output",
+   "side": "S",
+   "inset": 3,
+   "count": 1,
+   "first": null,
+   "step": null
+  },
+  {
+   "kind": "returns",
+   "side": "N",
+   "inset": 0,
+   "count": 2,
+   "first": null,
+   "step": null
+  },
+  {
+   "kind": "input",
+   "side": "N",
+   "inset": 0,
+   "count": 1,
+   "first": null,
+   "step": null
+  },
+  {
+   "kind": "output",
+   "side": "N",
+   "inset": 0,
+   "count": 1,
+   "first": null,
+   "step": null
+  },
+  {
+   "kind": "qc",
+   "side": "N",
+   "inset": 0,
+   "count": 1,
+   "first": null,
+   "step": null
+  },
+  {
+   "kind": "inbound_buf",
+   "side": "W",
+   "inset": 4,
+   "count": 3,
+   "first": null,
+   "step": null
+  },
+  {
+   "kind": "qc",
+   "side": "W",
+   "inset": 4,
+   "count": 1,
+   "first": null,
+   "step": null
+  },
+  {
+   "kind": "charger",
+   "side": "E",
+   "inset": 0,
+   "count": 6,
+   "first": null,
+   "step": null
+  },
+  {
+   "kind": "charge_q",
+   "side": "E",
+   "inset": 3,
+   "count": 6,
+   "first": null,
+   "step": null
+  }
+ ],
+ "charge_zone_col_inset": 4,
+ "charge_zone_row_inset": 1,
+ "seed": null
+}
