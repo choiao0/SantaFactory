@@ -15,7 +15,10 @@
 # 먼저 백엔드 스택이 떠 있어야 한다(네트워크가 external):
 #   cd 4_Web && docker compose up -d rabbitmq
 #
-# 늘릴 때:  docker compose -f compose.estimate.yml up -d --scale estimate-worker=N
+# 병렬 (S15P21A106-182): 기본 5개 컨테이너가 큐를 나눠 받는다(prefetch 1 이라 브로커가
+# 1건씩 분배). 견적 1건 = 1~28대 run 이 한꺼번에 발행되므로 5개면 벽시계 시간이 약 1/5.
+# 컨테이너 하나가 1코어(OMP 1)를 쓰니 총 5코어. 호스트 코어가 모자라면 WORKER_REPLICAS 로 줄인다:
+#   WORKER_REPLICAS=3 docker compose -f compose.estimate.yml up -d
 # 서버를 분리하면 RABBITMQ_URL 만 바꾼다 — 단 브로커가 127.0.0.1 바인딩이라
 # 그쪽을 먼저 열어야 한다(4_Web/docker-compose.yml).
 # ============================================================
@@ -36,6 +39,7 @@ services:
     networks: [santafactory]
     restart: unless-stopped
     deploy:
+      replicas: ${WORKER_REPLICAS:-5}
       resources:
         limits:
           cpus: "1.0"
