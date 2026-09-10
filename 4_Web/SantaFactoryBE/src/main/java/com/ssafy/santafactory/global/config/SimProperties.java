@@ -7,6 +7,7 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
 public record SimProperties(
         @DefaultValue("sim.request") String requestQueue,
         @DefaultValue("sim.result") String resultQueue,
+        @DefaultValue("sim.verify.request") String verifyRequestQueue,
         @DefaultValue("sim.verify.result") String verifyResultQueue
 ) {
 }

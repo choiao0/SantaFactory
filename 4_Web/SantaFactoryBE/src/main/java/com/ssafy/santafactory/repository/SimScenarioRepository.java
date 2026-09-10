@@ -17,6 +17,9 @@ public interface SimScenarioRepository extends JpaRepository<SimScenario, Long> 
     /** 견적의 대수별 결과 — 판정과 조회 표에 쓴다. */
     List<SimScenario> findByEstimateIdOrderByAmrCountAsc(Long estimateId);
 
+    /** 물리 검증 대상 run — 견적의 권장 대수에 해당하는 그 run. */
+    Optional<SimScenario> findByEstimateIdAndAmrCount(Long estimateId, Integer amrCount);
+
     /** 아직 결과를 기다리는 run 이 남았는지 — 전 대수 완료 판정. */
     boolean existsByEstimateIdAndStatusIn(Long estimateId, Collection<RunStatus> statuses);
 

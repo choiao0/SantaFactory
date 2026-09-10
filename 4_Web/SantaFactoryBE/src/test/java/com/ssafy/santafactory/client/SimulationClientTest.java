@@ -26,7 +26,7 @@ class SimulationClientTest {
     @Mock
     RabbitTemplate rabbitTemplate;
 
-    private final SimProperties props = new SimProperties("sim.request", "sim.result", "sim.verify.result");
+    private final SimProperties props = new SimProperties("sim.request", "sim.result", "sim.verify.request", "sim.verify.result");
 
     private final SimulationRequest request = new SimulationRequest(
             "est_77_n3", 42L, 21600L, "in,in,out,out,out,out", 48.0, 22.5,

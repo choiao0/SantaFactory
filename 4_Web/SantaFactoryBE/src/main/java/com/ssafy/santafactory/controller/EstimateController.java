@@ -87,6 +87,16 @@ public class EstimateController {
                 .body(verifyEventStream.subscribe(estimateId));
     }
 
+    @Operation(summary = "물리 검증 요청",
+            description = "권장 대수로 sim.verify.request 를 발행한다. 권장 대수가 없는 견적(사유만 있는 "
+                    + "판정)은 검증할 대상이 없어 거부한다.")
+    @PostMapping("/{estimateId}/verify")
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    public ApiResponse<Void> requestVerification(@PathVariable Long estimateId) {
+        estimateService.requestVerification(estimateId);
+        return ApiResponse.onSuccess();
+    }
+
     @Operation(summary = "견적 취소",
             description = "이미 큐에 들어간 run 은 결과가 와도 판정에 반영되지 않는다")
     @DeleteMapping("/{estimateId}")

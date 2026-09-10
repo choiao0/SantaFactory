@@ -3,6 +3,7 @@ package com.ssafy.santafactory.service;
 import com.ssafy.santafactory.client.SimulationClient;
 import com.ssafy.santafactory.dto.simulation.SimulationRequest;
 import com.ssafy.santafactory.dto.simulation.SimulationResponse;
+import com.ssafy.santafactory.dto.simulation.VerifyRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -46,6 +47,11 @@ public class SimulationService {
         }
         log.info("시뮬레이션 요청 발행: base={}, runs={}", base.runId(), runIds);
         return runIds;
+    }
+
+    public void publishVerify(VerifyRequest request) {
+        simulationClient.publishVerify(request);
+        log.info("물리 검증 요청 발행: runId={}, estimateId={}", request.runId(), request.estimateId());
     }
 
     public void applyResult(SimulationResponse response) {
