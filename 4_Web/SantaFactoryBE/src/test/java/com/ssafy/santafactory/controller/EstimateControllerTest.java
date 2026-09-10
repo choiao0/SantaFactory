@@ -2,10 +2,12 @@ package com.ssafy.santafactory.controller;
 
 import static org.hamcrest.Matchers.startsWith;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.request;
@@ -98,5 +100,23 @@ class EstimateControllerTest {
         mvc.perform(get("/api/estimates/999/verify").accept(MediaType.TEXT_EVENT_STREAM))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.code").value(ErrorCode.ESTIMATE_NOT_FOUND.getCode()));
+    }
+
+    @Test
+    void verification_request_is_accepted() throws Exception {
+        mvc.perform(post("/api/estimates/77/verify"))
+                .andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.isSuccess").value(true));
+
+        verify(estimateService).requestVerification(77L);
+    }
+
+    @Test
+    void verification_request_is_rejected_without_a_recommended_count() throws Exception {
+        doThrow(new GlobalException(ErrorCode.ESTIMATE_NOT_VERIFIABLE)).when(estimateService).requestVerification(77L);
+
+        mvc.perform(post("/api/estimates/77/verify"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value(ErrorCode.ESTIMATE_NOT_VERIFIABLE.getCode()));
     }
 }

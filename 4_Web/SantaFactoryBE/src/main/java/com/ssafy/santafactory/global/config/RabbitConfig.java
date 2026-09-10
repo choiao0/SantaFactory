@@ -23,6 +23,11 @@ public class RabbitConfig {
     }
 
     @Bean
+    public Queue simVerifyRequestQueue(SimProperties props) {
+        return new Queue(props.verifyRequestQueue(), true);
+    }
+
+    @Bean
     public Queue simVerifyResultQueue(SimProperties props) {
         return new Queue(props.verifyResultQueue(), true);
     }

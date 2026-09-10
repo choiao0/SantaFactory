@@ -35,6 +35,10 @@ export function getEstimate(estimateId) {
   return api.get(`/estimates/${estimateId}`)
 }
 
+export function requestVerify(estimateId) {
+  return api.post(`/estimates/${estimateId}/verify`)
+}
+
 export function openEstimateStream(estimateId, { onSnapshot, onRun, onDone, onError }) {
   const source = new EventSource(streamUrl(`/estimates/${estimateId}`))
   const parse = (event) => JSON.parse(event.data)
