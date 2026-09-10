@@ -14,18 +14,36 @@ EC2 에 상시로 떠서 host-orch 의 NCMD Start 를 받으면 (1) GPU 박스�
 | `conductor.py` | 상태기계 IDLE → STARTING(로봇 대기 → 플래너 → 정렬) → RUNNING(틱 배리어) → IDLE \| ERROR. Sparkplug 메트릭(`Fms/*`) · NCMD · Host STATE · biz 이벤트 |
 | `vda.py` | 로봇별 order 스티칭(orderUpdateId = 보낸 노드 번호, 갱신 = [n_k, n_{k+1}]), 재발행 규칙(state 2건 미반영 → 재발행, 10건 → 오류), 도착 판정(`lastNodeId == n_k`), `cancelOrder`, state/connection 거울 |
 | `world.py` | 격자 ↔ 월드: 칸 (r, c) → (c + 0.1, r + 0.5) m, 헤딩 h(0=N=+y) ↔ yaw, 한 틱 액션 분류(forward · reverse · turn · wait) |
-| `scenario.py` | Start JSON → `RunSpec`(sha 대조), `scenario.orders` → 커널 주문(`window_start_s` 오프셋), DES pass-through(`capacity · inbound_gap_s · shifts · seed`) |
+| `scenario.py` | Start JSON → `RunSpec`(sha 대조), `scenario.orders` → 커널 주문(`window_start_s` 오프셋), DES pass-through(`capacity(토트/왕복) · tote_units · outbound_gap_s · inbound_gap_s · shifts · seed`) |
 | `kpi.py` | `cli/report.py` 고정 시간 산식 그대로 → 견적 워커 `to_kpi` 의 14개 키 (`test_kernel_planner` 가 report() 와 대조) |
 | `edge.py` · `app.py` | paho 연결부(유언 NDEATH · NBIRTH · ACL 과 1:1 구독) · CLI |
 | `spb.py` · `sparkplug_b_pb2.py` | `2_Simulation/sim_runner/` 와 **바이트 동일 복사본** (`tests/test_spb_copy.py`) |
-| `tests/` | 브로커 없는 단위 테스트 103개 (t4_agent 의 `OrderBook` 을 오라클로 쓴다) |
+| `tests/` | 브로커 없는 단위 테스트 123개 (t4_agent 의 `OrderBook` 을 오라클로 쓴다). `test_des_parity.py` 는 견적 워커·sim_v2 와 직접 대조한다 |
+
+## 견적과 같은 조건으로 돈다 (S15P21A106-185)
+
+검증 런의 KPI 는 DES 견적 KPI 와 비교하려고 내는 값이다. 그래서 커널 설정은 견적 워커
+(`../infra/worker/estimate_worker.py` → `objective.run_once` → `../sim_engine/sim_v2_tasks.py`)와 같아야 한다.
+기준을 문서가 아니라 **워커 코드**에서 읽어 대조하는 게 `tests/test_des_parity.py` 다 — 같은 주문·같은 홈이면 두 틱 루프가
+같은 KPI 를 낸다(`test_same_orders_give_the_same_kpi`). sim_engine 이 바뀌면 여기서 깨진다.
+
+| 조건 | 값 | 출처 |
+|---|---|---|
+| 통로차단 | ON | `run_once(aisle_block=1)` — `DES_AISLE_BLOCK` |
+| θ 비용 | `THETA_PATH` 또는 `infra/out/theta_wallA_r24_g15.json`, 없으면 중립 + 경고 | 워커 `THETA_PATH` |
+| 차선·양보 | ON (`lane_gain = pocket_gain = 2.0`) | sim_v2 v3 기본 (헤딩 main) |
+| 적재 | `capacity` = 왕복당 토트 1~6, `tote_units` = 토트당 상품(기본 8), `svc_per_tote` = 5틱 | 워커 `_orders_flags` (계약 v2.6) |
+| 교대 | **출고 전용** (견적 기본은 `in,out,out`) | 의도된 차이 — 검증 창은 출고 구간 한 조각이라 창 길이에 in 교대를 다시 자르면 그 시각의 견적 모델과 달라진다 |
+
+바꿔 끼우려면 `--planner-opt aisle_block=0 · theta_path= · lanes=false · yield_rule=false` (전부 견적과 달라지는 방향이다).
+합성 창고(`--map-dir`, -139)는 `rack_buffers.json`(WMS 마스터)이 없어 명시 주문 모드를 못 쓴다 — 검증 런 대상이 아니다.
 
 ## 주행 로직 바꾸기
 
 새 알고리즘 = `Planner` 프로토콜을 만족하는 클래스 하나 + `planner.PLANNERS` 에 한 줄. 셸(conductor · vda · edge)은 손대지 않는다.
 계약은 "한 틱 = 로봇당 한 칸 전진 · 후진 · 90° 회전 · 대기 중 하나, 위치의 진실은 플래너 모델"이다 — 실 로봇은 명령한 칸 중심에
 5 cm · 0.03 rad 안으로 멈추므로(에이전트 stop 허용) 다음 틱의 시작 상태가 모델과 같다. `--planner-opt key=value` 로 옵션을 넘긴다
-(`kernel`: `aisle_block · theta_path · fixed_homes · horizon_ticks · order_gap`).
+(`kernel`: `aisle_block · theta_path · lanes · yield_rule · fixed_homes · horizon_ticks · order_gap` — 기본값은 위 "견적과 같은 조건" 표).
 
 ## 실행
 
@@ -34,7 +52,7 @@ cd 3_FMS
 python3 -m fms_core --env-file infra/emqx/.env -v                       # 상주 (MQTT_HOST · MQTT_PORT · MQTT_PW_FMS_CORE)
 python3 -m fms_core --env-file infra/emqx/.env --once start.json --once-window-s 120   # host-orch 없이 Start 1건 → 창 뒤 Stop → 결과 stdout
 python3 -m fms_core --spawn 3                                            # DES 와 같은 초기 배치 → Isaac WSIM_SPAWN 문자열
-python3 -m pytest fms_core/tests -q
+python3 -m pytest fms_core/tests host_orch/tests sim_engine/tests -q   # MR CI(.gitlab-ci.yml fms-python-test)가 도는 것과 같은 묶음
 ```
 
 옵션: `--planner kernel` · `--tick-s 1.0`(틱 최소 길이 = DES DT) · `--ack-timeout-s 30`(노드 하나 도착 상한) · `--ready-timeout-s 420` ·

@@ -117,7 +117,7 @@ FMS ↔ AMR 에이전트 ↔ sim-runner ↔ Host ↔ 시뮬 WMS 가 한 브로�
 |---|---|
 | `biz/v1/order` | `orderId` · `runId` · `createdAt` · `type` ∈ inbound · outbound · `lines[{sku, qty, fromStation, toStation}]` · `priority` |
 | `biz/v1/event` | `eventId` · `runId` · `at` · `type` ∈ task_assigned · task_done · order_shipped · robot_error · stall · **kpi_summary** · `tick` · `orderId` · `taskId` · `robot{manufacturer, serial}` |
-| `biz/v1/event` `type = kpi_summary` (v1.1, fms-core → Host, Stop 뒤 1건) | + `status` ∈ done · failed · `error` · `ticks` · `elapsed_s` · `planner` · `counters{open_tasks, done_tasks, orders_done, orders_total}` · `kpi` = SIM_VERIFY_CONTRACT §3 의 14개 키 블록(플래너가 없었으면 null). host-orch 가 `sim.verify.result.kpi` 에 그대로 싣는다 |
+| `biz/v1/event` `type = kpi_summary` (v1.1, fms-core → Host, Stop 뒤 1건) | + `status` ∈ done · failed · `error` · `ticks` · `elapsed_s` · `planner` · `counters{open_tasks, done_tasks, orders_done, orders_total}` · `kpi` = SIM_VERIFY_CONTRACT §3 의 14개 키 블록(플래너가 없었으면 null) · `warnings`(v1.2, 없으면 null — 견적과 다른 조건으로 돌았다는 신호). host-orch 가 `sim.verify.result.kpi` 와 `verify.fms.warnings` 에 그대로 싣는다 |
 
 ## 5. Sparkplug B 3.0 (`spBv1.0`, protobuf) — sim-runner 적용 2026-09-08 (`2_Simulation/sim_runner/`) · host-orch 적용 2026-09-09 (`3_FMS/host_orch/`, 잡 큐는 `SIM_VERIFY_CONTRACT.md`) · fms-core 적용 2026-09-09 (`3_FMS/fms_core/`)
 
@@ -173,6 +173,8 @@ FMS ↔ AMR 에이전트 ↔ sim-runner ↔ Host ↔ 시뮬 WMS 가 한 브로�
 - Host(적용): `spBv1.0/santa/#` 구독. seq 갭 · BIRTH 없는 노드 → Rebirth NCMD (노드당 5 s 에 1회). NDEATH 는 bdSeq 가 마지막 NBIRTH 와 같을 때만 offline(디바이스 stale), 아니면 stale death 로 무시. NDATA 가 15 s 없으면(하트비트 3회) 런 실패로 Stop. STATE 의 timestamp 는 접속마다 새로 — Edge 는 증가를 보고 BIRTH 재발행.
 - Start 의 `models[]` 가 비면 `amr01…` 순번 시리얼 · manufacturer `idealworks` · model `iw_hub`. sim-runner 는 factsheet 를 못 보므로(ACL) `Robot/Model` 은 이 목록에서 온다. 같은 run_id 는 무시하고 상태만 재보고, 다른 run_id 는 `LastError` "busy" 로 거절(상태 불변).
 - fms-core(적용): 유언·NBIRTH·Rebirth·Host STATE 규칙은 sim-runner 와 같다. keepalive 30 s. bdSeq 는 `~/.local/state/fms_core/bdseq`(컨테이너는 `/state`). Host 는 `Fms/Heartbeat` 15 s 결측 · NDEATH · `Fms/State` ERROR/IDLE(우리 run_id 이탈)을 런 실패로 본다.
+
+**v1.2-draft (2026-09-10, S15P21A106-185)**: §4.4 `kpi_summary` 에 `warnings` 추가 — 플래너가 견적과 다른 조건으로 돈 런을 결과에서 구분할 수 있어야 한다(θ 파일 없음 등). 추가만.
 
 **v1.1-draft (2026-09-09)**: fms-core 적용 — §2 런 제어 레인에 `NCMD/fms-core`, §4.3 재발행·틱 배리어 적용, §4.4 `kpi_summary` 이벤트(필드 추가), §5.2 fms-core 메트릭 타입·추가 메트릭, §5.3 fms-core 열, 결정 11 갱신.
 
