@@ -1,8 +1,10 @@
-# sim.verify 큐 계약 — Isaac 검증 런 (v0.1-draft, 2026-09-09)
+# sim.verify 큐 계약 — Isaac 검증 런 (v0.2-draft, 2026-09-09)
 
 견적 BE ↔ host-orch 가 RabbitMQ 로 주고받는 것. DES 큐 계약([`5_Docs/Web/시뮬엔진연동API명세서.md`](../../5_Docs/Web/시뮬엔진연동API명세서.md) §1)과
 같은 브로커·같은 규칙(durable · JSON snake_case · 결과 발행 뒤 ack · prefetch 1)이고, 큐 이름만 다르다.
-근거: [`MQTT_CONTRACT.md`](MQTT_CONTRACT.md) §1 결정 4 · 14, §5.3. 구현: [`../host_orch/`](../host_orch/). **웹 팀 합의 전 초안** — 이 문서가 그 §1-6 초안이다.
+근거: [`MQTT_CONTRACT.md`](MQTT_CONTRACT.md) §1 결정 4 · 11 · 14, §5.3. 구현: [`../host_orch/`](../host_orch/) (큐·런 오케스트레이션), [`../fms_core/`](../fms_core/) (로봇 주행 · KPI). **웹 팀 합의 전 초안** — 이 문서가 그 §1-6 초안이다.
+
+> v0.2 (2026-09-09, 추가만): §2 `scenario.window_start_s`, §3 `kpi` 는 fms-core 가 채운다 + `verify.fms`, §4 fms-core 행, §6 ⑤ 해소.
 
 ## 1. 큐
 
@@ -33,7 +35,9 @@
     "seed": 42, "map_version": "v6.0",
     "orders": { "meta": {…}, "outbound": [ {"order_id": 1, "ordered_at_s": 23659, "store_id": 1,
                                             "lines": [{"product_id": 3, "qty": 2, "rack_id": "A3"}]} ] },   // 주문 생성기 산출물 그대로 (DES 워커가 쓴 것)
-    "spawn": "36,40.8;39,40.8"          // 선택. 로봇 초기 위치 → Isaac WSIM_SPAWN
+    "spawn": "103.1,48.5;103.1,50.5",   // 선택. 로봇 초기 위치(m) → Isaac WSIM_SPAWN. DES 와 같은 배치는 `python3 -m fms_core --spawn N` 이 준다
+    "window_start_s": 5400,             // 선택. 주문 시각을 이만큼 앞당겨 재생(창 오프셋, §6 ①). 음수가 되는 주문은 버린다
+    "capacity": 8, "inbound_gap_s": 48.0, "shifts": "in,out,out"   // 선택. DES 요청 pass-through — 있으면 fms-core 가 같은 값으로 입고·왕복을 만든다. 없으면 출고 전용
   }
 }
 ```
@@ -59,9 +63,14 @@ DES 요청의 `horizon_s · shifts · inbound_gap_s · outbound_gap_s · warehou
     "started_at": "2026-09-09T02:10:00.000Z", "ended_at": "2026-09-09T02:20:00.400Z",
     "rtf_mean": 1.02, "ram_mb_max": 5120, "vram_mb_max": 9800, "isaac_instances": 1,
     "scenario_sha256": "…64hex…", "scenario_ack": true,   // sim-runner 가 NDATA `Runner/ScenarioSha` 로 같은 sha 를 되돌렸는가 = 데이터 도달 증명
-    "reason": "window elapsed"          // window elapsed | heartbeat lost | runner ended the run | runner NDEATH | start timeout | stop timeout
+    "reason": "window elapsed",         // window elapsed | heartbeat lost | runner ended the run | runner NDEATH | start timeout | stop timeout | fms-core ended the run | fms-core NDEATH | fms-core heartbeat lost | fms-core rejected Start | fms stop timeout
+    "fms": { "node": "fms-core", "ticks": 118, "status": "done", "error": null, "planner": "kernel",
+             "counters": {"open_tasks": 3, "done_tasks": 11, "orders_done": 9, "orders_total": 12} }   // host-orch 가 --fms-node 없이 돌면 null
   },
-  "kpi": null,                          // fms-core 연동 뒤 DES 와 같은 kpi 블록
+  "kpi": { "orders_total": 12, "orders_completed": 9, "inbound_total": 0, "inbound_completed": 0, "makespan_s": 118,
+           "lead_time_mean_s": 61.2, "lead_time_p90_s": 90.0, "queue_time_mean_s": 3.1, "throughput_orders_per_h": 274.6,
+           "throughput_tasks_per_h": 335.6, "amr_utilization": 0.71, "conflict_wait_ratio": 0.02, "distance_total_m": 140,
+           "charge_downtime_s": 0 },       // fms-core 의 kpi_summary(MQTT_CONTRACT §4.4) — DES 견적 워커 to_kpi 와 같은 14개 키. 분모(makespan_s) = 실제로 돈 커널 틱 수. fms-core 가 없거나 플래너 전에 끝났으면 null
   "artifacts": null,                    // 뒤에 {video, replay, heatmap} 키
   "source_run_id": "est_77_n3", "estimate_id": 77
 }
@@ -74,9 +83,11 @@ DES 요청의 `horizon_s · shifts · inbound_gap_s · outbound_gap_s · warehou
 | 상황 | 동작 |
 |---|---|
 | 요청 수신 | sim-runner 가 NBIRTH 로 보이고 IDLE/ERROR 면 NCMD Start. 다른 run_id 로 바쁘면 기다렸다가 start_timeout(180 s) 에 failed |
+| sim-runner RUNNING (fms-core 켜짐, `--fms-node`) | 같은 Start 를 fms-core 에 NCMD (15 s 마다 재전송). `Fms/State` RUNNING · `Fms/RunId` 일치일 때 창 시작(결정 11). fms-core ERROR/IDLE · `bad Start` · start_timeout → failed |
+| RUNNING 중 fms-core NDEATH · ERROR/IDLE · NDATA 15 s 없음 | Stop 둘 다 → failed (`fms-core NDEATH` · `fms-core ended the run` · `fms-core heartbeat lost`) |
 | Start 반영 없음 | 15 s 마다 재전송 (sim-runner 는 같은 run_id 멱등, QoS 0 유실 대비) |
 | RUNNING · RunId 일치 | 창 시작. `Runner/RTF · RamMB · VramMB · IsaacInstances · ScenarioSha`, DBIRTH 수를 모은다 |
-| 창 종료 | NCMD Stop → sim-runner IDLE 확인 → `done`. Stop 무응답 60 s → 재전송 1회 → failed "stop timeout" |
+| 창 종료 | NCMD Stop(둘 다) → sim-runner IDLE 확인 + fms-core 가 run_id 를 놓음(IDLE/ERROR) → `done`. `biz/v1/event` kpi_summary(runId 일치)의 `kpi` 를 결과에 싣는다. Stop 무응답 60 s → 재전송 1회 → failed "stop timeout" / fms-core 60 s → "fms stop timeout" |
 | sim-runner 가 먼저 접음 (ERROR · RunId 비움) | failed, `error` = `Runner/LastError` |
 | NDEATH (bdSeq 일치) | failed "runner NDEATH" |
 | NDATA 15 s 없음 (하트비트 3회 결측) | Stop 보내고 failed "heartbeat lost" |
@@ -90,6 +101,6 @@ DES 요청의 `horizon_s · shifts · inbound_gap_s · outbound_gap_s · warehou
 
 ## 6. 미결 (로드맵 §04)
 
-① 창 길이 — DES 6 h 대비 Isaac 10~20 분 창, 같은 창의 DES KPI 와 비교하는 정의. 지금은 요청의 `window_s` 로 열어 둔다.
+① 창 길이 — DES 6 h 대비 Isaac 10~20 분 창, 같은 창의 DES KPI 와 비교하는 정의. 지금은 요청의 `window_s` 로 열어 둔다. 실측(2026-09-09, 명세 예시 조건 seed 42): DES 창의 첫 10 분에는 주문 2건, 10~20 분에 124건(wave) — "첫 W 분" 은 쓸 수 없고 `scenario.window_start_s` 로 안정 구간을 잘라야 한다(제안: 출고 시작 + 90 분, 600 s). 실 로봇 1 칸 ≈ 2.2 s · 90° ≈ 2.5 s 라 커널 틱(1 s)보다 느리다 — `verify.fms.ticks` 가 그 창에서 돈 DES 초이고 KPI 분모다.
 ② 20 분 초과 창과 `consumer_timeout` — 큐 정책(`consumer_timeout`)을 늘릴지, 꺼내자마자 ack 하고 BE 의 TIMEOUT 재시도로 갈지.
-③ `VERIFYING` 상태값. ④ `kpi` 산출 주체 — fms-core 가 `biz/v1/event` 로 낸 것을 host-orch 가 집계.
+③ `VERIFYING` 상태값. ④ 주문 스크립트 전달 — 워커가 `sim.result` 에 `orders` + `orders_sha256` 을 동봉(ⓐ, 제안) vs seed 재생성(ⓑ). ⑤ `kpi` 산출 주체 — **해소(2026-09-09)**: fms-core 가 DES 와 같은 산식(`fms_core/kpi.py` = `sim_engine/cli/report.py`)으로 계산해 `kpi_summary` 로 내고 host-orch 는 그대로 싣는다.
