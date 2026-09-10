@@ -45,8 +45,18 @@ from topology_spec import TopologySpec  # noqa: E402
 
 RACK_VALUE = 2                 # 생성 격자는 장애물을 전부 '랙'으로 표기 (map_loader.OBSTACLE_VALUES 안)
 SPEC_FILE = "warehouse_spec.json"
+INDEX_FILE = "README.md"
 SIDES = ("S", "N", "W", "E")
 MIN_STATION_GAP = 3            # 목표 칸 최소 간격 — 2칸 차체가 겹치지 않는 조건 (fms_kernel 경고)
+
+# 균등 혼잡 대수 환산 — 공식 맵과 같은 기하인 r11p6l21 이 통로차단 ON 에서 free 1619 칸이고,
+# θ 탐색 권장 조건의 기준 대수가 20대다 (SIM_RUN_CONTRACT §5). 창고 크기가 달라도 칸당 로봇
+# 밀도를 맞춰야 "기하 차이"와 "혼잡도 차이"가 섞이지 않는다 (θ 감도 실험 §0 — θ 는 막힐 때 일한다).
+FLEET_CELLS_PER_ROBOT = 81
+# θ 가 판정 가능한 대수 구간 (2026-09-04 대수별 결과 §4: 8대는 약하고 28대는 부호가 갈린다)
+THETA_FLEET_BAND = (12, 24)
+# 인덱스 표의 처리량 열을 재는 조건 — 창고 난이도 비교용 고정 조건이지 권장 조건이 아니다
+INDEX_SIM = dict(robots=12, orders=60, order_gap=15, seed=101, aisle_block=1)
 
 
 # ------------------------------------------------------------
@@ -568,22 +578,159 @@ def compare_with_official(map_dir, official_dir=None):
 
 
 # ------------------------------------------------------------
-# 7) CLI
+# 7) 인덱스 표
+# ------------------------------------------------------------
+def _charge_zone_capacity(free, map_dir, limit=80):
+    """충전 존이 간격 2 로 앉힐 수 있는 최대 로봇 수 (map_loader.make_homes_zone 규칙)."""
+    from map_loader import load_charge_zone, make_homes_zone
+    zone = load_charge_zone(free, map_dir)
+    if zone is None:
+        return 0
+    zone = zone & free
+    cap = 0
+    for n in range(2, limit + 1):
+        try:
+            make_homes_zone(free, zone, n)
+        except AssertionError:
+            break
+        cap = n
+    return cap
+
+
+def survey(map_dir):
+    """맵 세트 하나의 정적 사실 — 시뮬 없이 읽을 수 있는 것만."""
+    from map_loader import load_map
+    spec = load_spec_file(map_dir)
+    free = load_map(map_dir, aisle_block=True)[0]
+    cells = int(free.sum())
+    fleet = max(1, round(cells / FLEET_CELLS_PER_ROBOT))
+    return dict(name=spec.name, aisles=spec.n_aisles, pitch=spec.aisle_pitch,
+                length=spec.aisle_len, shape=f"{free.shape[0]}×{free.shape[1]}",
+                free=cells, fleet=fleet, capacity=_charge_zone_capacity(free, map_dir),
+                in_band=THETA_FLEET_BAND[0] <= fleet <= THETA_FLEET_BAND[1])
+
+
+def _sim_tasks_per_h(map_dir, sim_engine_dir):
+    """INDEX_SIM 조건으로 한 번 돌려 tasks_per_h 만 뽑는다. 실패하면 None."""
+    import subprocess
+    a = INDEX_SIM
+    cmd = [sys.executable, "sim_v2_tasks.py", "idx", str(a["robots"]), str(a["orders"]),
+           str(a["seed"]), str(a["aisle_block"]), f"--order-gap={a['order_gap']}",
+           f"--map-dir={os.path.abspath(map_dir)}"]
+    env = dict(os.environ, SIM_NO_PLOT="1", PYTHONIOENCODING="utf-8")
+    try:
+        p = subprocess.run(cmd, cwd=sim_engine_dir, env=env, timeout=300,
+                           capture_output=True, text=True, encoding="utf-8")
+    except subprocess.TimeoutExpired:
+        return None
+    if p.returncode != 0:
+        return None
+    for line in (p.stdout or "").splitlines():
+        if line.startswith("[SUMMARY] "):
+            return json.loads(line[len("[SUMMARY] "):])["tasks_per_h"]
+    return None
+
+
+def build_index(root, sim=False, jobs=8):
+    """`<root>/README.md` 에 창고 목록 표를 쓴다. 폴더를 안 열고도 고를 수 있게.
+
+    표를 손으로 쓰지 않는 이유는 단순하다 — 맵이 바뀌면 손으로 쓴 표는 바로 낡는다.
+    """
+    dirs = sorted(d for d in os.listdir(root)
+                  if os.path.exists(os.path.join(root, d, SPEC_FILE)))
+    rows = [survey(os.path.join(root, d)) for d in dirs]
+    rows.sort(key=lambda r: (r["aisles"], r["pitch"], r["length"]))
+
+    if sim:
+        from concurrent.futures import ThreadPoolExecutor
+        sim_dir = os.path.normpath(os.path.join(HERE, "..", "sim_engine"))
+        with ThreadPoolExecutor(max_workers=jobs) as pool:
+            vals = list(pool.map(lambda r: _sim_tasks_per_h(os.path.join(root, r["name"]), sim_dir), rows))
+        for r, v in zip(rows, vals):
+            r["tph"] = v
+
+    a = INDEX_SIM
+    out = [
+        "# 합성 창고 목록 (S15P21A106-139)",
+        "",
+        f"`map/synth_warehouse.py` 가 만든 창고 {len(rows)}개. 이 표도 생성물이다 —",
+        "손으로 고치지 말고 `python synth_warehouse.py index synth` 로 다시 만든다.",
+        "",
+        "이름이 곧 파라미터다: `r13p7l25` = 통로 13개 · 중심 간격 7 · 통로 길이 25.",
+        "",
+        "| 열 | 뜻 |",
+        "|---|---|",
+        "| free | 통로차단 ON 에서 통행 가능한 1 m 칸 수 |",
+        f"| 권장 대수 | free ÷ {FLEET_CELLS_PER_ROBOT} — 공식 맵과 같은 기하(r11p6l21)의 20대와 칸당 밀도를 맞춘 값. "
+        "창고 크기가 다른데 대수를 고정하면 기하 차이와 혼잡도 차이가 섞인다 |",
+        f"| 충전존 | 간격 2 로 앉힐 수 있는 최대 로봇 수 (권장 대수보다 커야 한다) |",
+        f"| θ | 권장 대수가 θ 판정 가능 구간 {THETA_FLEET_BAND[0]}~{THETA_FLEET_BAND[1]}대 안인가 "
+        "(대수별 결과 §4: 8대는 효과가 약하고 28대는 시드마다 부호가 갈린다) |",
+    ]
+    if sim:
+        out.append(f"| tasks/h | 로봇 {a['robots']}대 · 주문 {a['orders']} · 간격 {a['order_gap']}틱 · "
+                   f"시드 {a['seed']} · 통로차단 ON 에서 1회 실측. **창고 난이도 비교용 고정 조건**이지 "
+                   "권장 조건이 아니다 |")
+    head = "| 창고 | 통로 | 간격 | 길이 | 격자 | free | 권장 대수 | 충전존 | θ |"
+    sep = "|---|---:|---:|---:|---|---:|---:|---:|:-:|"
+    if sim:
+        head += " tasks/h |"
+        sep += "---:|"
+    out += ["", head, sep]
+    for r in rows:
+        line = (f"| `{r['name']}` | {r['aisles']} | {r['pitch']} | {r['length']} | {r['shape']} | "
+                f"{r['free']} | {r['fleet']} | {r['capacity']} | {'O' if r['in_band'] else '—'} |")
+        if sim:
+            line += f" {'' if r.get('tph') is None else format(r['tph'], '.1f')} |"
+        out.append(line)
+
+    outside = [r["name"] for r in rows if not r["in_band"]]
+    short = [r for r in rows if r["capacity"] < r["fleet"]]
+    usable = [r for r in rows if r["in_band"] and r["capacity"] >= r["fleet"]]
+    out += ["", "## 라벨링에 바로 쓸 수 있는 창고", "",
+            f"권장 대수가 θ 구간 안이고 충전 존이 그 대수를 앉힐 수 있는 창고가 **{len(usable)}개**다 "
+            f"(통로 수 {sorted({r['aisles'] for r in usable})} 를 전부 덮는다). 나머지는 아래 이유로 걸린다."]
+    if outside:
+        out += ["", f"**θ 구간 밖 {len(outside)}개** — 권장 대수가 {THETA_FLEET_BAND[1]}대를 넘는다. "
+                    "라벨링 대상에서 빼거나 대수를 구간 안으로 낮춰 쓴다: "
+                    + ", ".join(f"`{n}`" for n in outside)]
+    if short:
+        out += ["", f"**충전 존 용량 부족 {len(short)}개** — 권장 대수를 간격 2 로 못 앉힌다. "
+                    "통로가 짧아(`l17`) 존이 작은데 창고는 넓은 조합이다: "
+                    + ", ".join(f"`{r['name']}`(권장 {r['fleet']}/수용 {r['capacity']})" for r in short)]
+    out += ["", "자세한 설계는 [합성 창고 생성기](../../docs/합성_창고_생성기.md).", ""]
+
+    path = os.path.join(root, INDEX_FILE)
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        f.write("\n".join(out))
+    return path, len(rows)
+
+
+# ------------------------------------------------------------
+# 8) CLI
 # ------------------------------------------------------------
 def _main(argv=None):
     p = argparse.ArgumentParser(description="합성 창고 생성기 (S15P21A106-139)")
-    p.add_argument("mode", choices=("racks", "wallA", "random", "check"),
+    p.add_argument("mode", choices=("racks", "wallA", "random", "check", "index"),
                    help="racks = 랙 블록만 변주(권장) / wallA = 실측 재현 / "
-                        "random = 밴드·스테이션까지 변주 / check = 공식 맵과 대조")
-    p.add_argument("out", help="생성 모드는 출력 폴더, check 는 대조할 맵 세트 폴더")
+                        "random = 밴드·스테이션까지 변주 / check = 공식 맵과 대조 / "
+                        "index = 창고 목록 표(README.md) 생성")
+    p.add_argument("out", help="생성 모드는 출력 폴더, check/index 는 맵 세트 폴더")
     p.add_argument("--n", type=int, default=12, help="만들 창고 수 (racks/random)")
     p.add_argument("--seed", type=int, default=None,
                    help="racks: 격자에서 무작위로 고를 때의 시드 (생략하면 축을 고루 훑는 고정 목록). "
                         "random: 필수 성격의 시드, 기본 0")
+    p.add_argument("--sim", action="store_true",
+                   help="index: 창고마다 시뮬 1회를 돌려 tasks/h 열을 채운다 (창고당 수 초)")
+    p.add_argument("--jobs", type=int, default=8, help="index --sim 병렬 프로세스 수")
     a = p.parse_args(argv)
 
     if a.mode == "check":
         return compare_with_official(a.out)
+    if a.mode == "index":
+        path, n = build_index(a.out, sim=a.sim, jobs=a.jobs)
+        print(f"창고 {n}개 → {path}")
+        return 0
     if a.mode == "wallA":
         print(write_set(wall_a_profile(), a.out))
         return 0

@@ -329,6 +329,46 @@ class RandomWarehouseTest(unittest.TestCase):
                 self.assertEqual(again.to_dict(), spec.to_dict())
 
 
+class IndexTest(unittest.TestCase):
+    """창고 목록 표 — 폴더를 안 열고 고를 수 있어야 하고, 손으로 못 고치게 생성물이어야 한다."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.mkdtemp(prefix="synth_index_")
+        cls.specs = sw.rack_variant_grid(3)
+        for spec in cls.specs:
+            sw.write_set(spec, str(Path(cls.tmp) / spec.name))
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def test_survey_reports_a_seatable_fleet(self):
+        """권장 대수는 free 칸수에서 나오고, 충전 존이 그만큼 앉힐 수 있어야 쓸 수 있다."""
+        for spec in self.specs:
+            with self.subTest(spec.name):
+                s = sw.survey(str(Path(self.tmp) / spec.name))
+                self.assertEqual(s["aisles"], spec.n_aisles)
+                self.assertEqual(s["fleet"], max(1, round(s["free"] / sw.FLEET_CELLS_PER_ROBOT)))
+                self.assertGreaterEqual(s["capacity"], s["fleet"],
+                                        "충전 존이 권장 대수를 못 앉힌다")
+
+    def test_index_lists_every_warehouse(self):
+        path, n = sw.build_index(self.tmp)          # sim=False — 표만
+        self.assertEqual(n, len(self.specs))
+        text = Path(path).read_text(encoding="utf-8")
+        for spec in self.specs:
+            self.assertIn(f"`{spec.name}`", text)
+
+    def test_index_is_regenerated_not_edited(self):
+        """같은 맵 세트면 몇 번 돌려도 같은 표가 나온다 (손으로 고칠 물건이 아니라는 뜻)."""
+        p1, _ = sw.build_index(self.tmp)
+        first = Path(p1).read_text(encoding="utf-8")
+        Path(p1).write_text("사람이 고쳐 놓은 내용", encoding="utf-8")
+        p2, _ = sw.build_index(self.tmp)
+        self.assertEqual(Path(p2).read_text(encoding="utf-8"), first)
+
+
 class BuildInputTest(unittest.TestCase):
     """AI 입력 텐서가 wallA 아닌 창고에서도 나온다 — 로드맵 3단계의 전제."""
 

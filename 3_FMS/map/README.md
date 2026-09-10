@@ -58,9 +58,13 @@ python check_map_set.py ../../2_Simulation/t3_warehouse_map/map     # 세트 수
 
 ```bash
 python synth_warehouse.py racks synth --n 112     # 격자 전부 (2.3 s, 97 MB). 라벨링은 이 중 25개부터
+python synth_warehouse.py index synth --sim       # 창고 목록 표 → synth/README.md (48 s)
 python synth_warehouse.py wallA /tmp/wallA        # 실측 프로파일 재현
 python synth_warehouse.py check /tmp/wallA        # 공식 맵과 링 영역 대조 → 차이 0
 ```
+
+어느 창고를 쓸지는 [`synth/README.md`](synth/README.md) 표에서 고른다 — 폴더를 안 열어도 크기·free
+칸수·권장 대수·충전 존 용량·처리량이 한 눈에 들어온다. 그 표도 생성물이라 손으로 고치지 않는다.
 
 `synth/` 112개는 **저장소에 들어 있다.** 디스크 97 MB 지만 압축하면 0.77 MB 라 무겁지 않고,
 θ 라벨이 특정 맵 바이트에 묶이기 때문에 얼려 두는 편이 낫다 — 생성기를 고친 뒤 재생성하면 맵이
