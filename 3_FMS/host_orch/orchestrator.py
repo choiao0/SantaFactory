@@ -396,7 +396,9 @@ class Job:
             return None
         sm = self.fms.summary or {}
         return {"node": self.fms.node_id, "ticks": sm.get("ticks", self.fms.ticks), "status": sm.get("status"),
-                "error": sm.get("error"), "planner": sm.get("planner"), "counters": sm.get("counters")}
+                "error": sm.get("error"), "planner": sm.get("planner"), "counters": sm.get("counters"),
+                # 견적과 다른 조건으로 돌았다는 신호 (예: θ 파일 없음 → 중립 θ). null 이 아니면 이 KPI 는 견적과 비교하면 안 된다.
+                "warnings": sm.get("warnings")}
 
 
 class FailedRequest:

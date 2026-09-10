@@ -24,6 +24,9 @@ RUN pip install --no-cache-dir numpy==2.4.6 paho-mqtt==2.1.0 protobuf==7.36.1
 COPY sim_engine/ /app/sim_engine/
 COPY map/        /app/map/
 COPY contracts/  /app/contracts/
+# θ 는 견적 워커 이미지와 같은 파일을 쓴다 (estimate.Dockerfile 과 같은 줄). 없으면 fms-core 가 중립 θ 로 돌아
+# 같은 주문에서도 견적과 다른 경로를 내고, 그 KPI 는 견적과 비교할 수 없다 (S15P21A106-185).
+COPY infra/out/  /app/infra/out/
 COPY fms_core/   /app/fms_core/
 
 VOLUME ["/state"]

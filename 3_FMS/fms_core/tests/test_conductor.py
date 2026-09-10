@@ -1,4 +1,6 @@
 """fms_core.conductor — NBIRTH 사전 · Start/Stop · 정렬 · 틱 배리어 · 재발행/정체/오류 → ERROR · kpi_summary · 실제 커널 통합."""
+import logging
+
 import pytest
 
 from fms_core import conductor as C
@@ -314,14 +316,16 @@ def test_timeout_s_and_host_offline_fail_the_run(tmp_path):
     assert h2.c.state == C.ERROR and "timeout_s" in h2.pub.values()["Fms/LastError"]
 
 
-def test_planner_build_failure_is_run_error(tmp_path):
+@pytest.mark.parametrize("exc", [ValueError("no map"), OSError("theta.json: permission denied")])
+def test_planner_build_failure_is_run_error(tmp_path, exc):
+    """플래너 생성 실패는 런 오류 — 데몬 틱 루프를 뚫고 나가면 안 된다 (θ·맵 파일 I/O 포함)."""
     def bad(name, spec):
-        raise ValueError("no map")
+        raise exc
     h = Harness(tmp_path, factory=bad)
     h.start(1.0)
     h.robots_ready(2.0)
     h.c.tick(2.5)
-    assert h.c.state == C.ERROR and h.pub.values()["Fms/LastError"] == "planner build failed: no map"
+    assert h.c.state == C.ERROR and h.pub.values()["Fms/LastError"] == f"planner build failed: {exc}"
 
 
 def test_heartbeat_reports_robots_online(tmp_path):
@@ -332,6 +336,43 @@ def test_heartbeat_reports_robots_online(tmp_path):
     h.c.tick(6.0)
     nd = h.pub.values()
     assert nd["Fms/Heartbeat"] == 6000 and nd["Fms/RobotsOnline"] == 2
+
+
+def test_planner_warnings_are_logged(tmp_path):
+    """플래너 경고(예: θ 파일 없음 → 중립 θ)는 런 로그에 남아야 한다 — 조용히 견적과 다른 조건으로 도는 게 최악이다."""
+    def warn_factory(name, spec):
+        p = FakePlanner(spec, {})
+        p.warnings = ["[WARN] θ 파일이 없어 중립 θ 로 진행"]
+        return p
+    seen = []
+
+    class Collect(logging.Handler):
+        def emit(self, record):
+            seen.append(record.getMessage())
+
+    handler = Collect(level=logging.WARNING)
+    logger = logging.getLogger("fms_core")
+    logger.addHandler(handler)
+    try:
+        h = Harness(tmp_path, factory=warn_factory)
+        now = h.to_running(1.0)
+        h.c.on_ncmd(ncmd(**{C.CMD_STOP: True}), now + 1.0)
+    finally:
+        logger.removeHandler(handler)
+    assert any("중립 θ" in m for m in seen)
+    # 로그만으로는 부족하다 — 결과를 견적과 비교하는 쪽(host-orch → sim.verify.result.verify.fms)이
+    # "이 KPI 는 견적과 다른 조건에서 나왔다"를 알 수 있어야 한다.
+    ev = h.pub.events("kpi_summary")[-1]
+    assert ev["warnings"] == ["[WARN] θ 파일이 없어 중립 θ 로 진행"]
+    assert h.c.snapshot()["warnings"] == ev["warnings"]
+
+
+def test_kpi_summary_has_no_warnings_key_noise(tmp_path):
+    """경고가 없으면 null — 있는 런만 눈에 띄어야 한다."""
+    h = Harness(tmp_path)
+    now = h.to_running(1.0)
+    h.c.on_ncmd(ncmd(**{C.CMD_STOP: True}), now + 1.0)
+    assert h.pub.events("kpi_summary")[-1]["warnings"] is None
 
 
 # ---- 실제 커널 통합 ------------------------------------------------------------------

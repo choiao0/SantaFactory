@@ -87,9 +87,11 @@ def test_kpi_matches_cli_report():
     for t in range(T):
         p.step(t)
     ours = K.summary(p.kernel, p.stream, 2, T)
+    cfg = p.kernel.cfg
     a = SimpleNamespace(variant="base", n_robots=2, n_orders=p.stream.n_orders, seed=42, aisle_block=False, flow="main",
                         horizon=T, shifts=("out",), order_gap=50, order_gap_arg=None, inbound_gap_arg=None, battery=False,
-                        capacity=None, theta_path=None, dirflow=False, export=False)
+                        capacity=cfg.capacity, tote_units=8, lanes=True, yield_rule=cfg.yield_rule,
+                        theta_path=None, dirflow=False, export=False)
     ctx = SimpleNamespace(H=p.kernel.H, W=p.kernel.W)
     with contextlib.redirect_stdout(io.StringIO()):
         theirs, _, _ = report(a, p.kernel, p.stream, ctx)
@@ -101,6 +103,39 @@ def test_kpi_matches_cli_report():
                           "lead_time_mean_s", "lead_time_p90_s", "queue_time_mean_s", "throughput_orders_per_h",
                           "throughput_tasks_per_h", "amr_utilization", "conflict_wait_ratio", "distance_total_m", "charge_downtime_s"}
     assert block["makespan_s"] == T and block["throughput_tasks_per_h"] == theirs["tasks_per_h"]
+
+
+def test_defaults_are_the_des_estimate_conditions():
+    """견적과 같은 조건으로 선다 — 통로차단 ON · 차선 비용 · 양보 ON · 토트 서비스 (계약 v2.6/v3, -185).
+    조건 자체가 워커와 같은지는 test_des_parity.py 가 워커 코드에서 읽어 대조한다."""
+    p = make()
+    cfg = p.kernel.cfg
+    assert cfg.capacity == 1 and cfg.svc_per_tote == 5, "왕복당 토트 수 · 토트당 서비스 틱"
+    assert cfg.yield_rule is True and cfg.theta is True, "v3 정면 조우 양보 · θ/차선 비용"
+    assert int(p.kernel.free.sum()) == 8640, "통로차단 ON 의 자유 칸 수 (OFF 면 9333)"
+    assert p.kernel.lane_dir is not None, "차선 방향이 커널에 들어가야 양보 규칙이 산다"
+    assert p.kernel.edge_cost.max() > 1.0, "차선 비용(기본 2.0)이 균일 1.0 이 아니어야 한다"
+
+
+def test_capacity_is_totes_and_tote_units_group_lines():
+    """v2.6 비호환 변경: amr.capacity = 왕복당 토트 수(1~6), amr.tote_units = 토트당 상품 수."""
+    rk = racks()
+    sc = {"seed": 42, "amr": {"capacity": 3, "tote_units": 8},
+          "orders": {"outbound": [{"order_id": 1, "ordered_at_s": 0, "lines": [{"rack_id": rk[0], "qty": 17}]}]}}
+    p = make(sc=sc)
+    p.step(0)
+    assert p.kernel.cfg.capacity == 3
+    assert p.stream.totes_total == 3, "ceil(17 / 8)"
+
+
+def test_oversize_order_is_dropped():
+    """한 대에 실을 수 없는 주문(6토트 초과)은 팔레트 흐름으로 보고 시뮬 밖 — 개수만 센다 (-177)."""
+    rk = racks()
+    sc = {"seed": 42, "amr": {"tote_units": 1},
+          "orders": {"outbound": [{"order_id": 1, "ordered_at_s": 0, "lines": [{"rack_id": rk[0], "qty": 7}]},
+                                  {"order_id": 2, "ordered_at_s": 1, "lines": [{"rack_id": rk[1], "qty": 6}]}]}}
+    p = make(sc=sc)
+    assert p.stream.orders_oversize == 1 and p.stream.n_orders == 1
 
 
 def test_service_steps_match_sim_v2():

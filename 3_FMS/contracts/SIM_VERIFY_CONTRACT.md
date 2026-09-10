@@ -1,10 +1,15 @@
-# sim.verify 큐 계약 — Isaac 검증 런 (v0.2-draft, 2026-09-09)
+# sim.verify 큐 계약 — Isaac 검증 런 (v0.3-draft, 2026-09-10)
 
 견적 BE ↔ host-orch 가 RabbitMQ 로 주고받는 것. DES 큐 계약([`5_Docs/Web/시뮬엔진연동API명세서.md`](../../5_Docs/Web/시뮬엔진연동API명세서.md) §1)과
 같은 브로커·같은 규칙(durable · JSON snake_case · 결과 발행 뒤 ack · prefetch 1)이고, 큐 이름만 다르다.
 근거: [`MQTT_CONTRACT.md`](MQTT_CONTRACT.md) §1 결정 4 · 11 · 14, §5.3. 구현: [`../host_orch/`](../host_orch/) (큐·런 오케스트레이션), [`../fms_core/`](../fms_core/) (로봇 주행 · KPI). **웹 팀 합의 전 초안** — 이 문서가 그 §1-6 초안이다.
 
 > v0.2 (2026-09-09, 추가만): §2 `scenario.window_start_s`, §3 `kpi` 는 fms-core 가 채운다 + `verify.fms`, §4 fms-core 행, §6 ⑤ 해소.
+> v0.3 (2026-09-10, S15P21A106-185): §2 적재 필드를 [`SIM_RUN_CONTRACT.md`](SIM_RUN_CONTRACT.md) v2.6 에 맞춘다 —
+> `scenario.amr.capacity`(최상위 `scenario.capacity` 도 받는다)는 **왕복당 토트 수(1~6)**, 토트당 상품 수는
+> `scenario.amr.tote_units`(기본 8). 옛 뜻(상품 수)으로 보내면 거절된다. §3 `verify.fms.warnings` 추가 —
+> null 이 아니면 그 런은 견적과 다른 조건에서 돌았다는 뜻이라 KPI 를 견적과 비교하면 안 된다.
+> 견적과 같은 조건으로 도는지는 `fms_core/tests/test_des_parity.py` 가 견적 워커 코드에서 기준을 읽어 대조한다.
 
 ## 1. 큐
 
@@ -37,7 +42,8 @@
                                             "lines": [{"product_id": 3, "qty": 2, "rack_id": "A3"}]} ] },   // 주문 생성기 산출물 그대로 (DES 워커가 쓴 것)
     "spawn": "103.1,48.5;103.1,50.5",   // 선택. 로봇 초기 위치(m) → Isaac WSIM_SPAWN. DES 와 같은 배치는 `python3 -m fms_core --spawn N` 이 준다
     "window_start_s": 5400,             // 선택. 주문 시각을 이만큼 앞당겨 재생(창 오프셋, §6 ①). 음수가 되는 주문은 버린다
-    "capacity": 8, "inbound_gap_s": 48.0, "shifts": "in,out,out"   // 선택. DES 요청 pass-through — 있으면 fms-core 가 같은 값으로 입고·왕복을 만든다. 없으면 출고 전용
+    "amr": {"capacity": 3, "tote_units": 8},   // 선택. DES 요청 pass-through (계약 v2.6): capacity = 왕복당 토트 수 1~6, tote_units = 토트당 상품 수(기본 8)
+    "outbound_gap_s": 50.0, "inbound_gap_s": 48.0, "shifts": "in,out,out"   // 선택. 없으면 **출고 전용** — 검증 런은 견적 지평선 안의 출고 창 한 조각만 재생한다 (§6 ①)
   }
 }
 ```
@@ -65,7 +71,8 @@ DES 요청의 `horizon_s · shifts · inbound_gap_s · outbound_gap_s · warehou
     "scenario_sha256": "…64hex…", "scenario_ack": true,   // sim-runner 가 NDATA `Runner/ScenarioSha` 로 같은 sha 를 되돌렸는가 = 데이터 도달 증명
     "reason": "window elapsed",         // window elapsed | heartbeat lost | runner ended the run | runner NDEATH | start timeout | stop timeout | fms-core ended the run | fms-core NDEATH | fms-core heartbeat lost | fms-core rejected Start | fms stop timeout
     "fms": { "node": "fms-core", "ticks": 118, "status": "done", "error": null, "planner": "kernel",
-             "counters": {"open_tasks": 3, "done_tasks": 11, "orders_done": 9, "orders_total": 12} }   // host-orch 가 --fms-node 없이 돌면 null
+             "counters": {"open_tasks": 3, "done_tasks": 11, "orders_done": 9, "orders_total": 12},
+             "warnings": null }   // host-orch 가 --fms-node 없이 돌면 null. warnings 가 null 이 아니면 이 런은 견적과 다른 조건에서 돌았다(예: θ 파일 없음 → 중립 θ) → KPI 를 견적과 비교하지 말 것
   },
   "kpi": { "orders_total": 12, "orders_completed": 9, "inbound_total": 0, "inbound_completed": 0, "makespan_s": 118,
            "lead_time_mean_s": 61.2, "lead_time_p90_s": 90.0, "queue_time_mean_s": 3.1, "throughput_orders_per_h": 274.6,
