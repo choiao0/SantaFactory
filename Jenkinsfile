@@ -150,7 +150,7 @@ pipeline {
                     '''
                 }
                 sh '''
-                    # 워커는 여러 개(compose replicas, 기본 5)라 컨테이너 전부가 running 이어야 통과.
+                    # 워커는 여러 개(compose replicas, 기본 2)라 컨테이너 전부가 running 이어야 통과.
                     for i in $(seq 1 30); do
                         cids=$($COMPOSE_FMS ps -q estimate-worker)
                         total=$(echo "$cids" | grep -c . || true)
