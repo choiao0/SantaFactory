@@ -355,12 +355,24 @@ def test_planner_warnings_are_logged(tmp_path):
     logger.addHandler(handler)
     try:
         h = Harness(tmp_path, factory=warn_factory)
-        h.start(1.0)
-        h.robots_ready(2.0)
-        h.c.tick(2.5)
+        now = h.to_running(1.0)
+        h.c.on_ncmd(ncmd(**{C.CMD_STOP: True}), now + 1.0)
     finally:
         logger.removeHandler(handler)
     assert any("중립 θ" in m for m in seen)
+    # 로그만으로는 부족하다 — 결과를 견적과 비교하는 쪽(host-orch → sim.verify.result.verify.fms)이
+    # "이 KPI 는 견적과 다른 조건에서 나왔다"를 알 수 있어야 한다.
+    ev = h.pub.events("kpi_summary")[-1]
+    assert ev["warnings"] == ["[WARN] θ 파일이 없어 중립 θ 로 진행"]
+    assert h.c.snapshot()["warnings"] == ev["warnings"]
+
+
+def test_kpi_summary_has_no_warnings_key_noise(tmp_path):
+    """경고가 없으면 null — 있는 런만 눈에 띄어야 한다."""
+    h = Harness(tmp_path)
+    now = h.to_running(1.0)
+    h.c.on_ncmd(ncmd(**{C.CMD_STOP: True}), now + 1.0)
+    assert h.pub.events("kpi_summary")[-1]["warnings"] is None
 
 
 # ---- 실제 커널 통합 ------------------------------------------------------------------

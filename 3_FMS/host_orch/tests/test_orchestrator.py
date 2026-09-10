@@ -421,7 +421,7 @@ class TestFmsLink:
         r = job.result()
         assert r["kpi"] == {"orders_total": 4, "orders_completed": 2, "throughput_tasks_per_h": 60.0}
         assert r["verify"]["fms"] == {"node": "fms-core", "ticks": 120, "status": "done", "error": None, "planner": "kernel",
-                                      "counters": {"done_tasks": 2}}
+                                      "counters": {"done_tasks": 2}, "warnings": None}
         assert r["verify"]["elapsed_s"] == 63.0                                       # 창 61 s + fms-core 정리 대기 2 s
 
     def test_fms_start_is_resent_and_ignores_other_run_ids(self):

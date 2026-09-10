@@ -73,6 +73,7 @@ class Conductor:
         self.last_heartbeat = 0.0
         self.event_seq = 0
         self.last_kpi: Optional[dict] = None
+        self.planner_warnings: list = []          # 이 런이 견적과 다른 조건에서 돌았다는 신호 (kpi_summary·snapshot 에 실린다)
         self.host_online: Optional[bool] = None
         self.host_ts = 0
         self.host_offline_since: Optional[float] = None
@@ -198,6 +199,7 @@ class Conductor:
         for serial, link in self.fleet.robots.items():        # retained connection 은 Start 전에 이미 왔을 수 있다. 포즈는 새 state 로만
             link.connection = self.connections.get(serial, "")
         self.planner, self.t, self.started_at, self.running_since, self.last_kpi = None, 0, now, None, None
+        self.planner_warnings = []                            # 앞 런의 경고가 다음 런 결과에 묻어가면 안 된다
         log.info("run %s: waiting for %d robots (scenario %s)", spec.run_id, spec.n_robots, (spec.scenario_sha256 or "none")[:12])
         self._set_state(STARTING, {RUN_ID: spec.run_id, LAST_ERROR: "", SCENARIO_SHA: spec.scenario_sha256 or "",
                                    TICK: 0, ROBOTS_ONLINE: 0, OPEN_TASKS: 0, DONE_TASKS: 0, ORDERS_DONE: 0})
@@ -229,7 +231,7 @@ class Conductor:
         counters = self.planner.counters() if self.planner is not None else {}
         self._publish_event(KPI_EVENT, status="done" if final == IDLE else "failed", error=reason or None,
                             kpi=kpi, ticks=self.t, elapsed_s=round(now - self.running_since, 1) if self.running_since else 0.0,
-                            counters=counters, planner=self.cfg.planner)
+                            counters=counters, planner=self.cfg.planner, warnings=self.planner_warnings or None)
         self.fleet, self.planner = None, None
         self._set_state(final, {RUN_ID: "", SCENARIO_SHA: "", LAST_ERROR: reason})
 
@@ -272,7 +274,10 @@ class Conductor:
         except (ValueError, RuntimeError, AssertionError, KeyError, OSError) as e:   # OSError: θ·맵 파일 읽기 실패
             self._fail(now, f"planner build failed: {e}")
             return
-        for warning in getattr(self.planner, "warnings", ()):    # 예: θ 파일 없음 → 중립 θ (견적과 경로가 달라진다)
+        # 플래너 경고 = "이 런은 견적과 다른 조건에서 돌았다" 는 신호. 로그로만 두면 결과를 견적과 비교하는 쪽이
+        # 알 수 없다 → kpi_summary·snapshot 에도 싣는다 (예: θ 파일 없음 → 중립 θ).
+        self.planner_warnings = [str(w) for w in getattr(self.planner, "warnings", ())]
+        for warning in self.planner_warnings:
             log.warning("run %s: planner %s", self.spec.run_id, warning)
         views = self.planner.robots()
         for link, view in zip(links, views):
@@ -355,4 +360,5 @@ class Conductor:
 
     def snapshot(self) -> dict:
         return {"state": self.state, "run_id": self.values[RUN_ID], "last_error": self.values[LAST_ERROR],
-                "tick": self.t, "bd_seq": self.session.bd_seq, "seq": self.session.seq, "kpi": self.last_kpi}
+                "tick": self.t, "bd_seq": self.session.bd_seq, "seq": self.session.seq, "kpi": self.last_kpi,
+                "warnings": self.planner_warnings or None}
