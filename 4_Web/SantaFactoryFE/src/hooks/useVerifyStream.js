@@ -12,7 +12,11 @@ export function useVerifyStream(estimateId) {
     const apply = (payload) =>
       setState({ id: estimateId, status: payload.status, videoUrl: payload.video_url, error: payload.error })
 
-    const close = openVerifyStream(estimateId, { onSnapshot: apply, onDone: apply })
+    const close = openVerifyStream(estimateId, {
+      onSnapshot: apply,
+      onDone: apply,
+      onError: () => console.error(`[verify] estimateId=${estimateId} 스트림 연결 실패`),
+    })
     return close
   }, [estimateId])
 

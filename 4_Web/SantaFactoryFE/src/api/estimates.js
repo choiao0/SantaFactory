@@ -50,7 +50,7 @@ export function openEstimateStream(estimateId, { onSnapshot, onRun, onDone, onEr
   return () => source.close()
 }
 
-export function openVerifyStream(estimateId, { onSnapshot, onDone }) {
+export function openVerifyStream(estimateId, { onSnapshot, onDone, onError }) {
   const source = new EventSource(streamUrl(`/estimates/${estimateId}/verify`))
   const parse = (event) => JSON.parse(event.data)
 
@@ -59,6 +59,7 @@ export function openVerifyStream(estimateId, { onSnapshot, onDone }) {
     onDone?.(parse(e))
     source.close()
   })
+  source.onerror = (e) => onError?.(e)
 
   return () => source.close()
 }
