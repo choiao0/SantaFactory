@@ -1,4 +1,4 @@
-# 시뮬 실행 계약 — `sim_engine/sim_v2_tasks.py` 호출 규약 (v3, 2026-09-09)
+# 시뮬 실행 계약 — `sim_engine/sim_v2_tasks.py` 호출 규약 (v3.1, 2026-09-10)
 
 > **v2 비호환 변경 (2026-09-04, S15P21A106-143):** 기본 이동 모델이 **헤딩 PIBT**로 바뀌었다. 칸 모델은 `--cell` opt-in.
 > `--heading`은 그대로 받되 무시한다. **`--heading`을 넘기지 않아 칸 모델을 얻던 호출자는 `--cell`을 넘겨야 한다**
@@ -30,15 +30,15 @@ python sim_v2_tasks.py <tag> <n_robots> <n_orders> <seed> <aisle_block> [--flow=
                        [--horizon=<틱>] [--shifts=in,out,out]                                    (v2.2 고정 시간·교대)
                        [--battery] [--chargers=6] [--runtime-h=8] [--charge-h=1.5] [--soc=20,80,95]  (v2.2 배터리)
                        [--orders-file=<json>] [--capacity=1] [--tote-units=<상품 수>] [--svc-per-tote=0]
-                       [--no-lanes] [--no-yield]
+                       [--no-lanes] [--no-yield] [--map-dir=<맵 세트 폴더>]
 ```
 작업 디렉토리 = `3_FMS/sim_engine/` (상대 import). 맵은 `3_FMS/map/occupancy_grid.npy`·`stations.json`·`charge_zone.json`을 읽는다
-(컨테이너는 `3_FMS/`를 통째로 마운트하면 된다).
+(컨테이너는 `3_FMS/`를 통째로 마운트하면 된다). `--map-dir`을 주면 그 폴더에서 같은 파일들을 읽는다.
 
 | 위치 인자 | 의미 | 기본 |
 |---|---|---|
 | `tag` | 실행 라벨. SUMMARY `variant`, 산출 파일명 접두 | `base` |
-| `n_robots` | 로봇 대수. 충전 존 초기 배치 상한 **28** (초과 시 assert). **이 값은 이 창고 충전 인프라(동쪽 존 106칸)의 용량이며 견적 제약으로 취급한다** — 더 필요하면 맵 변경(존 추가)이고 그 자체가 견적 출력물 | 6 |
+| `n_robots` | 로봇 대수. 공식 맵의 충전 존 초기 배치 상한 **28** (초과 시 assert). `--map-dir`을 쓰면 상한은 **그 맵의 존 용량**이다(합성 창고는 24~42, `map/synth/README.md` 표). **이 값은 이 창고 충전 인프라(동쪽 존 106칸)의 용량이며 견적 제약으로 취급한다** — 더 필요하면 맵 변경(존 추가)이고 그 자체가 견적 출력물 | 6 |
 | `n_orders` | 출고 주문 수. main 흐름은 입고도 같은 수. **`--horizon`이 있으면 무시**(0을 넣어 자리만 채움) | 40 |
 | `seed` | 주문 도착·구성 rng. 같은 인자 = 같은 결과(결정론) | 42 |
 | `aisle_block` | `1` = 랙 사이 통로(행 47~67) 로봇 통행 금지(피커 전용). **기준선은 1** | 0 |
@@ -52,6 +52,7 @@ python sim_v2_tasks.py <tag> <n_robots> <n_orders> <seed> <aisle_block> [--flow=
 | `--tote-units=<정수>` | 버퍼별 `ceil(qty 합 / tote_units)`로 주문 토트 수 계산 | 없으면 버퍼당 1토트 |
 | `--svc-per-tote=<틱>` | 픽업·하역 각각 `토트 수 × 값`을 기본 서비스 시간에 가산 | 기본 0 |
 | `--no-lanes` | 규칙 기반 출발·복귀 차선과 버퍼 주머니 비용을 끔 | 헤딩 main 기본 ON. `--lane-gain=1 --pocket-gain=1`과 같음 |
+| `--map-dir=<폴더>` | 맵 세트 폴더. 격자·스테이션·충전 존·토폴로지를 전부 여기서 읽는다 | 기본 = 공식 맵 `3_FMS/map`. 합성 창고는 `map/synth/<이름>`(-139). 폴더에 `topology.json`이 있으면 통로·밴드 좌표를 거기서, 없으면 wallA 상수 |
 | `--no-yield` | 8틱 이상 지속된 정면 조우의 양보 규칙을 끔 | main 헤딩 기본 ON |
 | (기본) | **헤딩 PIBT**(2칸 차체·회전·후진·라이브니스 5종). v2부터 플래그 없이 기본 | SUMMARY에 `heading=1` |
 | `--cell` | 칸 모델(점로봇). 기준선 CSV 재현·A/B 비교축 전용 | v1compat은 플래그와 무관하게 항상 칸 |
@@ -188,6 +189,7 @@ SIM_NO_PLOT=1 PYTHONIOENCODING=utf-8 python sim_v2_tasks.py bo17 24 120 42 1 --o
 | v2.4 | 2026-09-08 | 호환(키 추가만, -155): SUMMARY `inbound_total`·`distance_m` 항상 출력. 값·CLI·종료 코드 불변(기준값 3개·동일성 12행 확인). 호출자에 **견적 워커** `infra/worker/estimate_worker.py` 추가([설계](../docs/견적_워커.md)) |
 | v2.5 | 2026-09-09 | 호환(추가만, -156): **명시 주문 모드** `--orders-file`·`--capacity`, 조건부 SUMMARY 키 `orders_file`·`orders_skipped`·`capacity`. `map/rack_buffers.json`(랙 → 버퍼, `build_rack_map.py`) 신설. 플래그 없는 호출은 비트 동일(기준값 3개·동일성 12행 확인) |
 | **v2.6** | 2026-09-09 | **비호환**(-177): `capacity` 단위 상품 수→토트 수. `tote_units`·`svc_per_tote`, 동승 완료, 6토트 초과 제외, 토트·왕복·주문 리드타임 SUMMARY 추가. `capacity=1`, `svc_per_tote=0`, `tote_units` 미지정 시 기존 KPI 비트 동일 |
+| v3.1 | 2026-09-10 | 호환(추가만, -139·-183): `--map-dir=<맵 세트 폴더>`, 조건부 SUMMARY 키 `map_dir`. 맵 세트에 `topology.json`이 있으면 통로·밴드 좌표를 거기서 읽는다(없으면 wallA 상수). `n_robots` 상한이 그 맵의 충전 존 용량이 된다. 인자를 안 주면 v3와 비트 동일(기준값 3개·동일성 12행 확인). θ 탐색 워커 `run_study.py --map-dir`이 이 인자로 호출하고 `meta.condition.map_dir`에 fms_root 기준 상대 경로를 남긴다 |
 | **v3** | 2026-09-09 | **결과 변경**(-177): 헤딩 main 기본 차선(`--lane-gain`·`--pocket-gain` 2.0, θ 밖)·양보, `--no-lanes`·`--no-yield`, SUMMARY `lanes`·`yield_rule`·`yield_events`. θ 스키마는 11개 v2 그대로. 기준선은 두 스위치를 끄면 비트 동일 |
 
 관련: [고부하 기준](../docs/θ_경로_기준선.md#고부하-l1l2), [θ 로드맵](../docs/남은과업_계획.md#부록-a-θ-로드맵-단계표),

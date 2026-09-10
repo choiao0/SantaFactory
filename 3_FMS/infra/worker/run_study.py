@@ -20,6 +20,12 @@
 #   python /opt/worker/run_study.py --study wallA_r24_g15 \
 #       --robots 24 --orders 120 --seeds 42,43,44 --trials 50 \
 #       --metric tasks_per_h --direction maximize --out /work/infra/out
+#
+# 합성 창고(S15P21A106-139)를 탐색하려면 --map-dir 를 준다. 대수는 창고마다 달라야 한다 —
+# 크기가 다른 창고에 같은 대수를 넣으면 측정된 θ 차이가 기하 때문인지 혼잡도 때문인지
+# 갈리지 않는다 (θ 는 막힐 때 일하는 규칙, 감도 실험 §0). 권장 대수는 map/synth/README.md 표.
+#   python /opt/worker/run_study.py --study r11p6l21_r20_g15 \
+#       --map-dir /work/map/synth/r11p6l21 --robots 20 --orders 120 ...
 # ============================================================
 import argparse
 import json
@@ -41,9 +47,44 @@ DEFAULT_FMS_ROOT = "/work"
 # 열어두면 언젠가 쓰이므로 아예 상수로 고정하고, 기록만 meta 에 남긴다.
 FLOW = "main"
 
-# 계약 §1: 충전 존 초기 배치 상한. 넘기면 시뮬이 assert 로 죽는데, 그때는
-# 이미 컨테이너·DB 가 다 뜬 뒤다. 인자 파싱에서 먼저 끊는다.
+# 계약 §1: 공식 맵 wallA 의 충전 존 초기 배치 상한. 넘기면 시뮬이 assert 로 죽는데,
+# 그때는 이미 컨테이너·DB 가 다 뜬 뒤다. 인자 파싱에서 먼저 끊는다.
+# 합성 창고는 존 크기가 창고마다 달라(24~42대) 이 상수를 못 쓴다 — --map-dir 이 있으면
+# 그 맵의 존에서 직접 센다 (charge_zone_capacity, S15P21A106-183).
 MAX_ROBOTS = 28
+
+
+def _relative_to(path, root):
+    """`root` 아래면 상대 경로(슬래시), 아니면 절대 경로 그대로."""
+    try:
+        rel = os.path.relpath(path, os.path.abspath(root))
+    except ValueError:                                  # 윈도우: 드라이브가 다르면
+        return path
+    return path if rel.startswith("..") else rel.replace(os.sep, "/")
+
+
+def charge_zone_capacity(map_dir, sim_engine_dir, limit=MAX_ROBOTS * 4):
+    """맵 세트의 충전 존이 간격 2 로 앉힐 수 있는 최대 로봇 수.
+
+    시뮬과 같은 로더·같은 배치 규칙(map_loader.make_homes_zone)을 쓴다. 여기서 따로
+    세면 워커가 통과시킨 대수를 시뮬이 거부하는 일이 생긴다.
+    """
+    if sim_engine_dir not in sys.path:
+        sys.path.insert(0, sim_engine_dir)
+    from map_loader import load_charge_zone, load_map, make_homes_zone
+    free = load_map(map_dir, aisle_block=True)[0]
+    zone = load_charge_zone(free, map_dir)
+    if zone is None:
+        return 0
+    zone = zone & free
+    cap = 0
+    for n in range(2, limit + 1):
+        try:
+            make_homes_zone(free, zone, n)
+        except AssertionError:
+            break
+        cap = n
+    return cap
 
 
 def load_theta_space(fms_root):
@@ -85,6 +126,7 @@ def make_objective(args, continuous, categorical):
                               args.seeds, timeout_s=args.timeout,
                               aisle_block=args.aisle_block, flow=FLOW,
                               cell=args.cell, order_gap=args.order_gap,
+                              extra_args=args.extra_args,
                               tag=f"bo{trial.number}")
         except SimFailed as exc:
             # 시뮬이 못 끝나는 θ 도 정보다 — 버리지 말고 기록하고 가지치기한다.
@@ -129,10 +171,13 @@ def dump_best(study, args, schema_version, neutral_names):
         "theta_schema_version": schema_version,
         # 조건은 θ 를 재현하는 데 필요한 전부다 — 이 dict 로 계약 §6 호출을
         # 그대로 복원할 수 있어야 한다.
+        # map_dir 은 어느 창고에서 뽑은 θ 인지다. 빠지면 그 θ 는 재현도 해석도 안 된다
+        # (합성 창고 도입, S15P21A106-183). 공식 맵이면 키가 안 붙어 기존 meta 와 같다.
         "condition": {"robots": args.robots, "orders": args.orders,
                       "seeds": args.seeds, "aisle_block": args.aisle_block,
                       "flow": FLOW, "cell": args.cell,
-                      "order_gap": args.order_gap},
+                      "order_gap": args.order_gap,
+                      **({"map_dir": args.map_ref} if args.map_ref else {})},
         # 어떤 축을 탐색했는지 남긴다. 고정한 θ 도 값은 theta json 에 들어가므로
         # 이 목록이 없으면 "탐색해서 중립이 나온 것"과 구분되지 않는다.
         "search_space": {"pinned_neutral": sorted(args.pinned),
@@ -188,6 +233,10 @@ def parse_args(argv=None):
     # 탐색 자체의 재현은 Postgres 에 남는 study 기록으로 한다.
     p.add_argument("--sampler-seed", type=int, default=None, dest="sampler_seed",
                    help="단일 워커 재현용. 병렬로 돌릴 때는 지정하지 말 것")
+    # 합성 창고(S15P21A106-139)를 탐색 대상으로 쓸 때만. 생략 = 공식 맵 3_FMS/map.
+    p.add_argument("--map-dir", default=None, dest="map_dir",
+                   help="맵 세트 폴더. 합성 창고는 map/synth/<이름> "
+                        "(권장 대수는 map/synth/README.md 표)")
     p.add_argument("--sim-engine", default=DEFAULT_SIM_ENGINE, dest="sim_engine")
     p.add_argument("--fms-root", default=DEFAULT_FMS_ROOT, dest="fms_root")
     p.add_argument("--out", default="", help="최적 θ·메타 저장 디렉토리")
@@ -195,8 +244,21 @@ def parse_args(argv=None):
     args.seeds = [int(s) for s in args.seeds.split(",") if s.strip()]
     if not args.seeds:
         p.error("--seeds 가 비었다. 시뮬은 확률적이라 시드 3개 이상을 권장한다")
-    if args.robots > MAX_ROBOTS:
-        p.error(f"--robots {args.robots} > 충전 존 용량 {MAX_ROBOTS} (계약 §1)")
+    args.extra_args = ()
+    args.map_ref = None
+    if args.map_dir is None:
+        cap, where = MAX_ROBOTS, "공식 맵 (계약 §1)"
+    else:
+        args.map_dir = os.path.abspath(args.map_dir)
+        if not os.path.isdir(args.map_dir):
+            p.error(f"--map-dir 폴더가 없다: {args.map_dir}")
+        args.extra_args = (f"--map-dir={args.map_dir}",)
+        # meta 에는 fms_root 기준 상대 경로를 적는다. 절대 경로를 박으면 다른 머신·컨테이너에서
+        # 그 dict 로 호출을 복원할 수 없다 — meta 의 존재 이유가 그거다.
+        args.map_ref = _relative_to(args.map_dir, args.fms_root)
+        cap, where = charge_zone_capacity(args.map_dir, args.sim_engine), os.path.basename(args.map_dir)
+    if args.robots > cap:
+        p.error(f"--robots {args.robots} > 충전 존 용량 {cap} — {where}")
     args.exclude = [n.strip() for n in args.exclude.split(",") if n.strip()]
     return args
 
@@ -218,6 +280,7 @@ def main(argv=None):
     print(f"조건 flow={FLOW} · aisle_block={args.aisle_block} · "
           f"{'칸' if args.cell else '헤딩'} 모델 · order_gap={args.order_gap} "
           f"(SIM_RUN_CONTRACT v2)")
+    print(f"맵 {os.path.basename(args.map_dir) if args.map_dir else '공식 맵 (3_FMS/map)'}")
 
     study = optuna.create_study(
         study_name=args.study,
