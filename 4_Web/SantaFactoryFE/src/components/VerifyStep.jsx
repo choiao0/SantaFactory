@@ -6,7 +6,7 @@ export default function VerifyStep({ estimateId, ready }) {
   if (!ready || verify.status !== 'done' || !verify.videoUrl) return null
 
   return (
-    <section className="step section-dark reveal" id="verify">
+    <section className="step section-dark" id="verify">
       <div className="eyebrow red">
         <span className="live-dot" />
         04 — VERIFY
