@@ -27,8 +27,9 @@ log = logging.getLogger("sim_runner")
 SIM_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_ROS_SETUP = ("/opt/ros/humble/setup.bash", os.path.join(SIM_DIR, "t4_agent", "install", "setup.bash"))
 DEFAULT_STATE_DIR = os.path.expanduser("~/.local/state/sim_runner")
-DEFAULT_ISAAC_CMD = os.path.expanduser("~/isaacsim/python.sh") + " " + os.path.join(SIM_DIR, "t3_warehouse",
-                                                                                     "warehouse_sim.py")
+ISAAC_DIR = os.path.expanduser("~/isaacsim")
+DEFAULT_ISAAC_CMD = f"cd {ISAAC_DIR} && ./python.sh {os.path.join(SIM_DIR, 'apps', 'warehouse_sim.py')}"
+READY_TIMEOUT_S = {"fake": 120.0, "real": 420.0}     # 실모드 = Isaac 부팅(60~120 s) + 씬 로드 + 첫 odom
 KEEPALIVE_S = 60          # MQTT_CONTRACT §0: sim-runner 60 s
 TICK_S = 0.5
 SHUTDOWN_GRACE_S = 40.0   # 종료 신호 뒤 런 정리(에이전트 5 s + Isaac 20 s 사다리) 상한
@@ -179,10 +180,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--node-id", default="sim-runner-gpu01", help="edge_node_id = username = clientId")
     p.add_argument("--ros-setup", action="append", help="source 할 setup.bash (반복). 기본 humble + t4_agent/install")
     p.add_argument("--isaac-cmd", help="실모드 Isaac 셸 명령 (기본 $SIM_RUNNER_ISAAC_CMD 또는 warehouse_sim.py)")
-    p.add_argument("--isaac-warmup-s", type=float, default=90.0, help="Isaac 기동 뒤 에이전트를 띄우기까지")
+    p.add_argument("--isaac-warmup-s", type=float, default=0.0,
+                   help="Isaac 기동 뒤 에이전트를 띄우기까지 (기본 0: 같이 띄우고 포즈가 올 때까지 STARTING 에서 기다린다)")
     p.add_argument("--state-dir", default=DEFAULT_STATE_DIR, help="bdseq 파일 · 런 로그")
     p.add_argument("--heartbeat-s", type=float, default=5.0)
-    p.add_argument("--ready-timeout-s", type=float, default=120.0, help="Start 뒤 에이전트 전원 ONLINE 상한")
+    p.add_argument("--ready-timeout-s", type=float, help="Start 뒤 전원 ONLINE+포즈 상한 (기본 fake 120 · real 420)")
     p.add_argument("--host-offline-s", type=float, default=15.0, help="host-orch STATE offline 지속 → Stop")
     p.add_argument("-v", "--verbose", action="store_true")
     return p
@@ -202,10 +204,12 @@ def build(args: argparse.Namespace) -> tuple:
                     args.isaac_warmup_s)
     session = EdgeSession(os.path.join(args.state_dir, "bdseq"))
     log_dir = os.path.join(args.state_dir, "logs")
-    cfg = RunnerConfig(args.group, args.node_id, args.heartbeat_s, args.ready_timeout_s, args.host_offline_s)
+    ready = args.ready_timeout_s if args.ready_timeout_s is not None else READY_TIMEOUT_S[args.mode]
+    cfg = RunnerConfig(args.group, args.node_id, args.heartbeat_s, ready, args.host_offline_s)
     edge = Edge(args.node_id, args.node_id, password, session)
-    edge.runner = Runner(cfg, session, lambda: ProcessManager(env, fake=args.mode == "fake", log_dir=log_dir), edge,
-                         vram_mb=edge.cached_vram)
+    runs_dir = os.path.join(args.state_dir, "runs")
+    edge.runner = Runner(cfg, session, lambda: ProcessManager(env, fake=args.mode == "fake", log_dir=log_dir,
+                                                              runs_dir=runs_dir), edge, vram_mb=edge.cached_vram)
     return edge, host, port
 
 

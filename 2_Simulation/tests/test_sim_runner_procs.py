@@ -189,3 +189,29 @@ def test_reap_stale_kills_only_marked_processes_and_not_itself():
     found = P.reap_stale(process_iter=lambda: procs, send=lambda pid, sig: sent.append((pid, sig)), me=99)
 
     assert found == [(10, "r1")] and sent == [(10, signal.SIGKILL)]
+
+
+class TestScenario:
+    def test_scenario_parsed_and_hashed(self):
+        s = P.RunSpec.from_json(start_json(scenario={"seed": 7, "orders": {"outbound": []}}))
+
+        assert s.scenario == {"seed": 7, "orders": {"outbound": []}}
+        assert s.scenario_sha256 == P.scenario_sha256({"seed": 7, "orders": {"outbound": []}}) and len(s.scenario_sha256) == 64
+
+    def test_scenario_must_be_object_small_and_match_sha(self):
+        with pytest.raises(ValueError):
+            P.RunSpec.from_json(start_json(scenario=[1, 2]))
+        with pytest.raises(ValueError):
+            P.RunSpec.from_json(start_json(scenario={"blob": "x" * (P.MAX_SCENARIO_BYTES + 1)}))
+        with pytest.raises(ValueError):
+            P.RunSpec.from_json(start_json(scenario={"seed": 1}, scenario_sha256="f" * 64))
+        with pytest.raises(ValueError):
+            P.RunSpec.from_json(start_json(scenario={"spawn": [1, 2]}))
+
+    def test_canonical_json_is_key_sorted_and_compact(self):
+        assert P.canonical_json({"b": 1, "a": [1, 2]}) == b'{"a":[1,2],"b":1}'
+
+    def test_env_without_scenario_has_no_scenario_keys(self):
+        env = P.run_env(P.RunSpec.from_json(start_json()), base={})
+
+        assert "SIM_SCENARIO_PATH" not in env and "WSIM_SPAWN" not in env

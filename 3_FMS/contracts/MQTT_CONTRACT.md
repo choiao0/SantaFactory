@@ -117,7 +117,7 @@ FMS ↔ AMR 에이전트 ↔ sim-runner ↔ Host ↔ 시뮬 WMS 가 한 브로�
 | `biz/v1/order` | `orderId` · `runId` · `createdAt` · `type` ∈ inbound · outbound · `lines[{sku, qty, fromStation, toStation}]` · `priority` |
 | `biz/v1/event` | `eventId` · `runId` · `at` · `type` ∈ task_assigned · task_done · order_shipped · robot_error · stall · `orderId` · `taskId` · `robot{manufacturer, serial}` |
 
-## 5. Sparkplug B 3.0 (`spBv1.0`, protobuf) — sim-runner 적용 2026-09-08 (`2_Simulation/sim_runner/`, fake 모드 EC2 검증) · host-orch · fms-core 예정
+## 5. Sparkplug B 3.0 (`spBv1.0`, protobuf) — sim-runner 적용 2026-09-08 (`2_Simulation/sim_runner/`) · host-orch 적용 2026-09-09 (`3_FMS/host_orch/`, 잡 큐는 `SIM_VERIFY_CONTRACT.md`) · fms-core 예정
 
 ### 5.1 아이덴티티
 
@@ -138,6 +138,7 @@ FMS ↔ AMR 에이전트 ↔ sim-runner ↔ Host ↔ 시뮬 WMS 가 한 브로�
 | `Runner/Heartbeat` | Int64 ms | 5 s 주기 |
 | `Runner/RTF` · `IsaacInstances` · `RamMB` · `VramMB` | Double · Int32 | 5 s 샘플, 변화 시 |
 | `Runner/LastError` | String | ERROR 이유 |
+| `Runner/ScenarioSha` | String | 받은 scenario 의 sha256 (정규형). 런 없으면 `""`. Host 가 요청의 sha 와 대조 |
 | `Run Control/Start` · `Run Control/Stop` | Text(JSON) · Boolean | NCMD 용. NBIRTH 에 `""` · `false` 로 선언 |
 | **Device amr01… (state 거울)** | | |
 | `Robot/Model` · `Robot/Connection` · `Robot/LastNodeId` | String | factsheet seriesName / ONLINE · OFFLINE · CONNECTIONBROKEN / 틱 ack |
@@ -150,7 +151,7 @@ FMS ↔ AMR 에이전트 ↔ sim-runner ↔ Host ↔ 시뮬 WMS 가 한 브로�
 
 | 메트릭 | 값 | sim-runner 동작 |
 |---|---|---|
-| `Run Control/Start` | JSON `{run_id, scenario_pkg, n_robots, models[{serial, manufacturer, model}], ros_domain_id, timeout_s}` | Isaac + 에이전트 기동 → ready → DBIRTH ×N → RUNNING (실패 ERROR + LastError). 멱등: 같은 run_id 가 이미 RUNNING 이면 무시하고 상태만 재보고 (RabbitMQ 재전달 대비) |
+| `Run Control/Start` | JSON `{run_id, scenario_pkg, n_robots, models[{serial, manufacturer, model}], ros_domain_id, timeout_s, scenario?, scenario_sha256?}` (scenario 는 SIM_VERIFY_CONTRACT §2, 512 KB 이하) | Isaac + 에이전트 기동 → ready(전원 ONLINE + 포즈 수신) → DBIRTH ×N → RUNNING (실패 ERROR + LastError). 멱등: 같은 run_id 가 이미 RUNNING 이면 무시하고 상태만 재보고 (RabbitMQ 재전달 대비) |
 | `Run Control/Stop` | true | 에이전트 SIGTERM(OFFLINE) → DDEATH ×N → Isaac 종료 → IDLE |
 | `Node Control/Rebirth` | true | NBIRTH + 살아 있는 DBIRTH 재발행 |
 
@@ -160,6 +161,7 @@ FMS ↔ AMR 에이전트 ↔ sim-runner ↔ Host ↔ 시뮬 WMS 가 한 브로�
 - Host STATE online 갱신을 보면 Edge 는 NBIRTH · DBIRTH 재발행. Host 는 NDEATH(bdSeq 일치)의 노드를 offline, 그 디바이스 전부 stale.
 - 하트비트 5 s, 3회 결측 = 런 실패 → Stop. timeout_s 경과 · Host STATE offline 15 s · 런 프로세스 사망 → sim-runner 스스로 정지하고 `Runner/State` ERROR + `LastError`(사유). ERROR 는 IDLE 처럼 다음 Start 를 받고, Start 가 `LastError` 를 비운다.
 - Stop 순서(적용): DDEATH ×N 즉시 → 에이전트 SIGINT(브리지가 OFFLINE 발행) → 5 s 뒤 SIGTERM → 3 s 뒤 SIGKILL → Isaac 같은 사다리(유예 20 s) → IDLE. bdSeq 는 `~/.local/state/sim_runner/bdseq` 에 보존.
+- Host(적용): `spBv1.0/santa/#` 구독. seq 갭 · BIRTH 없는 노드 → Rebirth NCMD (노드당 5 s 에 1회). NDEATH 는 bdSeq 가 마지막 NBIRTH 와 같을 때만 offline(디바이스 stale), 아니면 stale death 로 무시. NDATA 가 15 s 없으면(하트비트 3회) 런 실패로 Stop. STATE 의 timestamp 는 접속마다 새로 — Edge 는 증가를 보고 BIRTH 재발행.
 - Start 의 `models[]` 가 비면 `amr01…` 순번 시리얼 · manufacturer `idealworks` · model `iw_hub`. sim-runner 는 factsheet 를 못 보므로(ACL) `Robot/Model` 은 이 목록에서 온다. 같은 run_id 는 무시하고 상태만 재보고, 다른 run_id 는 `LastError` "busy" 로 거절(상태 불변).
 
 ## 6. 변경 절차

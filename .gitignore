@@ -5,6 +5,7 @@ __pycache__/
 4_Web/sonarqube/.env
 4_Web/SantaFactoryBE/.env
 3_FMS/infra/.env
+3_FMS/infra/.env.estimate
 
 server-setup/
 

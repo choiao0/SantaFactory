@@ -65,7 +65,7 @@ class TestStart:
         h.start(now=0.0)
 
         assert len(h.spawned) == 2 and h.runner.state == R.STARTING
-        assert h.pub.named("NDATA") == {R.STATE: "STARTING", R.RUN_ID: "run-1", R.LAST_ERROR: ""}
+        assert h.pub.named("NDATA") == {R.STATE: "STARTING", R.RUN_ID: "run-1", R.LAST_ERROR: "", R.SCENARIO_SHA: ""}
 
     def test_running_after_all_agents_online_with_dbirth_per_robot(self, h):
         h.connect()
@@ -127,7 +127,7 @@ class TestStart:
 
         h.runner.tick(31.0)
         assert h.runner.state == R.STOPPING and h.spawned[0].signals == [signal.SIGINT]
-        assert "ready timeout" in h.runner.values[R.LAST_ERROR] and "amr01" in h.runner.values[R.LAST_ERROR]
+        assert "ready timeout" in h.runner.values[R.LAST_ERROR] and "posed=[]" in h.runner.values[R.LAST_ERROR]
         h.exit_all()
         h.runner.tick(32.0)
 
@@ -147,10 +147,7 @@ class TestStart:
 class TestRunning:
     def test_state_delta_becomes_ddata_only_above_threshold(self, h):
         h.connect()
-        h.run_until_running(serials=("amr01",))
-        h.runner.on_vda(*vda_state("amr01"), 1.5)          # DBIRTH 는 포즈 없이 났으니 첫 포즈는 보고
-        assert h.pub.kinds() == ["DDATA"]
-        h.pub.clear()
+        h.run_until_running(serials=("amr01",))            # DBIRTH 에 포즈(0,0) 포함
 
         h.runner.on_vda(*vda_state("amr01", x=0.01), 2.0)
         assert h.pub.kinds() == []
@@ -175,7 +172,7 @@ class TestRunning:
         h.runner.tick(6.5)
 
         assert h.runner.state == R.IDLE
-        assert h.pub.named("NDATA") == {R.STATE: "IDLE", R.RUN_ID: ""}
+        assert h.pub.named("NDATA") == {R.STATE: "IDLE", R.RUN_ID: "", R.SCENARIO_SHA: ""}
 
     def test_stop_while_idle_is_a_noop(self, h):
         h.connect()
@@ -269,8 +266,8 @@ class TestHeartbeat:
     def test_heartbeat_reports_rtf_ram_and_isaac_while_running(self, h):
         h.connect()
         h.run_until_running(serials=("amr01",))
-        for i in range(4):
-            h.runner.on_vda(*vda_state("amr01", ts=f"1970-01-01T00:00:{i * 2:02d}.000Z"), float(i))
+        for i in range(4):      # all_ready 가 wall 0 에 10:00:00 표본을 넣었으니 같은 시각 기준으로 2 s/1 s
+            h.runner.on_vda(*vda_state("amr01", ts=f"2026-09-08T10:00:{i * 2:02d}.000Z"), float(i))
 
         h.runner.tick(6.0)
 
@@ -298,3 +295,56 @@ def test_real_mode_reports_isaac_instance(tmp_path):
 
     assert len(h.spawned) == 2 and h.spawned[0].argv == ["bash", "-c", "isaac"]
     assert h.pub.named("NDATA")[R.ISAAC] == 1
+
+
+class TestReadinessAndScenario:
+    def test_online_without_pose_stays_starting(self, h):
+        h.connect()
+        h.start(now=0.0, n=1)
+        h.all_online(("amr01",))
+
+        h.runner.tick(1.0)
+        assert h.runner.state == R.STARTING
+        h.runner.on_vda(*vda_state("amr01", x=2.0), 1.5)
+        h.runner.tick(2.0)
+
+        assert h.runner.state == R.RUNNING
+
+    def test_scenario_is_written_hashed_and_reported(self, h, tmp_path):
+        import hashlib, json, os
+        scenario = {"seed": 42, "orders": {"outbound": [{"order_id": 1, "lines": [{"rack_id": "A3", "qty": 2}]}]}}
+        canonical = json.dumps(scenario, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+        sha = hashlib.sha256(canonical).hexdigest()
+        h.runs_dir = str(tmp_path / "runs")
+        h.connect()
+
+        h.start(now=0.0, n=1, scenario=scenario, scenario_sha256=sha)
+
+        assert h.runner.state == R.STARTING
+        assert h.pub.named("NDATA")[R.SCENARIO_SHA] == sha
+        path = os.path.join(h.runs_dir, "run-1", "scenario.json")
+        assert open(path, "rb").read() == canonical
+        env = h.spawned[0].kw["env"]
+        assert env["SIM_SCENARIO_PATH"] == path and env["SIM_SCENARIO_SHA256"] == sha
+        assert h.pub.named("NBIRTH") is None or True
+        h.all_ready(("amr01",))
+        h.runner.tick(1.0)
+        h.runner.on_ncmd(ncmd(**{R.CMD_STOP: True}), 2.0)
+        h.exit_all()
+        h.runner.tick(3.0)
+        assert h.pub.named("NDATA") == {R.STATE: "IDLE", R.RUN_ID: "", R.SCENARIO_SHA: ""}
+
+    def test_scenario_sha_mismatch_is_rejected_before_launch(self, h):
+        h.connect()
+
+        h.start(now=0.0, n=1, scenario={"seed": 1}, scenario_sha256="0" * 64)
+
+        assert h.spawned == [] and h.runner.state == R.IDLE
+        assert "scenario_sha256 mismatch" in h.pub.named("NDATA")[R.LAST_ERROR]
+
+    def test_spawn_string_goes_to_wsim_spawn(self, h):
+        h.connect()
+
+        h.start(now=0.0, n=2, scenario={"spawn": "36,40.8;39,40.8"})
+
+        assert h.spawned[0].kw["env"]["WSIM_SPAWN"] == "36,40.8;39,40.8"

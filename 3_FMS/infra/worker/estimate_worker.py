@@ -11,6 +11,7 @@
 # 환경: SIM_ENGINE_DIR(기본 /work/sim_engine, 없으면 이 파일 기준 ../../sim_engine)
 #       THETA_PATH(기본 <3_FMS>/infra/out/theta_wallA_r24_g15.json, "" 이면 중립)
 #       SIM_TIMEOUT_S(기본 600)  SIM_REQUEST_QUEUE/SIM_RESULT_QUEUE(기본 sim.request/sim.result)
+#       ORDER_GEN_DIR(기본 <3_FMS>/order_gen)  WORKER_GEN_ORDERS(기본 1, 0 이면 주문 자체 생성 끄고 간격 모드 — -158)
 # ============================================================
 import json
 import os
@@ -28,6 +29,8 @@ SIM_ENGINE_DIR = os.environ.get("SIM_ENGINE_DIR") or (
 FMS_DIR = os.path.dirname(SIM_ENGINE_DIR)
 THETA_PATH = os.environ.get("THETA_PATH", os.path.join(FMS_DIR, "infra", "out", "theta_wallA_r24_g15.json"))
 TIMEOUT_S = int(os.environ.get("SIM_TIMEOUT_S", "600"))
+ORDER_GEN_DIR = os.environ.get("ORDER_GEN_DIR", os.path.join(FMS_DIR, "order_gen"))
+GEN_ORDERS = os.environ.get("WORKER_GEN_ORDERS", "1") != "0"
 REQUEST_QUEUE = os.environ.get("SIM_REQUEST_QUEUE", "sim.request")
 RESULT_QUEUE = os.environ.get("SIM_RESULT_QUEUE", "sim.result")
 MAX_ROBOTS = 28            # 충전 존 초기 배치 상한 (SIM_RUN_CONTRACT §1 — 견적 제약)
@@ -80,29 +83,34 @@ def _log_ignored(req, amr, run_id):
         log(f"{run_id}: 명시 inbound 리스트는 V1 에서 무시 (간격 기반 생성, 입고 시나리오 보류)")
 
 
-def _orders_flags(req, amr, orders_path):
-    """명시 출고 주문 (-156): outbound[] 가 있으면 --orders-file, amr.capacity 가 정수면 --capacity (상품 개수)."""
-    if not (req.get("outbound") and orders_path):
+def _orders_flags(amr, orders_path):
+    """명시 출고 주문(v2.6): capacity=토트 수, tote_units 기본 8, 양 끝 서비스 5초/토트."""
+    if not orders_path:
         return []
-    flags = [f"--orders-file={orders_path}"]
+    flags = [f"--orders-file={orders_path}", "--svc-per-tote=5"]
     cap = amr.get("capacity")
-    if cap is None:
-        return flags
-    if isinstance(cap, bool) or not isinstance(cap, int) or cap < 1:
-        raise ValueError(f"amr.capacity 는 1 이상 정수 (상품 개수): {cap!r}")
-    return flags + [f"--capacity={cap}"]
+    if cap is not None:
+        if isinstance(cap, bool) or not isinstance(cap, int) or not 1 <= cap <= 6:
+            raise ValueError(f"amr.capacity 는 1~6 정수 (토트 수): {cap!r}")
+        flags.append(f"--capacity={cap}")
+    tote_units = amr.get("tote_units")
+    if tote_units is None:                      # 백엔드는 amr 필드를 null 로 채워 보낸다 → 기본 8 (신발 상자 기준 가정)
+        tote_units = 8
+    if isinstance(tote_units, bool) or not isinstance(tote_units, int) or tote_units < 1:
+        raise ValueError(f"amr.tote_units 는 1 이상 정수 (상품 개수): {tote_units!r}")
+    return flags + [f"--tote-units={tote_units}"]
 
 
 def to_sim_args(req, orders_path=None):
     """명세 §1-1 요청 dict → run_once 키워드 인자. 잘못된 요청은 ValueError (시뮬을 돌리지 않는다).
-    orders_path: 요청 outbound[] 를 써 둔 파일 (handle 이 만든다) → --orders-file (-156)."""
+    orders_path: 출고 주문을 써 둔 파일 (handle 이 만든다 — 요청 outbound[] 또는 자체 생성) → --orders-file (-156/-158)."""
     run_id, amr, n, horizon = _require_core(req)
     extra = [f"--horizon={horizon}"]
     if req.get("shifts"):
         extra.append(f"--shifts={req['shifts']}")
     extra += _gap_flags(req)
     _log_ignored(req, amr, run_id)
-    extra += _orders_flags(req, amr, orders_path)
+    extra += _orders_flags(amr, orders_path)
     seed = req.get("seed")
     return dict(tag=re.sub(r"[^A-Za-z0-9_.-]", "_", run_id), n_robots=n, n_orders=0,
                 seed=int(seed) if seed is not None else 42,
@@ -117,7 +125,8 @@ def to_kpi(s):
         orders_total=int(s["n_orders"]), orders_completed=int(s["orders_done"]),
         inbound_total=int(s["inbound_total"]), inbound_completed=int(s["tasks_in"]),
         makespan_s=int(round(s["makespan_steps"] * DT)),
-        lead_time_mean_s=s["lead_mean_s"], lead_time_p90_s=s["lead_p90_s"], queue_time_mean_s=s["queue_mean_s"],
+        lead_time_mean_s=s.get("order_lead_mean_s", s["lead_mean_s"]),
+        lead_time_p90_s=s.get("order_lead_p90_s", s["lead_p90_s"]), queue_time_mean_s=s["queue_mean_s"],
         throughput_orders_per_h=s["orders_per_h"], throughput_tasks_per_h=s["tasks_per_h"],
         amr_utilization=s["util_incl_service"],          # 주행+대기+서비스+회전 ÷ 대수×T (docs/견적_워커.md)
         conflict_wait_ratio=s["conflict_wait"],
@@ -126,21 +135,60 @@ def to_kpi(s):
     )
 
 
+# ------------------------------------------------------------
+# 출고 주문 자체 생성 (-158, docs/견적_워커.md "주문 자체 생성")
+# 백엔드는 outbound[] 를 비워 보내므로 창고 정보(outbound_avg·출고 시간대·seed)로 워커가 만든다.
+# ------------------------------------------------------------
+def _generate_orders(req):
+    """하루치 생성 → 출고 창 [outbound_start, outbound_end) 로 비례 매핑 → [start, start+horizon) 자르기. slice 출력 dict."""
+    if ORDER_GEN_DIR not in sys.path:
+        sys.path.insert(0, ORDER_GEN_DIR)
+    import generate_orders                                                 # 이미지 안 /app/order_gen (estimate.Dockerfile)
+    import slice_orders
+    _, _, _, horizon = _require_core(req)
+    wh = req.get("warehouse") or {}
+    n_day = int(wh.get("outbound_avg") or 500)                             # 500 = 프로파일 원본 규모
+    seed = int(req.get("seed", 42))
+    day = generate_orders.generate(
+        generate_orders.load_json(os.path.join(ORDER_GEN_DIR, "profiles", "order_rules.json")),
+        generate_orders.load_json(os.path.join(ORDER_GEN_DIR, "master", "santafactory_sample.json")),
+        n_day, seed=seed)
+    start = slice_orders.to_seconds(wh["outbound_start"]) if wh.get("outbound_start") else 7 * 3600   # 07:00 = 프로파일 피크
+    end = slice_orders.to_seconds(wh["outbound_end"]) if wh.get("outbound_end") else 0
+    if start < end:                                                        # 야간 교대(end <= start)는 매핑 없이 start 부터
+        day = slice_orders.rescale_orders(day, start, end)
+    return slice_orders.slice_orders(day, start, min(start + int(horizon * DT), 86400))
+
+
+def _orders_file(req):
+    """(임시 파일 경로, 건수). 요청 outbound[] 우선, 없으면 자체 생성(GEN_ORDERS). 주문이 없으면 (None, 0) = 간격 모드."""
+    orders = req.get("outbound")
+    if not orders and GEN_ORDERS:
+        gen = _generate_orders(req)
+        orders = gen["outbound"]
+        log(f"{req.get('run_id')}: 주문 자체 생성 {len(orders)}/{gen['meta']['orders_total']}건 "
+            f"(창 {gen['meta']['window_start_s']}~{gen['meta']['window_end_s']} s, seed {gen['meta']['seed']})")
+    if not orders:
+        return None, 0
+    fd, path = tempfile.mkstemp(prefix="orders_", suffix=".json")
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump({"outbound": orders}, f)
+    return path, len(orders)
+
+
 def handle(body):
     """요청 바이트/문자열 → 결과 dict. 어떤 경우에도 예외 대신 failed 결과를 돌려준다 (명세 §1-3: 실패도 발행)."""
-    run_id, orders_path = "?", None
+    run_id, orders_path, n_orders = "?", None, 0
     try:
         req = json.loads(body)
         run_id = req.get("run_id", "?") if isinstance(req, dict) else "?"
-        if isinstance(req, dict) and req.get("outbound"):
-            fd, orders_path = tempfile.mkstemp(prefix="orders_", suffix=".json")
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump({"outbound": req["outbound"]}, f)
+        if isinstance(req, dict):
+            orders_path, n_orders = _orders_file(req)
         kw = to_sim_args(req, orders_path)
         t0 = time.perf_counter()
         summary = run_once(SIM_ENGINE_DIR, timeout_s=TIMEOUT_S, **kw)
         log(f"{run_id}: n={kw['n_robots']} 완료 {time.perf_counter() - t0:.1f}s"
-            + (f" (명시 주문 {len(req['outbound'])}건, 제외 {summary.get('orders_skipped', 0)})" if orders_path else ""))
+            + (f" (명시 주문 {n_orders}건, 제외 {summary.get('orders_skipped', 0)})" if orders_path else ""))
         return dict(run_id=run_id, status="done", error=None, kpi=to_kpi(summary))
     except (ValueError, KeyError, SimFailed, json.JSONDecodeError) as e:
         log(f"{run_id}: 실패 — {e}")

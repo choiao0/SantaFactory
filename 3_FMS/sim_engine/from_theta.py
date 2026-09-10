@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 # ============================================================
-# B-2: from_theta() — θ 11개를 칸별 통행 비용(Guidance)으로 변환 (스키마 v2)
+# B-2: from_theta() — θ 11개를 칸별 통행 비용(Guidance)으로 변환 (스키마 v2) + 차선 비용(θ 밖, -177)
 # (설계: docs/θ_경로_기준선.md#from_theta-조립-규칙,
-#  합의: docs/θ_경로_기준선.md#θ-11개-스키마, 계약: contracts/guidance_types.py)
+#  계약: contracts/guidance_types.py, 실행 기본값: contracts/SIM_RUN_CONTRACT.md)
 #
 # 조립 규칙 (합의안 "비용 조립 규칙"):
 #   1. 모든 간선 1.0
@@ -49,12 +49,15 @@ HOME_PREFIXES = WALL_A.home_prefixes   # 홈은 작업자리가 아님 → stati
 class Topology:
     """from_theta가 소비하는 창고 토폴로지 (설계 §2, §3-3)."""
 
-    def __init__(self, v_aisle_rank, main_aisle, loop_fwd, junction, station_dir):
+    def __init__(self, v_aisle_rank, main_aisle, loop_fwd, junction, station_dir,
+                 lane_dir, pocket):
         self.v_aisle_rank = v_aisle_rank   # (H,W) int16, -1=통로 아님. 세로 통로 id(=rank)
         self.main_aisle = main_aisle       # (H,W) bool
         self.loop_fwd = loop_fwd           # (H,W) int8, 시계방향 접선, -1=아님
         self.junction = junction           # (H,W) bool  — 교차로(통로 목)
         self.station_dir = station_dir     # (H,W) int8, 도킹 칸의 entry_dir(station→통로), -1=아님
+        self.lane_dir = lane_dir           # (H,W) int8, 출발·복귀 차선 허용 방향, -1=차선 아님
+        self.pocket = pocket               # (H,W) bool, 버퍼 정차 주머니 줄
 
     @property
     def station(self):
@@ -101,7 +104,7 @@ def extract_topology(free, st_cell, verbose=False, spec=None):
 
     귀결(θ 감도 실험 2026-09-04 §5): 기준선(aisle_block=1, 입구버퍼 인수인계)에서는 rank 를 매기는 세로 통로 칸이
     전부 막혀 있어 aisle 계열 θ 4개(aisle_alt_gain·aisle_alt_boost·aisle_period·aisle_phase)가 **무효**(중립과 비트 동일).
-    코드 결함이 아니라 운영 모델의 결과이며, 스키마는 11개 그대로 두고 BO 탐색 공간에서만 제외한다.
+    코드 결함이 아니라 운영 모델의 결과이며, 기존 aisle 필드는 BO 탐색 공간에서만 제외한다.
     슬롯 앞 정차(Locus식)로 바꾸면 코드 수정 없이 되살아난다."""
     if spec is None:
         spec = WALL_A
@@ -144,7 +147,35 @@ def extract_topology(free, st_cell, verbose=False, spec=None):
                 print(f"[from_theta] {name} {rc}: entry_dir 결정 불가 → station 규칙 미적용")
             continue
         sdir[rc] = d
-    return Topology(rank, main, loop, junc, sdir)
+    # 버퍼 줄 → 주머니, 안쪽 첫 줄 → 출발, 한 줄 간격 뒤 → 복귀.
+    # 남/북과 열 범위는 좌표로 박지 않고 버퍼 행과 기존 링 방향에서 추론한다.
+    lane = np.full((H, W), -1, dtype=np.int8)
+    pocket = np.zeros((H, W), dtype=bool)
+    buf_rows = sorted({rc[0] for name, rc in st_cell.items() if name.startswith("aisle_buf[")})
+    buf_cols = [rc[1] for name, rc in st_cell.items() if name.startswith("aisle_buf[")]
+    connector_cols = np.nonzero(np.any((loop == 0) | (loop == 2), axis=0))[0]   # 남북 방향 순환로가 있는 열 = 연결 기둥
+    left = max((c for c in connector_cols if c < min(buf_cols)), default=0)
+    right = min((c for c in connector_cols if c > max(buf_cols)), default=W - 2) + 1
+    span = np.zeros(W, dtype=bool)
+    span[left:right + 1] = True
+    center = sum(buf_rows) / len(buf_rows) if buf_rows else 0
+    for r in buf_rows:
+        inner = -1 if r < center else 1
+        dirs, counts = np.unique(loop[r][loop[r] >= 0], return_counts=True)
+        if not len(dirs):
+            continue
+        band_dir = int(dirs[np.argmax(counts)])
+        depart_dir = (band_dir + 2) % 4
+        pocket[r] = free[r] & (loop[r] == band_dir) & span
+        depart_r = r + inner
+        lane[depart_r, free[depart_r] & (loop[depart_r] == band_dir) & span] = depart_dir
+        return_dir = band_dir
+        return_r, fallback_r = r + 3 * inner, r + 4 * inner
+        base = free[return_r] & (loop[return_r] == band_dir) & span
+        lane[return_r, base] = return_dir
+        missing = pocket[r] & ~base & free[fallback_r] & (loop[fallback_r] == band_dir) & span
+        lane[fallback_r, missing] = return_dir
+    return Topology(rank, main, loop, junc, sdir, lane, pocket)
 
 
 def _shift(a, d, fill):
@@ -162,7 +193,8 @@ def edge_masks(free, topo, theta):
     H, W = free.shape
     m = {k: np.zeros((H, W, 4), dtype=bool) for k in
          ("station_in", "station_out", "loop_gain", "junction_penalty",
-          "aisle_alt_boost", "aisle_alt_gain", "main_aisle_gain")}
+          "aisle_alt_boost", "aisle_alt_gain", "main_aisle_gain",
+          "lane_gain", "pocket_gain")}
     rank = topo.v_aisle_rank
     group = (rank // theta.aisle_period + theta.aisle_phase) % 2
     pref_dir = np.where(group == 0, 0, 2)                  # 세로 통로: 그룹0=북, 그룹1=남
@@ -189,11 +221,18 @@ def edge_masks(free, topo, theta):
             m["aisle_alt_gain"][..., d] = same & (pref_dir != d)
         # main_aisle_gain (항상): 양 끝 main_aisle
         m["main_aisle_gain"][..., d] = both & topo.main_aisle & _shift(topo.main_aisle, d, False)
+        same_lane = both & (topo.lane_dir >= 0) & \
+            (topo.lane_dir == _shift(topo.lane_dir, d, np.int8(-1)))
+        m["lane_gain"][..., d] = same_lane & (topo.lane_dir == (d + 2) % 4)
+        if d in (1, 3):
+            m["pocket_gain"][..., d] = both & topo.pocket & _shift(topo.pocket, d, False)
     return m
 
 
-def from_theta(free, topo, theta):
-    """GuidanceTheta → Guidance (스키마 v2 배타 조립, 마지막에 한 번 clamp)."""
+def from_theta(free, topo, theta, lane_gain=1.0, pocket_gain=1.0):
+    """GuidanceTheta → Guidance (스키마 v2 배타 조립, 마지막에 한 번 clamp).
+    lane_gain·pocket_gain 은 θ 가 아니라 시뮬 운영 규칙(-177 차선)이다 — θ 스키마(A트랙 계약)는 11개 그대로 두고,
+    θ 조립이 끝난 비용 위에 곱한다. 1.0 이면 차선 없음(v2 와 비트 동일)."""
     H, W = free.shape
     m = edge_masks(free, topo, theta)
     ec = np.ones((H, W, 4), dtype=np.float32)
@@ -204,6 +243,8 @@ def from_theta(free, topo, theta):
             ec[sel] *= getattr(theta, name)
             applied |= sel
     ec[m["main_aisle_gain"]] *= theta.main_aisle_gain
+    ec[m["lane_gain"]] *= lane_gain                 # 차선 줄 역방향 이동
+    ec[m["pocket_gain"]] *= pocket_gain             # 버퍼 정차 주머니 줄 통과
     wc = np.full((H, W), theta.wait_cost, dtype=np.float32)
     return Guidance(edge_cost=np.clip(ec, COST_MIN, COST_MAX),
                     wait_cost=np.clip(wc, COST_MIN, COST_MAX))

@@ -19,7 +19,7 @@
 #                              [--inbound-gap=<틱>] (입고 간격만 따로, 기본 = order-gap)
 #                              [--horizon=<틱>] [--shifts=in,out,out]                     (고정 시간·교대, -145 §1)
 #                              [--battery] [--chargers=6] [--runtime-h=8] [--charge-h=1.5] [--soc=20,80,95]  (배터리, -145 §2)
-#                              [--orders-file=<json>] [--capacity=<상품 개수>]                     (명시 주문, -156)
+#                              [--orders-file=<json>] [--capacity=<토트 수>] [--tote-units=<상품 수>] [--svc-per-tote=<초>]
 #   기본 = 헤딩 모델 (상태 (r,c,h), 자기+뒤 칸 2칸 점유, 90° 회전 = TURN_TICKS 틱, 회전 중 스윙 칸
 #              예약, 라이브니스 장치 5종). docs/이동계층_PIBT.md#라이브니스-장치-5종
 #   --cell:    칸 모델(점로봇) opt-in — 기준선 CSV 재현·A/B 비교축. (--heading 은 호환용, 무시)
@@ -32,7 +32,7 @@
 #   --battery: SoC 틱 모델 + 충전 도크(charger[0..k) 칸). 임무 없는 로봇이 soc<low 면 강제, soc<go 면 기회 충전.
 #              main + 존 전용 (--fixed-homes·v1compat 과 함께 못 씀). docs/커널_시뮬_구조.md#배터리와-충전-도크
 #   --orders-file: WMS 명시 주문(큐 명세 §1-1 outbound[]) 을 그대로 흘림. 도착 틱 = ordered_at_s, rack_id → map/rack_buffers.json,
-#              같은 버퍼 라인은 토트로 묶고 --capacity 가 있으면 왕복 = ceil(qty합/capacity). 주문수 인자 무시, 출고 교대 창 무시,
+#              버퍼별 토트 수 = ceil(qty합/tote_units), --capacity 만큼 같은 버퍼 토트를 동승. 주문수 인자·출고 교대 창 무시,
 #              horizon 밖 주문은 제외(SUMMARY orders_skipped). 입고는 기존 규칙. docs/커널_시뮬_구조.md#명시-주문-모드
 # 환경: SIM_NO_PLOT=1 히트맵 생략, SIM_CHECK=1 매 틱 충돌 전수 검사(느림),
 #       SIM_DIRFLOW=1 방향별 이동 카운트 npz 저장 (B-2 검증용), SIM_NO_DOCK_PRIO=1 장치 ⑤ 끄기,
@@ -105,6 +105,13 @@ def _parse_model(a, argv):
     # 충전 존 복귀 = main 흐름 기본값 (2026-09-03 결정). 기존 고정 홈 12칸은 --fixed-homes opt-in.
     # v1compat 은 패리티 때문에 항상 고정 홈. (--zone 은 호환용 무시)
     a.zone = "--fixed-homes" not in argv and a.flow != "v1compat"
+    # v3: 차선·양보는 헤딩 main 전용. 칸 모델(--cell)은 A/B 기준 축이라 건드리지 않는다(기준값 2970/127.3 유지).
+    a.lanes = "--no-lanes" not in argv and a.heading and a.flow != "v1compat"
+    a.yield_rule = "--no-yield" not in argv and a.heading and a.flow != "v1compat"
+    # 차선 비용은 θ(A트랙 계약, 11개) 밖의 운영 규칙이다. 기본 2.0 (2·3·5 A/B: 5 는 평가 시드 102 에서 새 STALL, 3·2 완주).
+    a.lane_gain = _opt(argv, "lane-gain", float, 2.0)
+    a.pocket_gain = _opt(argv, "pocket-gain", float, 2.0)
+    assert a.lane_gain >= 1.0 and a.pocket_gain >= 1.0, f"--lane-gain/--pocket-gain 은 1.0 이상: {a.lane_gain}, {a.pocket_gain}"
     # 주문 도착 간격 평균 [틱] (지수분포). 기본 50 = B-0 이후 전 기준선. --order-gap=<틱> 으로 부하 조절
     # (고부하 스윕, docs/θ_경로_기준선.md#고부하-l1l2). v1compat 은 패리티 때문에 항상 50.
     a.order_gap_arg = next((float(f.split("=", 1)[1]) for f in argv if f.startswith("--order-gap=")), None)
@@ -164,16 +171,20 @@ def _parse_battery(a, argv):
 
 
 def _parse_orders(a, argv):
-    """명시 주문 (-156): --orders-file=<json> (생성기 출력 {meta, outbound} 또는 요청 메시지 {…, outbound}), --capacity=<상품 개수>."""
+    """토트 적재(v2.6): capacity=왕복당 토트, tote_units=토트당 상품, svc_per_tote=양 끝 추가 틱."""
     a.orders_file = _opt(argv, "orders-file", str)
-    a.capacity = _opt(argv, "capacity", int)
+    a.capacity = _opt(argv, "capacity", int, 1)
+    a.tote_units = _opt(argv, "tote-units", int)
+    a.svc_per_tote = _opt(argv, "svc-per-tote", int, 0)
     if a.orders_file is not None:
         assert a.flow == "main", "--orders-file 은 main 흐름만"
-    if a.capacity is not None:
-        assert a.capacity >= 1, f"--capacity 는 1 이상: {a.capacity}"
+    assert 1 <= a.capacity <= 6, f"--capacity 는 1~6 토트: {a.capacity}"
+    assert a.svc_per_tote >= 0, f"--svc-per-tote 는 0 이상: {a.svc_per_tote}"
+    if a.tote_units is not None:
+        assert a.tote_units >= 1, f"--tote-units 는 1 이상: {a.tote_units}"
         if a.orders_file is None:
-            a.warnings.append("[WARN] --capacity 는 --orders-file 없이는 무시 (간격 모드는 qty 없음)")
-            a.capacity = None
+            a.warnings.append("[WARN] --tote-units 는 --orders-file 없이는 무시 (간격 모드는 qty 없음)")
+            a.tote_units = None
 
 
 def parse_args(argv):
@@ -218,12 +229,17 @@ def build(a):
         # 합성 창고에서는 make_homes 가 여기서 터졌다 (-139). 존 경로 결과는 그대로다.
         homes = make_homes(free, st_cell, a.n_robots)
 
-    # 통행 비용 — 기본 uniform 1.0. --theta=<json>이면 from_theta(θ) 출력 (B-2).
+    # 통행 비용 — θ(11개, A트랙 계약)로 조립한 뒤 차선 비용(--lane-gain/--pocket-gain, θ 밖)을 곱한다 (-177).
+    # --no-lanes 또는 칸 모델이면 둘 다 1.0 = v2 와 비트 동일.
     # 토폴로지 좌표는 맵 세트에서 온다 (합성 창고는 topology.json, 공식 맵은 wallA 상수 — -139).
-    if a.theta_path:
-        from from_theta import extract_topology, from_theta, load_theta
+    topo = None
+    if a.theta_path or a.lanes or a.yield_rule:
+        from from_theta import GuidanceTheta, extract_topology, from_theta, load_theta
         topo = extract_topology(free, st_cell, spec=load_topology_spec(map_dir))
-        g = from_theta(free, topo, load_theta(a.theta_path))
+    if a.theta_path or a.lanes:
+        theta = load_theta(a.theta_path) if a.theta_path else GuidanceTheta.neutral()
+        lane_gain, pocket_gain = (a.lane_gain, a.pocket_gain) if a.lanes else (1.0, 1.0)
+        g = from_theta(free, topo, theta, lane_gain=lane_gain, pocket_gain=pocket_gain)
         edge_cost = g.edge_cost.astype(np.float64)
         wait_cost = g.wait_cost.astype(np.float64)
     else:
@@ -236,7 +252,7 @@ def build(a):
         rack_map = load_rack_map(map_dir)
         assert rack_map, f"{map_dir}/rack_buffers.json 없음 — map/build_rack_map.py 로 생성 " \
                          "(합성 창고는 WMS 마스터가 없어 명시 주문 모드를 못 쓴다 — -139)"
-        explicit = dict(orders=load_orders_file(a.orders_file), rack_map=rack_map, capacity=a.capacity)
+        explicit = dict(orders=load_orders_file(a.orders_file), rack_map=rack_map, tote_units=a.tote_units)
     stream = OrderStream(rng, a.flow, a.n_orders, a.order_gap, st_cell, stations, inbound_gap=a.inbound_gap_arg,
                          k_line_p=K_LINE_P, horizon=a.horizon, shifts=a.shifts, **explicit)
     if a.horizon is not None or explicit:
@@ -254,11 +270,14 @@ def build(a):
         bat = dict(battery=True, dock_cells=docks, soc_init=soc_init, drain_drive=drain_drive,
                    drain_idle=0.25 * drain_drive, charge_rate=1.0 / (a.charge_h * 3600 / DT),
                    soc_low=a.soc[0], soc_go=a.soc[1], soc_leave=a.soc[2], soc_yield=(a.soc[0] + a.soc[1]) / 2)
-    cfg = KernelConfig(heading=a.heading, zone=a.zone, theta=bool(a.theta_path), check=a.check,
+    cfg = KernelConfig(heading=a.heading, zone=a.zone, theta=bool(a.theta_path or a.lanes), check=a.check,
                        dock_prio=a.dock_prio, export=a.export, service_steps=SERVICE_STEPS,
+                       capacity=a.capacity, svc_per_tote=a.svc_per_tote,
+                       yield_rule=a.yield_rule,
                        turn_ticks=TURN_TICKS, stall_warn_only=a.horizon is not None, **bat)
     kernel = FmsKernel(free, st_cell, edge_cost, wait_cost, homes, a.n_robots, cfg,
-                       zone_mask=zone_mask, on_task_completed=stream.on_completed)
+                       zone_mask=zone_mask, on_task_completed=stream.on_completed,
+                       lane_dir=None if topo is None else topo.lane_dir)
     a.warnings += kernel.warnings
     ctx = SimpleNamespace(free=free, st_cell=st_cell, stations=stations, H=H, W=W)
     return kernel, stream, ctx

@@ -11,7 +11,7 @@ REQ = {
     "run_id": "est_77_n3", "seed": 42,
     "horizon_s": 21600, "shifts": "in,in,out,out,out,out", "inbound_gap_s": 48.0, "outbound_gap_s": 22.5,
     "warehouse": {"worker_count": 4, "inbound_avg": 480, "outbound_avg": 500},
-    "amr": {"count": 3, "speed_empty": 1.2, "speed_loaded": 1.0, "capacity": 8},
+    "amr": {"count": 3, "speed_empty": 1.2, "speed_loaded": 1.0, "capacity": 6},
     "inbound": [], "outbound": [],
 }
 
@@ -20,7 +20,7 @@ SUMMARY = {
     "variant": "est_77_n3", "n_robots": 20, "n_orders": 116, "seed": 42, "makespan_steps": 3600,
     "tasks_per_h": 202.0, "orders_per_h": 104.0, "lead_mean_s": 180.4, "lead_p90_s": 274.0, "queue_mean_s": 9.1,
     "util": 0.598, "util_incl_service": 0.63, "conflict_wait": 0.1, "orders_done": 104, "tasks_in": 30,
-    "inbound_total": 33, "distance_m": 41200,
+    "inbound_total": 33, "distance_m": 41200, "order_lead_mean_s": 190.0, "order_lead_p90_s": 290.0,
 }
 
 KPI_KEYS = {"orders_total", "orders_completed", "inbound_total", "inbound_completed", "makespan_s",
@@ -58,6 +58,7 @@ def test_summary_to_kpi():
     assert (kpi["orders_total"], kpi["orders_completed"]) == (116, 104)
     assert (kpi["inbound_total"], kpi["inbound_completed"]) == (33, 30)
     assert kpi["makespan_s"] == 3600 and kpi["amr_utilization"] == 0.63
+    assert (kpi["lead_time_mean_s"], kpi["lead_time_p90_s"]) == (190.0, 290.0)
     assert kpi["distance_total_m"] == 41200 and kpi["charge_downtime_s"] == 0
 
 
@@ -99,12 +100,48 @@ def test_explicit_orders_and_capacity_flags():
     req = {**REQ, "outbound": [{"order_id": 1, "ordered_at_s": 3, "lines": [{"product_id": 7, "rack_id": "A2", "qty": 1}]}]}
     extra = w.to_sim_args(req, orders_path="/tmp/o.json")["extra_args"]
     assert "--orders-file=/tmp/o.json" in extra
-    assert "--capacity=8" in extra
+    assert {"--capacity=6", "--tote-units=8", "--svc-per-tote=5"} <= set(extra)
     no_cap = w.to_sim_args({**req, "amr": {"count": 3, "capacity": None}}, orders_path="/tmp/o.json")["extra_args"]
     assert "--orders-file=/tmp/o.json" in no_cap
     assert not any(f.startswith("--capacity") for f in no_cap)
-    empty = w.to_sim_args(REQ, orders_path="/tmp/o.json")["extra_args"]          # outbound: [] → 간격 모드
+    assert "--tote-units=8" in no_cap
+    assert "--svc-per-tote=5" in no_cap
+    null_units = w.to_sim_args({**req, "amr": {"count": 3, "capacity": None, "tote_units": None}},
+                               orders_path="/tmp/o.json")["extra_args"]     # 백엔드 실제 형식: 키는 있고 값은 null
+    assert "--tote-units=8" in null_units
+    empty = w.to_sim_args(REQ)["extra_args"]                                     # 주문 파일 없음 → 간격 모드
     assert not any(f.startswith("--orders-file") for f in empty)
     assert not any(f.startswith("--capacity") for f in empty)
     with pytest.raises(ValueError, match="capacity"):
         w.to_sim_args({**req, "amr": {"count": 3, "capacity": 0}}, orders_path="/tmp/o.json")
+
+
+# ------------------------------------------------------------
+# 주문 자체 생성 (-158) — 이미지 안 order_gen 의 실제 프로파일·마스터로 돈다 (결정론)
+# ------------------------------------------------------------
+def test_generated_orders_mapped_to_outbound_window():
+    """출고 시간대 13:00~18:00 → 하루치 500건이 전부 그 창에 비례 매핑되고, horizon 6h 창 [13:00, 19:00) 에 다 들어온다."""
+    req = {**REQ, "warehouse": {**REQ["warehouse"], "outbound_start": "13:00", "outbound_end": "18:00"}}
+    gen = w._generate_orders(req)
+    times = [o["ordered_at_s"] for o in gen["outbound"]]
+    assert len(times) == 500
+    assert min(times) == 0
+    assert max(times) < 5 * 3600
+    assert times == sorted(times)
+    assert gen["meta"]["rescaled_to_s"] == [13 * 3600, 18 * 3600]
+    assert w._generate_orders(req)["outbound"] == gen["outbound"]           # 같은 seed → 같은 주문
+
+
+def test_generated_orders_default_window_and_priority(tmp_path):
+    """출고 시간대가 없으면 매핑 없이 07:00 부터 horizon 만큼(일부만 남음). outbound[] 가 오면 생성하지 않는다."""
+    gen = w._generate_orders(REQ)
+    assert 0 < len(gen["outbound"]) < 500
+    assert gen["meta"]["window_start_s"] == 7 * 3600
+    explicit = {**REQ, "outbound": [{"order_id": 1, "ordered_at_s": 3, "lines": [{"product_id": 7, "rack_id": "A2", "qty": 1}]}]}
+    path, n = w._orders_file(explicit)
+    try:
+        assert n == 1
+        assert json.load(open(path, encoding="utf-8"))["outbound"][0]["order_id"] == 1
+    finally:
+        import os
+        os.remove(path)

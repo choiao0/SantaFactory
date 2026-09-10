@@ -22,8 +22,8 @@ host-orch 가 `NCMD Run Control/Start` 를 보내면 로봇 N 대(에이전트 +
 cd 2_Simulation
 # 비밀번호는 argv 가 아니라 환경에서만: MQTT_HOST · MQTT_PORT · MQTT_PW_SIM_RUNNER · MQTT_PW_AMR (팀 .env, 600)
 python3 -m sim_runner --env-file ../3_FMS/infra/emqx/.env --mode fake -v          # Isaac 없이 fake_robot 에이전트
-python3 -m sim_runner --env-file ../3_FMS/infra/emqx/.env --mode real \
-        --isaac-cmd "$HOME/isaacsim/python.sh $PWD/t3_warehouse/warehouse_sim.py"   # 실모드 (WSIM_N · ROS_DOMAIN_ID 는 환경으로 전달)
+python3 -m sim_runner --env-file ../3_FMS/infra/emqx/.env --mode real       # 실모드: 기본 `cd ~/isaacsim && ./python.sh …/apps/warehouse_sim.py`
+#   (--isaac-cmd 로 교체. WSIM_N · ROS_DOMAIN_ID · SIM_SCENARIO_PATH · WSIM_SPAWN 은 환경으로 전달. WSIM_LEAN 등은 명령에 직접)
 
 # host-orch 대역 (다른 터미널) — STATE/host-orch online retained 발행 + spBv1.0/santa/# 디코드 출력
 python3 -m sim_runner.tools.spb_tap --env-file ../3_FMS/infra/emqx/.env --vda
@@ -36,14 +36,14 @@ python3 -m sim_runner.tools.spb_tap … --start '{"run_id":"r2","n_robots":3,"mo
 python3 -m pytest tests/test_sim_runner_*.py -q     # 단위 테스트
 ```
 
-옵션: `--ready-timeout-s 120`(Start 뒤 전원 ONLINE 상한) · `--host-offline-s 15` · `--heartbeat-s 5` · `--isaac-warmup-s 90`(Isaac 기동 뒤 에이전트까지) ·
+옵션: `--ready-timeout-s`(Start 뒤 전원 ONLINE+포즈 상한, 기본 fake 120 · real 420) · `--host-offline-s 15` · `--heartbeat-s 5` · `--isaac-warmup-s 0`(Isaac 뒤 에이전트까지 지연; 기본은 같이 띄우고 포즈를 기다림) ·
 `--state-dir ~/.local/state/sim_runner`(bdseq · 런별 에이전트 로그 `logs/<run_id>.<serial>.log`) · `--ros-setup`(반복; 기본 humble + `t4_agent/install/setup.bash`).
 
 ## 동작 요약 (계약 §5.3 · §5.4)
 
 | 입력 | 동작 |
 |---|---|
-| `Run Control/Start` JSON | 검증 실패 → `LastError` "bad Start: …"(상태 불변). IDLE/ERROR 면 STARTING: 에이전트 ×N 기동(실모드는 Isaac 먼저) → 전원 ONLINE → DBIRTH ×N → RUNNING. 같은 run_id 재수신 = 상태만 재보고, 다른 run_id = "busy" 거절 |
+| `Run Control/Start` JSON | 검증 실패 → `LastError` "bad Start: …"(상태 불변). IDLE/ERROR 면 STARTING: (실모드) Isaac + 에이전트 ×N 기동 → 전원 ONLINE **+ 포즈 수신**(Isaac odom 이 와야 생김) → DBIRTH ×N → RUNNING. `scenario` 가 있으면 sha 대조 뒤 `<state>/runs/<run_id>/scenario.json` 으로 쓰고 `SIM_SCENARIO_PATH`·`SIM_SCENARIO_SHA256`(·`WSIM_SPAWN`) 환경으로 넘기며 `Runner/ScenarioSha` 로 되돌린다. 같은 run_id 재수신 = 상태만 재보고, 다른 run_id = "busy" 거절 |
 | `Run Control/Stop` | DDEATH ×N → SIGINT(브리지 OFFLINE) → 5 s 뒤 SIGTERM → 3 s 뒤 SIGKILL → (Isaac 같은 사다리, 20 s) → IDLE |
 | `Node Control/Rebirth` | NBIRTH + 살아 있는 DBIRTH |
 | Host `STATE` online 복귀 (offline → online, 또는 timestamp 증가) | 재발행. offline 15 s 지속 (RUNNING 중) → ERROR "host-orch offline" |
@@ -66,7 +66,16 @@ python3 -m pytest tests/test_sim_runner_*.py -q     # 단위 테스트
 | runner SIGTERM | 런 정리 뒤 NDEATH(bdSeq=1) 직접 발행 |
 | 에이전트 kill -9 | connection CONNECTIONBROKEN retained (LWT) |
 
-단위 테스트 98개 (`tests/test_sim_runner_*.py`), 브로커·ROS 불필요. E2E 는 위 절차를 손으로 (또는 세션 스크립트로) 반복.
+**실모드 (2026-09-09, EC2 host-orch → EMQX → 이 박스, 로봇 2, 창 60 s, 주문 스크립트 66 KB 동봉)**
+
+| 단계 | 결과 |
+|---|---|
+| NCMD Start(scenario 포함) → Isaac(`apps/warehouse_sim.py`, WSIM_N=2) + 에이전트 기동 | 19 s 뒤 2대 ONLINE + 포즈 → DBIRTH ×2 → RUNNING (헤드리스 부팅 + 첫 odom) |
+| 데이터 도달 | `runs/verify-real-1/scenario.json` sha == 요청 sha, `Runner/ScenarioSha` 로 되돌려 host-orch 결과 `scenario_ack: true` |
+| RUNNING 60 s | RTF 1.0, RAM 9.6 GB(Isaac+에이전트 트리), VRAM 5.4 GB, `IsaacInstances 1` |
+| Stop | Isaac 이 SIGINT 를 무시해 20 s 유예 뒤 SIGTERM 으로 종료 → IDLE (창 60 s + 정리 22 s = elapsed 82 s). 잔여 프로세스 0, VRAM 22 MiB 복귀 |
+
+단위 테스트 106개 (`tests/test_sim_runner_*.py`), 브로커·ROS 불필요. E2E 는 위 절차를 손으로 (또는 세션 스크립트로) 반복.
 
 ## 남은 것
 

@@ -33,6 +33,27 @@ def slice_orders(data, start, end):
     return {"meta": meta, "outbound": kept}
 
 
+def rescale_orders(data, start, end):
+    """주문 시각 구간(첫 주문~마지막 주문+1 s)을 [start, end) 로 선형 비례 매핑 (-158).
+
+    생성기 시각은 참조 창고 분포(07시 피크)를 따르는데 견적 대상 창고의 출고 시간대는 다르다. 백엔드는
+    "하루 물량이 출고 창 안에 전부 들어온다"로 간격을 계산하므로 같은 전제로 맞춘다 — 몰림 모양은 그대로,
+    밀도 = 하루 물량 ÷ 출고 창. 정렬 순서는 유지되고 결과 시각은 항상 end 미만이다.
+    """
+    if not 0 <= start < end <= 86400:
+        raise ValueError(f"창은 0 <= start < end <= 86400: {start}, {end}")
+    orders = data["outbound"] if isinstance(data, dict) else data
+    meta = dict(data.get("meta", {})) if isinstance(data, dict) else {}
+    if not orders:
+        return {"meta": meta, "outbound": []}
+    lo = min(o["ordered_at_s"] for o in orders)
+    hi = max(o["ordered_at_s"] for o in orders) + 1
+    scale = (end - start) / (hi - lo)
+    moved = [dict(o, ordered_at_s=start + int((o["ordered_at_s"] - lo) * scale)) for o in orders]
+    meta.update(rescaled_from_s=[lo, hi], rescaled_to_s=[start, end])
+    return {"meta": meta, "outbound": moved}
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("orders", type=Path)
