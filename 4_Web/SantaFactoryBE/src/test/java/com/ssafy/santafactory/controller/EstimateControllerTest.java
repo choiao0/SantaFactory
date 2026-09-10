@@ -13,6 +13,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.ssafy.santafactory.dto.estimate.EstimateDetailResponse;
 import com.ssafy.santafactory.entity.estimate.EstimateStatus;
+import com.ssafy.santafactory.global.exception.ErrorCode;
+import com.ssafy.santafactory.global.exception.GlobalException;
 import com.ssafy.santafactory.service.estimate.EstimateEventStream;
 import com.ssafy.santafactory.service.estimate.EstimateService;
 import com.ssafy.santafactory.service.estimate.VerifyEventStream;
@@ -86,5 +88,15 @@ class EstimateControllerTest {
 
         verify(eventStream).subscribe(77L);
         verify(estimateService, never()).detail(anyLong());
+    }
+
+    /** SSE 라우트에서도 예외가 JSON 협상 실패로 500 이 되지 않고 깔끔한 상태 코드로 나가야 한다. */
+    @Test
+    void unknown_estimate_gets_a_clean_404_even_over_the_verify_sse_route() throws Exception {
+        when(verifyEventStream.subscribe(999L)).thenThrow(new GlobalException(ErrorCode.ESTIMATE_NOT_FOUND));
+
+        mvc.perform(get("/api/estimates/999/verify").accept(MediaType.TEXT_EVENT_STREAM))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value(ErrorCode.ESTIMATE_NOT_FOUND.getCode()));
     }
 }
