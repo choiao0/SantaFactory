@@ -19,15 +19,42 @@ WALL_H = 9.0                    # 처마 기둥 상단 +9.000 (DXF 치수선 실
 CENTER_COL_Z = 11.0             # 중앙(릿지 지지) 기둥 상단 +11.000 (실측)
 CONV_H = 0.9                    # 라이다 평면(0.7m) 위 — 가시(콜라이더)
 TABLE_H = 0.9                   # 작업대 높이 — 라이다 평면 위 (0.6m 큐브 관통 사고 교훈)
+MIN_BENCH_CELLS = 100           # 작업대 비주얼 최소 크기 [셀] = 1 m². 이보다 작은 조각은
+                                # 그리디 분할이 남긴 파편이라 packing_table 을 세우지 않는다
+                                # (콜라이더는 그대로 — 단일 소스는 그리드 rect)
 
 # 컨베이어 비주얼 — ConveyorBelt_A08 직선 섹션 (컴포즈 실측 2.719x1.15x1.17, 피벗 동측 끝)
 CONV_USD = ASSETS + "/Isaac/Props/Conveyors/ConveyorBelt_A08.usd"
 CONV_SEC_L = 2.719
+
 # (x0, y0, 길이, 세로 여부) — 맵 v5.6 CONVEYORS/CONVEYORS_V와 동일 좌표
-CONVEYORS_VIS = [(14.6, 38.9, 16.0, False), (14.6, 70.9, 16.0, False),
-                 (94.6, 43.1, 15.0, False), (94.6, 75.1, 15.0, False),
-                 (101.0, 34.4, 7.4, False),                 # 패킹→출고 연결 (동진)
-                 (107.5, 35.3, 7.8, True)]                  # 패킹→출고 연결 (북상)
+_CONVEYORS_V56 = [(14.6, 38.9, 16.0, False), (14.6, 70.9, 16.0, False),
+                  (94.6, 43.1, 15.0, False), (94.6, 75.1, 15.0, False),
+                  (101.0, 34.4, 7.4, False),                # 패킹→출고 연결 (동진)
+                  (107.5, 35.3, 7.8, True)]                 # 패킹→출고 연결 (북상)
+
+
+def _load_conveyors(map_dir):
+    """벨트 좌표는 **맵 데이터**다 — 맵 폴더에 `conveyors.json` 이 있으면 그것을 쓴다.
+
+    이 표는 `stations.py:on_conveyor()` 가 셀값 5 를 컨베이어/작업대로 가르는
+    기준이면서 A08 섹션을 까는 좌표이기도 하다. 그런데 코드에 박혀 있어서
+    **맵이 바뀌면 조용히 낡는다** — 다른 격자에서 표에 없는 벨트 한 줄이
+    작업대로 분류되어 packing_table 이 4개 잘못 얹히는 것을 실측했다
+    (S15P21A106-141). 좌표는 격자와 함께 움직여야 하므로 맵 폴더로 옮긴다.
+
+    파일이 없으면 v5.6 값을 그대로 쓴다 — 현행 맵의 동작은 바뀌지 않는다.
+    형식: [[x0, y0, 길이, 세로여부], ...]
+    """
+    p = os.path.join(map_dir, "conveyors.json")
+    if not os.path.isfile(p):
+        return list(_CONVEYORS_V56)
+    import json
+    with open(p, encoding="utf-8") as f:
+        return [tuple(v) for v in json.load(f)]
+
+
+CONVEYORS_VIS = _load_conveyors(MAP_DIR)
 UNIT_L = 3.0                    # 렉 유닛 길이 (y) — v6.0 구역제(반쪽 3랙×3m).
 DECK_SCALE = UNIT_L / 4.0       # SM_RackShelf 베이는 4.0m — 장축 0.75 스케일로 정합
 RACK_D = 1.08                   # 데크 실측 깊이 (그리드 선언 1.2 — 풋프린트 내 배치)

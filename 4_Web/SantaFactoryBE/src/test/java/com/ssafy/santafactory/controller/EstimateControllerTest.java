@@ -2,10 +2,12 @@ package com.ssafy.santafactory.controller;
 
 import static org.hamcrest.Matchers.startsWith;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.request;
@@ -13,8 +15,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.ssafy.santafactory.dto.estimate.EstimateDetailResponse;
 import com.ssafy.santafactory.entity.estimate.EstimateStatus;
+import com.ssafy.santafactory.global.exception.ErrorCode;
+import com.ssafy.santafactory.global.exception.GlobalException;
 import com.ssafy.santafactory.service.estimate.EstimateEventStream;
 import com.ssafy.santafactory.service.estimate.EstimateService;
+import com.ssafy.santafactory.service.estimate.VerifyEventStream;
 import java.time.LocalDateTime;
 import java.util.List;
 import org.junit.jupiter.api.Test;
@@ -37,6 +42,9 @@ class EstimateControllerTest {
 
     @MockBean
     EstimateEventStream eventStream;
+
+    @MockBean
+    VerifyEventStream verifyEventStream;
 
     private static final EstimateDetailResponse DETAIL = new EstimateDetailResponse(
             77L, EstimateStatus.RUNNING, "iw.hub", 95.0, 80.0, 300_000_000L,
@@ -82,5 +90,33 @@ class EstimateControllerTest {
 
         verify(eventStream).subscribe(77L);
         verify(estimateService, never()).detail(anyLong());
+    }
+
+    /** SSE 라우트에서도 예외가 JSON 협상 실패로 500 이 되지 않고 깔끔한 상태 코드로 나가야 한다. */
+    @Test
+    void unknown_estimate_gets_a_clean_404_even_over_the_verify_sse_route() throws Exception {
+        when(verifyEventStream.subscribe(999L)).thenThrow(new GlobalException(ErrorCode.ESTIMATE_NOT_FOUND));
+
+        mvc.perform(get("/api/estimates/999/verify").accept(MediaType.TEXT_EVENT_STREAM))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value(ErrorCode.ESTIMATE_NOT_FOUND.getCode()));
+    }
+
+    @Test
+    void verification_request_is_accepted() throws Exception {
+        mvc.perform(post("/api/estimates/77/verify"))
+                .andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.isSuccess").value(true));
+
+        verify(estimateService).requestVerification(77L);
+    }
+
+    @Test
+    void verification_request_is_rejected_without_a_recommended_count() throws Exception {
+        doThrow(new GlobalException(ErrorCode.ESTIMATE_NOT_VERIFIABLE)).when(estimateService).requestVerification(77L);
+
+        mvc.perform(post("/api/estimates/77/verify"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value(ErrorCode.ESTIMATE_NOT_VERIFIABLE.getCode()));
     }
 }

@@ -24,6 +24,7 @@ FMS 파트는 두 트랙으로 나눠 진행한다.
 ├── map/           # FMS 공식 맵·스테이션·충전 존과 동기화 도구
 ├── infra/         # θ 탐색 워커·견적 워커·EMQX 브로커 구성과 산출 θ
 ├── host_orch/     # Sparkplug Primary Host + sim.verify 큐 소비자 (Isaac 검증 런 오케스트레이션, EC2 상시)
+├── fms_core/      # VDA 5050 플릿 매니저 + Sparkplug Edge fms-core — sim_engine 커널을 플래너로 감싸 Isaac 로봇을 굴린다 (주행 로직 교체형)
 └── docs/          # 주제별 설계·결정·기준선과 작업 계획
 ```
 

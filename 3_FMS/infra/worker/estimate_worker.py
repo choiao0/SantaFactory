@@ -37,8 +37,11 @@ MAX_ROBOTS = 28            # 충전 존 초기 배치 상한 (SIM_RUN_CONTRACT �
 DT = 1.0                   # 1틱 = 1초 (CELL_M 1.0 m / SPEED 1.0 m/s). 속도 반영은 docs/견적_워커.md "미룬 것"
 
 
+WORKER_ID = os.environ.get("HOSTNAME", "")[:12]     # 컨테이너 id 앞 12자 — 병렬 5개(-182) 로그 구분용. 로컬은 빈 문자열
+
+
 def log(msg):
-    print(f"[worker] {msg}", flush=True)
+    print(f"[worker{(' ' + WORKER_ID) if WORKER_ID else ''}] {msg}", flush=True)
 
 
 # ------------------------------------------------------------
@@ -84,16 +87,21 @@ def _log_ignored(req, amr, run_id):
 
 
 def _orders_flags(amr, orders_path):
-    """명시 출고 주문 (-156): 주문 파일이 있으면 --orders-file, amr.capacity 가 정수면 --capacity (상품 개수)."""
+    """명시 출고 주문(v2.6): capacity=토트 수, tote_units 기본 8, 양 끝 서비스 5초/토트."""
     if not orders_path:
         return []
-    flags = [f"--orders-file={orders_path}"]
+    flags = [f"--orders-file={orders_path}", "--svc-per-tote=5"]
     cap = amr.get("capacity")
-    if cap is None:
-        return flags
-    if isinstance(cap, bool) or not isinstance(cap, int) or cap < 1:
-        raise ValueError(f"amr.capacity 는 1 이상 정수 (상품 개수): {cap!r}")
-    return flags + [f"--capacity={cap}"]
+    if cap is not None:
+        if isinstance(cap, bool) or not isinstance(cap, int) or not 1 <= cap <= 6:
+            raise ValueError(f"amr.capacity 는 1~6 정수 (토트 수): {cap!r}")
+        flags.append(f"--capacity={cap}")
+    tote_units = amr.get("tote_units")
+    if tote_units is None:                      # 백엔드는 amr 필드를 null 로 채워 보낸다 → 기본 8 (신발 상자 기준 가정)
+        tote_units = 8
+    if isinstance(tote_units, bool) or not isinstance(tote_units, int) or tote_units < 1:
+        raise ValueError(f"amr.tote_units 는 1 이상 정수 (상품 개수): {tote_units!r}")
+    return flags + [f"--tote-units={tote_units}"]
 
 
 def to_sim_args(req, orders_path=None):
@@ -120,7 +128,8 @@ def to_kpi(s):
         orders_total=int(s["n_orders"]), orders_completed=int(s["orders_done"]),
         inbound_total=int(s["inbound_total"]), inbound_completed=int(s["tasks_in"]),
         makespan_s=int(round(s["makespan_steps"] * DT)),
-        lead_time_mean_s=s["lead_mean_s"], lead_time_p90_s=s["lead_p90_s"], queue_time_mean_s=s["queue_mean_s"],
+        lead_time_mean_s=s.get("order_lead_mean_s", s["lead_mean_s"]),
+        lead_time_p90_s=s.get("order_lead_p90_s", s["lead_p90_s"]), queue_time_mean_s=s["queue_mean_s"],
         throughput_orders_per_h=s["orders_per_h"], throughput_tasks_per_h=s["tasks_per_h"],
         amr_utilization=s["util_incl_service"],          # 주행+대기+서비스+회전 ÷ 대수×T (docs/견적_워커.md)
         conflict_wait_ratio=s["conflict_wait"],

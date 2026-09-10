@@ -150,16 +150,23 @@ pipeline {
                     '''
                 }
                 sh '''
+                    # 워커는 여러 개(compose replicas, 기본 2)라 컨테이너 전부가 running 이어야 통과.
                     for i in $(seq 1 30); do
-                        cid=$($COMPOSE_FMS ps -q estimate-worker)
-                        status=$(docker inspect -f "{{.State.Status}}" "$cid" 2>/dev/null || true)
-                        if [ "$status" = "running" ]; then
-                            echo "FMS 워커 기동 확인"
+                        cids=$($COMPOSE_FMS ps -q estimate-worker)
+                        total=$(echo "$cids" | grep -c . || true)
+                        running=0
+                        for cid in $cids; do
+                            if [ "$(docker inspect -f '{{.State.Status}}' "$cid" 2>/dev/null)" = "running" ]; then
+                                running=$((running + 1))
+                            fi
+                        done
+                        if [ "$total" -gt 0 ] && [ "$running" -eq "$total" ]; then
+                            echo "FMS 워커 ${running}개 기동 확인"
                             exit 0
                         fi
                         sleep 2
                     done
-                    echo "FMS 워커가 60초 안에 기동하지 않음"
+                    echo "FMS 워커가 60초 안에 전부 기동하지 않음 (running ${running}/${total})"
                     $COMPOSE_FMS logs --tail 100 || true
                     exit 1
                 '''

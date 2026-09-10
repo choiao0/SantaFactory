@@ -5,6 +5,8 @@ import WarehouseStep from './components/WarehouseStep.jsx'
 import FleetStep from './components/FleetStep.jsx'
 import RunsStep from './components/RunsStep.jsx'
 import QuoteStep from './components/QuoteStep.jsx'
+import VerifyStep from './components/VerifyStep.jsx'
+import VerifyTrigger from './components/VerifyTrigger.jsx'
 import Footer from './components/Footer.jsx'
 import { useReveal } from './hooks/useReveal.js'
 import { useEstimateStream } from './hooks/useEstimateStream.js'
@@ -95,6 +97,8 @@ export default function App() {
           onRequest={requestEstimate}
         />
         <RunsStep estimateId={estimateId} estimate={stream.estimate} connected={stream.connected} error={stream.error} />
+        <VerifyTrigger estimateId={estimateId} recommendedCount={stream.verdict?.recommended_count} />
+        <VerifyStep estimateId={estimateId} ready={Boolean(stream.verdict)} />
         <QuoteStep
           estimateId={estimateId}
           estimate={stream.estimate}

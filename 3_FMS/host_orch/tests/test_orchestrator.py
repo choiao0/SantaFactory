@@ -326,3 +326,216 @@ class TestCoordinatorRedelivery:
             c.submit(req_json(run_id=f"r{i}"))
 
         assert len(c.recent) == O.Coordinator.RECENT_MAX and "r0" not in c.recent
+
+
+class TestScenario:
+    SCENARIO = {"seed": 42, "map_version": "v6.0", "orders": {"outbound": [{"order_id": 1, "ordered_at_s": 5,
+                                                                             "lines": [{"rack_id": "A3", "qty": 2}]}]}}
+
+    def test_request_carries_scenario_and_sha_into_start(self):
+        r = O.VerifyRequest.from_json(req_json(scenario=self.SCENARIO))
+
+        assert r.scenario == self.SCENARIO and r.scenario_sha256 == O.scenario_sha256(self.SCENARIO)
+        cmd = r.start_command()
+        assert cmd["scenario"] == self.SCENARIO and cmd["scenario_sha256"] == r.scenario_sha256
+        assert "scenario" not in O.VerifyRequest.from_json(req_json()).start_command()
+
+    def test_scenario_must_be_object_and_small(self):
+        with pytest.raises(ValueError):
+            O.VerifyRequest.from_json(req_json(scenario="text"))
+        with pytest.raises(ValueError):
+            O.VerifyRequest.from_json(req_json(scenario={"blob": "x" * (O.MAX_SCENARIO_BYTES + 1)}))
+
+    def test_result_reports_scenario_ack_only_when_runner_echoes_the_sha(self):
+        req = O.VerifyRequest.from_json(req_json(scenario=self.SCENARIO, window_s=10))
+        job, cmd = O.Job(req, "sim-runner-gpu01", O.JobConfig(), 0.0), Cmd()
+        job.step(node("IDLE"), 0.0, cmd)
+        n = node("RUNNING", "verify-1", last_seen=1.0)
+        n.metrics[O.SCENARIO_SHA] = req.scenario_sha256
+        n.metrics[O.ISAAC] = 1
+        job.step(n, 1.0, cmd)
+        job.step(node("RUNNING", "verify-1", last_seen=12.0), 12.0, cmd)
+        job.step(node("IDLE", "", last_seen=13.0), 13.0, cmd)
+
+        v = job.result()["verify"]
+        assert v["scenario_ack"] is True and v["scenario_sha256"] == req.scenario_sha256 and v["isaac_instances"] == 1
+
+    def test_scenario_ack_false_when_runner_did_not_echo(self):
+        req = O.VerifyRequest.from_json(req_json(scenario=self.SCENARIO, window_s=10))
+        job, cmd = O.Job(req, "sim-runner-gpu01", O.JobConfig(), 0.0), Cmd()
+        job.step(node("IDLE"), 0.0, cmd)
+        job.step(node("RUNNING", "verify-1", last_seen=1.0), 1.0, cmd)
+        job.step(node("RUNNING", "verify-1", last_seen=12.0), 12.0, cmd)
+        job.step(node("IDLE", "", last_seen=13.0), 13.0, cmd)
+
+        assert job.result()["verify"]["scenario_ack"] is False
+
+    def test_no_scenario_means_no_ack_claim(self):
+        job, cmd = make_job()
+        job.step(node("IDLE"), 0.0, cmd)
+
+        assert job.result()["verify"]["scenario_ack"] is False and job.result()["verify"]["scenario_sha256"] is None
+
+
+# ---- fms-core 연동 (결정 11 · SIM_VERIFY_CONTRACT §3 kpi) ---------------------------------
+def fms_node(state="IDLE", run_id="", online=True, last_seen=0.0, last_error="", tick=None):
+    n = Node("fms-core", online=online, bd_seq=1, seq=0, last_seen=last_seen)
+    n.metrics = {O.FMS_STATE: state, O.FMS_RUN_ID: run_id, O.FMS_LAST_ERROR: last_error}
+    if tick is not None:
+        n.metrics[O.FMS_TICK] = tick
+    return n
+
+
+def make_fms_job(now=0.0, **cfg):
+    return O.Job(O.VerifyRequest.from_json(req_json()), "sim-runner-gpu01", O.JobConfig(**cfg), now, "fms-core"), Cmd(), Cmd()
+
+
+def kpi_event(run_id="verify-1", kind="kpi_summary", **over):
+    body = {"eventId": f"{run_id}-9", "runId": run_id, "at": "2026-09-09T10:00:00.000Z", "type": kind, "tick": 120,
+            "status": "done", "error": None, "ticks": 120, "planner": "kernel",
+            "kpi": {"orders_total": 4, "orders_completed": 2, "throughput_tasks_per_h": 60.0}, "counters": {"done_tasks": 2}}
+    body.update(over)
+    return json.dumps(body).encode()
+
+
+class TestFmsLink:
+    def test_window_starts_only_when_both_nodes_run_and_kpi_is_relayed(self):
+        job, cmd, fcmd = make_fms_job()
+
+        job.step(node("IDLE"), 0.0, cmd, fms_node("IDLE"), fcmd)
+        assert cmd.starts[0]["run_id"] == "verify-1" and fcmd.starts == []          # fms Start 는 러너 RUNNING 뒤
+        job.step(node("RUNNING", "verify-1", last_seen=2.0), 2.0, cmd, fms_node("IDLE", last_seen=2.0), fcmd)
+        assert job.phase == O.STARTING and fcmd.starts[0] == cmd.starts[0]
+        job.step(node("RUNNING", "verify-1", last_seen=3.0), 3.0, cmd, fms_node("STARTING", "verify-1", last_seen=3.0), fcmd)
+        assert job.phase == O.STARTING and len(fcmd.starts) == 1
+        job.step(node("RUNNING", "verify-1", last_seen=20.0), 20.0, cmd, fms_node("RUNNING", "verify-1", last_seen=20.0), fcmd)
+        assert job.phase == O.RUNNING and job.started_at == 20.0
+        job.step(node("RUNNING", "verify-1", last_seen=81.0), 81.0, cmd, fms_node("RUNNING", "verify-1", last_seen=81.0, tick=55), fcmd)
+        assert job.phase == O.STOPPING and cmd.stops == 1 and fcmd.stops == 1
+        assert job.on_biz_event(json.loads(kpi_event()))
+        job.step(node("IDLE", "", last_seen=82.0), 82.0, cmd, fms_node("RUNNING", "verify-1", last_seen=82.0), fcmd)
+        assert job.phase == O.STOPPING                                                  # fms-core 가 아직 놓지 않음
+        job.step(node("IDLE", "", last_seen=83.0), 83.0, cmd, fms_node("IDLE", "", last_seen=83.0), fcmd)
+
+        assert job.done and job.phase == "DONE"
+        r = job.result()
+        assert r["kpi"] == {"orders_total": 4, "orders_completed": 2, "throughput_tasks_per_h": 60.0}
+        assert r["verify"]["fms"] == {"node": "fms-core", "ticks": 120, "status": "done", "error": None, "planner": "kernel",
+                                      "counters": {"done_tasks": 2}, "warnings": None}
+        assert r["verify"]["elapsed_s"] == 63.0                                       # 창 61 s + fms-core 정리 대기 2 s
+
+    def test_fms_start_is_resent_and_ignores_other_run_ids(self):
+        job, cmd, fcmd = make_fms_job(start_resend_s=10)
+        job.step(node("RUNNING", "verify-1", last_seen=0.0), 0.0, cmd, fms_node("IDLE"), fcmd)
+        job.step(node("RUNNING", "verify-1", last_seen=5.0), 5.0, cmd, fms_node("IDLE"), fcmd)
+        job.step(node("RUNNING", "verify-1", last_seen=10.0), 10.0, cmd, fms_node("IDLE"), fcmd)
+        assert len(fcmd.starts) == 2
+        assert not job.on_biz_event(json.loads(kpi_event(run_id="other")))
+        assert not job.on_biz_event(json.loads(kpi_event(kind="task_done")))
+        assert job.kpi is None
+
+    def test_fms_error_before_running_fails(self):
+        job, cmd, fcmd = make_fms_job()
+        job.step(node("RUNNING", "verify-1", last_seen=0.0), 0.0, cmd, fms_node("IDLE"), fcmd)
+        job.step(node("RUNNING", "verify-1", last_seen=1.0), 1.0, cmd,
+                 fms_node("ERROR", "", last_error="planner build failed: robot 1 home blocked"), fcmd)
+        assert job.phase == O.STARTING                                                  # 아직 우리 run_id 를 본 적 없음
+        job.step(node("RUNNING", "verify-1", last_seen=2.0), 2.0, cmd, fms_node("STARTING", "verify-1"), fcmd)
+        job.step(node("RUNNING", "verify-1", last_seen=3.0), 3.0, cmd,
+                 fms_node("ERROR", "", last_error="amr02 primitiveError: timeout"), fcmd)
+
+        assert job.phase == "FAILED" and job.result()["error"] == "amr02 primitiveError: timeout"
+        assert job.result()["verify"]["reason"] == "fms-core ended the run"
+
+    def test_fms_bad_start_fails_at_once(self):
+        job, cmd, fcmd = make_fms_job()
+        job.step(node("RUNNING", "verify-1", last_seen=0.0), 0.0, cmd, fms_node("IDLE", last_error="bad Start: scenario too large"), fcmd)
+        assert job.phase == "FAILED" and job.result()["verify"]["reason"] == "fms-core rejected Start"
+
+    def test_fms_offline_at_start_times_out_with_fms_reason(self):
+        job, cmd, fcmd = make_fms_job(start_timeout_s=30)
+        job.step(node("RUNNING", "verify-1", last_seen=0.0), 0.0, cmd, None, fcmd)
+        job.step(node("RUNNING", "verify-1", last_seen=31.0), 31.0, cmd, None, fcmd)
+        assert job.phase == "FAILED" and job.result()["error"] == "fms-core offline" and fcmd.starts == []
+
+    @pytest.mark.parametrize("what,reason", [("offline", "fms-core NDEATH"), ("error", "fms-core ended the run"),
+                                             ("idle", "fms-core ended the run"), ("silent", "fms-core heartbeat lost")])
+    def test_fms_faults_during_run_stop_and_fail(self, what, reason):
+        job, cmd, fcmd = make_fms_job()
+        job.step(node("RUNNING", "verify-1", last_seen=0.0), 0.0, cmd, fms_node("RUNNING", "verify-1", last_seen=0.0), fcmd)
+        assert job.phase == O.RUNNING
+        fn = {"offline": fms_node(online=False), "error": fms_node("ERROR", "", last_seen=5.0, last_error="amr01 silent for 31s"),
+              "idle": fms_node("IDLE", "", last_seen=5.0), "silent": fms_node("RUNNING", "verify-1", last_seen=0.0)}[what]
+        job.step(node("RUNNING", "verify-1", last_seen=20.0), 20.0, cmd, fn, fcmd)
+
+        assert job.phase == O.STOPPING and job.final == "FAILED" and job.reason == reason and cmd.stops == fcmd.stops == 1
+        if what == "error":
+            assert job.error == "amr01 silent for 31s"
+
+    def test_fms_stop_timeout_fails(self):
+        job, cmd, fcmd = make_fms_job(stop_timeout_s=10)
+        job.step(node("RUNNING", "verify-1", last_seen=0.0), 0.0, cmd, fms_node("RUNNING", "verify-1", last_seen=0.0), fcmd)
+        job.step(node("RUNNING", "verify-1", last_seen=61.0), 61.0, cmd, fms_node("RUNNING", "verify-1", last_seen=61.0), fcmd)
+        assert job.phase == O.STOPPING
+        job.step(node("IDLE", "", last_seen=62.0), 62.0, cmd, fms_node("RUNNING", "verify-1", last_seen=62.0), fcmd)
+        assert job.phase == O.STOPPING
+        job.step(node("IDLE", "", last_seen=72.0), 72.0, cmd, fms_node("RUNNING", "verify-1", last_seen=72.0), fcmd)
+
+        assert job.phase == "FAILED" and job.result()["verify"]["reason"] == "fms stop timeout"
+
+    def test_without_fms_the_job_is_unchanged(self):
+        job, cmd = make_job()
+        job.step(node("RUNNING", "verify-1", last_seen=0.0), 0.0, cmd)
+        assert job.phase == O.RUNNING and job.result()["verify"]["fms"] is None and job.result()["kpi"] is None
+        assert not job.on_biz_event(json.loads(kpi_event()))
+
+
+class TestCoordinatorFms:
+    FNB, FND = "spBv1.0/santa/NBIRTH/fms-core", "spBv1.0/santa/NDATA/fms-core"
+    FST, FRID = spb.MetricDef(O.FMS_STATE, spb.STRING, 20), spb.MetricDef(O.FMS_RUN_ID, spb.STRING, 21)
+
+    def make(self):
+        sent, clock = [], {"t": 0.0}
+        c = O.Coordinator(HostTracker(), lambda n, m: sent.append((n, m)), "sim-runner-gpu01", O.JobConfig(start_resend_s=10),
+                          clock=lambda: clock["t"], fms_node_id="fms-core")
+        c.on_mqtt(NB, spb.encode_birth(0, [(BD, 1), (STATE, "IDLE"), (RUN_ID, "")]))
+        c.on_mqtt(self.FNB, spb.encode_birth(0, [(BD, 1), (self.FST, "IDLE"), (self.FRID, "")]))
+        return c, sent, clock
+
+    def test_starts_both_nodes_relays_kpi_and_stops_both(self):
+        c, sent, clock = self.make()
+        job = c.submit(req_json(window_s=5))
+        assert [n for n, _ in sent] == ["sim-runner-gpu01"]
+        c.on_mqtt(ND, spb.encode_data(1, [(STATE, "RUNNING"), (RUN_ID, "verify-1")]))
+        assert [n for n, _ in sent] == ["sim-runner-gpu01", "fms-core"] and sent[-1][1][0][0] == O.CMD_START
+        clock["t"] = 3.0
+        c.on_mqtt(self.FND, spb.encode_data(1, [(self.FST, "RUNNING"), (self.FRID, "verify-1")]))
+        assert job.phase == O.RUNNING
+        clock["t"] = 9.0
+        c.tick()
+        assert job.phase == O.STOPPING and [n for n, m in sent if m[0][0] == O.CMD_STOP] == ["sim-runner-gpu01", "fms-core"]
+        c.on_mqtt("biz/v1/event", kpi_event())
+        c.on_mqtt("biz/v1/event", b"not json")
+        c.on_mqtt(self.FND, spb.encode_data(2, [(self.FST, "IDLE"), (self.FRID, "")]))
+        c.on_mqtt(ND, spb.encode_data(2, [(STATE, "IDLE"), (RUN_ID, "")]))
+
+        assert job.done and job.result()["status"] == "done" and job.result()["kpi"]["orders_total"] == 4
+        assert c.fms_snapshot()["state"] == "IDLE"
+
+    def test_late_kpi_lands_on_the_finished_job(self):
+        c, sent, clock = self.make()
+        job = c.submit(req_json(window_s=1))
+        c.on_mqtt(ND, spb.encode_data(1, [(STATE, "RUNNING"), (RUN_ID, "verify-1")]))
+        c.on_mqtt(self.FND, spb.encode_data(1, [(self.FST, "RUNNING"), (self.FRID, "verify-1")]))
+        clock["t"] = 2.0
+        c.tick()
+        c.on_mqtt(self.FND, spb.encode_data(2, [(self.FST, "IDLE"), (self.FRID, "")]))
+        c.on_mqtt(ND, spb.encode_data(2, [(STATE, "IDLE"), (RUN_ID, "")]))
+        assert job.done and job.result()["kpi"] is None
+        c.on_mqtt("biz/v1/event", kpi_event())
+        assert job.result()["kpi"]["orders_total"] == 4
+
+    def test_fms_seq_gap_triggers_rebirth_on_fms_node(self):
+        c, sent, _ = self.make()
+        c.on_mqtt(self.FND, spb.encode_data(7, [(self.FST, "IDLE")]))
+        assert sent[-1] == ("fms-core", [(O.REBIRTH, spb.BOOLEAN, True)])

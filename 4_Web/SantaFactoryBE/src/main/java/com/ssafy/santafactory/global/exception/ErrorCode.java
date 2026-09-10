@@ -19,6 +19,7 @@ public enum ErrorCode {
     // Estimate
     WAREHOUSE_NOT_FOUND(HttpStatus.NOT_FOUND, "EST404_1", "요청한 창고를 찾을 수 없습니다."),
     ESTIMATE_NOT_FOUND(HttpStatus.NOT_FOUND, "EST404_2", "요청한 견적을 찾을 수 없습니다."),
+    ESTIMATE_NOT_VERIFIABLE(HttpStatus.CONFLICT, "EST409_1", "권장 대수가 없어 물리 검증을 시작할 수 없습니다."),
     ;
 
     private final HttpStatus httpStatus;

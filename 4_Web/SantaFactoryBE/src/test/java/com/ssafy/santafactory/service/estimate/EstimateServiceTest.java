@@ -4,6 +4,8 @@ import com.ssafy.santafactory.dto.estimate.EstimateCreateRequest;
 import com.ssafy.santafactory.dto.estimate.EstimateCreateResponse;
 import com.ssafy.santafactory.dto.simulation.SimulationRequest;
 import com.ssafy.santafactory.dto.simulation.SimulationResponse;
+import com.ssafy.santafactory.dto.simulation.VerifyRequest;
+import com.ssafy.santafactory.dto.simulation.VerifyResultResponse;
 import com.ssafy.santafactory.entity.estimate.Estimate;
 import com.ssafy.santafactory.entity.estimate.EstimateStatus;
 import com.ssafy.santafactory.entity.estimate.ReasonCode;
@@ -47,7 +49,7 @@ import static org.mockito.Mockito.when;
 class EstimateServiceTest {
 
     private static final EstimateProperties PROPS =
-            new EstimateProperties(15_000_000L, 5_000_000L, 500_000L, 28, 6, 4, 1, Duration.ofMinutes(30), Duration.ofHours(6), "in,in,out,out,out,out");
+            new EstimateProperties(15_000_000L, 5_000_000L, 500_000L, 28, 6, 4, 1, Duration.ofMinutes(30), Duration.ofHours(6), "in,in,out,out,out,out", Duration.ofMinutes(10));
 
     @Mock
     EstimateRepository estimateRepository;
@@ -171,7 +173,7 @@ class EstimateServiceTest {
         // 실행 시간을 명시하지 않으면 시뮬이 유한 주문 모드로 돌아 처리율이 전 대수 100 % 가 된다
         assertThat(sent.seed()).isEqualTo(101L);                          // 평가 시드, API 로 받지 않는다
         assertThat(sent.horizonS()).isEqualTo(21600L);                    // 6시간
-        assertThat(sent.shifts()).isEqualTo("in,in,out,out,out,out");     // 입고 2h + 출고 4h
+        assertThat(sent.shifts()).isEqualTo("in,in,out,out,out,out", Duration.ofMinutes(10));     // 입고 2h + 출고 4h
         assertThat(sent.inboundGapS()).isEqualTo(48.0);                   // 600건 / 8시간
         assertThat(sent.outboundGapS()).isEqualTo(22.5);                  // 800건 / 5시간
     }
@@ -372,6 +374,97 @@ class EstimateServiceTest {
         assertThat(estimate.getReasonCode()).isEqualTo(ReasonCode.ALL_FAILED);
     }
 
+    // ── 물리 검증 결과 반영 ──────────────────────────────────────────────────
+
+    @Test
+    void ignores_a_verify_result_without_an_estimate_id() {
+        assertThatCode(() -> service().applyVerifyResult(verifyDone("v1", null, "https://minio/v1.mp4")))
+                .doesNotThrowAnyException();
+
+        verify(estimateRepository, never()).findById(any());
+    }
+
+    @Test
+    void ignores_a_verify_result_for_an_unknown_estimate() {
+        when(estimateRepository.findById(99L)).thenReturn(Optional.empty());
+
+        assertThatCode(() -> service().applyVerifyResult(verifyDone("v1", 99L, "https://minio/v1.mp4")))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    void stores_the_video_url_and_publishes_the_result() {
+        Estimate estimate = withId(estimate(85.0, 90.0, 1_000_000_000L), 77L);
+        when(estimateRepository.findById(77L)).thenReturn(Optional.of(estimate));
+
+        service().applyVerifyResult(verifyDone("v1", 77L, "https://minio/v1.mp4"));
+
+        assertThat(estimate.getVerifyVideoUrl()).isEqualTo("https://minio/v1.mp4");
+        ArgumentCaptor<EstimateEvents.EstimateVerified> event = ArgumentCaptor.captor();
+        verify(eventPublisher).publishEvent(event.capture());
+        assertThat(event.getValue().estimateId()).isEqualTo(77L);
+        assertThat(event.getValue().status()).isEqualTo("done");
+        assertThat(event.getValue().videoUrl()).isEqualTo("https://minio/v1.mp4");
+    }
+
+    @Test
+    void a_failed_verification_publishes_the_result_without_a_video_url() {
+        Estimate estimate = withId(estimate(85.0, 90.0, 1_000_000_000L), 77L);
+        when(estimateRepository.findById(77L)).thenReturn(Optional.of(estimate));
+
+        service().applyVerifyResult(new VerifyResultResponse("v1", "failed", "start timeout", 77L, null));
+
+        assertThat(estimate.getVerifyVideoUrl()).isNull();
+        ArgumentCaptor<EstimateEvents.EstimateVerified> event = ArgumentCaptor.captor();
+        verify(eventPublisher).publishEvent(event.capture());
+        assertThat(event.getValue().status()).isEqualTo("failed");
+        assertThat(event.getValue().videoUrl()).isNull();
+        assertThat(event.getValue().error()).isEqualTo("start timeout");
+    }
+
+    // ── 물리 검증 요청 발행 ──────────────────────────────────────────────────
+
+    @Test
+    void rejects_verification_for_an_unknown_estimate() {
+        when(estimateRepository.findById(99L)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service().requestVerification(99L))
+                .isInstanceOf(GlobalException.class)
+                .hasFieldOrPropertyWithValue("errorCode", ErrorCode.ESTIMATE_NOT_FOUND);
+        verify(simulationService, never()).publishVerify(any());
+    }
+
+    @Test
+    void rejects_verification_when_there_is_no_recommended_count() {
+        Estimate estimate = withId(estimate(85.0, 90.0, 1_000_000_000L), 77L);
+        when(estimateRepository.findById(77L)).thenReturn(Optional.of(estimate));
+
+        assertThatThrownBy(() -> service().requestVerification(77L))
+                .isInstanceOf(GlobalException.class)
+                .hasFieldOrPropertyWithValue("errorCode", ErrorCode.ESTIMATE_NOT_VERIFIABLE);
+        verify(simulationService, never()).publishVerify(any());
+    }
+
+    @Test
+    void publishes_a_fixed_run_id_for_the_recommended_run() {
+        Estimate estimate = withId(estimate(85.0, 90.0, 1_000_000_000L), 77L);
+        estimate.complete(4, 6, null, false);
+        SimScenario recommendedRun = run(estimate, 4);
+        when(estimateRepository.findById(77L)).thenReturn(Optional.of(estimate));
+        when(scenarioRepository.findByEstimateIdAndAmrCount(77L, 4)).thenReturn(Optional.of(recommendedRun));
+
+        service().requestVerification(77L);
+
+        ArgumentCaptor<VerifyRequest> request = ArgumentCaptor.captor();
+        verify(simulationService).publishVerify(request.capture());
+        assertThat(request.getValue().runId()).isEqualTo("verify_77");            // 견적당 고정 — 재요청해도 같은 id
+        assertThat(request.getValue().nRobots()).isEqualTo(4);
+        assertThat(request.getValue().windowS()).isEqualTo(600L);                 // EstimateProperties.verifyWindow 기본값
+        assertThat(request.getValue().sourceRunId()).isEqualTo(recommendedRun.getRunId());
+        assertThat(request.getValue().estimateId()).isEqualTo(77L);
+        assertThat(request.getValue().seed()).isEqualTo(101L);
+    }
+
     // ── TIMEOUT 스윕 ─────────────────────────────────────────────────────────
 
     @Test
@@ -479,5 +572,10 @@ class EstimateServiceTest {
 
     private SimulationResponse failed(String runId, String error) {
         return new SimulationResponse(runId, "failed", error, null);
+    }
+
+    private VerifyResultResponse verifyDone(String runId, Long estimateId, String videoUrl) {
+        return new VerifyResultResponse(runId, "done", null, estimateId,
+                new VerifyResultResponse.Artifacts(videoUrl));
     }
 }

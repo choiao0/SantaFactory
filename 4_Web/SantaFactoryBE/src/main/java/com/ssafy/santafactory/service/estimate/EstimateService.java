@@ -4,10 +4,13 @@ import com.ssafy.santafactory.dto.estimate.EstimateCreateRequest;
 import com.ssafy.santafactory.dto.estimate.EstimateCreateResponse;
 import com.ssafy.santafactory.dto.estimate.EstimateDetailResponse;
 import com.ssafy.santafactory.service.estimate.EstimateEvents.EstimateFinished;
+import com.ssafy.santafactory.service.estimate.EstimateEvents.EstimateVerified;
 import com.ssafy.santafactory.service.estimate.EstimateEvents.RunUpdated;
 import com.ssafy.santafactory.dto.estimate.EstimateSummaryResponse;
 import com.ssafy.santafactory.dto.simulation.SimulationRequest;
 import com.ssafy.santafactory.dto.simulation.SimulationResponse;
+import com.ssafy.santafactory.dto.simulation.VerifyRequest;
+import com.ssafy.santafactory.dto.simulation.VerifyResultResponse;
 import com.ssafy.santafactory.entity.estimate.Estimate;
 import com.ssafy.santafactory.entity.estimate.RunStatus;
 import com.ssafy.santafactory.entity.simulation.SimScenario;
@@ -208,6 +211,31 @@ public class EstimateService {
         }
     }
 
+    /**
+     * 물리 검증(Isaac) 요청을 발행한다. 권장 대수가 없으면(사유만 있는 판정) 검증할 대상이 없어 거부한다.
+     *
+     * <p>{@code run_id}는 견적당 고정({@code verify_<estimateId>})으로 보낸다 — host-orch 는 같은
+     * run_id 를 "같은 작업"으로 보고 재전송을 멱등 처리하는데(SIM_VERIFY_CONTRACT.md §5), 검증은
+     * 견적당 정상적으로 한 번만 돌아서 인프라 문제로 재요청해도 이어서 처리되는 쪽이 자연스럽다.
+     * {@code source_run_id}는 반대로 host-orch 로직에 안 쓰이고 결과에 그대로 돌아오기만 하는
+     * 추적용이라, 권장 대수의 DES run_id({@code est_{id}_n{count}})를 그대로 싣는다.
+     */
+    @Transactional(readOnly = true)
+    public void requestVerification(Long estimateId) {
+        Estimate estimate = estimateRepository.findById(estimateId)
+                .orElseThrow(() -> new GlobalException(ErrorCode.ESTIMATE_NOT_FOUND));
+        Integer recommendedCount = estimate.getRecommendedCount();
+        if (recommendedCount == null) {
+            throw new GlobalException(ErrorCode.ESTIMATE_NOT_VERIFIABLE);
+        }
+        SimScenario run = scenarioRepository.findByEstimateIdAndAmrCount(estimateId, recommendedCount)
+                .orElseThrow(() -> new GlobalException(ErrorCode.ESTIMATE_NOT_VERIFIABLE));
+
+        simulationService.publishVerify(new VerifyRequest(
+                "verify_" + estimateId, recommendedCount, properties.verifyWindow().toSeconds(),
+                run.getRunId(), estimateId, FIXED_SEED));
+    }
+
     // ── 결과 반영 ────────────────────────────────────────────────────────────
 
     @Transactional
@@ -231,6 +259,36 @@ public class EstimateService {
         eventPublisher.publishEvent(new RunUpdated(run.getEstimate().getId(), EstimateDetailResponse.Run.from(run)));
 
         finalizeIfComplete(run.getEstimate());
+    }
+
+    // ── 물리 검증 결과 반영 ──────────────────────────────────────────────────
+
+    /**
+     * 물리 검증(Isaac) 결과를 반영한다. 영상 URL 이 있으면 저장하고, 성패와 무관하게 SSE 로 알린다.
+     *
+     * <p>모르는 견적 id 는 무시한다. 같은 결과가 두 번 와도(명세 §1-3과 동일한 중복 허용) 같은 값을
+     * 다시 쓸 뿐이라 별도 처리 없이 안전하다 — DES 의 run 처럼 상태를 갖는 하위 엔티티가 없어서다.
+     */
+    @Transactional
+    public void applyVerifyResult(VerifyResultResponse response) {
+        if (response.estimateId() == null) {
+            log.warn("estimate_id 없는 검증 결과 무시: runId={}", response.runId());
+            return;
+        }
+        Estimate estimate = estimateRepository.findById(response.estimateId()).orElse(null);
+        if (estimate == null) {
+            log.warn("모르는 견적의 검증 결과 무시: estimateId={}, runId={}",
+                    response.estimateId(), response.runId());
+            return;
+        }
+        String videoUrl = response.artifacts() != null ? response.artifacts().video() : null;
+        if (videoUrl != null) {
+            estimate.applyVerifyVideo(videoUrl);
+        }
+        log.info("물리 검증 결과 반영: estimateId={}, status={}, video={}",
+                estimate.getId(), response.status(), videoUrl);
+        eventPublisher.publishEvent(
+                new EstimateVerified(estimate.getId(), response.status(), videoUrl, response.error()));
     }
 
     /**

@@ -32,7 +32,7 @@ FMS ↔ AMR 에이전트 ↔ sim-runner ↔ Host ↔ 시뮬 WMS 가 한 브로�
 | 8 | 런 ↔ 세션 | sim-runner 상시 NBIRTH, 런 시작 = DBIRTH ×N, 종료 = DDEATH ×N |
 | 9 | 하트비트 | `Runner/Heartbeat` 5 s, 3회 결측 = 런 실패 → Stop |
 | 10 | order 재발행 | 그 로봇 state 2건 도착에도 미반영 → 같은 order(같은 orderUpdateId) 재발행, state 10건 → 로봇 오류. ONLINE 복귀 시 1회. ONLINE 인데 30 s 무소식 = CONNECTIONBROKEN 취급. 벽시계 틱은 쓰지 않는다(에이전트 state 는 sim time) |
-| 11 | 주문 유실 방지 | Host 가 fms-core RUNNING(NBIRTH `Fms/RunId` 일치) 확인 후 REST `POST /run/{id}/start` 로 WMS 수요 생성 시작. fms-core 단절 > keepalive = 런 실패 |
+| 11 | 주문 유실 방지 | Host 가 fms-core RUNNING(`Fms/State` RUNNING · `Fms/RunId` 일치) 확인 뒤에 검증 창을 연다(적용 2026-09-09: host-orch `--fms-node`). WMS 가 생기면 그 뒤 REST `POST /run/{id}/start`. fms-core 단절 > keepalive · `Fms/Heartbeat` 3회 결측 = 런 실패 |
 | 12 | 이벤트 | Sparkplug 메트릭에 싣지 않는다(RBE · protobuf). `biz/v1/event` JSON |
 | 13 | Host 의 읽기 | host-orch 는 세 레인 전부 구독 가능(관측 창 · 런 KPI). VDA 발행은 못 한다 |
 | 14 | 잡 큐 (2026-09-08, A안) | RabbitMQ 프로세스 하나(4_Web compose)에 큐 둘: DES `sim.request/result`(워커 ×M, prefetch 1 = CPU 풀 자원 관리) + Isaac `sim.verify.request/result`(host-orch 1, prefetch = IDLE GPU 러너 수). BE 는 AMQP 만, GPU 서버는 MQTT 만, host-orch 만 둘 다. 결과 발행 후 ack. 미정: `sim.verify.*` 의 consumer-timeout 정책 vs 즉시 ack + BE TIMEOUT 재시도, 검증 런 길이(DES 6 h 대비 Isaac 창), 견적 상태 `VERIFYING` |
@@ -53,7 +53,7 @@ FMS ↔ AMR 에이전트 ↔ sim-runner ↔ Host ↔ 시뮬 WMS 가 한 브로�
 | 상태 · 시각화 | VDA | 에이전트 → fms-core | `…/state` · `visualization` | 0 / — / — |
 | 접속 | VDA | 에이전트 → fms-core | `…/connection` | 1 / 예 / CONNECTIONBROKEN |
 | 팩트시트 | VDA | 에이전트 → fms-core | `…/factsheet` | 1 / 예 / — |
-| 런 제어 | SPB | Host → sim-runner | `spBv1.0/santa/NCMD/sim-runner-gpu01` | 0 / — / — |
+| 런 제어 | SPB | Host → sim-runner · fms-core | `spBv1.0/santa/NCMD/sim-runner-gpu01` · `…/NCMD/fms-core` | 0 / — / — |
 | 텔레메트리 | SPB | sim-runner · fms-core → Host | `…/NDATA/{edge}` · `…/DDATA/sim-runner-gpu01/{serial}` | 0 / — / — |
 | 세션 | SPB | Edge, Host | `…/NBIRTH · NDEATH · DBIRTH · DDEATH`, `spBv1.0/STATE/host-orch` | NDEATH LWT QoS1 · STATE QoS1 retained |
 | 주문 · 이벤트 | JSON | WMS → fms-core · fms-core → WMS · Host | `biz/v1/order` · `biz/v1/event` | 1 / — / — |
@@ -107,7 +107,8 @@ FMS ↔ AMR 에이전트 ↔ sim-runner ↔ Host ↔ 시뮬 WMS 가 한 브로�
 
 - 1 틱 = orderUpdateId 를 1 올리며 노드 하나를 더 released 로 보내는 order 업데이트. 업데이트는 마지막 base 노드에서 시작(스티칭), 새 orderId 는 base 가 끝난 뒤에만.
 - 중복: 같은 orderId · **같은** orderUpdateId 는 오류 없이 무시(state 만 재발행), **낮은** orderUpdateId 는 `orderUpdateError` (적용 2026-09-08: `OrderBook.receive` → 'duplicate' / `OrderUpdateError`, fake_fms `--repeat-last` 로 확인).
-- 재발행(결정 10): fms-core 는 로봇별 outbox 를 두고 state 도착 횟수로 센다 — 2건 미반영 → 같은 order 재발행, 10건 → 로봇 오류, ONLINE 복귀 시 1회, 30 s 무소식 → broken (예정).
+- 재발행(결정 10, 적용 2026-09-09 `3_FMS/fms_core/vda.py`): fms-core 는 로봇별로 마지막 order 를 들고 state 도착 횟수로 센다 — 2건 미반영(state.orderUpdateId < 보낸 값) → 같은 order 재발행, 10건 → 로봇 오류(런 ERROR), 30 s 무소식 → 단절로 런 ERROR. 노드 도착은 `lastNodeId == n_k` 로만 본다(벽시계 틱 없음). 노드 하나에 30 s(`--ack-timeout-s`)를 넘기면 정체로 런 ERROR.
+- 틱 배리어(적용): fms-core 는 커널 틱 t 의 명령(로봇별 노드 1개)을 보낸 뒤 명령받은 전 로봇의 `lastNodeId` 도착을 기다리고, 최소 `--tick-s`(기본 1 s = DES DT)가 지나야 다음 틱을 계산한다. 대기·서비스 로봇은 노드가 없으므로 기다리지 않는다. 런 시작 시 정렬 order(orderUpdateId 0 = 현재 포즈, 1 = 칸 중심·커널 헤딩)로 실 로봇을 커널 격자에 맞춘다.
 - 정지 허용치: 노드의 `allowedDeviationXY / Theta` (기본 0.05 m · 0.03 rad).
 
 ### 4.4 biz/v1 JSON (WMS ↔ fms-core, QoS1, 비-retained)
@@ -115,16 +116,17 @@ FMS ↔ AMR 에이전트 ↔ sim-runner ↔ Host ↔ 시뮬 WMS 가 한 브로�
 | 토픽 | 필수 필드 |
 |---|---|
 | `biz/v1/order` | `orderId` · `runId` · `createdAt` · `type` ∈ inbound · outbound · `lines[{sku, qty, fromStation, toStation}]` · `priority` |
-| `biz/v1/event` | `eventId` · `runId` · `at` · `type` ∈ task_assigned · task_done · order_shipped · robot_error · stall · `orderId` · `taskId` · `robot{manufacturer, serial}` |
+| `biz/v1/event` | `eventId` · `runId` · `at` · `type` ∈ task_assigned · task_done · order_shipped · robot_error · stall · **kpi_summary** · `tick` · `orderId` · `taskId` · `robot{manufacturer, serial}` |
+| `biz/v1/event` `type = kpi_summary` (v1.1, fms-core → Host, Stop 뒤 1건) | + `status` ∈ done · failed · `error` · `ticks` · `elapsed_s` · `planner` · `counters{open_tasks, done_tasks, orders_done, orders_total}` · `kpi` = SIM_VERIFY_CONTRACT §3 의 14개 키 블록(플래너가 없었으면 null) · `warnings`(v1.2, 없으면 null — 견적과 다른 조건으로 돌았다는 신호). host-orch 가 `sim.verify.result.kpi` 와 `verify.fms.warnings` 에 그대로 싣는다 |
 
-## 5. Sparkplug B 3.0 (`spBv1.0`, protobuf) — sim-runner 적용 2026-09-08 (`2_Simulation/sim_runner/`) · host-orch 적용 2026-09-09 (`3_FMS/host_orch/`, 잡 큐는 `SIM_VERIFY_CONTRACT.md`) · fms-core 예정
+## 5. Sparkplug B 3.0 (`spBv1.0`, protobuf) — sim-runner 적용 2026-09-08 (`2_Simulation/sim_runner/`) · host-orch 적용 2026-09-09 (`3_FMS/host_orch/`, 잡 큐는 `SIM_VERIFY_CONTRACT.md`) · fms-core 적용 2026-09-09 (`3_FMS/fms_core/`)
 
 ### 5.1 아이덴티티
 
 | | 값 |
 |---|---|
 | group_id | `santa` |
-| edge_node_id | `sim-runner-gpu01` (GPU 서버 상시 데몬) · `fms-core` (런 단위 Job) |
+| edge_node_id | `sim-runner-gpu01` (GPU 서버 상시 데몬) · `fms-core` (EC2 상시 데몬 — k3s 전까지 compose. Start 마다 커널을 새로 만들어 런 단위 Job 과 같다) |
 | device_id | VDA serialNumber `amr01…` (sim-runner 의 디바이스) |
 | host_id | `host-orch` — `spBv1.0/STATE/host-orch` `{"online": true|false, "timestamp": ms}` QoS1 retained, Will = offline |
 
@@ -138,21 +140,29 @@ FMS ↔ AMR 에이전트 ↔ sim-runner ↔ Host ↔ 시뮬 WMS 가 한 브로�
 | `Runner/Heartbeat` | Int64 ms | 5 s 주기 |
 | `Runner/RTF` · `IsaacInstances` · `RamMB` · `VramMB` | Double · Int32 | 5 s 샘플, 변화 시 |
 | `Runner/LastError` | String | ERROR 이유 |
+| `Runner/ScenarioSha` | String | 받은 scenario 의 sha256 (정규형). 런 없으면 `""`. Host 가 요청의 sha 와 대조 |
 | `Run Control/Start` · `Run Control/Stop` | Text(JSON) · Boolean | NCMD 용. NBIRTH 에 `""` · `false` 로 선언 |
 | **Device amr01… (state 거울)** | | |
 | `Robot/Model` · `Robot/Connection` · `Robot/LastNodeId` | String | factsheet seriesName / ONLINE · OFFLINE · CONNECTIONBROKEN / 틱 ack |
 | `Robot/PoseX` · `PoseY` · `Yaw` · `Battery` | Double | 변화 시 (0.05 m · 0.05 rad · 1 %) |
 | `Robot/AmclErr` | Double | 선택. DBIRTH 에 `is_null = true` 로 선언 |
-| **Edge fms-core** | | |
-| `bdSeq` · `Node Control/Rebirth` · `Fms/RunId` · `Fms/Tick` · `Fms/RobotsOnline` · `Fms/OpenTasks` · `Fms/DoneTasks` | | 값만. 이벤트는 `biz/v1/event` |
+| **Edge fms-core** (적용 2026-09-09) | | |
+| `bdSeq` · `Node Control/Rebirth` | Int64 · Boolean | 규격 필수 |
+| `Fms/State` · `Fms/RunId` | String | IDLE · STARTING · RUNNING · ERROR / 현재 런 ID (STARTING = 로봇 ONLINE+포즈 대기 → 정렬 order 도착 대기) |
+| `Fms/LastError` · `Fms/ScenarioSha` | String | ERROR 이유 / 받은 scenario 의 sha256 (sim-runner 와 같은 규칙) |
+| `Fms/Tick` | Int64 | 진행한 커널 틱 수 (= DES 초). 틱마다 변화 시 |
+| `Fms/RobotsOnline` · `Fms/OpenTasks` · `Fms/DoneTasks` · `Fms/OrdersDone` | Int32 | 변화 시. 값만 — 이벤트는 `biz/v1/event` |
+| `Fms/Heartbeat` | Int64 ms | 5 s 주기 (Host 는 3회 결측 = 런 실패) |
+| `Fms/Planner` | String | 주행 로직 이름 (`kernel` = sim_engine 커널 어댑터) |
+| `Run Control/Start` · `Run Control/Stop` | Text(JSON) · Boolean | NCMD 용. NBIRTH 에 `""` · `false` 로 선언 |
 
 ### 5.3 NCMD
 
-| 메트릭 | 값 | sim-runner 동작 |
-|---|---|---|
-| `Run Control/Start` | JSON `{run_id, scenario_pkg, n_robots, models[{serial, manufacturer, model}], ros_domain_id, timeout_s}` | Isaac + 에이전트 기동 → ready → DBIRTH ×N → RUNNING (실패 ERROR + LastError). 멱등: 같은 run_id 가 이미 RUNNING 이면 무시하고 상태만 재보고 (RabbitMQ 재전달 대비) |
-| `Run Control/Stop` | true | 에이전트 SIGTERM(OFFLINE) → DDEATH ×N → Isaac 종료 → IDLE |
-| `Node Control/Rebirth` | true | NBIRTH + 살아 있는 DBIRTH 재발행 |
+| 메트릭 | 값 | sim-runner 동작 | fms-core 동작 (같은 Start JSON, host-orch 가 sim-runner RUNNING 뒤에 보낸다) |
+|---|---|---|---|
+| `Run Control/Start` | JSON `{run_id, scenario_pkg, n_robots, models[{serial, manufacturer, model}], ros_domain_id, timeout_s, scenario?, scenario_sha256?}` (scenario 는 SIM_VERIFY_CONTRACT §2, 512 KB 이하) | Isaac + 에이전트 기동 → ready(전원 ONLINE + 포즈 수신) → DBIRTH ×N → RUNNING (실패 ERROR + LastError). 멱등: 같은 run_id 가 이미 RUNNING 이면 무시하고 상태만 재보고 (RabbitMQ 재전달 대비) | sha 대조 → STARTING: 전원 ONLINE+포즈(`uagv/v2/+/+/{connection,state}`) → 플래너 생성(로봇 첫 포즈 칸 = 홈) → 정렬 order → 도착 → RUNNING(틱 루프). 멱등·busy 규칙은 sim-runner 와 같다. `timeout_s` 경과 · 로봇 단절/오류 · host STATE offline 15 s → ERROR |
+| `Run Control/Stop` | true | 에이전트 SIGTERM(OFFLINE) → DDEATH ×N → Isaac 종료 → IDLE | 전 로봇 `instantActions cancelOrder` → `biz/v1/event` kpi_summary(§4.4) → IDLE |
+| `Node Control/Rebirth` | true | NBIRTH + 살아 있는 DBIRTH 재발행 | NBIRTH 재발행 |
 
 ### 5.4 세션 규칙
 
@@ -162,6 +172,11 @@ FMS ↔ AMR 에이전트 ↔ sim-runner ↔ Host ↔ 시뮬 WMS 가 한 브로�
 - Stop 순서(적용): DDEATH ×N 즉시 → 에이전트 SIGINT(브리지가 OFFLINE 발행) → 5 s 뒤 SIGTERM → 3 s 뒤 SIGKILL → Isaac 같은 사다리(유예 20 s) → IDLE. bdSeq 는 `~/.local/state/sim_runner/bdseq` 에 보존.
 - Host(적용): `spBv1.0/santa/#` 구독. seq 갭 · BIRTH 없는 노드 → Rebirth NCMD (노드당 5 s 에 1회). NDEATH 는 bdSeq 가 마지막 NBIRTH 와 같을 때만 offline(디바이스 stale), 아니면 stale death 로 무시. NDATA 가 15 s 없으면(하트비트 3회) 런 실패로 Stop. STATE 의 timestamp 는 접속마다 새로 — Edge 는 증가를 보고 BIRTH 재발행.
 - Start 의 `models[]` 가 비면 `amr01…` 순번 시리얼 · manufacturer `idealworks` · model `iw_hub`. sim-runner 는 factsheet 를 못 보므로(ACL) `Robot/Model` 은 이 목록에서 온다. 같은 run_id 는 무시하고 상태만 재보고, 다른 run_id 는 `LastError` "busy" 로 거절(상태 불변).
+- fms-core(적용): 유언·NBIRTH·Rebirth·Host STATE 규칙은 sim-runner 와 같다. keepalive 30 s. bdSeq 는 `~/.local/state/fms_core/bdseq`(컨테이너는 `/state`). Host 는 `Fms/Heartbeat` 15 s 결측 · NDEATH · `Fms/State` ERROR/IDLE(우리 run_id 이탈)을 런 실패로 본다.
+
+**v1.2-draft (2026-09-10, S15P21A106-185)**: §4.4 `kpi_summary` 에 `warnings` 추가 — 플래너가 견적과 다른 조건으로 돈 런을 결과에서 구분할 수 있어야 한다(θ 파일 없음 등). 추가만.
+
+**v1.1-draft (2026-09-09)**: fms-core 적용 — §2 런 제어 레인에 `NCMD/fms-core`, §4.3 재발행·틱 배리어 적용, §4.4 `kpi_summary` 이벤트(필드 추가), §5.2 fms-core 메트릭 타입·추가 메트릭, §5.3 fms-core 열, 결정 11 갱신.
 
 ## 6. 변경 절차
 

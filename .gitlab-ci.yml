@@ -10,6 +10,7 @@ workflow:
 
 stages:
   - lint
+  - test
   - sonar
   - comment
 
@@ -77,6 +78,32 @@ branch-lint:
       echo "브랜치명 컨벤션 위반: $BRANCH"
       echo "형식: feature|hotfix/S15P21A106-{이슈번호}-{설명}, release/v{버전} — Docs/GIT_CONVENTION.md 참고"
       exit 1
+
+# 3_FMS 파이썬 테스트 (S15P21A106-185). 이 축이 없어서 sim_engine 계약 v2.6 변경이 fms_core 를 깨뜨린 걸
+# 아무도 MR 단계에서 못 잡았다. 3_FMS 를 건드리는 MR 에서만 돈다 (다른 파트 MR 은 그대로 지나간다).
+# 의존성은 배포 이미지와 같은 고정 버전(infra/requirements.txt)을 쓴다 — 버전이 다르면 float 누적 순서가 달라져
+# 같은 시드가 다른 KPI 를 낸다(파일 머리말 참고). pip 캐시는 러너에 남겨 재설치를 줄인다.
+fms-python-test:
+  stage: test
+  image: python:3.11.9-slim
+  tags:
+    - sonar-ec2
+  variables:
+    PIP_CACHE_DIR: "${CI_PROJECT_DIR}/.cache/pip"
+    MPLBACKEND: "Agg"
+  cache:
+    key: fms-pip-cache
+    paths:
+      - .cache/pip
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - 3_FMS/**/*
+  script:
+    - pip install --no-cache-dir pytest==8.3.4 -r 3_FMS/infra/requirements.txt
+    - cd 3_FMS
+    # fms_core/tests/test_des_parity.py 가 견적 워커·sim_v2 와 커널 조건을 직접 대조한다 — sim_engine 이 바뀌면 여기서 빨개진다.
+    - python -m pytest fms_core/tests host_orch/tests sim_engine/tests -q
 
 sonarqube-analysis:
   stage: sonar

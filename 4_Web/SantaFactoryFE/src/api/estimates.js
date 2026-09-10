@@ -35,6 +35,10 @@ export function getEstimate(estimateId) {
   return api.get(`/estimates/${estimateId}`)
 }
 
+export function requestVerify(estimateId) {
+  return api.post(`/estimates/${estimateId}/verify`)
+}
+
 export function openEstimateStream(estimateId, { onSnapshot, onRun, onDone, onError }) {
   const source = new EventSource(streamUrl(`/estimates/${estimateId}`))
   const parse = (event) => JSON.parse(event.data)
@@ -42,6 +46,20 @@ export function openEstimateStream(estimateId, { onSnapshot, onRun, onDone, onEr
   source.addEventListener('snapshot', (e) => onSnapshot?.(parse(e)))
   source.addEventListener('run', (e) => onRun?.(parse(e)))
   source.addEventListener('estimate.done', (e) => {
+    onDone?.(parse(e))
+    source.close()
+  })
+  source.onerror = (e) => onError?.(e)
+
+  return () => source.close()
+}
+
+export function openVerifyStream(estimateId, { onSnapshot, onDone, onError }) {
+  const source = new EventSource(streamUrl(`/estimates/${estimateId}/verify`))
+  const parse = (event) => JSON.parse(event.data)
+
+  source.addEventListener('snapshot', (e) => onSnapshot?.(parse(e)))
+  source.addEventListener('verify.done', (e) => {
     onDone?.(parse(e))
     source.close()
   })

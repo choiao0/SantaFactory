@@ -27,6 +27,7 @@ import java.time.Duration;
  * @param horizon           시뮬 고정 시간 실행 길이. 성능 제약(견적 1회 90초)으로 정해지는 값이라
  *                          창고 데이터가 아니라 설정으로 둔다. 하루 전량으로 바꾸려면 24h
  * @param shifts            입고/출고 교대 토큰열. horizon 을 토큰 수로 등분한다
+ * @param verifyWindow      물리 검증(Isaac) 창 길이. SIM_VERIFY_CONTRACT.md 기본값(600s)과 같다
  */
 @ConfigurationProperties(prefix = "estimate")
 public record EstimateProperties(
@@ -39,7 +40,8 @@ public record EstimateProperties(
         @DefaultValue("1") int amrCountMargin,
         @DefaultValue("30m") Duration runTimeout,
         @DefaultValue("6h") Duration horizon,
-        @DefaultValue("in,in,out,out,out,out") String shifts
+        @DefaultValue("in,in,out,out,out,out") String shifts,
+        @DefaultValue("10m") Duration verifyWindow
 ) {
 
     /** 대수에 비례하는 1대당 비용 — 단가 + 구축·설치비. 충전기는 대수의 계단 함수라 여기 넣지 않는다. */
