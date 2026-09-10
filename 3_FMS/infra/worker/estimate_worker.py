@@ -37,8 +37,11 @@ MAX_ROBOTS = 28            # 충전 존 초기 배치 상한 (SIM_RUN_CONTRACT �
 DT = 1.0                   # 1틱 = 1초 (CELL_M 1.0 m / SPEED 1.0 m/s). 속도 반영은 docs/견적_워커.md "미룬 것"
 
 
+WORKER_ID = os.environ.get("HOSTNAME", "")[:12]     # 컨테이너 id 앞 12자 — 병렬 5개(-182) 로그 구분용. 로컬은 빈 문자열
+
+
 def log(msg):
-    print(f"[worker] {msg}", flush=True)
+    print(f"[worker{(' ' + WORKER_ID) if WORKER_ID else ''}] {msg}", flush=True)
 
 
 # ------------------------------------------------------------
