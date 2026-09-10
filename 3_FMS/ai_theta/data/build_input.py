@@ -19,8 +19,11 @@
 #      비용을 만드는 구조가 어긋나면 학습이 무의미해진다. 별도 추출기를 두면
 #      130이 발견한 "맵 복사본 어긋남"과 같은 부류의 사고가 반복된다.
 #
-# 대가: **현재 wallA 맵 전용**이다. 새 창고 일반화는 합성 창고 도입
-# (S15P21A106-128)과 함께 다뤄야 한다. README '한계' 참고.
+# 2026-09-08(S15P21A106-139): wallA 전용이던 제약이 풀렸다. 추출기를 일반화한 게
+# 아니라 **창고를 만드는 쪽이 토폴로지를 같이 낸다** — map_dir 의 topology.json 을
+# extract_topology(spec=…) 로 넘긴다. 위 이유 2는 그대로다(시뮬 비용과 AI 입력이 같은
+# 스펙 한 장을 본다). 공식 맵에는 그 파일이 없어 wallA 상수로 떨어진다.
+# docs/합성_창고_생성기.md · map/synth_warehouse.py
 # ============================================================
 from collections import deque
 import os
@@ -36,7 +39,7 @@ for _p in (_FMS_ROOT, _SIM_ENGINE):
 
 from contracts.guidance_types import GuidanceInput  # noqa: E402
 from from_theta import extract_topology  # noqa: E402
-from map_loader import load_charge_zone, load_map  # noqa: E402
+from map_loader import load_charge_zone, load_map, load_topology_spec  # noqa: E402
 
 # 방향 규약 — 명세 §3-2 (북0 동1 남2 서3), §14-1 (y가 커지면 북쪽)
 DIR_N, DIR_E, DIR_S, DIR_W = 0, 1, 2, 3
@@ -333,11 +336,14 @@ def build_guidance_input(n_agents, order_rate, sim_engine_dir=_SIM_ENGINE,
     맵은 map_loader.load_map 을, 충전 존은 map_loader.load_charge_zone 을 그대로
     쓴다. 시뮬과 다른 로더를 두면 격자가 어긋난다
     (docs/맵_충전존.md#맵-불일치와-동기화-결정).
+
+    `map_dir` 이 합성 창고면 토폴로지도 그 세트의 topology.json 에서 온다 (S15P21A106-139).
+    공식 맵에는 그 파일이 없어 wallA 상수로 떨어지므로 기존 결과는 그대로다.
     """
     if map_dir is None:
         map_dir = os.path.join(_FMS_ROOT, "map")          # 공식 맵 폴더 (= map_loader.MAP_DIR)
     free, st_cell, _ = load_map(map_dir, aisle_block)     # sim_engine_dir 은 호환용(맵 복사본 제거됨)
-    topo = extract_topology(free, st_cell)
+    topo = extract_topology(free, st_cell, spec=load_topology_spec(map_dir))
     charge_zone = load_charge_zone(free, map_dir)
     return GuidanceInput(
         static_map=build_static_map(free, st_cell, topo, charge_zone),

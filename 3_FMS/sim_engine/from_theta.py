@@ -11,7 +11,8 @@
 #   3. main_aisle_gain은 양 끝이 main_aisle인 간선에 항상 곱 (독립)
 #   4. 마지막에 한 번만 [COST_MIN, COST_MAX] clamp
 #
-# 토폴로지는 wallA 전용 규칙 기반 추출 (A트랙 topology_tensor 15ch는 별도).
+# 토폴로지는 좌표 스펙 기반 추출 (A트랙 topology_tensor 15ch는 별도). 기본값은 wallA 상수이고,
+# 합성 창고는 맵 세트의 topology.json 을 넘겨받는다 (topology_spec.py, docs/합성_창고_생성기.md).
 # 거리항은 sim_v2가 --theta일 때 이 edge_cost로 가중 다익스트라를 돌린다
 # (pibt_core.dist_map / dist_map_h, docs/이동계층_PIBT.md#가중-다익스트라-거리장).
 # ============================================================
@@ -27,23 +28,26 @@ if _ROOT not in sys.path:
 from contracts.guidance_types import (COST_MAX, COST_MIN, EDGE_RULE_PRECEDENCE,  # noqa: E402
                                       Guidance, GuidanceTheta)
 
-from map_loader import CELL_M, OFFSET_M  # noqa: E402
+from map_loader import CELL_M, OFFSET_M  # noqa: E402,F401
 from pibt_core import DIRS  # noqa: E402  (0=북 1=동 2=남 3=서)
+from topology_spec import WALL_A, TopologySpec  # noqa: E402,F401
 
 # wallA 좌표 상수 (설계 §2, 2026-09-01 실측)
 # 2026-09-03 맵 동기화(벽있음 ∪ v5.8, 랙 양 끝 1 m 연장)로 재산출: 랙 행 48~66 → 47~67.
-VA_ROWS = (47, 68)                     # 세로 통로 행 [47, 68) — 랙 내부 (= map_loader.AISLE_ROWS)
-VA_XS_M = [35.1 + 6 * k for k in range(11)]   # 통로 중심 x (m), 서쪽부터
-BAND_S_ROWS = (40, 47)                 # 남쪽 가로 간선 [40, 47)
-BAND_N_ROWS = (68, 74)                 # 북쪽 가로 간선 [68, 74)
-BAND_W_COLS = (20, 32)                 # 서쪽 연결 통로 [20, 32)
-BAND_E_COLS = (99, 109)                # 동쪽 연결 통로 [99, 109) — 충전 존(c103~108)이 이 안에 있음
-JUNCTION_ROWS = (46, 68)               # 통로가 간선에 접속하는 목 (랙 바로 바깥 행)
-HOME_PREFIXES = ("charger", "charge_q")   # 홈은 작업자리가 아님 → station 규칙 미적용
+# 2026-09-08(-139): 값의 원본은 topology_spec.WALL_A 하나다. 아래 이름들은 이미 이걸 import 해
+# 쓰는 곳(checks/from_theta_demo.py, 문서)을 위해 남긴 별칭이고, 합성 창고는 spec 인자로 받는다.
+VA_ROWS = WALL_A.va_rows               # 세로 통로 행 [47, 68) — 랙 내부 (= map_loader.AISLE_ROWS)
+VA_XS_M = [35.1 + 6 * k for k in range(11)]   # 통로 중심 x (m), 서쪽부터 (= WALL_A.va_centers)
+BAND_S_ROWS = WALL_A.band_s_rows       # 남쪽 가로 간선 [40, 47)
+BAND_N_ROWS = WALL_A.band_n_rows       # 북쪽 가로 간선 [68, 74)
+BAND_W_COLS = WALL_A.band_w_cols       # 서쪽 연결 통로 [20, 32)
+BAND_E_COLS = WALL_A.band_e_cols       # 동쪽 연결 통로 [99, 109) — 충전 존(c103~108)이 이 안에 있음
+JUNCTION_ROWS = WALL_A.junction_rows   # 통로가 간선에 접속하는 목 (랙 바로 바깥 행)
+HOME_PREFIXES = WALL_A.home_prefixes   # 홈은 작업자리가 아님 → station 규칙 미적용
 
 
 class Topology:
-    """from_theta가 소비하는 wallA 토폴로지 (설계 §2, §3-3)."""
+    """from_theta가 소비하는 창고 토폴로지 (설계 §2, §3-3)."""
 
     def __init__(self, v_aisle_rank, main_aisle, loop_fwd, junction, station_dir,
                  lane_dir, pocket):
@@ -60,25 +64,25 @@ class Topology:
         return self.station_dir >= 0
 
 
-def _band_center_dir(r, c, loop_fwd):
+def _band_center_dir(r, c, loop_fwd, spec=WALL_A):
     """규칙 2: 도킹 칸이 속한 밴드의 중심선 쪽 방향 (밴드 = loop_fwd 값으로 식별)."""
     b = loop_fwd[r, c]
     if b == 3:                                          # 남 밴드 → 행 중심
-        mid = (BAND_S_ROWS[0] + BAND_S_ROWS[1] - 1) / 2
+        mid = (spec.band_s_rows[0] + spec.band_s_rows[1] - 1) / 2
         return 0 if r < mid else 2
     if b == 1:                                          # 북 밴드
-        mid = (BAND_N_ROWS[0] + BAND_N_ROWS[1] - 1) / 2
+        mid = (spec.band_n_rows[0] + spec.band_n_rows[1] - 1) / 2
         return 0 if r < mid else 2
     if b == 0:                                          # 서 밴드 → 열 중심
-        mid = (BAND_W_COLS[0] + BAND_W_COLS[1] - 1) / 2
+        mid = (spec.band_w_cols[0] + spec.band_w_cols[1] - 1) / 2
         return 1 if c < mid else 3
     if b == 2:                                          # 동 밴드
-        mid = (BAND_E_COLS[0] + BAND_E_COLS[1] - 1) / 2
+        mid = (spec.band_e_cols[0] + spec.band_e_cols[1] - 1) / 2
         return 1 if c < mid else 3
     return -1
 
 
-def station_entry_dir(free, loop_fwd, rc):
+def station_entry_dir(free, loop_fwd, rc, spec=WALL_A):
     """명세 §6-3 'station→가장 가까운 큰 통로' 방향 (설계 §3-3).
     1) 인접 non-free 칸이 있으면 그 반대  2) 없으면 밴드 중심선 쪽  3) 못 정하면 -1."""
     H, W = free.shape
@@ -87,38 +91,45 @@ def station_entry_dir(free, loop_fwd, rc):
         rr, cc = r + dr, c + dc
         if not (0 <= rr < H and 0 <= cc < W) or not free[rr, cc]:
             return (d + 2) % 4
-    return int(_band_center_dir(r, c, loop_fwd))
+    return int(_band_center_dir(r, c, loop_fwd, spec))
 
 
-def extract_topology(free, st_cell, verbose=False):
-    """wallA 규칙 기반 추출. 통로차단 ON이면 랙 내부 통로 칸이 free=False라 자동 비활성.
+def extract_topology(free, st_cell, verbose=False, spec=None):
+    """스펙 좌표 기반 추출. 통로차단 ON이면 랙 내부 통로 칸이 free=False라 자동 비활성.
+
+    `spec` 생략 = wallA 상수(topology_spec.WALL_A) — 공식 맵의 기존 결과와 비트 동일하다.
+    합성 창고는 생성기가 같이 낸 topology.json 을 `map_loader.load_topology_spec(map_dir)` 로
+    읽어 넘긴다 (S15P21A106-139). 규칙 기반 자동 추출을 안 하는 이유는 ai_theta/data/README.md
+    '설계 결정' — 이 맵에서 깨졌고, AI 입력과 비용이 같은 토폴로지를 봐야 한다.
 
     귀결(θ 감도 실험 2026-09-04 §5): 기준선(aisle_block=1, 입구버퍼 인수인계)에서는 rank 를 매기는 세로 통로 칸이
     전부 막혀 있어 aisle 계열 θ 4개(aisle_alt_gain·aisle_alt_boost·aisle_period·aisle_phase)가 **무효**(중립과 비트 동일).
     코드 결함이 아니라 운영 모델의 결과이며, 기존 aisle 필드는 BO 탐색 공간에서만 제외한다.
     슬롯 앞 정차(Locus식)로 바꾸면 코드 수정 없이 되살아난다."""
+    if spec is None:
+        spec = WALL_A
     H, W = free.shape
     rank = np.full((H, W), -1, dtype=np.int16)
-    for k, x in enumerate(VA_XS_M):
-        c = int((x + OFFSET_M) / CELL_M)
-        rank[VA_ROWS[0]:VA_ROWS[1], c - 1:c + 2] = k
+    for k, center in enumerate(spec.va_centers):
+        c0, c1 = spec.aisle_cols(center)
+        rank[spec.va_rows[0]:spec.va_rows[1], c0:c1] = k
 
     main = np.zeros((H, W), dtype=bool)
-    main[BAND_S_ROWS[0]:BAND_S_ROWS[1], :] = True
-    main[BAND_N_ROWS[0]:BAND_N_ROWS[1], :] = True
+    main[spec.band_s_rows[0]:spec.band_s_rows[1], :] = True
+    main[spec.band_n_rows[0]:spec.band_n_rows[1], :] = True
 
     loop = np.full((H, W), -1, dtype=np.int8)
-    r_lo, r_hi = BAND_S_ROWS[0], BAND_N_ROWS[1]
-    loop[r_lo:r_hi, BAND_W_COLS[0]:BAND_W_COLS[1]] = 0   # 서 밴드 → 북행
-    loop[r_lo:r_hi, BAND_E_COLS[0]:BAND_E_COLS[1]] = 2   # 동 밴드 → 남행
-    loop[BAND_S_ROWS[0]:BAND_S_ROWS[1], :] = 3           # 남 밴드 → 서행 (코너 우선)
-    loop[BAND_N_ROWS[0]:BAND_N_ROWS[1], :] = 1           # 북 밴드 → 동행
+    r_lo, r_hi = spec.ring_rows
+    loop[r_lo:r_hi, spec.band_w_cols[0]:spec.band_w_cols[1]] = 0   # 서 밴드 → 북행
+    loop[r_lo:r_hi, spec.band_e_cols[0]:spec.band_e_cols[1]] = 2   # 동 밴드 → 남행
+    loop[spec.band_s_rows[0]:spec.band_s_rows[1], :] = 3           # 남 밴드 → 서행 (코너 우선)
+    loop[spec.band_n_rows[0]:spec.band_n_rows[1], :] = 1           # 북 밴드 → 동행
 
     junc = np.zeros((H, W), dtype=bool)
-    for k, x in enumerate(VA_XS_M):
-        c = int((x + OFFSET_M) / CELL_M)
-        for r in JUNCTION_ROWS:
-            junc[r, c - 1:c + 2] = True
+    for center in spec.va_centers:
+        c0, c1 = spec.aisle_cols(center)
+        for r in spec.junction_rows:
+            junc[r, c0:c1] = True
 
     # free 밖은 전부 비활성 (칸 자체를 못 가는 것은 격자가 담당 — 명세 §12)
     rank[~free] = -1
@@ -128,9 +139,9 @@ def extract_topology(free, st_cell, verbose=False):
 
     sdir = np.full((H, W), -1, dtype=np.int8)
     for name, rc in st_cell.items():
-        if name.startswith(HOME_PREFIXES) or not free[rc]:
+        if name.startswith(spec.home_prefixes) or not free[rc]:
             continue
-        d = station_entry_dir(free, loop, rc)
+        d = station_entry_dir(free, loop, rc, spec)
         if d < 0:
             if verbose:
                 print(f"[from_theta] {name} {rc}: entry_dir 결정 불가 → station 규칙 미적용")

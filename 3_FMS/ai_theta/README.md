@@ -8,8 +8,8 @@
 | 파일/디렉토리 | 내용 | 상태 |
 |---|---|---|
 | [`theta_fixtures.py`](theta_fixtures.py) | 규칙별 θ 검증 세트 + 기대 히트맵 (`from_theta` 배관 확인용) | 세트 10개 |
-| [`tests/`](tests/) | 세트를 실제 `from_theta` 출력과 대조 | 테스트 10개 |
-| [`data/`](data/) | 창고 + 운영조건 → `GuidanceInput` (39채널 + 운영조건 9) | `build_input.py`, 테스트 22개 |
+| [`tests/`](tests/) | 세트를 실제 `from_theta` 출력과 대조 · 합성 창고 생성기 검증 | 테스트 35개 |
+| [`data/`](data/) | 창고 + 운영조건 → `GuidanceInput` (39채널 + 운영조건 9). **wallA 외 창고도 가능** (-139) | `build_input.py`, 테스트 22개 |
 | [`train/`](train/) | θ 회귀(연속 8) + 분류(범주형 3) 학습 스크립트 | 비어있음 |
 | [`experiments/`](experiments/) | θ 감도 실험 (`theta_sensitivity.py`, `--from-csv` 로 시뮬 없이 재판정) · 대수별 θ 검증 (`eval_fleet.py`, 탐색/평가 시드 분리) | 케이스 17개 |
 | [`results/`](results/) | 실험 산출물 CSV (기존 결과 덮어쓰기 금지) | |

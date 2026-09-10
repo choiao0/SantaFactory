@@ -1,6 +1,6 @@
 # 3_FMS/docs
 
-현재 유효한 FMS 설계와 실측을 주제별 문서 7개로 정리한다. 날짜 기록은 원문 근거로 로컬에
+현재 유효한 FMS 설계와 실측을 주제별 문서 8개로 정리한다. 날짜 기록은 원문 근거로 로컬에
 보관하지만 git 추적 대상이 아니며, 새 링크는 아래 문서의 구체적인 절을 가리킨다.
 
 ## 주제 문서
@@ -39,6 +39,13 @@ Lifelong MAPF 해석, ROS/Isaac 연결 순서와 계약 기준값 3개를 확인
 신발 창고 공개 데이터(Mendeley pf2w725pw3)에서 라인 수·수량·SKU 편중·웨이브 시각 분포를 추출해 우리 매장·상품·랙 위에
 하루치 `outbound[]`(명세 §1-1 형식)를 만든다. 릴리스 기본 웨이브, ABC 는 인기 가중치만, 입고 보류. 이슈 S15P21A106-153.
 시뮬 연결(-156): `--orders-file`·`--capacity`, 랙 → 버퍼 매핑 `map/rack_buffers.json`, `slice_orders.py` 시간창 자르기, 첫 비교 표는 커널·시뮬 구조 문서에.
+
+### [합성 창고 생성기](합성_창고_생성기.md)
+
+파라미터 8개로 창고를 만들고 **토폴로지를 같이 낸다** — 추출기를 일반화하지 않고 로드맵 3단계로 간다.
+wallA 를 그 파라미터로 재현해 링 영역 1 m 통행성·토폴로지 차이 0 을 확인했고, 규칙에서 안 나오는
+실측 구조물 121칸을 사각형 15개로 적어 뒀다. 데이터셋 기본 모드는 랙 기하 3축만 흔든다 — 격자 112개를 다 만들어 두고(2.3 s) 라벨링을 25개부터 시작한다.
+공식 맵 회귀(기준값 3개·80행·거리장)와 바뀐 코드 목록도 이 문서에. 이슈 S15P21A106-139.
 
 ### [남은 과업 계획](남은과업_계획.md)
 
@@ -100,6 +107,9 @@ SIM_CHECK=1 SIM_NO_PLOT=1 python sim_v2_tasks.py base 6 40 42 1
 python checks/check_results_identity.py --quick
 python checks/check_lifelong_battery.py
 python -m pytest ../ai_theta/tests ../contracts/tests tests -q     # tests = 명시 주문 모드 (-156)
+
+# 합성 창고 (-139) — wallA 재현이 링 영역에서 공식 맵과 같은지
+cd ../map && python synth_warehouse.py wallA /tmp/wallA && python synth_warehouse.py check /tmp/wallA
 ```
 
 전수 기준선 비교는 `python checks/check_results_identity.py`로 실행한다.
