@@ -27,7 +27,7 @@ services:
       MQTT_HOST: emqx
       MQTT_PORT: "1883"
       RABBITMQ_URL: amqp://${RABBITMQ_USER:?infra/.env 에 RABBITMQ_USER 를 설정하세요}:${RABBITMQ_PASSWORD:?infra/.env 에 RABBITMQ_PASSWORD 를 설정하세요}@rabbitmq:5672/
-    command: ["--node", "sim-runner-gpu01"]
+    command: ["--node", "sim-runner-gpu01", "--fms-node", "fms-core"]   # fms-core 스택(compose.fms-core.yml)도 떠 있어야 런이 RUNNING 이 된다
     networks: [santafactory, backbone]
     restart: unless-stopped
     deploy:

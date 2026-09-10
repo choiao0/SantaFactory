@@ -25,6 +25,8 @@ class MetricsMixin:
                       f"goal={rb['goal']} busy={rb['busy']} stag={self._stag.get(rid)}")
             if self.heading:
                 self._dump_heading_diag()
+                for ev in self.yield_events[-12:]:
+                    print(f"  [YIELD] {ev}")
         return buf.getvalue().rstrip("\n")
 
     def _dump_heading_diag(self):

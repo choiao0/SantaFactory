@@ -1,0 +1,42 @@
+# ============================================================
+# fms-core 배포 스택 (S15P21A106-92) — EC2, k3s 이전까지 compose
+#
+# EMQX 만 본다(backbone_default). host-orch 가 NCMD Start/Stop 을 보내고, 로봇(GPU 박스 T4 에이전트)과는 VDA 5050 토픽으로만 만난다.
+# 공인 포트는 하나도 안 쓴다. 자격증명은 infra/emqx/.env (MQTT_PW_FMS_CORE), gitignored. MQTT_HOST 는 아래서 emqx 로 덮는다.
+#
+#   cd 3_FMS/infra
+#   docker compose -f compose.fms-core.yml up -d --build
+#   docker compose -f compose.fms-core.yml logs -f
+# ============================================================
+name: fms-core
+
+services:
+  fms-core:
+    build:
+      context: ..
+      dockerfile: infra/fms_core.Dockerfile
+    image: fms-core:latest
+    container_name: a106-fms-core
+    env_file:
+      - emqx/.env
+    environment:
+      MQTT_HOST: emqx
+      MQTT_PORT: "1883"
+    command: ["--planner", "kernel", "--tick-s", "1.0"]
+    volumes:
+      - fms-core-state:/state
+    networks: [backbone]
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 768M
+
+volumes:
+  fms-core-state:
+
+networks:
+  backbone:
+    external: true
+    name: backbone_default

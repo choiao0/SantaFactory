@@ -6,7 +6,7 @@ import numpy as np
 from pxr import Gf, Usd, UsdGeom, UsdPhysics
 from scipy import ndimage
 
-from .config import (ASSETS, CELL, CONV_H, CONV_SEC_L, CONV_USD, CONVEYORS_VIS, E_WALL, FORK_POS,
+from .config import (ASSETS, CELL, CONV_H, CONV_SEC_L, CONV_USD, CONVEYORS_VIS, E_WALL, FORK_POS, MIN_BENCH_CELLS,
                      MAP_DIR, MAT_DIR, PACK_USD, TABLE_H)
 from .gridutil import greedy_rects
 from .materials import bind_mdl, bind_pbr
@@ -32,6 +32,15 @@ def build_conveyors_and_tables(stage, grid):
     UsdGeom.Xform.Define(stage, "/World/worktables")
     n_conv = n_tab = 0
     bench_mask = np.zeros_like(grid, dtype=bool)
+
+    # 파편 판정용 연결 성분 — 1 m² 미만 조각에 packing_table 을 세우면 실제로 없는
+    # 작업대가 생긴다. 앞면 45° 모따기가 있는 격자에서 그리디 분할이 작은 조각을
+    # 남기는 것을 실측했다 (S15P21A106-141: 9·19·6·1·6·1칸). 콜라이더는 그대로
+    # 둔다 — V&V·플래너의 단일 소스는 그리드 rect 다.
+    _lab5, _ = ndimage.label(grid == 5)
+    _frag = {k for k, sl in enumerate(ndimage.find_objects(_lab5), 1)
+             if sl is not None and int((_lab5[sl] == k).sum()) < MIN_BENCH_CELLS}
+
     for i, (r0, c0, h, w) in enumerate(convs):
         if on_conveyor((c0 + w / 2) * CELL, (r0 + h / 2) * CELL):   # 컨베이어 — 콜라이더 전용(비주얼은 A08)
             b = add_box(stage, f"/World/conveyors/c_{i}", c0 * CELL, r0 * CELL,
@@ -42,7 +51,8 @@ def build_conveyors_and_tables(stage, grid):
             b = add_box(stage, f"/World/worktables/t_{i}", c0 * CELL, r0 * CELL,
                         w * CELL, h * CELL, 0.0, TABLE_H)     # (투명), 비주얼은 packing_table
             UsdGeom.Imageable(b.GetPrim()).MakeInvisible()
-            bench_mask[r0:r0 + h, c0:c0 + w] = True
+            if int(_lab5[r0 + h // 2, c0 + w // 2]) not in _frag:
+                bench_mask[r0:r0 + h, c0:c0 + w] = True
             n_tab += 1
     # 정적 비주얼 — 기능 없는 모양용 (V&V·플래너는 위 콜라이더 박스 기준 그대로)
     n_sec = 0

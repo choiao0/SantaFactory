@@ -47,14 +47,21 @@ def test_same_buffer_lines_merge_into_one_tote_and_arrive_at_ordered_time():
     assert s.orders_skipped == 0
 
 
-def test_different_buffers_split_and_capacity_adds_trips():
+def test_different_buffers_split_and_tote_units_adds_totes():
     two = stream([order(10, ("A1", 1), ("B1", 1))], horizon=100)
     assert len(drain(two, 100)) == 2                                     # 버퍼 2개 → 태스크 2
-    cap = stream([order(10, ("A1", 9), ("A2", 8))], horizon=100, capacity=8)   # 같은 버퍼 qty 17 → ceil(17/8) = 3
+    cap = stream([order(10, ("A1", 9), ("A2", 8))], horizon=100, tote_units=8)   # 같은 버퍼 qty 17 → 3토트
     tasks = drain(cap, 100)
     assert len(tasks) == 3
     assert len({tk["frm_name"] for tk in tasks}) == 1
     assert cap.orders[0]["remaining"] == 3
+
+
+def test_order_over_six_totes_is_excluded():
+    s = stream([order(10, ("A1", 49)), order(20, ("B1", 8), oid=2)],
+               horizon=100, tote_units=8)
+    assert s.orders_oversize == 1 and s.n_orders == 1
+    assert len(drain(s, 100)) == 1
 
 
 def test_unknown_rack_fails_fast():
