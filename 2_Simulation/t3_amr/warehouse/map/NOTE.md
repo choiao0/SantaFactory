@@ -86,7 +86,28 @@ Santa 의 `warehouse/map_fms/obstacle_mask.npy` 를 복사해 맞췄고 (t3_amr 
     존 22개 → 버퍼 22개 (일대일) · 랙 132개 · 버퍼당 6개
     복사해 온 rack_buffers.json 과 동일
 
-## ★ 씬은 아직 안 맞는다
+## ★ 씬 — 9/8 기록이었고, 9/9 에 다시 구웠다 (2026-09-11 갱신)
+
+아래 본문은 **9/8 시점**이다. 그 뒤 9/9 에 새 격자로 씬을 다시 구웠다
+(Santa `106160f` "usd 파일 새로운 창고에 맞게 수정", 이어서 `7c6f1ac` 벽 철골).
+지금 `warehouse/scene/warehouse_scene.usd` 는 그 결과물이다 —
+`9ee7829f…` · 913 KB. 팀 원본(`2_Simulation/t3_warehouse/`, 9/2)은
+`581f9fca…` · 405 KB 로 **다른 파일**이다.
+
+그런데도 "창고가 안 바뀐다" 가 계속 나온 이유는 씬이 아니라 `paths.sh` 였다.
+`SCENE` 이 **팀 원본 쪽**을 가리키고 있어서, 새로 구운 씬이 저장소 안에 있는데도
+안 쓰였다. 2026-09-11 에 `$W/warehouse/scene/warehouse_scene.usd` 로 고쳤다.
+
+> **먼저 `paths.sh` 를 고친 상태로 한 번 돌려 보라.** 그것만으로 해결되면
+> `build_scene.py` 를 돌릴 필요가 없다 — 그 스크립트는 `$SCENE` 을 덮어쓰므로
+> 불필요하게 돌리지 않는 편이 낫다.
+>
+> 그래도 컨베이어·작업대가 y 33.8 · 30.2 에 서 있으면 그때는 9/9 재빌드가
+> 새 격자를 안 쓴 것이므로, 아래 "다시 지으려면" 절대로 간다.
+
+---
+
+(이하 9/8 기록)
 
 `warehouse_scene.usd` 의 컨베이어·작업대는 **옛 격자로 세운 것**이다.
 `build_scene.py` 의 원칙이 "그리드가 곧 씬이다"이고, 그 기하는
@@ -98,23 +119,39 @@ Santa 의 `warehouse/map_fms/obstacle_mask.npy` 를 복사해 맞췄고 (t3_amr 
 그래서 지금 계획하면 로봇이 y=40.4 의 **빈 바닥**으로 간다. 충돌은 없다
 (FMS 통행영역 ⊂ 우리 통행영역). 영상으로는 말이 안 된다.
 
-### 다시 지으려면 — 파일 두 개가 없다
+### 다시 지으려면 — ~~파일 두 개가 없다~~ **이제 다 있다** (2026-09-11)
 
     occupancy_grid.npy   있음
     stations.json        있음
-    rack_units.npy       ★ 없음   build_scene.py:89   즉시 실패
-    columns.npy          ★ 없음   build_scene.py:330
+    rack_units.npy       있음 (896 B, 9/9 수령)    build_scene.py:89
+    columns.npy          있음 (320 B, 9/9 수령)    build_scene.py:330
 
-FMS 는 계획만 하므로 그 둘을 안 만든다. **맵 파트에 요청해야 한다.**
+위의 "★ 없음" 은 9/8 시점 기록이다. 9/9 에 맵 파트에서 둘 다 받았으므로
+**맵 파트에 더 요청할 것은 없고, 바로 다시 지을 수 있다.**
 
-> `2_Simulation/t3_warehouse_map/map/` 에 v6.0 공식 세트를 넣어주세요.
-> `occupancy_grid.npy`(작업 라인 y=40.4) · `stations.json` ·
-> **`rack_units.npy`** · **`columns.npy`**
-> 앞의 둘은 `3_FMS/map/` 에 있는데 뒤의 둘이 없어 Isaac 씬을 못 짓습니다.
+    cd "$W" && source paths.sh
+    cp "$SCENE" "$SCENE.bak"                       # 지금 것이 유일한 옛 창고 사본
+    cd ~/isaacsim && ./python.sh "$W/warehouse/scene/build_scene.py"
 
-받으면 서버에서 한 번에 끝난다.
+`build_scene.py:934` 가 `stage.GetRootLayer().Save()` 로 `$SCENE` 을
+**덮어쓴다.** 그래서 먼저 백업한다.
 
-    cd ~/isaacsim && ./python.sh ~/khs/wh/warehouse/scene/build_scene.py
+돌린 뒤 V&V 출력에서 셀값 2(랙) 재현율이 100 % 인지 보고, 컨베이어·작업대가
+y≈40 대에 서는지 확인한다 (옛 격자는 y 33.8 · 30.2).
+
+### `--rebuild` 는 필요 없다 — 창고는 참조다
+
+`runners/build_amr_scene_v2.py:57` 이
+
+    wh.GetReferences().AddReference(args.warehouse, Sdf.Path("/World"))
+
+로 가져오고, `:163` 의 `st.GetRootLayer().Export(args.out)` 은 `Flatten()` 을
+부르지 않는다. 즉 `stage/*.usd` 에는 창고가 **복사돼 들어가지 않고 경로로만**
+걸려 있다. USD 가 열 때 합성하므로 `warehouse_scene.usd` 만 새로 구우면 다음
+실행에서 바로 반영된다.
+
+`--rebuild` 가 필요한 것은 **로봇 스폰 위치가 바뀔 때**뿐이다 — `starts.json`
+은 `stage/*.usd` 에 구워진다.
 
 ## 되돌리기
 

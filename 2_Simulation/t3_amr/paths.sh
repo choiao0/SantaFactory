@@ -12,7 +12,14 @@ export W="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 export SIM="$(cd "$W/.." && pwd)"                    # 2_Simulation
 
 # --- 입력 자산 (보존) ---
-export SCENE=$SIM/t3_warehouse/warehouse_scene.usd   # 팀 T3 창고 씬
+# ★ 씬도 t3_amr 안의 것이 단일 소스다 (2026-09-11 수정).
+#   예전에는 `$SIM/t3_warehouse/warehouse_scene.usd`(팀 원본, 9/2 · 405 KB)를
+#   가리켰다. 그런데 9/9 에 새 격자로 다시 구운 씬(913 KB)이 저장소 안
+#   `warehouse/scene/` 에 이미 들어와 있었고, 그게 안 쓰이고 있었다 —
+#   맵은 새 창고인데 화면은 옛 창고인 상태가 여기서 나왔다.
+#   `build_scene.py` 가 덮어쓰는 대상도 아래 경로다. 둘을 어긋나게 두면
+#   "다시 구웠는데 안 바뀐다" 가 반복된다.
+export SCENE=$W/warehouse/scene/warehouse_scene.usd  # 구운 T3 창고 씬 (build_scene.py 산출)
 # ★ 계획 맵은 t3_amr 안의 것이 **단일 소스**다 (occupancy_grid sha 563e6aeb…).
 #   팀 기본 맵(t3_warehouse_map/map, v6.0)은 격자가 다르고 stations.json 에
 #   `handoff` 가 없다 — GOAL_CATS 다섯 중 하나가 조용히 빠진다. 씬을 v6.0

@@ -96,8 +96,16 @@ export PIBT_N
 # [patch_record_n_fix] 계획 디렉터리는 0 패딩이다 — pibt_h.py 의 f"fleet_{n:02d}"
 #   실측: ls plan/traj_pibt_h/ → fleet_01  fleet_12
 PLAN_DIR="$PLAN/traj_pibt_h/fleet_$(printf '%02d' "$PIBT_N")"
-if [ ! -d "$PLAN_DIR" ] && [ "${REPLAN:-0}" = "1" ]; then
+# ★ REPLAN=1 이면 **이미 있어도** 다시 만든다 (2026-09-11 수정).
+#   예전 조건은 `[ ! -d "$PLAN_DIR" ] && [ REPLAN = 1 ]` 이라, 계획이 이미
+#   있으면 REPLAN=1 을 줘도 통째로 건너뛰었다. 이름은 "다시 계획" 인데 실제로는
+#   "없으면 만든다" 였다. 맵을 새 창고로 바꾼 뒤 REPLAN=1 로 돌렸는데 옛 좌표
+#   궤적이 그대로 재생되는 일이 여기서 나왔다.
+#   기본값은 그대로 0 이므로, 안 주던 사람의 동작은 바뀌지 않는다.
+if [ "${REPLAN:-0}" = "1" ]; then
     echo "── 계획 생성 (PIBT_N=$PIBT_N) ──────────────────────"
+    [ -d "$PLAN_DIR" ] && echo "  기존 계획을 지우고 다시 만듭니다: $PLAN_DIR"
+    rm -rf "$PLAN_DIR"                     # 남은 옛 파일이 섞이지 않게
 # [patch_record_n_fix] `--n` 을 넘겨야 한다. main.py:164 의 default 는 12다.
     ( cd "$W" && python amr/main.py plan --planner pibt_h --n "$PIBT_N" ) || exit 1
     cp -a "$W/v2/traj_pibt_h/." "$PLAN/traj_pibt_h/" || exit 1
