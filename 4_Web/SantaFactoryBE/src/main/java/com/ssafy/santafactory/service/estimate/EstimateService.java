@@ -260,7 +260,29 @@ public class EstimateService {
 
         simulationService.publishVerify(new VerifyRequest(
                 "verify_" + estimateId, recommendedCount, properties.verifyWindow().toSeconds(),
-                run.getRunId(), estimateId, FIXED_SEED));
+                run.getRunId(), estimateId, FIXED_SEED, verifyScenario(estimate)));
+    }
+
+    /**
+     * 견적이 DES 스윕에 실제로 쓴 출고 주문 전체를 검증 시나리오로 싣는다. 1단계 이전에 만들어진(주문
+     * 저장 전) 견적은 {@code outboundOrdersJson} 이 없으므로 시나리오 없이 발행한다(하위 호환).
+     */
+    private VerifyRequest.Scenario verifyScenario(Estimate estimate) {
+        String json = estimate.getOutboundOrdersJson();
+        if (json == null) {
+            return null;
+        }
+        List<SimulationRequest.Outbound> orders = readOutboundOrders(json);
+        return orders.isEmpty() ? null : new VerifyRequest.Scenario(FIXED_SEED, new VerifyRequest.Orders(null, orders));
+    }
+
+    private List<SimulationRequest.Outbound> readOutboundOrders(String json) {
+        try {
+            return objectMapper.readValue(json,
+                    objectMapper.getTypeFactory().constructCollectionType(List.class, SimulationRequest.Outbound.class));
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("출고 주문 목록 역직렬화 실패", e);
+        }
     }
 
     // ── 결과 반영 ────────────────────────────────────────────────────────────
