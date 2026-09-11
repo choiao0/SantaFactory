@@ -36,7 +36,9 @@ class StateBuilder:
               paused: bool = False, errors: Iterable[dict] = (), information: Iterable[dict] = (),
               battery_charge: float = 100.0, operating_mode: str = "AUTOMATIC",
               localization_score: Optional[float] = None, new_base_request: bool = False,
-              distance_since_last_node: float = 0.0, action_states: Iterable[dict] = ()) -> dict:
+              distance_since_last_node: float = 0.0, action_states: Iterable[dict] = (),
+              battery: Optional[dict] = None) -> dict:
+        """battery: BatteryModel.state() — 없으면 battery_charge 로 채운 고정값."""
         last = book.last_node
         pos = None
         if pose is not None:
@@ -52,7 +54,7 @@ class StateBuilder:
                "driving": driving, "paused": paused, "newBaseRequest": new_base_request,
                "distanceSinceLastNode": distance_since_last_node,
                "actionStates": list(action_states),
-               "batteryState": {"batteryCharge": battery_charge, "charging": False},
+               "batteryState": dict(battery) if battery else {"batteryCharge": battery_charge, "charging": False},
                "operatingMode": operating_mode,
                "errors": list(errors), "information": list(information),
                "safetyState": {"eStop": "NONE", "fieldViolation": False},

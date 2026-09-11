@@ -1,17 +1,21 @@
 """Kinematic fake robot: /cmd_vel → odom (+ TF odom→base_link). Stands in for Isaac.
 
-Response mimics T1 measurement (near-instant, ~6 m/s^2) so the controller's own
-ramps are what shape the motion — same as against Isaac.
+Plant response comes from the profile's `plant` section (T1 measurement: near-instant, ~6 m/s^2, asset
+tops out at 0.835 m/s) so the controller's own ramps are what shape the motion — same as against Isaac.
+Initial pose is per launch (fake_x / fake_y / fake_yaw).
 """
 from __future__ import annotations
 
 import math
 
 import rclpy
+from rclpy.executors import ExternalShutdownException   # ros2 launch 의 SIGINT 는 이걸로 온다
 from geometry_msgs.msg import TransformStamped, Twist
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from tf2_ros import TransformBroadcaster
+
+from ..profile import PROFILE_PARAMS, ProfileError, resolve_from_values
 
 
 class FakeRobot(Node):
@@ -19,22 +23,28 @@ class FakeRobot(Node):
         super().__init__("fake_robot")
         p = self.declare_parameters("", [
             ("x", 0.0), ("y", 0.0), ("yaw", 0.0), ("rate_hz", 50.0),
-            ("a_max", 6.0), ("alpha_max", 12.0), ("v_max", 0.835), ("w_max", 2.0),
             ("odom_frame", "odom"), ("base_frame", "base_link"), ("publish_tf", True),
+            *PROFILE_PARAMS,
         ])
         g = {q.name: q.value for q in p}
+        try:
+            plant = resolve_from_values(g)["plant"]
+        except ProfileError as e:
+            self.get_logger().error(f"profile: {e}")
+            raise SystemExit(2) from e
         self.x, self.y, self.yaw = g["x"], g["y"], g["yaw"]
         self.v = self.w = 0.0
         self.v_cmd = self.w_cmd = 0.0
-        self.a_max, self.alpha_max = g["a_max"], g["alpha_max"]
-        self.v_max, self.w_max = g["v_max"], g["w_max"]
+        self.a_max, self.alpha_max = float(plant["a_max"]), float(plant["alpha_max"])
+        self.v_max, self.w_max = float(plant["v_max"]), float(plant["w_max"])
         self.odom_frame, self.base_frame = g["odom_frame"], g["base_frame"]
         self.dt = 1.0 / g["rate_hz"]
         self.create_subscription(Twist, "cmd_vel", self._on_cmd, 10)
         self.odom_pub = self.create_publisher(Odometry, "odom", 20)
         self.tf = TransformBroadcaster(self) if g["publish_tf"] else None
         self.create_timer(self.dt, self._step)
-        self.get_logger().info(f"fake robot at ({self.x:.2f}, {self.y:.2f}, {self.yaw:.2f})")
+        self.get_logger().info(f"fake robot at ({self.x:.2f}, {self.y:.2f}, {self.yaw:.2f}) "
+                               f"plant v_max={self.v_max} a_max={self.a_max}")
 
     def _on_cmd(self, m: Twist) -> None:
         self.v_cmd = max(-self.v_max, min(self.v_max, m.linear.x))
@@ -72,8 +82,11 @@ def main() -> None:
     n = FakeRobot()
     try:
         rclpy.spin(n)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):   # 정상 종료 — 트레이스백·exit 1 없이
         pass
+    except Exception:                                        # noqa: BLE001 — 종료 레이스(컨텍스트 무효)만 삼킨다
+        if rclpy.ok():
+            raise
     finally:
         n.destroy_node()
         rclpy.try_shutdown()
