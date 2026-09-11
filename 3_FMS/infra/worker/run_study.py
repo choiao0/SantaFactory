@@ -26,6 +26,10 @@
 # 갈리지 않는다 (θ 는 막힐 때 일하는 규칙, 감도 실험 §0). 권장 대수는 map/synth/README.md 표.
 #   python /opt/worker/run_study.py --study r11p6l21_r20_g15 \
 #       --map-dir /work/map/synth/r11p6l21 --robots 20 --orders 120 ...
+#
+# 적재량은 --capacity 로 운영 조건과 맞춘다 (S15P21A106-192). 기본 1 로 두면 운영이
+# 6 토트여도 탐색은 1 토트로 돌아 다른 θ 가 나온다 — 실측 455.1 vs 824.9 tasks_per_h.
+#   python /opt/worker/run_study.py --study r11p6l21_r20_c6 --capacity 6 ...
 # ============================================================
 import argparse
 import json
@@ -173,11 +177,13 @@ def dump_best(study, args, schema_version, neutral_names):
         # 그대로 복원할 수 있어야 한다.
         # map_dir 은 어느 창고에서 뽑은 θ 인지다. 빠지면 그 θ 는 재현도 해석도 안 된다
         # (합성 창고 도입, S15P21A106-183). 공식 맵이면 키가 안 붙어 기존 meta 와 같다.
+        # capacity 는 기본값(1)이면 키가 안 붙는다 — 기존 meta 와 같은 모양이 된다.
         "condition": {"robots": args.robots, "orders": args.orders,
                       "seeds": args.seeds, "aisle_block": args.aisle_block,
                       "flow": FLOW, "cell": args.cell,
                       "order_gap": args.order_gap,
-                      **({"map_dir": args.map_ref} if args.map_ref else {})},
+                      **({"map_dir": args.map_ref} if args.map_ref else {}),
+                      **({"capacity": args.capacity} if args.capacity != 1 else {})},
         # 어떤 축을 탐색했는지 남긴다. 고정한 θ 도 값은 theta json 에 들어가므로
         # 이 목록이 없으면 "탐색해서 중립이 나온 것"과 구분되지 않는다.
         "search_space": {"pinned_neutral": sorted(args.pinned),
@@ -237,6 +243,15 @@ def parse_args(argv=None):
     p.add_argument("--map-dir", default=None, dest="map_dir",
                    help="맵 세트 폴더. 합성 창고는 map/synth/<이름> "
                         "(권장 대수는 map/synth/README.md 표)")
+    # 토트 적재 (계약 v2.6, S15P21A106-192). 기본값 1 이면 v2.5 이전과 같은 실행이다.
+    # 운영 조건이 6토트인데 탐색을 1토트로 하면 다른 세계에서 θ 를 찾는 것이다 —
+    # 실측(20대·250건·gap 4): 1토트 455.1 vs 6토트 824.9 tasks_per_h.
+    p.add_argument("--capacity", type=int, default=1,
+                   help="출고 왕복당 함께 싣는 토트 수 1~6. 운영 조건과 같게 줄 것")
+    # 적재량별 '속도'는 여기 없다. 시뮬에 아직 손잡이가 없어서다 — --svc-per-tote 는 그걸
+    # 서비스 시간으로 흡수하는 근사인데 채택 안 됐다. 속도 모델이 정해지면 그때 붙인다.
+    # --tote-units 도 뺐다 — 명시 주문(--orders-file)의 qty 로 토트 수를 세는 인자라
+    # 간격 모드인 θ 탐색에서는 시뮬이 경고를 내고 무시한다.
     p.add_argument("--sim-engine", default=DEFAULT_SIM_ENGINE, dest="sim_engine")
     p.add_argument("--fms-root", default=DEFAULT_FMS_ROOT, dest="fms_root")
     p.add_argument("--out", default="", help="최적 θ·메타 저장 디렉토리")
@@ -244,7 +259,11 @@ def parse_args(argv=None):
     args.seeds = [int(s) for s in args.seeds.split(",") if s.strip()]
     if not args.seeds:
         p.error("--seeds 가 비었다. 시뮬은 확률적이라 시드 3개 이상을 권장한다")
-    args.extra_args = ()
+    if not 1 <= args.capacity <= 6:
+        p.error(f"--capacity {args.capacity} — 계약 v2.6 은 1~6 만 받는다")
+    # 기본값이면 인자를 아예 안 붙인다. 공식 맵 기본 실행이 -183 이전과 글자 단위로 같아야
+    # 기준값 3개(docs/README.md)를 다시 안 재도 된다.
+    extra = []
     args.map_ref = None
     if args.map_dir is None:
         cap, where = MAX_ROBOTS, "공식 맵 (계약 §1)"
@@ -252,11 +271,14 @@ def parse_args(argv=None):
         args.map_dir = os.path.abspath(args.map_dir)
         if not os.path.isdir(args.map_dir):
             p.error(f"--map-dir 폴더가 없다: {args.map_dir}")
-        args.extra_args = (f"--map-dir={args.map_dir}",)
+        extra.append(f"--map-dir={args.map_dir}")
         # meta 에는 fms_root 기준 상대 경로를 적는다. 절대 경로를 박으면 다른 머신·컨테이너에서
         # 그 dict 로 호출을 복원할 수 없다 — meta 의 존재 이유가 그거다.
         args.map_ref = _relative_to(args.map_dir, args.fms_root)
         cap, where = charge_zone_capacity(args.map_dir, args.sim_engine), os.path.basename(args.map_dir)
+    if args.capacity != 1:
+        extra.append(f"--capacity={args.capacity}")
+    args.extra_args = tuple(extra)
     if args.robots > cap:
         p.error(f"--robots {args.robots} > 충전 존 용량 {cap} — {where}")
     args.exclude = [n.strip() for n in args.exclude.split(",") if n.strip()]
