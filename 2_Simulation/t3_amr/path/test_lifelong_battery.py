@@ -22,7 +22,7 @@ from lifelong import run_lifelong                           # noqa: E402
 from pibt_core_v2 import occupied                           # noqa: E402
 
 MAP = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                   "..", "warehouse", "map_fms")
+                   "..", "warehouse", "map")
 
 
 def plan_overlaps(history):

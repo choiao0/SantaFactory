@@ -11,11 +11,21 @@
 export W="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 export SIM="$(cd "$W/.." && pwd)"                    # 2_Simulation
 
-# --- 입력 자산 (보존. 팀 저장소 안에 있다) ---
-export SCENE=$SIM/t3_warehouse/warehouse_scene.usd   # 팀 T3 창고 씬
-export MAP=$SIM/t3_warehouse_map/map                 # 팀 기본 맵 (v6.0, 단일 소스)
-export MAP_FMS=$SIM/t3_warehouse_map/map_fms         # FMS 정렬 맵 (벽 있음)
-export ROBOT=$W/robots/iwhub/iw_hub.usd              # iw.hub 에셋 (git 제외, fetch_iwhub.py)
+# --- 입력 자산 (보존) ---
+# ★ 씬도 t3_amr 안의 것이 단일 소스다 (2026-09-11 수정).
+#   예전에는 `$SIM/t3_warehouse/warehouse_scene.usd`(팀 원본, 9/2 · 405 KB)를
+#   가리켰다. 그런데 9/9 에 새 격자로 다시 구운 씬(913 KB)이 저장소 안
+#   `warehouse/scene/` 에 이미 들어와 있었고, 그게 안 쓰이고 있었다 —
+#   맵은 새 창고인데 화면은 옛 창고인 상태가 여기서 나왔다.
+#   `build_scene.py` 가 덮어쓰는 대상도 아래 경로다. 둘을 어긋나게 두면
+#   "다시 구웠는데 안 바뀐다" 가 반복된다.
+export SCENE=$W/warehouse/scene/warehouse_scene.usd  # 구운 T3 창고 씬 (build_scene.py 산출)
+# ★ 계획 맵은 t3_amr 안의 것이 **단일 소스**다 (occupancy_grid sha 563e6aeb…).
+#   팀 기본 맵(t3_warehouse_map/map, v6.0)은 격자가 다르고 stations.json 에
+#   `handoff` 가 없다 — GOAL_CATS 다섯 중 하나가 조용히 빠진다. 씬을 v6.0
+#   격자로 다시 지은 뒤에 이 줄을 그쪽으로 옮긴다.
+export MAP=$W/warehouse/map
+export ROBOT=$W/robots/iwhub/iw_hub.usd              # iw.hub 에셋 (git 제외, tools/fetch_iwhub.py 가 여기 받는다)
 
 # --- 파생물 (지워도 된다. 빌드로 다시 만들어진다) ---
 export STAGE=$W/stage                                # 빌드된 씬 USD
@@ -37,7 +47,6 @@ export LOGS=$W/logs
 #   부모(=W)를 가리키면 된다.
 export AMR_BASE=$W
 export MODS=$W/path
-export MOD_FILES="amr_driver_v2.py pibt_core_v2.py isaac_drive.py pibt_scene.py lifelong.py battery.py dispatch.py metrics.py"
 
 # --- 스트리밍 ---
 export LAN_IP=$(hostname -I | awk '{print $1}')
@@ -66,6 +75,6 @@ echo "  파생  STAGE=$STAGE"
 echo "  계획  PLAN=$PLAN"
 echo "  결과  OUT=$OUT  LOGS=$LOGS"
 echo "  LAN=$LAN_IP  GPU=$GPU  CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-<격리 해제>}"
-for f in "$SCENE" "$ROBOT" "$MAP/obstacle_mask.npy"; do
+for f in "$SCENE" "$ROBOT" "$MAP/occupancy_grid.npy"; do
     [ -e "$f" ] || echo "  ★ 없음: $f"
 done
