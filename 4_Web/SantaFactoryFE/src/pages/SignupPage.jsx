@@ -6,7 +6,7 @@ const ROLES = [
   { key: 'admin', label: '관리자' },
 ]
 
-const DEFAULT_FORM = { username: '', password: '', passwordConfirm: '', companyName: '', phone: '' }
+const DEFAULT_FORM = { username: '', password: '', passwordConfirm: '', companyName: '' }
 
 export default function SignupPage() {
   const navigate = useNavigate()
@@ -22,7 +22,7 @@ export default function SignupPage() {
   }
 
   return (
-    <section className="section-dark login-page" id="top">
+    <section className="section-dark login-page signup-page" id="top">
       <div className="login-brand">
         <a className="brand" href="#top">
           <img className="brand-mark" src="/santafactory-logo.png" alt="Santa Factory" width={30} height={30} />
@@ -35,11 +35,7 @@ export default function SignupPage() {
       </div>
 
       <div className="login-card">
-        <h1 className="login-title">
-          Join the fleet.
-          <br />
-          <span>Start sizing.</span>
-        </h1>
+        <h1 className="login-title">Join the fleet.</h1>
 
         <div className="login-fields">
           <form className="login-form" onSubmit={handleSubmit}>
@@ -63,10 +59,6 @@ export default function SignupPage() {
             <label>
               <span>회사명</span>
               <input value={form.companyName} onChange={onChange('companyName')} autoComplete="organization" />
-            </label>
-            <label>
-              <span>연락처</span>
-              <input value={form.phone} onChange={onChange('phone')} autoComplete="tel" />
             </label>
 
             <div>

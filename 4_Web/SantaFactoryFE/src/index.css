@@ -503,6 +503,14 @@ footer a:hover { color: #fff; }
 }
 .login-alt-link:hover { color: #fff; }
 
+/* 회원가입은 필드가 많아 한 화면에 들어오도록 로그인보다 여백·글자를 줄인다 */
+.signup-page { padding: 24px 22px; }
+.signup-page .login-title { font-size: clamp(40px, 6.4vw, 76px); margin: 10px 0 22px; }
+.signup-page .login-form { gap: 12px; }
+.signup-page .login-form input { padding: 10px 14px; font-size: 17px; }
+.signup-page .tabs { margin-bottom: 4px; }
+.signup-page .tab { padding: 11px; }
+
 .admin-grid {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
   gap: 16px; max-width: 1100px;
