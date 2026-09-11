@@ -508,5 +508,5 @@ footer a:hover { color: #fff; }
 .admin-card .status.RUNNING { color: var(--red-dark); border-color: var(--red-dark); background: rgba(181, 22, 22, .12); }
 .admin-card .status.QUEUED, .admin-card .status.CANCELLED { color: #5d5d58; border-color: #8a8985; }
 .admin-card .status.FAILED, .admin-card .status.TIMEOUT, .admin-card .status.PARTIAL {
-  color: #8a5a05; border-color: #a5730e; background: rgba(165, 115, 14, .14);
+  color: #b8860b; border-color: var(--warn); background: rgba(224, 160, 30, .16);
 }
