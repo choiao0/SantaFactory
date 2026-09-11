@@ -10,8 +10,15 @@
 > | 파일 | sha256 (앞 12) |
 > |---|---|
 > | `occupancy_grid.npy` | `563e6aeba9c4` |
-> | `obstacle_mask.npy`  | `5ff6d11039c7` |
+> | `obstacle_mask.npy`  | `ae4344de2a55` ← 2026-09-11 수정 (옛값 `5ff6d11039c7`) |
 > | `stations.json`      | `f8edcf71bdde` |
+>
+> ★ `obstacle_mask.npy` 기준값이 바뀐 이유: 이관 시점에 적어 둔 `5ff6d110…` 은
+> 9/8 FMS 교체에서 **빠진 옛 v5.9 판**이었다. 격자와 짝이 안 맞아 새
+> `occupancy_grid.npy` 의 장애물 128,839 칸 중 12,540 칸(9.73 %)을 덮지 못했고,
+> 마스크를 읽는 A*·WPPL(`amr/make_path/`)이 **옛 창고**로 계획했다.
+> `warehouse/map_fms/obstacle_mask.npy` 로 맞췄고 지금은 미커버 0 이다.
+> 자세한 경위는 아래 ★ 절.
 >
 > 1061×1151 · 0.1 m/셀. pitch 1.2 로 풀링 → 격자 88×95 · 통행칸 5,889 ·
 > 스테이션 성분 1,298.
@@ -26,10 +33,31 @@
 | 파일 | 상태 |
 |---|---|
 | `occupancy_grid.npy` | `3_FMS/map` 과 **바이트 동일** (`f8bcfc1b…`) |
-| `obstacle_mask.npy` | `warehouse/map_fms` 와 동일 (`1080a637…`) |
+| `obstacle_mask.npy` | `warehouse/map_fms` 와 동일 (`ae4344de…`) — **2026-09-11 에야 실제로 맞췄다.** 아래 ★ |
 | `stations.json` | FMS 값 + `handoff` 하나 |
 | `rack_buffers.json` | FMS 에서 복사. 우리 `stations.json` 으로 재생성해도 같은 값 |
 | `charge_zone.json` | FMS 에서 복사 |
+
+### ★ obstacle_mask 는 9/8 에 **안 바뀌어 있었다** (2026-09-11 수정)
+
+위 표는 9/8 에 쓴 것인데 `obstacle_mask.npy` 줄만 사실이 아니었다. 실제로는
+옛 v5.9 판(`5ff6d110…`)이 그대로 남아 Santa 의 `.bak` 과 바이트 동일했다.
+격자와 짝이 안 맞는다는 것은 숫자로 드러난다 — 새 `occupancy_grid.npy` 의
+장애물 128,839 칸 중 **12,540 칸(9.73 %)을 마스크가 덮지 못했다.**
+
+그래서 읽는 파일에 따라 **다른 창고**를 봤다.
+
+| 무엇을 읽나 | 누가 | 창고 |
+|---|---|---|
+| `occupancy_grid.npy` | `path/pibt_scene.py` (PIBT 헤딩 · lifelong) | 새 것 |
+| `obstacle_mask.npy` | `amr/make_path/{grid,lattice,validate}.py` (A* · WPPL) | **옛 것** |
+
+뒤쪽은 단순히 낡은 정도가 아니라 **새 장애물을 통과하는 경로**를 낸다.
+Santa 의 `warehouse/map_fms/obstacle_mask.npy` 를 복사해 맞췄고 (t3_amr 에는
+`map_fms` 폴더가 없다), 지금은 못 덮는 칸이 0 이다.
+
+★ `path/deinflate_map.py $MAP --write` 는 마스크에서 격자를 **역산해 덮어쓴다.**
+  마스크가 틀린 상태에서 돌리면 멀쩡한 `occupancy_grid.npy` 가 망가진다.
 
 스테이션 좌표 변화:
 
