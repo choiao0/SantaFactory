@@ -641,6 +641,11 @@ def main():
                     help="충전존 복귀를 끈다 — FREED 가 시작 칸으로 돌아가던 "
                          "2026-09-11 이전 동작. 옛 기준선 재현용")
     ap.set_defaults(zone=True)
+    ap.add_argument("--order-end", type=float, default=None,
+                    help="업무 종료 시점. 이 뒤로는 새 주문이 없고, 남은 일을 "
+                         "치운 로봇이 충전존으로 복귀한다. "
+                         "1 이하면 horizon 비율(예: 0.7), 1 초과면 틱 수. "
+                         "생략하면 horizon 끝까지 주문이 들어온다(이전 동작)")
     args = ap.parse_args()
 
     map_dir = os.path.abspath(args.map)
@@ -673,10 +678,16 @@ def main():
             if args.zone:
                 print(f"[scene] 충전존 복귀 ON · 후보 {len(zone)}칸 "
                       f"(끄려면 --no-zone)")
+            # 1 이하 = horizon 비율, 1 초과 = 틱. 둘 다 받는다
+            oe = args.order_end
+            if oe is not None:
+                oe = int(round(horizon * oe)) if oe <= 1.0 else int(round(oe))
+                print(f"[scene] 업무 종료 {oe}틱 / horizon {horizon}틱 "
+                      f"— 남은 {horizon - oe}틱은 복귀 시간")
             adg, order, history, info = plan_and_build_lifelong(
                 free, starts, goals, geom, horizon=horizon, seed=args.seed,
                 order_gap=args.order_gap, battery=args.battery,
-                dispatch=args.dispatch, zone_cells=zone,
+                dispatch=args.dispatch, zone_cells=zone, order_end=oe,
                 docks=charge_docks(free, geom) if args.battery else ())
         else:
             from isaac_drive import plan_and_build

@@ -172,6 +172,15 @@ DISPATCH = os.environ.get("PIBT_DISPATCH", "fms")      # fms | robot_first
 # 충전존 복귀. 기본 ON — PIBT_ZONE=0 이면 FREED 가 시작 칸으로 돌아가던
 # 2026-09-11 이전 동작으로 되돌아간다 (옛 기준선 재현용).
 ZONE = os.environ.get("PIBT_ZONE", "1") not in ("0", "", "false")
+# 업무 종료 시점. 이 뒤로는 새 주문이 없고 로봇이 충전존으로 복귀한다.
+# 1 이하 = HORIZON 비율(예: 0.7), 1 초과 = 틱. 빈 값이면 끝까지 주문(이전 동작).
+_OE = os.environ.get("PIBT_ORDER_END", "").strip()
+ORDER_END = float(_OE) if _OE else None
+# 주문 도착 간격(틱). 기본 15 는 12대 선단이 **못 따라간다** — 315틱에 30건
+# 도착하고 13건만 완료돼 적체 8건이 남는다. 그러면 주문을 끊어도 로봇이 계속
+# 일하므로 복귀가 안 된다. 전원 복귀를 보려면 25 이상으로 부하를 낮춘다.
+# 실측(12대·seed 1·업무 315틱·horizon 550): gap 15 → 4/12, gap 25 → **12/12**.
+ORDER_GAP = int(os.environ.get("PIBT_ORDER_GAP", "15"))
 CAMERA = os.environ.get("PIBT_CAMERA", "/World/Cameras/Cam_Top")
 SPAWN_Z = float(os.environ.get("PIBT_SPAWN_Z", "0.081"))   # build_amr_scene 의 WHEEL_R
 LEFT_IDX, RIGHT_IDX = 0, 1
@@ -837,12 +846,22 @@ async def _run():
     try:
         if MODE == "lifelong":
             zone = PS.charge_zone_cells(free, geom) if ZONE else ()
+            oe = ORDER_END
+            if oe is not None:
+                oe = int(round(HORIZON * oe)) if oe <= 1.0 else int(round(oe))
             adg, order, history, info = plan_and_build_lifelong(
                 free, starts, goals, geom, horizon=HORIZON, seed=SEED,
                 battery=BATTERY, dispatch=DISPATCH, zone_cells=zone,
+                order_end=oe, order_gap=ORDER_GAP,
                 docks=PS.charge_docks(free, geom) if BATTERY else ())
             carb.log_warn(f"[pibt] lifelong {HORIZON}틱 · 배터리 {BATTERY} "
-                          f"· 배차 {DISPATCH} · 존복귀 {ZONE}({len(zone)}칸)")
+                          f"· 배차 {DISPATCH} · 존복귀 {ZONE}({len(zone)}칸)"
+                          f" · 주문간격 {ORDER_GAP}틱"
+                          + (f" · 업무종료 {oe}틱" if oe is not None else ""))
+            _li = info.get("lifelong") or {}
+            if _li.get("parked_end") is not None:
+                carb.log_warn(f"[pibt] 계획 종료 시 충전존 주차 "
+                              f"{_li['parked_end']}/{N}대")
             import metrics
             for ln in metrics.fmt(info["throughput"]).splitlines():
                 carb.log_warn(ln)
