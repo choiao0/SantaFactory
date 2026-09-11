@@ -37,7 +37,7 @@ class _PIBTStepH:
     """헤딩 모델 한 틱: 칸 하나 → 칸 집합으로 일반화한 우선순위 상속 + 백트래킹."""
 
     def __init__(self, states, dists, edge_cost, wait_cost, free, turn_cost, extra,
-                 bias):
+                 bias, sec_map=None, sec_limit=0, sec_free=()):
         self.states = states
         self.dists = dists
         self.edge_cost = edge_cost
@@ -56,14 +56,71 @@ class _PIBTStepH:
         self.next_of = {}       # agent -> 다음 상태
         self.next_cells = {}    # agent -> 예약 칸 집합
         self.occ_next = {}      # cell -> 예약 agent
+        # 구간 대수 제한 (S15P21A106-193). sec_map 은 칸 -> 구간번호(-1 = 구간 밖).
+        self.sec_map = sec_map
+        self.sec_limit = sec_limit
+        self.sec_free = frozenset(sec_free)    # 정체 판정된 로봇 = 정원 면제
+        self.denied = set()                    # 이번 틱 정원 때문에 후보가 막힌 agent
+        self.sec_now = {a: self._secs(c) for a, c in self.now_cells.items()} if self.on else {}
+        self.sec_cnt = {}                      # 구간 -> 그 구간에 있는 로봇 수
+        for secs in self.sec_now.values():     # 아직 안 정해진 로봇은 현 위치로 센다
+            for s in secs:
+                self.sec_cnt[s] = self.sec_cnt.get(s, 0) + 1
+
+    @property
+    def on(self):
+        return self.sec_map is not None and self.sec_limit > 0
+
+    def _secs(self, cells):
+        """칸 집합이 걸친 구간 번호들. 몸이 두 칸이라 두 구간에 걸칠 수 있다."""
+        m = self.sec_map
+        out = set()
+        for r, c in cells:
+            k = int(m[r, c])
+            if k >= 0:
+                out.add(k)
+        return out
+
+    def _entry_ok(self, a, cells):
+        """정원이 찬 구간으로 **진입**하는가. 안→안·안→밖·제자리는 항상 허용한다.
+
+        퇴출을 막지 않으니 구간은 언제나 비워질 수 있다. 그래도 순환 대기는 막지 못한다 —
+        A 가 S1 을, B 가 S2 를 기다리는데 A 가 S2 에, B 가 S1 에 있으면 둘 다 제자리가 된다.
+        통행 칸 전체를 타일링하면 구간 밖 대피처가 없어 이게 실제로 난다 (실측: 블록 4·6·8 ×
+        정원 1·2·3, 8가지 전부 STALL). 그래서 정체한 로봇은 정원에서 푼다 (sec_free). (-193)
+        """
+        if not self.on or a in self.sec_free:
+            return True
+        now = self.sec_now[a]
+        for s in self._secs(cells) - now:
+            if self.sec_cnt.get(s, 0) >= self.sec_limit:
+                self.denied.add(a)
+                return False
+        return True
+
+    def _count(self, a, cells, sign):
+        """예약 확정(+1)·되돌리기(-1): 로봇 하나의 귀속을 현 위치 ↔ 예약 위치로 옮긴다.
+
+        즉 sec_cnt[s] 는 항상 "미정 로봇은 지금 있는 구간, 확정 로봇은 갈 구간" 기준
+        대수다. 그래서 우선순위 순서대로 자리가 찬다 — 먼저 결정된 쪽이 들어간다.
+        """
+        if not self.on:
+            return
+        now, nxt = self.sec_now[a], self._secs(cells)
+        for s in nxt - now:
+            self.sec_cnt[s] = self.sec_cnt.get(s, 0) + sign
+        for s in now - nxt:
+            self.sec_cnt[s] = self.sec_cnt.get(s, 0) - sign
 
     def _reserve(self, a, s2, cells):
         self.next_of[a] = s2
         self.next_cells[a] = cells
         for cell in cells:
             self.occ_next[cell] = a
+        self._count(a, cells, +1)          # 미정(현 위치) → 확정(예약 위치)로 계수 이전
 
     def _release(self, a):
+        self._count(a, self.next_cells[a], -1)
         for cell in self.next_cells.pop(a):
             if self.occ_next.get(cell) == a:       # 밀린 쪽이 제자리 예약으로
                 del self.occ_next[cell]            # 덮어썼으면 보존
@@ -89,6 +146,8 @@ class _PIBTStepH:
                 continue                                    # 타 agent 예약 칸
             if parent is not None and cells & self.now_cells[parent]:
                 continue                                    # 부모와 맞교환(swap) 금지
+            if not self._entry_ok(a, cells):
+                continue                                    # 정원 찬 구간 진입 금지
             self._reserve(a, s2, cells)
             if self._push_occupants(a, cells):
                 return True
@@ -98,18 +157,19 @@ class _PIBTStepH:
 
 
 def step_h(states, dists, edge_cost, wait_cost, free, priority_order,
-           turn_cost=None, extra=None, bias=None):
+           turn_cost=None, extra=None, bias=None, sec_map=None, sec_limit=0, sec_free=()):
     """헤딩 모델 한 틱. states: {a: (r,c,h)}, dists: {a: (H,W,4)},
     extra: {a: 추가 점유 칸(회전 중 스윙)}, bias: {a: 대기 점수 가산(wait_bias)}.
-    반환 (다음 상태 dict, 예약 칸 dict)."""
+    sec_map/sec_limit: 구간 대수 제한(-193) — sec_limit 0 이면 장치가 통째로 꺼진다.
+    반환 (다음 상태 dict, 예약 칸 dict, 정원 때문에 막힌 agent 집합)."""
     if turn_cost is None:
         turn_cost = float(TURN_TICKS)
     ps = _PIBTStepH(states, dists, edge_cost, wait_cost, free, turn_cost,
-                    extra or {}, bias or {})
+                    extra or {}, bias or {}, sec_map, sec_limit, sec_free)
     for a in priority_order:
         if a not in ps.next_of:
             ps.resolve(a)
-    return dict(ps.next_of), dict(ps.next_cells)
+    return dict(ps.next_of), dict(ps.next_cells), ps.denied
 
 
 def _occupancy(states, extra):
@@ -235,8 +295,8 @@ def run_h(free, starts, goals, edge_cost=None, wait_cost=None, max_steps=200,
         extra = {a: swing[a] for a in agents if busy[a] > 0}
         d_now = _dists_now_h(agents, states, goals, dists, busy, replan, stag, extra, t, free)
         bias = {a: wait_bias(stag.get(a)) for a in agents}
-        new, cells = step_h(states, d_now, edge_cost, wait_cost, free, prio,
-                            turn_cost, extra, bias)
+        new, cells, _ = step_h(states, d_now, edge_cost, wait_cost, free, prio,
+                               turn_cost, extra, bias)
         _after_step_h(agents, states, new, goals, dists, busy, swing, stag, age, turn_ticks)
         states = new
         history.append(dict(states))

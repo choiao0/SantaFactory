@@ -45,6 +45,12 @@
 # ============================================================
 set -uo pipefail
 
+# ★ paths.sh 는 **자기 옆의 것**을 쓴다 (run.sh 와 같은 방식).
+#   예전에는 `$HOME/khs/wh/paths.sh` 가 박혀 있었다. 저장소를 t3_amr 로 옮긴
+#   뒤에도 그 줄이 남아 있어서, 여기서 돌리면 조용히 **옛 Santa 체크아웃의**
+#   paths.sh 를 읽었다 — $W·$MAP·$PLAN 이 전부 남의 폴더를 가리킨다.
+#   그쪽이 없으면 source 가 실패하는데 `set -e` 가 아니라 그냥 지나가고,
+#   뒤에서 빈 변수로 엉뚱한 경로를 만든다. (2026-09-11)
 [ -n "${VIRTUAL_ENV:-}" ] || source "${VENV:-$HOME/khs/venv}/bin/activate"
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/paths.sh"
 
@@ -73,8 +79,59 @@ fi
 SHOTS="$OUT/shots_$TAG"
 MP4="$OUT/demo_$TAG.mp4"
 MYLOG="$LOGS/record_$TAG.log"
+# [patch_record_n] 첫 인자가 순수 정수면 로봇 대수로 먹는다
+#   bash run_record.sh 20 --rebuild  →  PIBT_N=20, run.sh 로는 --rebuild 만 간다
+#   대수를 안 주면 환경변수 PIBT_N, 그것도 없으면 12.
+if [ $# -ge 1 ] && [[ "$1" =~ ^[0-9]+$ ]]; then
+    PIBT_N="$1"; shift
+fi
+PIBT_N="${PIBT_N:-12}"
+if [ "$PIBT_N" -lt 1 ] 2>/dev/null; then
+    echo "★ 대수는 1 이상의 정수여야 합니다: $PIBT_N" >&2; exit 1
+fi
+export PIBT_N
+
+# [patch_record_n] 계획과 대수가 일치해야 한다 — 계획 디렉터리 이름에 대수가 박혀 있다.
+#   안 맞으면 35초 부팅하고 계획 로드까지 간 뒤에야 죽는다. 0초에 막는다.
+# [patch_record_n_fix] 계획 디렉터리는 0 패딩이다 — pibt_h.py 의 f"fleet_{n:02d}"
+#   실측: ls plan/traj_pibt_h/ → fleet_01  fleet_12
+PLAN_DIR="$PLAN/traj_pibt_h/fleet_$(printf '%02d' "$PIBT_N")"
+# ★ REPLAN=1 이면 **이미 있어도** 다시 만든다 (2026-09-11 수정).
+#   예전 조건은 `[ ! -d "$PLAN_DIR" ] && [ REPLAN = 1 ]` 이라, 계획이 이미
+#   있으면 REPLAN=1 을 줘도 통째로 건너뛰었다. 이름은 "다시 계획" 인데 실제로는
+#   "없으면 만든다" 였다. 맵을 새 창고로 바꾼 뒤 REPLAN=1 로 돌렸는데 옛 좌표
+#   궤적이 그대로 재생되는 일이 여기서 나왔다.
+#   기본값은 그대로 0 이므로, 안 주던 사람의 동작은 바뀌지 않는다.
+if [ "${REPLAN:-0}" = "1" ]; then
+    echo "── 계획 생성 (PIBT_N=$PIBT_N) ──────────────────────"
+    [ -d "$PLAN_DIR" ] && echo "  기존 계획을 지우고 다시 만듭니다: $PLAN_DIR"
+    rm -rf "$PLAN_DIR"                     # 남은 옛 파일이 섞이지 않게
+# [patch_record_n_fix] `--n` 을 넘겨야 한다. main.py:164 의 default 는 12다.
+    ( cd "$W" && python amr/main.py plan --planner pibt_h --n "$PIBT_N" ) || exit 1
+    cp -a "$W/v2/traj_pibt_h/." "$PLAN/traj_pibt_h/" || exit 1
+    echo "── 계획 완료 ───────────────────────────────────────"
+fi
+if [ ! -d "$PLAN_DIR" ] && [ "${SKIP_PLAN_CHECK:-0}" != "1" ]; then
+    echo "★ ${PIBT_N}대 계획이 없습니다: $PLAN_DIR" >&2
+    echo "  먼저:  python amr/main.py plan --planner pibt_h --n $PIBT_N" >&2
+    echo "         cp -a v2/traj_pibt_h/. plan/traj_pibt_h/" >&2
+    echo "  또는:  REPLAN=1 bash run_record.sh $PIBT_N" >&2
+    echo "  (검사만 끄려면 SKIP_PLAN_CHECK=1 — 계획이 없으면 주행이 실패합니다)" >&2
+    exit 1
+fi
+
 ARGS=("$@")
 [ ${#ARGS[@]} -eq 0 ] && ARGS=(--planner pibt_h)
+
+# [patch_record_n_fix] `--n` 을 run.sh -> main.py run 까지 넘긴다
+#   pibt_h.py:launch(n) 이 PIBT_STAGE="$STAGE/"+USD%n 을 쓴다 — 씬 USD 가
+#   대수별이다. main.py run 이 씬 빌드까지 하므로(run.sh:49) --n 이 거기까지
+#   가야 stage/pibt0N.usd 가 만들어진다. export PIBT_N 은 live_pibt.py 용이고,
+#   둘 다 필요하다.
+case " ${ARGS[*]} " in
+    *" --n "*) ;;                       # 사용자가 직접 줬으면 그대로 둔다
+    *) ARGS+=(--n "$PIBT_N") ;;
+esac
 
 # ── 들어오면 안 되는 조합 거부 ──────────────────────────────
 for a in "${ARGS[@]}"; do
@@ -107,6 +164,16 @@ EXPSEC=$(awk -v n="$EXPN" -v f="$SHOT_FPS" 'BEGIN{printf "%d", n/f}')
 echo "════════════════════════════════════════════════════"
 echo " run_record  $TAG"
 echo "  인자        ${ARGS[*]}"
+# [patch_record_n] 플래그가 걸렸는지 로그로 증명한다 (규칙 1번)
+echo "  대수        ${PIBT_N}대"
+echo "  계획        $PLAN_DIR"
+if [ "$PIBT_N" -gt 16 ]; then
+    echo "  ※ 충전존의 서쪽헤딩 슬롯이 2.4 m 간격에서 16개입니다."
+    echo "    ${PIBT_N}대면 CHARGE_STEP_Y=1.2 로 계획해야 할 수 있습니다."
+fi
+if [ "$PIBT_N" != "12" ]; then
+    echo "  ※ 아래 '예상' 줄은 12대 기준(43,800스텝)이라 부정확합니다."
+fi
 echo "  프레임      $SHOTS"
 echo "  영상        $MP4"
 echo "  로그        $MYLOG"

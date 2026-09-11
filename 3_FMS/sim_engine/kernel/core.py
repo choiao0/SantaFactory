@@ -35,6 +35,8 @@ class StallError(RuntimeError):
 
 
 MAX_TOTES_PER_TRIP = 6        # 선반형 AMR 3단 × 2 토트 (-177). 주문도 이 수를 넘으면 시뮬 밖(팔레트 흐름)
+SECTION_RELEASE = 8           # 이 틱 넘게 정체한 로봇은 구간 정원에서 면제 (-193). 재계획
+                              # 문턱(REPLAN_AFTER)과 같은 값 — 그 시점이면 이미 우회를 시도했다
 
 
 @dataclass
@@ -52,6 +54,7 @@ class KernelConfig:
     yield_ticks: int = 20         # 양보 임시 목표 유지 상한
     yield_after: int = 8          # 이 틱 이상 실제로 막힌 정면 조우만 양보 대상 (PIBT 가 스스로 푸는 마주침은 제외)
     turn_ticks: int = TURN_TICKS  # 90° 회전 틱
+    section_limit: int = 0        # 접속행 구간별 동시 진입 대수 상한 (0 = 끔, -193)
     dock_clear: int = 3           # 장치 ⑤ 유지 거리 (체비쇼프, 로봇 길이)
     stall_ticks: int = 1500       # 워치독: 이 틱 동안 완료 태스크 수 무변화 → StallError
     stall_warn_only: bool = False # 고정 시간 실행: 무진전은 기록하고 계속 (유한 모드는 기존 StallError)
@@ -71,7 +74,7 @@ class KernelConfig:
 
 class FmsKernel(BatteryMixin, MetricsMixin):
     def __init__(self, free, st_cell, edge_cost, wait_cost, homes, n_robots, cfg,
-                 zone_mask=None, on_task_completed=None, lane_dir=None):
+                 zone_mask=None, on_task_completed=None, lane_dir=None, sec_map=None):
         self.free, self.st_cell = free, st_cell
         self.H, self.W = free.shape
         self.edge_cost, self.wait_cost = edge_cost, wait_cost
@@ -83,6 +86,9 @@ class FmsKernel(BatteryMixin, MetricsMixin):
         self.zone_mask = zone_mask if self.zone else None
         self.zone_cells = zone_cells(free, zone_mask) if self.zone else []
         self.lane_dir = lane_dir
+        # 구간 대수 제한 (-193). 맵이 안 주면(sec_map None) 또는 정원 0 이면 장치가 꺼진다.
+        self.sec_map = sec_map if cfg.section_limit > 0 else None
+        self.section_blocks = self.section_releases = 0
         self.zone_stats = dict(wait=0, retargets=0, degraded=0, occ=[])   # 구현 설계 §4. occ = 틱별 존 안 로봇 수
         self.on_task_completed = on_task_completed
         self.station_cells = frozenset(st_cell.values())
@@ -420,8 +426,15 @@ class FmsKernel(BatteryMixin, MetricsMixin):
             prio = self._priority_h(t)
             dists = self._dists_h(t, states, extra)
         bias = {rid: 0.0 if robots[rid]["yield_peer"] is not None else wait_bias(self._stag.get(rid)) for rid in rids}
-        new, cells = step_h(states, dists, self.edge_cost, self.wait_cost, free, prio,
-                            self.turn_cost, extra, bias)
+        # 정체가 SECTION_RELEASE 틱을 넘은 로봇은 정원에서 푼다. 전면 분할처럼 우회로가
+        # 구간 밖에 없을 때 순환 대기를 깨는 마지막 안전판이다 (-193).
+        sec_free = ({rid for rid in rids if self._stag.get(rid) > SECTION_RELEASE}
+                    if cfg.section_limit else ())
+        new, cells, denied = step_h(states, dists, self.edge_cost, self.wait_cost, free, prio,
+                                    self.turn_cost, extra, bias,
+                                    self.sec_map, cfg.section_limit, sec_free)
+        self.section_blocks += len(denied)      # 정원에 막힌 (로봇 × 틱). 0 이면 제한이 논 것
+        self.section_releases += len(sec_free)
         if cfg.check:
             self._check_heading_step(t, states, new, cells)
         snap = {}
