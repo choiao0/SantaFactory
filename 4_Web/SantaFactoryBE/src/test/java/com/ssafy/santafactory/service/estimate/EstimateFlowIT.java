@@ -55,6 +55,12 @@ class EstimateFlowIT extends PostgresSupport {
     void seedWarehouse() {
         scenarioRepository.deleteAllInBatch();
         estimateRepository.deleteAllInBatch();
+        // 자식부터: products → rack/stores → zones → facility/warehouses (FK 순서)
+        jdbc.update("DELETE FROM products");
+        jdbc.update("DELETE FROM rack");
+        jdbc.update("DELETE FROM stores");
+        jdbc.update("DELETE FROM zones");
+        jdbc.update("DELETE FROM facility");
         jdbc.update("DELETE FROM warehouses");
         // 창고 시드(품고)와 같은 값 — 목표 처리율 95 %, 가동률 80 %, 예산 3억
         warehouseId = jdbc.queryForObject("""
@@ -69,6 +75,30 @@ class EstimateFlowIT extends PostgresSupport {
                         600, 800, 95.0, 95.0, 80.0, 300000000)
                 RETURNING warehouse_id
                 """, Long.class);
+        seedProductMaster(warehouseId);
+    }
+
+    /**
+     * {@code OutboundOrderGenerator}가 출고 주문을 뽑아낼 최소한의 상품 마스터.
+     * 실제 견적 흐름(주문 생성 → DES 발행)이 상품·랙 데이터 없이는 못 돈다.
+     */
+    private void seedProductMaster(long warehouseId) {
+        Long facilityId = jdbc.queryForObject(
+                "INSERT INTO facility (type, x, y) VALUES ('SHELF', 0, 0) RETURNING facility_id", Long.class);
+        Long zoneId = jdbc.queryForObject(
+                "INSERT INTO zones (warehouse_id, facility_id, zone_code, rack_count) VALUES (?, ?, 'Z1', 2) "
+                        + "RETURNING zone_id",
+                Long.class, warehouseId, facilityId);
+        Long rackId = jdbc.queryForObject(
+                "INSERT INTO rack (zone_id, field) VALUES (?, 'A1') RETURNING rack_id", Long.class, zoneId);
+        Long storeId = jdbc.queryForObject(
+                "INSERT INTO stores (zone_id, name, category, outbound_count) VALUES (?, 'DemoStore', 'shoes', 500) "
+                        + "RETURNING store_id",
+                Long.class, zoneId);
+        for (int i = 0; i < 20; i++) {
+            jdbc.update("INSERT INTO products (store_id, rack_id, name, price, count, count_init) "
+                    + "VALUES (?, ?, ?, 10000, 100, 100)", storeId, rackId, "item" + i);
+        }
     }
 
     @Test
