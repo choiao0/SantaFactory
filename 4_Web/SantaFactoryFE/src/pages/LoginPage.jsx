@@ -18,11 +18,11 @@ export default function LoginPage() {
       <div className="login-brand">
         <a className="brand" href="#top">
           <img className="brand-mark" src="/santafactory-logo.png" alt="Santa Factory" width={30} height={30} />
-          SANTA FACTORY
+          <span>SANTA FACTORY</span>
         </a>
         <span className="eyebrow red login-eyebrow">
           <span className="live-dot" />
-          LOGIN
+          <span>LOGIN</span>
         </span>
       </div>
 
@@ -36,11 +36,11 @@ export default function LoginPage() {
         <div className="login-fields">
           <form className="login-form" onSubmit={handleSubmit}>
             <label>
-              아이디
+              <span>아이디</span>
               <input value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" />
             </label>
             <label>
-              비밀번호
+              <span>비밀번호</span>
               <input
                 type="password"
                 value={password}

@@ -22,7 +22,7 @@ export default function AdminPage() {
       <header className="header">
         <a className="brand" href="/admin">
           <img className="brand-mark" src="/santafactory-logo.png" alt="Santa Factory" width={30} height={30} />
-          SANTA FACTORY
+          <span>SANTA FACTORY</span>
           <small>ADMIN</small>
         </a>
         <button type="button" className="ghost sm" onClick={() => navigate('/')}>로그아웃</button>
@@ -31,7 +31,7 @@ export default function AdminPage() {
         <section className="step paper">
           <div className="eyebrow red">
             <span className="live-dot" />
-            ALL ESTIMATES
+            <span>ALL ESTIMATES</span>
           </div>
           <h2>회원별 견적 현황.</h2>
           <p className="desc">회원마다 등록한 창고와 최근 견적을 한눈에 봅니다. 카드를 누르면 그 견적 화면으로 이동합니다.</p>

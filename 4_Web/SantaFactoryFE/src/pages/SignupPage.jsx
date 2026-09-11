@@ -26,11 +26,11 @@ export default function SignupPage() {
       <div className="login-brand">
         <a className="brand" href="#top">
           <img className="brand-mark" src="/santafactory-logo.png" alt="Santa Factory" width={30} height={30} />
-          SANTA FACTORY
+          <span>SANTA FACTORY</span>
         </a>
         <span className="eyebrow red login-eyebrow">
           <span className="live-dot" />
-          SIGN UP
+          <span>SIGN UP</span>
         </span>
       </div>
 
@@ -44,15 +44,15 @@ export default function SignupPage() {
         <div className="login-fields">
           <form className="login-form" onSubmit={handleSubmit}>
             <label>
-              아이디
+              <span>아이디</span>
               <input value={form.username} onChange={onChange('username')} autoComplete="username" />
             </label>
             <label>
-              비밀번호
+              <span>비밀번호</span>
               <input type="password" value={form.password} onChange={onChange('password')} autoComplete="new-password" />
             </label>
             <label>
-              비밀번호 확인
+              <span>비밀번호 확인</span>
               <input
                 type="password"
                 value={form.passwordConfirm}
@@ -61,11 +61,11 @@ export default function SignupPage() {
               />
             </label>
             <label>
-              회사명
+              <span>회사명</span>
               <input value={form.companyName} onChange={onChange('companyName')} autoComplete="organization" />
             </label>
             <label>
-              연락처
+              <span>연락처</span>
               <input value={form.phone} onChange={onChange('phone')} autoComplete="tel" />
             </label>
 
