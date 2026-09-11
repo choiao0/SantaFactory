@@ -496,6 +496,12 @@ footer a:hover { color: #fff; }
 }
 .login-form input:focus { outline: 2px solid var(--red); border-color: var(--red); }
 .login-submit { width: 100%; margin-top: 8px; border-radius: 4px; text-align: center; }
+.login-form-label { font: 500 15px var(--font-mono); letter-spacing: .05em; color: #999; display: block; margin-bottom: 8px; }
+.login-alt-link {
+  display: block; margin-top: 4px; text-align: center;
+  font: 500 14px var(--font-mono); letter-spacing: .03em; color: #999;
+}
+.login-alt-link:hover { color: #fff; }
 
 .admin-grid {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));

@@ -1,21 +1,16 @@
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
-
-const TABS = [
-  { key: 'user', label: '일반 유저' },
-  { key: 'admin', label: '관리자' },
-]
+import { Link, useNavigate } from 'react-router-dom'
 
 export default function LoginPage() {
   const navigate = useNavigate()
-  const [tab, setTab] = useState('user')
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
 
-  // 기능 연동 전 — 실제 인증 없이 선택된 탭에 따라 라우팅만 한다.
+  // 기능 연동 전 — 실제 인증 없이 견적 화면으로 이동한다. 역할(일반/관리자) 분기는
+  // 나중에 로그인 응답의 역할 값을 보고 처리한다(회원가입 시 정하는 값이라 로그인엔 없음).
   const handleSubmit = (e) => {
     e.preventDefault()
-    navigate(tab === 'admin' ? '/admin' : '/estimate')
+    navigate('/estimate')
   }
 
   return (
@@ -39,21 +34,6 @@ export default function LoginPage() {
         </h1>
 
         <div className="login-fields">
-          <div className="tabs" role="tablist">
-            {TABS.map((t) => (
-              <button
-                key={t.key}
-                type="button"
-                role="tab"
-                aria-selected={tab === t.key}
-                className={`tab${tab === t.key ? ' on' : ''}`}
-                onClick={() => setTab(t.key)}
-              >
-                {t.label}
-              </button>
-            ))}
-          </div>
-
           <form className="login-form" onSubmit={handleSubmit}>
             <label>
               아이디
@@ -69,6 +49,7 @@ export default function LoginPage() {
               />
             </label>
             <button type="submit" className="button login-submit">로그인</button>
+            <Link className="login-alt-link" to="/signup">계정이 없으신가요? 회원가입</Link>
           </form>
         </div>
       </div>
