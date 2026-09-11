@@ -1,4 +1,4 @@
-"""fms_core.vda — order 스티칭 규약(t4_agent OrderBook 이 오라클) · state 거울 · 도착/재발행 판정 · Fleet 토픽 배분."""
+"""fms_core.vda — order 스티칭 규약(1_Robot/amr_agent OrderBook 이 오라클) · state 거울 · 도착/재발행 판정 · Fleet 토픽 배분."""
 import json
 import math
 
@@ -7,7 +7,7 @@ import pytest
 from fms_core import vda as V
 from fms_core.tests.fakes import vda_connection, vda_state
 
-t4 = pytest.importorskip("amr_agent.vda5050.order", reason="t4_agent not in this checkout")
+t4 = pytest.importorskip("amr_agent.vda5050.order", reason="1_Robot/amr_agent not in this checkout")
 
 
 def link(serial="amr01"):
