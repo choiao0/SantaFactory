@@ -45,8 +45,14 @@
 # ============================================================
 set -uo pipefail
 
-[ -n "${VIRTUAL_ENV:-}" ] || source "$HOME/khs/venv/bin/activate"
-source "$HOME/khs/wh/paths.sh"
+# ★ paths.sh 는 **자기 옆의 것**을 쓴다 (run.sh 와 같은 방식).
+#   예전에는 `$HOME/khs/wh/paths.sh` 가 박혀 있었다. 저장소를 t3_amr 로 옮긴
+#   뒤에도 그 줄이 남아 있어서, 여기서 돌리면 조용히 **옛 Santa 체크아웃의**
+#   paths.sh 를 읽었다 — $W·$MAP·$PLAN 이 전부 남의 폴더를 가리킨다.
+#   그쪽이 없으면 source 가 실패하는데 `set -e` 가 아니라 그냥 지나가고,
+#   뒤에서 빈 변수로 엉뚱한 경로를 만든다. (2026-09-11)
+[ -n "${VIRTUAL_ENV:-}" ] || source "${VENV:-$HOME/khs/venv}/bin/activate"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/paths.sh"
 
 ME="${USER:-$(id -un)}"
 TAG="${RUN_TAG:-$(date +%Y%m%d_%H%M%S)}"

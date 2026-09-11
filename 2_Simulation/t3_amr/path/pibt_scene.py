@@ -615,7 +615,11 @@ def main():
     ap.add_argument("--pitch", type=float, default=1.2)
     ap.add_argument("--seed", type=int, default=9)   # 12대에서 완주 확인 (4·9·11·15·17·19·22)
     ap.add_argument("--pool", choices=("strict", "cross", "center"), default="cross")
-    ap.add_argument("--out", default=os.path.join(here, "..", "..", "v2", "traj_pibt_h"))
+    # ★ `..` 하나다. `here` 는 `<t3_amr>/path` 이므로 `../..` 는 t3_amr 의 **부모**
+    #   (2_Simulation)로 나가 버린다 — 거기엔 v2/ 가 없다. `amr/make_path/` 쪽
+    #   기본값들이 `../..` 인 것을 그대로 베껴 온 자리인데, 그쪽은 한 단계 더
+    #   깊어서 같은 표기가 맞다. 인자 없이 직접 돌릴 때만 드러난다. (2026-09-11)
+    ap.add_argument("--out", default=os.path.join(here, "..", "v2", "traj_pibt_h"))
     ap.add_argument("--plan", action="store_true",
                     help="계획까지 돌려 ADG 를 만들어 본다 (Isaac 불필요)")
     ap.add_argument("--max-steps", type=int, default=400)
