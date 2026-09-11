@@ -497,6 +497,26 @@ class EstimateServiceTest {
         assertThat(request.getValue().sourceRunId()).isEqualTo(recommendedRun.getRunId());
         assertThat(request.getValue().estimateId()).isEqualTo(77L);
         assertThat(request.getValue().seed()).isEqualTo(101L);
+        assertThat(request.getValue().scenario()).isNull();   // outbound_orders_json 없는(1단계 이전) 견적 — 하위 호환
+    }
+
+    @Test
+    void ships_the_full_outbound_order_list_as_the_verify_scenario() throws Exception {
+        Estimate estimate = withId(estimate(85.0, 90.0, 1_000_000_000L), 77L);
+        estimate.complete(4, 6, null, false);
+        List<SimulationRequest.Outbound> orders = List.of(
+                new SimulationRequest.Outbound(1L, 120L, List.of(new SimulationRequest.Line(5L, "A1", 2))));
+        estimate.applyOutboundOrders(objectMapper.writeValueAsString(orders));
+        SimScenario recommendedRun = run(estimate, 4);
+        when(estimateRepository.findById(77L)).thenReturn(Optional.of(estimate));
+        when(scenarioRepository.findByEstimateIdAndAmrCount(77L, 4)).thenReturn(Optional.of(recommendedRun));
+
+        service().requestVerification(77L);
+
+        ArgumentCaptor<VerifyRequest> request = ArgumentCaptor.captor();
+        verify(simulationService).publishVerify(request.capture());
+        assertThat(request.getValue().scenario().seed()).isEqualTo(101L);
+        assertThat(request.getValue().scenario().orders().outbound()).isEqualTo(orders);
     }
 
     // ── TIMEOUT 스윕 ─────────────────────────────────────────────────────────

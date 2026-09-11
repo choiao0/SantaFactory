@@ -87,4 +87,22 @@ class SimulationDtoJsonTest {
         assertThat(out.get("kpi").get("lead_time_p90_s").asDouble()).isEqualTo(402.0);
         assertThat(out.get("kpi").get("throughput_orders_per_h").asDouble()).isEqualTo(96.4);
     }
+
+    @Test
+    void verify_request_scenario_snake_case_roundtrip() throws Exception {
+        VerifyRequest req = new VerifyRequest("verify_77", 4, 600L, "est_77_n4", 77L, 101L,
+                new VerifyRequest.Scenario(101L, new VerifyRequest.Orders(null, java.util.List.of(
+                        new SimulationRequest.Outbound(1L, 23659L, java.util.List.of(
+                                new SimulationRequest.Line(3L, "A3", 2)))))));
+
+        JsonNode out = om.readTree(om.writeValueAsString(req));
+        assertThat(out.get("run_id").asText()).isEqualTo("verify_77");
+        assertThat(out.get("scenario").get("seed").asLong()).isEqualTo(101L);
+        JsonNode order = out.get("scenario").get("orders").get("outbound").get(0);
+        assertThat(order.get("ordered_at_s").asLong()).isEqualTo(23659L);
+        assertThat(order.get("lines").get(0).get("rack_id").asText()).isEqualTo("A3");
+
+        VerifyRequest roundTripped = om.readValue(om.writeValueAsString(req), VerifyRequest.class);
+        assertThat(roundTripped).isEqualTo(req);
+    }
 }
