@@ -148,6 +148,33 @@ ADG 가 예약하는 칸은 코어의 `cells_hist` 가 **아니라** `RobotGeom.
 | `astar` | `time` | 우선순위 space-time A* · 0.2 m 격자 · 비교군 |
 | `fms` | `time` | 3_FMS 커널 내보내기 재생. 계획 안 함 · 통제 비교용 |
 
+### 배차 정책 — 기본은 `fms` (이산쪽 정렬)
+
+계획기와 **별개 축**이다. `pibt_h` 안에서 태스크를 어느 순서로 나눠줄지를 정한다.
+
+| 정책 | 순회 | 쓸 때 |
+|---|---|---|
+| `fms` (**기본**) | 태스크 순회 — waiting FIFO 순으로 가장 가까운 유휴 로봇 | 3_FMS 와 KPI 비교 |
+| `robot_first` | 로봇 순회 — 로봇마다 가장 가까운 태스크 | **시연·처리량** |
+
+```bash
+python path/pibt_scene.py ... --dispatch robot_first     # 계획
+PIBT_DISPATCH=robot_first bash run_record.sh             # 주행
+```
+
+`robot_first` 가 **처리량은 더 높다.** 12시드 실측(12대·horizon 315·
+`order_gap` 15·배터리 ON·존복귀 ON, 완료 태스크 수):
+
+```
+robot_first  175   |   fms  149        9승 2패 1무 (+17.4%)
+```
+
+그런데도 기본을 `fms` 로 둔 것은 **3_FMS 이산 시뮬과 정책을 같게** 두기
+위해서다. 배차가 다르면 두 시뮬의 KPI 차이를 물리 탓으로 돌릴 수 없다.
+격자(1.0 vs 1.2 m)와 목표열은 AMR 기하 제약이라 못 맞추지만 정책은 맞출 수 있다.
+
+**시연 영상을 뽑을 때는 `robot_first` 를 쓰는 편이 낫다.**
+
 ---
 
 ## PIBT 코어는 사본이 아니다

@@ -16,12 +16,28 @@ PITCH = 1.2
 SEED = 1
 MODE = "lifelong"          # oneshot | lifelong
 # 배차 정책. fms=태스크 순회(FMS 이식본) / robot_first=로봇 순회
-#   큐는 비지 않고(평균 7.2개) 빈 로봇은 한두 대다 — 태스크가 흔하고 로봇이
-#   귀하므로 **귀한 쪽을 기준으로** 돈다. 실측 12시드: 완료 +12.8%,
-#   최대지연 -6.0%, 6승 1패 5무 (부호검정 p ~ 0.06).
-#   방향은 분명하지만 표본이 작다. `--dispatch fms` 로 언제든 되돌릴 수 있게
-#   두 정책을 모두 살려 뒀다 (dispatch.py).
-DISPATCH = "robot_first"
+#
+# ★ 2026-09-11: 기본값을 `robot_first` → `fms` 로 되돌렸다 (S15P21A106-200).
+#
+#   [왜] 3_FMS 이산 시뮬과 **정책을 같게** 두기 위해서다. 두 시뮬의 KPI 차이를
+#   비교하려면 배차가 같아야 한다 — 다르면 차이가 물리 때문인지 배차 때문인지
+#   가릴 수 없다. 격자(1.0 vs 1.2 m)와 목표열은 AMR 기하 제약이라 못 맞추지만,
+#   정책은 맞출 수 있고 비용도 상수 하나다.
+#
+#   [대가 — 처리량을 잃는다] 12시드 실측 (12대·horizon 315·order_gap 15·
+#   배터리 ON·존복귀 ON, 완료 태스크 수):
+#
+#       robot_first  175   |  fms  149      robot_first 9승 2패 1무 (+17.4%)
+#
+#   옛 주석은 "완료 +12.8%, 6승 1패 5무" 였는데, 맵이 FMS 정렬로 바뀌고(9/8)
+#   충전존 복귀가 들어간 뒤 **차이가 더 벌어졌다.** 그걸 알고도 `fms` 를 택한
+#   것이다 — 지금 목적이 성능이 아니라 이산쪽과의 대조이기 때문이다.
+#
+#   [되돌리는 법] 두 정책 모두 살아 있다 (dispatch.py).
+#       계획   python path/pibt_scene.py ... --dispatch robot_first
+#       주행   PIBT_DISPATCH=robot_first bash run_record.sh
+#   시연·처리량 측정이 목적이면 `robot_first` 가 낫다.
+DISPATCH = "fms"
 HORIZON = 315              # 틱. 315 x (1.2/0.9) = 계획 420 s
 BATTERY = True
 
