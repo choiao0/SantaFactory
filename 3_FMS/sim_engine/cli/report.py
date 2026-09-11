@@ -176,6 +176,13 @@ def report(a, kernel, stream, ctx):
         **zone_extra,
         # 합성 창고 (-139): 어느 맵 세트로 잰 값인지 없으면 재현이 안 된다. 공식 맵이면 키가 안 붙는다.
         **(dict(map_dir=os.path.basename(os.path.normpath(a.map_dir))) if getattr(a, "map_dir", None) else {}),
+        # 구간 대수 제한 (-193). 안 켜면 키가 안 붙어 기존 SUMMARY 와 같은 모양이다.
+        # blocks 0 = 제한이 한 번도 안 걸림(헐거움). releases 가 blocks 에 육박하면 정체 면제로
+        # 다 풀려 규칙이 무력한 것이다 — 블록이 너무 클 때 그렇게 된다(8×8 실측).
+        **(dict(section_limit=a.section_limit, section_grid=a.section_grid,
+                section_blocks=int(kernel.section_blocks),
+                section_releases=int(kernel.section_releases))
+           if getattr(a, "section_limit", 0) else {}),
         **(dict(order_gap=a.order_gap) if a.order_gap_arg is not None else {}),   # v1compat SUMMARY 불변
         **(dict(inbound_gap=a.inbound_gap_arg) if a.inbound_gap_arg is not None else {}),
         **lifelong_extra, **bat_extra,

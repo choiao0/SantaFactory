@@ -1,4 +1,4 @@
-# 시뮬 실행 계약 — `sim_engine/sim_v2_tasks.py` 호출 규약 (v3.1, 2026-09-10)
+# 시뮬 실행 계약 — `sim_engine/sim_v2_tasks.py` 호출 규약 (v3.2, 2026-09-11)
 
 > **v2 비호환 변경 (2026-09-04, S15P21A106-143):** 기본 이동 모델이 **헤딩 PIBT**로 바뀌었다. 칸 모델은 `--cell` opt-in.
 > `--heading`은 그대로 받되 무시한다. **`--heading`을 넘기지 않아 칸 모델을 얻던 호출자는 `--cell`을 넘겨야 한다**
@@ -31,6 +31,7 @@ python sim_v2_tasks.py <tag> <n_robots> <n_orders> <seed> <aisle_block> [--flow=
                        [--battery] [--chargers=6] [--runtime-h=8] [--charge-h=1.5] [--soc=20,80,95]  (v2.2 배터리)
                        [--orders-file=<json>] [--capacity=1] [--tote-units=<상품 수>] [--svc-per-tote=0]
                        [--no-lanes] [--no-yield] [--map-dir=<맵 세트 폴더>]
+                       [--section-limit=0] [--section-grid=3]                    (v3.2 구간 대수 제한)
 ```
 작업 디렉토리 = `3_FMS/sim_engine/` (상대 import). 맵은 `3_FMS/map/occupancy_grid.npy`·`stations.json`·`charge_zone.json`을 읽는다
 (컨테이너는 `3_FMS/`를 통째로 마운트하면 된다). `--map-dir`을 주면 그 폴더에서 같은 파일들을 읽는다.
@@ -54,6 +55,8 @@ python sim_v2_tasks.py <tag> <n_robots> <n_orders> <seed> <aisle_block> [--flow=
 | `--no-lanes` | 규칙 기반 출발·복귀 차선과 버퍼 주머니 비용을 끔 | 헤딩 main 기본 ON. `--lane-gain=1 --pocket-gain=1`과 같음 |
 | `--map-dir=<폴더>` | 맵 세트 폴더. 격자·스테이션·충전 존·토폴로지를 전부 여기서 읽는다 | 기본 = 공식 맵 `3_FMS/map`. 합성 창고는 `map/synth/<이름>`(-139). 폴더에 `topology.json`이 있으면 통로·밴드 좌표를 거기서, 없으면 wallA 상수 |
 | `--no-yield` | 8틱 이상 지속된 정면 조우의 양보 규칙을 끔 | main 헤딩 기본 ON |
+| `--section-limit=<N>` | 블록당 동시 대수 상한. **0 = 끔** | 실질 0/1 스위치다 — N≥2 는 같은 블록 안 두 대가 마주보는 걸 못 막아 무효거나 악화(실측 §5-2) |
+| `--section-grid=<k>` | 블록 한 변[칸]. `--section-limit>0` 일 때만 의미 | 기본 3. 크면 정체 면제로 풀려 무력해진다 |
 | (기본) | **헤딩 PIBT**(2칸 차체·회전·후진·라이브니스 5종). v2부터 플래그 없이 기본 | SUMMARY에 `heading=1` |
 | `--cell` | 칸 모델(점로봇). 기준선 CSV 재현·A/B 비교축 전용 | v1compat은 플래그와 무관하게 항상 칸 |
 | `--heading` | **호환용, 무시** (v1 호출자가 넘기던 플래그) | v1compat에서 넘기면 `[WARN]` 한 줄 |
@@ -169,6 +172,33 @@ v2.6부터 도착 틱 = `ordered_at_s`(1틱 = 1초), `rack_id` → `map/rack_buf
   평가 시드 기준선 CSV: `sim_engine/results/load_sweep_eval.csv`(시드 4개 × 고부하 격자 24). 평가 시드 처리량은 탐색 시드보다 3~5 % 낮게
   나오는 것이 정상 — 비교는 같은 집합끼리만. 근거: [시드 역할](../docs/θ_경로_기준선.md#시드-역할).
 
+## 5-2. 구간 대수 제한 — 측정과 한계 (v3.2, S15P21A106-193)
+
+정면 조우(소싸움)를 통행 칸의 k×k 블록별 동시 대수로 묶는다. 공식 맵 · 250건 · gap 4 ·
+6토트 · 16·20대 × 평가 시드 3개 = **6런**, 지표는 "창고 전체에서 8틱 이상 지속된 정면 마주보기".
+
+| 설정 | makespan | 8틱+ 마주보기 | 최장 지속 |
+|---|---|---|---|
+| 끔 (기본) | 기준 | 1115건 | 67~104틱 |
+| `--section-limit=1 --section-grid=3` | **+3.2 %** | **372건 (−67 %)** | **10~16틱** |
+| `--section-limit=1 --section-grid=2` | +7.2 % | 318건 (−71 %) | 8~10틱 |
+
+**세 가지를 알고 써야 한다.**
+
+1. **N 은 사실상 0/1 스위치다.** 소싸움은 밀도가 아니라 방향 문제라, 한 블록에 2대를 허용하면
+   그 2대가 마주보는 걸 못 막는다. 실측(16대·시드 101)에서 N=2 는 8틱+ 가 102→**121건으로 늘었고**,
+   N=4·5 는 진입 차단이 3회·0회로 규칙이 없는 것과 결과가 같았다. N=1 만 블록당 배타 점유가
+   되어 듣는다 — 철도 폐색과 같은 구조다.
+2. **k 는 클수록 조이는 게 아니라 무력해진다.** 8×8·N=1 은 64칸에 1대라 로봇이 계속 정체 →
+   면제로 풀려 92건(대가 +29 %)이었다. 3×3 이 무릎이다.
+3. **정체 면제가 없으면 교착으로 죽는다.** 진입만 막고 퇴출을 허용해도 순환 대기는 남는다 —
+   블록 4·6·8 × N 1·2·3 의 **8가지 조합이 전부 STALL** 이었다. 정체가 `SECTION_RELEASE`(8틱)를
+   넘은 로봇을 정원에서 푸는 것이 유일한 탈출구다. `section_releases` 가 `section_blocks` 에
+   육박하면 규칙이 사실상 안 걸리고 있다는 신호다.
+
+θ 탐색에는 기본(끔)을 쓴다. 이 규칙은 θ 밖의 운영 규칙이고, 켜면 혼잡 패턴이 바뀌어 θ 를
+다시 뽑아야 한다.
+
 ## 6. 권장 탐색 호출 예
 
 ```
@@ -190,6 +220,7 @@ SIM_NO_PLOT=1 PYTHONIOENCODING=utf-8 python sim_v2_tasks.py bo17 24 120 42 1 --o
 | v2.5 | 2026-09-09 | 호환(추가만, -156): **명시 주문 모드** `--orders-file`·`--capacity`, 조건부 SUMMARY 키 `orders_file`·`orders_skipped`·`capacity`. `map/rack_buffers.json`(랙 → 버퍼, `build_rack_map.py`) 신설. 플래그 없는 호출은 비트 동일(기준값 3개·동일성 12행 확인) |
 | **v2.6** | 2026-09-09 | **비호환**(-177): `capacity` 단위 상품 수→토트 수. `tote_units`·`svc_per_tote`, 동승 완료, 6토트 초과 제외, 토트·왕복·주문 리드타임 SUMMARY 추가. `capacity=1`, `svc_per_tote=0`, `tote_units` 미지정 시 기존 KPI 비트 동일 |
 | v3.1 | 2026-09-10 | 호환(추가만, -139·-183): `--map-dir=<맵 세트 폴더>`, 조건부 SUMMARY 키 `map_dir`. 맵 세트에 `topology.json`이 있으면 통로·밴드 좌표를 거기서 읽는다(없으면 wallA 상수). `n_robots` 상한이 그 맵의 충전 존 용량이 된다. 인자를 안 주면 v3와 비트 동일(기준값 3개·동일성 12행 확인). θ 탐색 워커 `run_study.py --map-dir`이 이 인자로 호출하고 `meta.condition.map_dir`에 fms_root 기준 상대 경로를 남긴다 |
+| **v3.2** | 2026-09-11 | 호환(추가만, -193): `--section-limit=<N>`·`--section-grid=<k>`, 조건부 SUMMARY 키 `section_limit`·`section_grid`·`section_blocks`·`section_releases`. 통행 칸을 k×k 블록으로 자르고 블록당 동시 대수를 N 으로 묶어 정면 조우(소싸움)를 줄인다. `--section-limit` 을 안 주면 v3.1과 비트 동일(기준값 3개 확인). 측정·한계는 §5-2 |
 | **v3** | 2026-09-09 | **결과 변경**(-177): 헤딩 main 기본 차선(`--lane-gain`·`--pocket-gain` 2.0, θ 밖)·양보, `--no-lanes`·`--no-yield`, SUMMARY `lanes`·`yield_rule`·`yield_events`. θ 스키마는 11개 v2 그대로. 기준선은 두 스위치를 끄면 비트 동일 |
 
 관련: [고부하 기준](../docs/θ_경로_기준선.md#고부하-l1l2), [θ 로드맵](../docs/남은과업_계획.md#부록-a-θ-로드맵-단계표),

@@ -108,6 +108,22 @@ def _parse_model(a, argv):
     # v3: 차선·양보는 헤딩 main 전용. 칸 모델(--cell)은 A/B 기준 축이라 건드리지 않는다(기준값 2970/127.3 유지).
     a.lanes = "--no-lanes" not in argv and a.heading and a.flow != "v1compat"
     a.yield_rule = "--no-yield" not in argv and a.heading and a.flow != "v1compat"
+    # 구간 대수 제한 (-193). 통행 칸을 k×k 블록으로 자르고 블록당 동시 대수를 N 으로 묶는다.
+    # 기본 0 = 끔 → 이 인자 없이는 v3 와 비트 동일.
+    #
+    # N 은 실질적으로 0/1 스위치다. 소싸움은 밀도가 아니라 방향 문제라, 같은 블록에 2대를
+    # 허용하면 그 2대가 마주보는 걸 못 막는다. 실측(16대·250건·gap 4): N=2 는 8틱 이상
+    # 마주보기가 102→121건으로 **늘었고**, N=4·5 는 진입 차단이 3회·0회로 규칙이 없는 것과
+    # 같았다. N=1 만 블록당 배타 점유가 되어 듣는다 (철도 폐색과 같은 구조).
+    a.section_limit = _opt(argv, "section-limit", int, 0)
+    assert a.section_limit >= 0, f"--section-limit 은 0 이상: {a.section_limit}"
+    # 블록 한 변. 클수록 조이는 게 아니라 **무력해진다** — 6런 실측에서 8×8·N=1 은 64칸에
+    # 1대라 로봇이 계속 정체→면제로 풀려 92건(대가 +29%), 3×3 은 67건(대가 +3.2%)이었다.
+    a.section_grid = _opt(argv, "section-grid", int, 3)
+    assert a.section_grid >= 1, f"--section-grid 는 1 이상: {a.section_grid}"
+    if a.section_limit and not a.heading:
+        a.warnings.append("[WARN] --section-limit 은 헤딩 모델 전용 — 칸 모델에서 무시")
+        a.section_limit = 0
     # 차선 비용은 θ(A트랙 계약, 11개) 밖의 운영 규칙이다. 기본 2.0 (2·3·5 A/B: 5 는 평가 시드 102 에서 새 STALL, 3·2 완주).
     a.lane_gain = _opt(argv, "lane-gain", float, 2.0)
     a.pocket_gain = _opt(argv, "pocket-gain", float, 2.0)
@@ -198,6 +214,19 @@ def parse_args(argv):
     return a
 
 
+def block_sections(free, k):
+    """통행 가능 칸을 k×k 블록으로 타일링한 (H, W) int16 격자. 벽·랙은 -1 (-193).
+
+    맵을 안 보고 자른다 — topology.json 이 없어도, 생성기가 안 만든 외부 창고에서도 된다.
+    접속행 두 줄에만 긋는 안을 먼저 만들어 봤는데(git 이력), 6런 실측에서 8틱 이상
+    마주보기 감소가 30% 대 67% 로 이 쪽이 이겨서 지웠다. 대가는 makespan +3.2%.
+    """
+    rr, cc = np.indices(free.shape)
+    sec = ((rr // k) * ((free.shape[1] + k - 1) // k) + cc // k).astype(np.int16)
+    sec[~free] = -1
+    return sec
+
+
 def load_orders_file(path):
     """--orders-file JSON → outbound 리스트. 생성기 출력({meta, outbound})·요청 메시지({…, outbound})·맨 리스트 모두 허용."""
     with open(path, encoding="utf-8") as f:
@@ -236,6 +265,7 @@ def build(a):
     if a.theta_path or a.lanes or a.yield_rule:
         from from_theta import GuidanceTheta, extract_topology, from_theta, load_theta
         topo = extract_topology(free, st_cell, spec=load_topology_spec(map_dir))
+    sec_map = block_sections(free, a.section_grid) if a.section_limit else None
     if a.theta_path or a.lanes:
         theta = load_theta(a.theta_path) if a.theta_path else GuidanceTheta.neutral()
         lane_gain, pocket_gain = (a.lane_gain, a.pocket_gain) if a.lanes else (1.0, 1.0)
@@ -273,11 +303,11 @@ def build(a):
     cfg = KernelConfig(heading=a.heading, zone=a.zone, theta=bool(a.theta_path or a.lanes), check=a.check,
                        dock_prio=a.dock_prio, export=a.export, service_steps=SERVICE_STEPS,
                        capacity=a.capacity, svc_per_tote=a.svc_per_tote,
-                       yield_rule=a.yield_rule,
+                       yield_rule=a.yield_rule, section_limit=a.section_limit,
                        turn_ticks=TURN_TICKS, stall_warn_only=a.horizon is not None, **bat)
     kernel = FmsKernel(free, st_cell, edge_cost, wait_cost, homes, a.n_robots, cfg,
                        zone_mask=zone_mask, on_task_completed=stream.on_completed,
-                       lane_dir=None if topo is None else topo.lane_dir)
+                       lane_dir=None if topo is None else topo.lane_dir, sec_map=sec_map)
     a.warnings += kernel.warnings
     ctx = SimpleNamespace(free=free, st_cell=st_cell, stations=stations, H=H, W=W)
     return kernel, stream, ctx
