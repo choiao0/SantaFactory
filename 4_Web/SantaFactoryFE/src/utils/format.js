@@ -15,6 +15,11 @@ export function formatWon(won) {
   return `${eok}억 ${rest.toLocaleString()}만원`
 }
 
+export function formatPercent(value) {
+  if (value == null || Number.isNaN(value)) return '—'
+  return Number.isInteger(value) ? `${value}` : value.toFixed(1)
+}
+
 export function formatEok(won) {
   if (won == null) return ''
   const eok = won / 100000000
