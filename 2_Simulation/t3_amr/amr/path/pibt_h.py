@@ -84,13 +84,21 @@ def plan(n=12, seed=None, seconds=None, map_dir=None, extra=None):
         # `seconds` 가 드디어 쓰인다. 다만 **어느 초인지**를 정해야 한다.
         #   --clock plan : 계획 시간 (FMS 틱과 같은 단위). 420 s -> 315틱
         #   --clock wall : Isaac 벽시계.  420 s -> 183틱 (stretch 1.72)
+        # ★ 여기도 셸 환경변수를 먼저 본다 (2026-09-11).
+        #   `main.py plan` 이 만드는 계획과 Isaac 이 실제로 도는 계획(live_pibt 가
+        #   in-process 로 다시 세운다)이 **같은 설정이어야** 한다. 한쪽만 환경변수를
+        #   보면 "계획은 550틱인데 주행은 315틱" 같은 어긋남이 조용히 생긴다.
         if seconds is None:
-            argv += ["--horizon", str(HORIZON)]
+            argv += ["--horizon", os.environ.get("PIBT_HORIZON", str(HORIZON))]
         else:
             argv += ["--seconds", str(seconds), "--clock", "plan"]
-        if BATTERY:
+        if os.environ.get("PIBT_BATTERY", "1" if BATTERY else "0") not in ("0", "", "false"):
             argv += ["--battery"]
-        argv += ["--dispatch", DISPATCH]
+        argv += ["--dispatch", os.environ.get("PIBT_DISPATCH", DISPATCH)]
+        argv += ["--order-gap", os.environ.get("PIBT_ORDER_GAP", "15")]
+        _oe = os.environ.get("PIBT_ORDER_END", "").strip()
+        if _oe:
+            argv += ["--order-end", _oe]
     out = run(argv + (extra or []))
     return {"out": os.path.join(rel(OUT), f"fleet_{n:02d}"), "log": out,
             "note": f"{MODE} · {HORIZON}틱 = 계획 420 s "
@@ -112,17 +120,39 @@ def launch(n=12):
     # 모션블러를 끈다. (예전 주석이 "자세를 대입하는 방식이라 순간이동으로 보인다"
     #  고 적었는데 틀렸다 — live_pibt 는 joint_velocities 로 실제 PhysX 주행이다.
     #  자세 대입은 replay_wppl / render_video_wppl 쪽 얘기다. 2026-09-08 정정)
+    # ★ 이 목록이 Isaac 프로세스의 환경을 **통째로 정한다.** 여기 없는 이름은
+    #   셸에서 `PIBT_X=... bash run_record.sh` 로 줘도 **전달되지 않고**, 여기
+    #   하드코딩한 이름은 셸 값을 **덮어쓴다**.
+    #
+    #   실제로 그랬다 (2026-09-11): live_pibt 에 PIBT_ORDER_END·PIBT_ORDER_GAP 을
+    #   추가하고 `PIBT_HORIZON=550 PIBT_ORDER_END=315 PIBT_ORDER_GAP=40` 으로
+    #   서버에서 돌렸는데, HORIZON 은 str(HORIZON)=315 에 덮이고 나머지 둘은
+    #   목록에 없어 전달조차 안 됐다. 두 번 돌린 결과가 **숫자까지 동일**했다
+    #   (막힘 232,859 프레임 · 완주 730.3s · 액션 1769). 로그의 "릴리스 지평
+    #   419s"(=315틱)가 그 증거였다.
+    #
+    #   그래서 셸이 준 값을 먼저 보고, 없을 때만 모듈 상수를 쓴다.
+    #   새 변수를 live_pibt 에 추가하면 **여기에도 반드시 한 줄 넣을 것.**
+    def _e(name, default):
+        return (name, os.environ.get(name, default))
+
     return Launch(
         "live_pibt.py",
         # [patch_record_n_fix] PIBT_N 을 여기서 넣는다 — `--n` 을 단일 소스로.
         #   예전에는 이 목록에 PIBT_N 이 없어서, `--n 1` 만 주면 씬은 1대인데
         #   live_pibt.py 가 기본값 12로 읽어 어긋났다 (2026-09-09).
         env=[("PIBT_N", str(n)),
-             ("PIBT_SEED", str(SEED)), ("PIBT_PITCH", str(PITCH)),
              ("PIBT_STAGE", "$STAGE/" + USD % n), ("PIBT_MAP", "$MAP"),
-             ("PIBT_MODE", MODE), ("PIBT_HORIZON", str(HORIZON)),
-             ("PIBT_BATTERY", "1" if BATTERY else "0"),
-             ("PIBT_DISPATCH", DISPATCH)],
+             ("PIBT_MODE", MODE),
+             _e("PIBT_SEED", str(SEED)),
+             _e("PIBT_PITCH", str(PITCH)),
+             _e("PIBT_HORIZON", str(HORIZON)),
+             _e("PIBT_BATTERY", "1" if BATTERY else "0"),
+             _e("PIBT_DISPATCH", DISPATCH),
+             # 업무 종료 후 전원 충전존 복귀 (-199). 빈 값이면 live_pibt 가
+             # 끈 것으로 본다 — 기본 동작은 바뀌지 않는다.
+             _e("PIBT_ORDER_END", ""),
+             _e("PIBT_ORDER_GAP", "15")],
         flags=["--/rtx/post/motionblur/enabled=false"])
 
 
