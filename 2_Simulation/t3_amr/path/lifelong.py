@@ -101,19 +101,48 @@ class OrderStream(object):
     """주문·입고 도착 → 태스크(from→to). rng 는 이 객체만 갖는다 (FMS 와 같은 분리)."""
 
     def __init__(self, rng, cells, horizon, order_gap=15,
-                 shifts=("in", "out", "out"), k_line_p=(0.5, 0.3, 0.2)):
+                 shifts=("in", "out", "out"), k_line_p=(0.5, 0.3, 0.2),
+                 order_end=None):
         self.rng, self.cells, self.k_line_p = rng, cells, list(k_line_p)
-        self.windows = shift_windows(horizon, shifts)
         self.gap = max(1, int(order_gap))
-        self._next = {kind: s for kind, s, _ in self.windows}
         self.n_task = 0
+        # ★ 업무 종료 틱 (2026-09-11). 이 틱부터 새 주문을 만들지 않는다.
+        #   None 이면 horizon 끝까지 — 이전 동작 그대로다.
+        #
+        #   [왜 필요한가] FMS 유한 모드는 주문 **개수**가 정해져 있어 후반에
+        #   도착이 자연히 끊기고, 배차받지 못한 로봇이 충전존으로 복귀한다.
+        #   우리 쪽은 "horizon 까지 gap 마다" 라 끝이 없다. 실측(12대·seed 1·
+        #   order_gap 15·horizon 315): 태스크 30건 중 13건 완료, **대기 8건이
+        #   남은 채 종료** — 로봇이 쉬는 틈이 0 이라 TO_HOME 진입이 한 번도
+        #   없었다. 충전존 복귀 구현이 켜져 있어도(존 후보 84칸) 무용이다.
+        #
+        #   FMS 의 유한 모드를 그대로 옮기지 않은 것은, 우리가 고정 시간 실행
+        #   (ADG · 영상 길이)이 전제라 주문 수보다 **끊는 시각**이 다루기 쉽기
+        #   때문이다. 효과는 같다 — 뒤쪽에 일이 마르는 구간이 생긴다.
+        self.order_end = None if order_end is None else max(0, int(order_end))
+
+        # ★ 교대 창은 **업무 구간**을 등분한다. horizon 이 아니다.
+        #   `shift_windows(horizon, ...)` 로 두면 horizon 을 늘릴 때 업무 일정이
+        #   같이 늘어나 복귀 시간이 생기지 않는다. 실측(order_end 315 고정,
+        #   horizon 315→500): 주차 2/12 → 3/12 로 거의 그대로였다. 창을 여기서
+        #   끊어야 [0, order_end) 업무 · [order_end, horizon) 복귀가 된다.
+        #   order_end 가 없으면 horizon 전체가 업무 — 이전과 같다.
+        span = horizon if self.order_end is None else self.order_end
+        self.windows = shift_windows(max(1, span), shifts)
+        self._next = {kind: s for kind, s, _ in self.windows}
 
     def _pick(self, cat):
         pool = self.cells.get(cat) or []
         return pool[int(self.rng.integers(len(pool)))] if pool else None
 
     def arrivals(self, t):
-        """이 틱에 새로 생기는 태스크. 창 안의 종류만 나온다."""
+        """이 틱에 새로 생기는 태스크. 창 안의 종류만 나온다.
+
+        `order_end` 이후로는 빈 목록 — 업무 종료. 남은 태스크를 다 소화하면
+        로봇이 배차를 못 받고 FREED → TO_HOME 으로 넘어가 충전존에 주차한다.
+        """
+        if self.order_end is not None and t >= self.order_end:
+            return []
         out = []
         for kind, s, e in self.windows:
             if not (s <= t < e) or t < self._next.get(kind, s):
@@ -446,7 +475,7 @@ class Kernel(object):
 def run_lifelong(free, starts, cells_by_cat, horizon=600, seed=0, order_gap=15,
                  shifts=("in", "out", "out"), edge_cost=None, wait_cost=None,
                  turn_cost=None, turn_ticks=None, verbose=True,
-                 kernel_cls=None, kernel_kw=None, zone_cells=()):
+                 kernel_cls=None, kernel_kw=None, zone_cells=(), order_end=None):
     """T틱까지 돌린다. **정체로 죽지 않는다** — 못 가는 로봇은 대기할 뿐이다.
 
     반환 (history, cells_hist, info). history 는 run_h 와 같은 형식이므로
@@ -454,9 +483,15 @@ def run_lifelong(free, starts, cells_by_cat, horizon=600, seed=0, order_gap=15,
 
     `zone_cells` 를 주면 FREED 가 **시작 칸**이 아니라 충전존 빈 칸으로 복귀
     한다 (`pibt_scene.charge_zone_cells`). 비우면 이전 동작 그대로다.
+
+    `order_end` 는 업무 종료 틱 — 그 이후로는 새 주문이 없다. 남은 일을 다
+    치우면 로봇이 충전존으로 복귀한다. 둘을 **같이 줘야** 복귀가 보인다:
+    `zone_cells` 만 주면 갈 곳은 정해지는데 갈 틈이 안 나고, `order_end` 만
+    주면 시작 칸으로 흩어져 돌아간다.
     """
     rng = np.random.default_rng(seed)
-    stream = OrderStream(rng, cells_by_cat, horizon, order_gap, shifts)
+    stream = OrderStream(rng, cells_by_cat, horizon, order_gap, shifts,
+                         order_end=order_end)
     # ★ 커널을 갈아 끼울 자리. 기본값이면 동작은 이전과 **완전히 같다**.
     #   battery.BatteryKernel 이 이 훅으로 들어온다 — 이 파일에 배터리 코드가
     #   섞이지 않게 하려는 것이다.
@@ -469,13 +504,19 @@ def run_lifelong(free, starts, cells_by_cat, horizon=600, seed=0, order_gap=15,
         cells = K.step(t)
         history.append(dict(K.states))
         cells_hist.append(cells)
+    # 종료 시 충전존 안에 있는 대수 — "업무 끝나고 돌아왔나" 를 숫자로 남긴다.
+    parked = (sum(1 for s in K.states.values() if tuple(s[:2]) in K.zone_set)
+              if K.zone else None)
     info = {"horizon": horizon, "tasks_spawned": stream.n_task,
             "tasks_done": K.done, "waiting": len(K.waiting),
-            "windows": stream.windows,
+            "windows": stream.windows, "order_end": stream.order_end,
+            "parked_end": parked,
             "busy_robots": sum(1 for r in K.rb.values() if r["state"] != IDLE)}
     if hasattr(K, "report"):
         info.update(K.report())
     if verbose:
-        print(f"[lifelong] T={horizon}틱  교대 {stream.windows}")
-        print(f"[lifelong] 태스크 생성 {stream.n_task} · 완료 {K.done} · 대기 {len(K.waiting)}")
+        print(f"[lifelong] T={horizon}틱  교대 {stream.windows}"
+              + (f"  업무종료 {stream.order_end}틱" if stream.order_end is not None else ""))
+        print(f"[lifelong] 태스크 생성 {stream.n_task} · 완료 {K.done} · 대기 {len(K.waiting)}"
+              + (f" · 종료 시 존 주차 {parked}/{len(K.states)}대" if parked is not None else ""))
     return history, cells_hist, info
