@@ -21,6 +21,9 @@ import com.ssafy.santafactory.repository.EstimateRepository;
 import com.ssafy.santafactory.repository.SimScenarioRepository;
 import com.ssafy.santafactory.repository.WarehouseRepository;
 import com.ssafy.santafactory.service.SimulationService;
+import com.ssafy.santafactory.service.estimate.ordergen.OutboundOrderGenerator;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
@@ -66,6 +69,8 @@ public class EstimateService {
     private final EstimateEvaluator evaluator;
     private final EstimateProperties properties;
     private final ApplicationEventPublisher eventPublisher;
+    private final OutboundOrderGenerator outboundOrderGenerator;
+    private final ObjectMapper objectMapper;
 
     // ── 생성 ─────────────────────────────────────────────────────────────────
 
@@ -91,11 +96,16 @@ public class EstimateService {
         int maxAmrCount = amrCounts.get(amrCounts.size() - 1);
         String baseRunId = "est_" + estimate.getId();
 
+        List<SimulationRequest.Outbound> outboundOrders = outboundOrderGenerator.generate(
+                warehouse, properties.horizon().toSeconds(), outboundOrderCount(warehouse), FIXED_SEED);
+        estimate.applyOutboundOrders(toJson(outboundOrders));
+
         for (int amrCount : amrCounts) {
             scenarioRepository.save(SimScenario.queued(
                     estimate, SimulationService.runId(baseRunId, amrCount), amrCount, costCalculator.cost(amrCount)));
         }
-        List<String> runIds = simulationService.publishRuns(baseRequest(baseRunId, warehouse), amrCounts);
+        List<String> runIds =
+                simulationService.publishRuns(baseRequest(baseRunId, warehouse, outboundOrders), amrCounts);
 
         log.info("견적 생성: estimateId={}, 최대 {}대, 목표 처리율 {}%, 가동률 {}%, 예산 {}원",
                 estimate.getId(), maxAmrCount, targetThroughput, targetUtilization, budgetLimit);
@@ -133,9 +143,12 @@ public class EstimateService {
      * <p>도착 간격은 창고의 <b>작업 시간 기준</b>으로 계산한다 — 하루 물량을 실제 작업창으로 나눈
      * 도착률이다(입고 600건 / 8시간 → 48초). 시간만 줄이고 간격은 유지하므로 부하 밀도가 보존된다.
      *
-     * <p>AMR 사양(속도·배터리·소모량)과 주문 목록은 비워 둔다 — 시뮬이 자체 기본값과 주문 스트림을 쓴다.
+     * <p>AMR 사양(속도·배터리·소모량)은 비워 둔다 — 시뮬이 자체 기본값을 쓴다. 출고 주문은 이제 백엔드가
+     * 생성한 목록을 그대로 싣는다({@code outboundOrderGenerator}) — 대수마다 다시 생성하지 않고 호출자가
+     * 넘긴 같은 리스트를 재사용해야 대수별 비교가 의미 있다. 입고는 여전히 간격(gap) 기반이다.
      */
-    private SimulationRequest baseRequest(String baseRunId, Warehouse warehouse) {
+    private SimulationRequest baseRequest(
+            String baseRunId, Warehouse warehouse, List<SimulationRequest.Outbound> outboundOrders) {
         SimulationRequest.Warehouse conditions = new SimulationRequest.Warehouse(
                 warehouse.getWorkerCount(),
                 format(warehouse.getInboundStart()),
@@ -153,7 +166,21 @@ public class EstimateService {
                 properties.shifts(),
                 gapSeconds(warehouse.getInboundAvg(), warehouse.getInboundStart(), warehouse.getInboundEnd()),
                 gapSeconds(warehouse.getOutboundAvg(), warehouse.getOutboundStart(), warehouse.getOutboundEnd()),
-                conditions, amr, List.of(), List.of());
+                conditions, amr, List.of(), outboundOrders);
+    }
+
+    /** 생성할 출고 주문 건수 — 창고의 하루 출고 물량, 없으면 파이썬 쪽과 같은 기본값(500). */
+    private int outboundOrderCount(Warehouse warehouse) {
+        Long outboundAvg = warehouse.getOutboundAvg();
+        return outboundAvg != null && outboundAvg > 0 ? outboundAvg.intValue() : 500;
+    }
+
+    private String toJson(Object value) {
+        try {
+            return objectMapper.writeValueAsString(value);
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("출고 주문 목록 직렬화 실패", e);
+        }
     }
 
     /**
