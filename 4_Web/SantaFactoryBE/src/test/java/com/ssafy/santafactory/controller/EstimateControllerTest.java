@@ -1,6 +1,8 @@
 package com.ssafy.santafactory.controller;
 
+import static com.ssafy.santafactory.support.TestPrincipals.ADMIN;
 import static org.hamcrest.Matchers.startsWith;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
@@ -20,18 +22,26 @@ import com.ssafy.santafactory.global.exception.GlobalException;
 import com.ssafy.santafactory.service.estimate.EstimateEventStream;
 import com.ssafy.santafactory.service.estimate.EstimateService;
 import com.ssafy.santafactory.service.estimate.VerifyEventStream;
+import com.ssafy.santafactory.support.WebMvcSecuritySupport;
 import java.time.LocalDateTime;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
+import com.ssafy.santafactory.support.WithMockMember;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 /** 같은 URL 이 Accept 헤더로 JSON 스냅샷과 SSE 를 가른다. */
 @WebMvcTest(EstimateController.class)
+// @WebMvcTest 는 SecurityFilterChain 을 포함시키므로 그게 참조하는 빈을 채워줘야 한다 (S15P21A106-186)
+@Import(WebMvcSecuritySupport.class)
+// 견적 API 는 인증이 필요하다. 이 테스트의 관심사는 Accept 헤더 분기라 주체만 심어 준다.
+// @WithMockUser 가 아니라 이걸 써야 @AuthenticationPrincipal 이 우리 타입으로 바인딩된다
+@WithMockMember(role = "ADMIN")
 class EstimateControllerTest {
 
     @Autowired
@@ -52,7 +62,7 @@ class EstimateControllerTest {
 
     @Test
     void json_by_default() throws Exception {
-        when(estimateService.detail(77L)).thenReturn(DETAIL);
+        when(estimateService.detail(77L, ADMIN)).thenReturn(DETAIL);
 
         mvc.perform(get("/api/estimates/77"))
                 .andExpect(status().isOk())
@@ -66,7 +76,7 @@ class EstimateControllerTest {
 
     @Test
     void wildcard_accept_is_still_json() throws Exception {
-        when(estimateService.detail(77L)).thenReturn(DETAIL);
+        when(estimateService.detail(77L, ADMIN)).thenReturn(DETAIL);
 
         mvc.perform(get("/api/estimates/77").accept(MediaType.ALL))
                 .andExpect(status().isOk())
@@ -89,7 +99,7 @@ class EstimateControllerTest {
                 .andExpect(header().string("X-Accel-Buffering", "no"));
 
         verify(eventStream).subscribe(77L);
-        verify(estimateService, never()).detail(anyLong());
+        verify(estimateService, never()).detail(anyLong(), any());
     }
 
     /** SSE 라우트에서도 예외가 JSON 협상 실패로 500 이 되지 않고 깔끔한 상태 코드로 나가야 한다. */
@@ -108,12 +118,12 @@ class EstimateControllerTest {
                 .andExpect(status().isAccepted())
                 .andExpect(jsonPath("$.isSuccess").value(true));
 
-        verify(estimateService).requestVerification(77L);
+        verify(estimateService).requestVerification(77L, ADMIN);
     }
 
     @Test
     void verification_request_is_rejected_without_a_recommended_count() throws Exception {
-        doThrow(new GlobalException(ErrorCode.ESTIMATE_NOT_VERIFIABLE)).when(estimateService).requestVerification(77L);
+        doThrow(new GlobalException(ErrorCode.ESTIMATE_NOT_VERIFIABLE)).when(estimateService).requestVerification(77L, ADMIN);
 
         mvc.perform(post("/api/estimates/77/verify"))
                 .andExpect(status().isConflict())

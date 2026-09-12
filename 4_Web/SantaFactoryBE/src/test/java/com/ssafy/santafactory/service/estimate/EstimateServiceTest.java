@@ -12,6 +12,7 @@ import com.ssafy.santafactory.entity.estimate.ReasonCode;
 import com.ssafy.santafactory.entity.estimate.RunStatus;
 import com.ssafy.santafactory.entity.simulation.SimScenario;
 import com.ssafy.santafactory.entity.warehouse.Warehouse;
+import com.ssafy.santafactory.global.auth.OwnershipGuard;
 import com.ssafy.santafactory.global.exception.ErrorCode;
 import com.ssafy.santafactory.global.exception.GlobalException;
 import com.ssafy.santafactory.repository.EstimateRepository;
@@ -33,6 +34,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.stream.IntStream;
 
+import static com.ssafy.santafactory.support.TestPrincipals.ADMIN;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -69,7 +71,8 @@ class EstimateServiceTest {
     private EstimateService service() {
         if (service == null) {
             service = new EstimateService(estimateRepository, scenarioRepository, warehouseRepository,
-                    simulationService, costCalculator, new EstimateEvaluator(), PROPS, eventPublisher);
+                    simulationService, costCalculator, new EstimateEvaluator(), PROPS,
+                    new OwnershipGuard(), eventPublisher);
         }
         return service;
     }
@@ -83,7 +86,7 @@ class EstimateServiceTest {
         when(simulationService.publishRuns(any(), any())).thenReturn(List.of("est_77_n1"));
 
         EstimateCreateResponse response = service().create(
-                new EstimateCreateRequest(1L, null, null, null, null, null, null));
+                new EstimateCreateRequest(1L, null, null, null, null, null, null), ADMIN);
 
         // 예산 3억 ÷ 대당 1,550만 = 19대 + 여유 1 = 20대. 충전 존 상한 28 보다 작아 예산이 먼저 걸린다
         assertThat(response.estimateId()).isEqualTo(77L);
@@ -104,7 +107,7 @@ class EstimateServiceTest {
         when(simulationService.publishRuns(any(), any())).thenReturn(List.of());
 
         EstimateCreateResponse response = service().create(
-                new EstimateCreateRequest(1L, null, null, null, null, 3, 8));
+                new EstimateCreateRequest(1L, null, null, null, null, 3, 8), ADMIN);
 
         ArgumentCaptor<List<Integer>> counts = ArgumentCaptor.captor();
         verify(simulationService).publishRuns(any(), counts.capture());
@@ -121,7 +124,7 @@ class EstimateServiceTest {
 
         // 상한 28 을 넘는 29~35 는 발행하면 시뮬이 배치에서 죽으므로 잘라낸다
         EstimateCreateResponse response = service().create(
-                new EstimateCreateRequest(1L, null, null, null, null, 25, 35));
+                new EstimateCreateRequest(1L, null, null, null, null, 25, 35), ADMIN);
 
         ArgumentCaptor<List<Integer>> counts = ArgumentCaptor.captor();
         verify(simulationService).publishRuns(any(), counts.capture());
@@ -135,7 +138,7 @@ class EstimateServiceTest {
         givenSavedEstimateId(77L);
 
         assertThatThrownBy(() -> service().create(
-                new EstimateCreateRequest(1L, null, null, null, null, 30, 40)))
+                new EstimateCreateRequest(1L, null, null, null, null, 30, 40), ADMIN))
                 .isInstanceOf(GlobalException.class)
                 .extracting(e -> ((GlobalException) e).getErrorCode())
                 .isEqualTo(ErrorCode.VALIDATION_ERROR);
@@ -148,7 +151,7 @@ class EstimateServiceTest {
         givenSavedEstimateId(77L);
         when(simulationService.publishRuns(any(), any())).thenReturn(List.of());
 
-        service().create(new EstimateCreateRequest(1L, null, null, null, 50_000_000L, null, null));
+        service().create(new EstimateCreateRequest(1L, null, null, null, 50_000_000L, null, null), ADMIN);
 
         ArgumentCaptor<SimScenario> saved = ArgumentCaptor.captor();
         verify(scenarioRepository, times(4)).save(saved.capture());   // 5천만 / 1550만 = 3대 + 여유 1
@@ -165,7 +168,7 @@ class EstimateServiceTest {
         givenSavedEstimateId(77L);
         when(simulationService.publishRuns(any(), any())).thenReturn(List.of());
 
-        service().create(new EstimateCreateRequest(1L, null, null, null, null, null, null));
+        service().create(new EstimateCreateRequest(1L, null, null, null, null, null, null), ADMIN);
 
         ArgumentCaptor<SimulationRequest> base = ArgumentCaptor.captor();
         verify(simulationService).publishRuns(base.capture(), any());
@@ -192,7 +195,7 @@ class EstimateServiceTest {
         givenSavedEstimateId(77L);
         when(simulationService.publishRuns(any(), any())).thenReturn(List.of());
 
-        service().create(new EstimateCreateRequest(1L, null, null, null, null, null, null));
+        service().create(new EstimateCreateRequest(1L, null, null, null, null, null, null), ADMIN);
 
         ArgumentCaptor<SimulationRequest> base = ArgumentCaptor.captor();
         verify(simulationService).publishRuns(base.capture(), any());
@@ -207,7 +210,7 @@ class EstimateServiceTest {
         when(estimateRepository.save(saved.capture())).thenAnswer(call -> withId(call.getArgument(0), 77L));
         when(simulationService.publishRuns(any(), any())).thenReturn(List.of());
 
-        service().create(new EstimateCreateRequest(1L, "geek.p40", 88.0, 70.0, 100_000_000L, null, null));
+        service().create(new EstimateCreateRequest(1L, "geek.p40", 88.0, 70.0, 100_000_000L, null, null), ADMIN);
 
         assertThat(saved.getValue().getAmrModel()).isEqualTo("geek.p40");
         assertThat(saved.getValue().getTargetThroughput()).isEqualTo(88.0);
@@ -219,7 +222,7 @@ class EstimateServiceTest {
     void rejects_an_unknown_warehouse() {
         when(warehouseRepository.findById(99L)).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> service().create(new EstimateCreateRequest(99L, null, null, null, null, null, null)))
+        assertThatThrownBy(() -> service().create(new EstimateCreateRequest(99L, null, null, null, null, null, null), ADMIN))
                 .isInstanceOf(GlobalException.class)
                 .hasFieldOrPropertyWithValue("errorCode", ErrorCode.WAREHOUSE_NOT_FOUND);
     }
@@ -228,7 +231,7 @@ class EstimateServiceTest {
     void rejects_an_unknown_estimate_on_lookup() {
         when(estimateRepository.findById(99L)).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> service().detail(99L))
+        assertThatThrownBy(() -> service().detail(99L, ADMIN))
                 .isInstanceOf(GlobalException.class)
                 .hasFieldOrPropertyWithValue("errorCode", ErrorCode.ESTIMATE_NOT_FOUND);
     }
@@ -428,7 +431,7 @@ class EstimateServiceTest {
     void rejects_verification_for_an_unknown_estimate() {
         when(estimateRepository.findById(99L)).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> service().requestVerification(99L))
+        assertThatThrownBy(() -> service().requestVerification(99L, ADMIN))
                 .isInstanceOf(GlobalException.class)
                 .hasFieldOrPropertyWithValue("errorCode", ErrorCode.ESTIMATE_NOT_FOUND);
         verify(simulationService, never()).publishVerify(any());
@@ -439,7 +442,7 @@ class EstimateServiceTest {
         Estimate estimate = withId(estimate(85.0, 90.0, 1_000_000_000L), 77L);
         when(estimateRepository.findById(77L)).thenReturn(Optional.of(estimate));
 
-        assertThatThrownBy(() -> service().requestVerification(77L))
+        assertThatThrownBy(() -> service().requestVerification(77L, ADMIN))
                 .isInstanceOf(GlobalException.class)
                 .hasFieldOrPropertyWithValue("errorCode", ErrorCode.ESTIMATE_NOT_VERIFIABLE);
         verify(simulationService, never()).publishVerify(any());
@@ -453,7 +456,7 @@ class EstimateServiceTest {
         when(estimateRepository.findById(77L)).thenReturn(Optional.of(estimate));
         when(scenarioRepository.findByEstimateIdAndAmrCount(77L, 4)).thenReturn(Optional.of(recommendedRun));
 
-        service().requestVerification(77L);
+        service().requestVerification(77L, ADMIN);
 
         ArgumentCaptor<VerifyRequest> request = ArgumentCaptor.captor();
         verify(simulationService).publishVerify(request.capture());
