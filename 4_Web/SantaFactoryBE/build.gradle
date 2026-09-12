@@ -40,7 +40,18 @@ dependencies {
     implementation 'org.flywaydb:flyway-core'
     implementation 'org.flywaydb:flyway-database-postgresql'
 
+    implementation 'org.springframework.boot:spring-boot-starter-security'
+
+    // refresh 토큰 저장소. TTL 로 만료가 자동 정리되고, 회전·폐기가 SET/DEL 두 줄이다.
+    implementation 'org.springframework.boot:spring-boot-starter-data-redis'
+
+    // access 토큰(JWT). api 는 컴파일 대상, impl·jackson 은 런타임 구현체 — jjwt 의 표준 구성이다.
+    implementation 'io.jsonwebtoken:jjwt-api:0.12.7'
+    runtimeOnly 'io.jsonwebtoken:jjwt-impl:0.12.7'
+    runtimeOnly 'io.jsonwebtoken:jjwt-jackson:0.12.7'
+
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    testImplementation 'org.springframework.security:spring-security-test'
     testCompileOnly 'org.projectlombok:lombok'
     testAnnotationProcessor 'org.projectlombok:lombok'
 
