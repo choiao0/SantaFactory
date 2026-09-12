@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { BOTS, DOCK, ESTIMATE_STATUS_LABEL, GRID, RACK, RUN_STATUS_LABEL, STATION, buildLayout } from '../data/replay.js'
-import { formatDateTime } from '../utils/format.js'
+import { formatDateTime, formatPercent } from '../utils/format.js'
 
 const CELL_CLASS = { [RACK]: 'c1', [STATION]: 'c2', [DOCK]: 'c3' }
 
@@ -13,9 +13,9 @@ function RunCard({ run }) {
       <span className="n">{run.amr_count}<span>대</span></span>
       {run.status === 'DONE' && (
         <span className="metric">
-          처리율 <b>{run.throughput?.toFixed(1)}%</b>
+          처리율 <b>{formatPercent(run.throughput)}%</b>
           <br />
-          가동률 <b>{run.utilization?.toFixed(0)}%</b>
+          가동률 <b>{formatPercent(run.utilization)}%</b>
         </span>
       )}
       {failed && (
