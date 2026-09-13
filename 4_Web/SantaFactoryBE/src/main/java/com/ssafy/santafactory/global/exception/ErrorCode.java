@@ -20,6 +20,12 @@ public enum ErrorCode {
     WAREHOUSE_NOT_FOUND(HttpStatus.NOT_FOUND, "EST404_1", "요청한 창고를 찾을 수 없습니다."),
     ESTIMATE_NOT_FOUND(HttpStatus.NOT_FOUND, "EST404_2", "요청한 견적을 찾을 수 없습니다."),
     ESTIMATE_NOT_VERIFIABLE(HttpStatus.CONFLICT, "EST409_1", "권장 대수가 없어 물리 검증을 시작할 수 없습니다."),
+
+    // Auth
+    UNAUTHORIZED(HttpStatus.UNAUTHORIZED, "AUTH401_1", "로그인이 필요합니다."),
+    INVALID_CREDENTIALS(HttpStatus.UNAUTHORIZED, "AUTH401_2", "이메일 또는 비밀번호가 올바르지 않습니다."),
+    REFRESH_TOKEN_INVALID(HttpStatus.UNAUTHORIZED, "AUTH401_3", "다시 로그인해 주세요."),
+    EMAIL_ALREADY_USED(HttpStatus.CONFLICT, "AUTH409_1", "이미 사용 중인 이메일입니다."),
     ;
 
     private final HttpStatus httpStatus;

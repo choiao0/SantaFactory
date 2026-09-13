@@ -41,7 +41,7 @@ class OrderStream:
 
     def __init__(self, rng, flow, n_orders, order_gap, st_cell, stations,
                  n_inbound=None, inbound_gap=None, k_line_p=(0.5, 0.3, 0.2),
-                 horizon=None, shifts=("in", "out", "out"),
+                 horizon=None, shifts=("in", "out", "out"), dt=1.0,
                  orders=None, rack_map=None, tote_units=None):
         assert flow in ("main", "v1compat"), f"알 수 없는 flow: {flow}"
         self.rng, self.flow, self.st_cell = rng, flow, st_cell
@@ -56,7 +56,7 @@ class OrderStream:
         self.totes_total = 0
         gap_in = order_gap if inbound_gap is None else inbound_gap
         if orders is not None:
-            self._init_explicit(flow, orders, rack_map, tote_units, n_inbound, horizon, shifts, gap_in)
+            self._init_explicit(flow, orders, rack_map, tote_units, n_inbound, horizon, shifts, gap_in, dt)
         elif horizon is None:
             self._init_finite(flow, n_orders, n_inbound, order_gap, gap_in)
         else:
@@ -86,9 +86,9 @@ class OrderStream:
         else:
             self.inbound_times = np.array([], dtype=int)
 
-    def _init_explicit(self, flow, orders, rack_map, tote_units, n_inbound, horizon, shifts, gap_in):
+    def _init_explicit(self, flow, orders, rack_map, tote_units, n_inbound, horizon, shifts, gap_in, dt=1.0):
         """명시 주문 모드 (-156, docs/커널_시뮬_구조.md#명시-주문-모드): 큐 명세 §1-1 `outbound[]` 를 그대로 흘린다.
-        도착 틱 = ordered_at_s (1틱 = 1초). 라인 rack_id → rack_map → 버퍼, 같은 버퍼는 qty 를 합쳐 토트로 묶고
+        도착 틱 = ordered_at_s / dt (dt = 틱 길이[초], 기본 1.0 = 1틱 1초; -116). 라인 rack_id → rack_map → 버퍼, 같은 버퍼는 qty 를 합쳐 토트로 묶고
         토트 수 = ceil(qty 합 / tote_units) (없으면 버퍼당 1). 주문 합계가 6토트를 넘으면 제외한다.
         출고 교대 창은 쓰지 않는다(파일 시각이 진실).
         horizon 밖(t ≥ T) 주문은 버리고 orders_skipped 에 센다. 입고는 기존 규칙(간격·in 창) 그대로."""
@@ -97,8 +97,8 @@ class OrderStream:
         assert tote_units is None or tote_units >= 1, f"tote_units 는 1 이상 (상품 개수): {tote_units}"
         parsed = []
         for od in orders:
-            t = int(od["ordered_at_s"])
-            assert t >= 0, f"ordered_at_s 는 0 이상: {od}"
+            assert od["ordered_at_s"] >= 0, f"ordered_at_s 는 0 이상: {od}"
+            t = int(od["ordered_at_s"] / dt)
             groups = {}
             for ln in od["lines"]:
                 rid = ln["rack_id"]

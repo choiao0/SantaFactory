@@ -18,6 +18,11 @@ spring:
     properties:
       hibernate:
         format_sql: true
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
   rabbitmq:
     host: ${RABBITMQ_HOST:localhost}
     port: 5672
@@ -53,6 +58,31 @@ estimate:
   # 발행 후 결과가 이 시간 안에 안 오면 TIMEOUT (명세 §1-4 는 30분 — 시연 때는 줄여도 된다)
   run-timeout: 30m
   timeout-sweep-interval: 60   # 스윕 주기(초)
+
+auth:
+  # HS256 이라 32바이트(256비트) 이상 필요하다 — openssl rand -base64 48
+  secret: ${JWT_SECRET:}
+  # access 는 짧게 두고 refresh 로 갱신한다. 탈취돼도 유효 창이 좁다 (RFC 9700 예시가 15분)
+  access-ttl: 15m
+  refresh-ttl: 7d
+  # Secure 쿠키는 HTTPS 에서만 전달된다. 평문 HTTP 로 뜨는 환경에서는 꺼야 로그인이 동작한다
+  secure-cookie: ${AUTH_SECURE_COOKIE:false}
+
+account:
+  # 관리자는 가입 API 로 만들 수 없다 (가입은 항상 USER). 비밀번호가 비면 만들지 않는다.
+  admin:
+    email: ${ADMIN_EMAIL:admin@santafactory.test}
+    password: ${ADMIN_PASSWORD:}
+    name: 관리자
+    company: Santa Factory
+    phone: "0200000000"
+  # 데모 회원 — 창고 등록 화면이 없는 동안 시드 창고의 주인 역할을 한다. 화면이 생기면 비워 끈다.
+  user:
+    email: ${DEMO_EMAIL:demo@santafactory.test}
+    password: ${DEMO_PASSWORD:}
+    name: 김담당
+    company: 품고물류
+    phone: "01012345678"
 
 springdoc:
   swagger-ui:

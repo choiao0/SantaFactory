@@ -1,6 +1,6 @@
 """VDA 5050 2.0.0 마스터 쪽 — 로봇별 order 스티칭 · instantActions · state/connection 거울 (MQTT_CONTRACT §4).
 
-order 규약(t4_agent vda5050/order.py 가 수용자): 노드 sequenceId 짝수 · 엣지 홀수, 갱신은 마지막 base 노드에서 시작,
+order 규약(1_Robot/amr_agent vda5050/order.py 가 수용자): 노드 sequenceId 짝수 · 엣지 홀수, 갱신은 마지막 base 노드에서 시작,
 같은 orderUpdateId 재발행은 무시(오류 없음), 낮으면 orderUpdateError. 런당 로봇당 orderId 하나, 틱마다 노드 하나를
 released 로 덧붙인다(orderUpdateId = k = 지금까지 보낸 노드 번호). 도착 = state.lastNodeId == n_k (orderUpdateId ≥ k).
 재발행 규칙(§4.3 결정 10): 보낸 뒤 state 2건이 와도 orderUpdateId 가 안 오르면 같은 order 재발행, 10건이면 로봇 오류.

@@ -14,9 +14,9 @@ import numpy as np
 import pytest
 
 from fms_core import kpi as K
-from fms_core.kernel_planner import DES_AISLE_BLOCK, ensure_sim_engine, des_homes, theta_path
+from fms_core.kernel_planner import DES_AISLE_BLOCK, DES_SPEED, ensure_sim_engine, des_homes, theta_path
 from fms_core.planner import PlannerSpec, build_planner
-from fms_core.scenario import DEFAULT_TOTE_UNITS, SVC_PER_TOTE, scenario_orders, stream_options
+from fms_core.scenario import DEFAULT_TOTE_UNITS, SVC_PER_TOTE_S, scenario_orders, stream_options
 
 
 FMS = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -75,8 +75,10 @@ def des_build(sim_v2, worker, tmp_path, sc, n_robots=N_ROBOTS, horizon=HORIZON):
     """
     path = tmp_path / "orders.json"
     path.write_text(json.dumps({"outbound": scenario_orders(sc)}), encoding="utf-8")
+    # 워커는 초를 받아 틱 = 초 / dt 로 환산한다 (-116). 기본 속도(무게 없음)의 dt 로 같은 틱 수가 되게 초를 준다.
+    dt = worker.CELL_M / worker.SPEED_DEFAULT
     req = {"run_id": "parity", "amr": dict(sc.get("amr") or {}, count=n_robots),
-           "horizon_s": horizon, "seed": sc.get("seed", 42),
+           "horizon_s": horizon * dt, "seed": sc.get("seed", 42),
            # 교대는 명시해서 맞춘다 — 견적의 기본값(in,out,out)과 검증 런의 기본값(out)이 다른 건 의도된 차이다
            # (test_verify_replays_one_outbound_window 참고). 입고 창은 도착 시각을 뽑느라 난수를 소비하므로
            # 교대가 다르면 같은 시드에서도 포장대 배정이 어긋난다.
@@ -96,9 +98,12 @@ def fms_build(sc, n_robots=N_ROBOTS, horizon=HORIZON):
 
 # ---- 기준값이 워커와 같은가 -------------------------------------------------------------
 def test_worker_defaults(worker):
-    """토트 상수·통로차단·θ 를 워커에서 읽어 대조한다 (문서가 아니라 코드가 기준)."""
-    flags = worker._orders_flags({"capacity": 3}, "/tmp/orders.json")
-    assert f"--svc-per-tote={SVC_PER_TOTE}" in flags, "픽업·하역 토트당 서비스 틱"
+    """토트 상수·통로차단·θ·속도 를 워커에서 읽어 대조한다 (문서가 아니라 코드가 기준)."""
+    assert DES_SPEED == worker.SPEED_DEFAULT, "무게 입력 없는 요청의 속도 — 틱 길이(서비스 틱·KPI 초)가 여기서 갈린다 (-116)"
+    assert SVC_PER_TOTE_S == worker.SVC_PER_TOTE_S, "픽업·하역 토트당 서비스 [초]"
+    dt = worker.CELL_M / worker.SPEED_DEFAULT
+    flags = worker._orders_flags({"capacity": 3}, "/tmp/orders.json", dt)
+    assert f"--svc-per-tote={max(1, int(SVC_PER_TOTE_S / dt + 0.5))}" in flags, "픽업·하역 토트당 서비스 틱 = 초 / dt 반올림"
     assert f"--tote-units={DEFAULT_TOTE_UNITS}" in flags, "amr.tote_units 가 null 일 때의 기본 토트당 상품 수"
     assert "--capacity=3" in flags, "amr.capacity = 왕복당 토트 수 (v2.6)"
     from objective import run_once
@@ -132,7 +137,8 @@ def test_same_orders_give_the_same_kpi(sim_v2, worker, tmp_path):
         p.step(t)
     sim_v2.run_ticks(kernel, stream, HORIZON)
     assert K.summary(p.kernel, p.stream, N_ROBOTS, HORIZON) == K.summary(kernel, stream, N_ROBOTS, HORIZON)
-    assert p.kpi(HORIZON) == K.des_block(K.summary(kernel, stream, N_ROBOTS, HORIZON))
+    assert p.kpi(HORIZON) == K.des_block(K.summary(kernel, stream, N_ROBOTS, HORIZON, p.dt), p.dt)
+    assert p.dt == worker.CELL_M / worker.SPEED_DEFAULT
     assert p.kernel.trips == kernel.trips and p.stream.totes_total == stream.totes_total
 
 

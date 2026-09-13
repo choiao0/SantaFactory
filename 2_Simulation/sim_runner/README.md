@@ -37,7 +37,7 @@ python3 -m pytest tests/test_sim_runner_*.py -q     # 단위 테스트
 ```
 
 옵션: `--ready-timeout-s`(Start 뒤 전원 ONLINE+포즈 상한, 기본 fake 120 · real 420) · `--host-offline-s 15` · `--heartbeat-s 5` · `--isaac-warmup-s 0`(Isaac 뒤 에이전트까지 지연; 기본은 같이 띄우고 포즈를 기다림) ·
-`--state-dir ~/.local/state/sim_runner`(bdseq · 런별 에이전트 로그 `logs/<run_id>.<serial>.log`) · `--ros-setup`(반복; 기본 humble + `t4_agent/install/setup.bash`).
+`--state-dir ~/.local/state/sim_runner`(bdseq · 런별 에이전트 로그 `logs/<run_id>.<serial>.log`) · `--ros-setup`(반복; 기본 humble + `1_Robot/amr_agent/install/setup.bash`). Start 의 `scenario.amr`(BE amr 블록)은 `profile_overrides:=` 로 에이전트에 그대로 간다.
 
 ## 동작 요약 (계약 §5.3 · §5.4)
 

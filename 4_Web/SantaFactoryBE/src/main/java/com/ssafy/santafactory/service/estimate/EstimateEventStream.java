@@ -48,7 +48,7 @@ public class EstimateEventStream {
      * 바로 닫는다 — 응답이 열리기 전에 보낸 이벤트는 SseEmitter 가 버퍼링해 두었다가 함께 내보낸다.
      */
     public SseEmitter subscribe(Long estimateId) {
-        EstimateDetailResponse snapshot = estimateService.detail(estimateId);
+        EstimateDetailResponse snapshot = estimateService.snapshot(estimateId);
         SseEmitter emitter = new SseEmitter(EMITTER_TIMEOUT_MS);
         if (snapshot.status() == EstimateStatus.RUNNING) {
             register(estimateId, emitter);

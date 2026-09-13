@@ -122,7 +122,18 @@
 |---|---|---|
 | `amr.capacity` | 왕복당 함께 싣는 토트 수(1~6) | `--capacity`; 로봇 시드의 기존 200은 6으로 변경 요청 |
 | `amr.tote_units` | 토트 하나에 담는 상품 수 | `--tote-units`; 누락 시 워커 기본 8 |
-| 서비스 시간 | 요청 필드 없음 | 픽업·하역 각각 `--svc-per-tote=5` 고정 |
+| 서비스 시간 | 요청 필드 없음 | 픽업·하역 각각 토트당 5초 → `--svc-per-tote=round(5 / dt)` (dt = 틱 길이, 아래) |
+
+**AMR 속도 필드 (2026-09-13, S15P21A106-116 — 백엔드 합의 필요)**
+
+| 필드 | 의미 | 워커 매핑 |
+|---|---|---|
+| `amr.avg_payload_kg` | 사용자가 입력한 **평균 적재 무게(kg)**. 없으면(null) 속도 0.9 m/s 고정(물리 시뮬 계획 속도) | `contracts/speed_model.speed_for_load` → `--speed` |
+| `amr.speed_empty` · `amr.speed_loaded` | 기종 공차·적재 운영 속도(m/s) — 감속 직선의 양 끝 | 위 함수의 앵커. `avg_payload_kg` 가 있을 때만 쓴다 |
+| `amr.max_payload_kg` | 기종 최대 적재(kg) | 위 함수의 앵커. 셋 중 하나라도 null 이면 0.9 고정 + 워커 로그 |
+
+속도는 run 내내 하나로 고정된다(토트 수와 무관). 틱 길이 dt = 1 m ÷ speed 이고, `horizon_s`·gap·서비스 초는 워커가 dt 로 틱으로 바꾼다.
+물리 검증 요청 `scenario.amr` 에도 같은 `speed` 값이 실려야 두 KPI 가 같은 시계를 쓴다(`SIM_VERIFY_CONTRACT.md`).
 
 > ⚠️ **`horizon_s`를 무시하면 견적이 틀린 답을 낸다.** 유한 주문 모드(주문을 다 처리하고 종료)로 돌면
 > `orders_completed == orders_total`이라 처리율이 전 대수 100 %가 되고, 그러면 가동률이 가장 높은 최소

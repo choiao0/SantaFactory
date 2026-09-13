@@ -77,13 +77,13 @@ def test_max_totes_matches_the_kernel():
 class TestStreamOptions:
     def test_defaults_match_the_estimate_worker(self):
         """필드가 없으면 견적 워커와 같은 기본값 — 왕복당 1토트, 토트당 8개, 토트당 서비스 5틱 (계약 v2.6)."""
-        assert S.stream_options({}) == {"seed": 42, "capacity": 1, "tote_units": 8, "svc_per_tote": 5,
+        assert S.stream_options({}) == {"seed": 42, "capacity": 1, "tote_units": 8, "svc_per_tote_s": 5.0,
                                         "order_gap": 50.0, "inbound_gap": None, "shifts": ("out",)}
 
     def test_des_passthrough(self):
         o = S.stream_options({"seed": 7, "amr": {"capacity": 3, "tote_units": 12},
                               "inbound_gap_s": 48.0, "shifts": "in,in,out"})
-        assert o == {"seed": 7, "capacity": 3, "tote_units": 12, "svc_per_tote": 5,
+        assert o == {"seed": 7, "capacity": 3, "tote_units": 12, "svc_per_tote_s": 5.0,
                      "order_gap": 50.0, "inbound_gap": 48.0, "shifts": ("in", "in", "out")}
 
     def test_outbound_gap_passthrough(self):

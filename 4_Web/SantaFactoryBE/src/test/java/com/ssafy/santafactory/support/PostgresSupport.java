@@ -2,6 +2,7 @@ package com.ssafy.santafactory.support;
 
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.PostgreSQLContainer;
 
 /**
@@ -13,6 +14,9 @@ import org.testcontainers.containers.PostgreSQLContainer;
  * H2 는 엔티티에서 스키마를 만들어버려서 이 검증이 구조적으로 불가능했다.
  *
  * <p>데모 시드({@code db/seed})는 테스트에서 제외된다 — 이유는 {@code R__seed_demo.sql} 주석 참고.
+ *
+ * <p>Redis 도 함께 띄운다(S15P21A106-186). refresh 토큰 회전·재사용 감지는 저장소 동작이라
+ * 목으로는 검증되지 않고, Postgres 와 수명이 같아 한곳에 모아 두는 게 단순하다.
  *
  * <p>DB 를 잡는 순서:
  * <ol>
@@ -26,6 +30,8 @@ public abstract class PostgresSupport {
     private static final String JDBC_URL;
     private static final String USERNAME;
     private static final String PASSWORD;
+    private static final String REDIS_HOST;
+    private static final int REDIS_PORT;
 
     static {
         String envUrl = System.getenv("DB_URL");
@@ -41,6 +47,12 @@ public abstract class PostgresSupport {
             USERNAME = container.getUsername();
             PASSWORD = container.getPassword();
         }
+
+        // 비밀번호 없이 띄운다 — 테스트 컨테이너는 외부에 노출되지 않는다
+        GenericContainer<?> redis = new GenericContainer<>("redis:7-alpine").withExposedPorts(6379);
+        redis.start();
+        REDIS_HOST = redis.getHost();
+        REDIS_PORT = redis.getMappedPort(6379);
     }
 
     private static String envOrDefault(String name, String fallback) {
@@ -53,5 +65,8 @@ public abstract class PostgresSupport {
         registry.add("spring.datasource.url", () -> JDBC_URL);
         registry.add("spring.datasource.username", () -> USERNAME);
         registry.add("spring.datasource.password", () -> PASSWORD);
+        registry.add("spring.data.redis.host", () -> REDIS_HOST);
+        registry.add("spring.data.redis.port", () -> REDIS_PORT);
+        registry.add("spring.data.redis.password", () -> "");
     }
 }

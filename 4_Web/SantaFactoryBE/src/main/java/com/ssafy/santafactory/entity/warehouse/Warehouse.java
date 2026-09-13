@@ -1,12 +1,16 @@
 package com.ssafy.santafactory.entity.warehouse;
 
+import com.ssafy.santafactory.entity.member.Member;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
+import jakarta.persistence.FetchType;
 import jakarta.persistence.Id;
+import jakarta.persistence.JoinColumn;
+import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -31,6 +35,14 @@ public class Warehouse {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     @Column(name = "warehouse_id")
     private Long id;
+
+    /**
+     * 소유 회원. 컬럼이 nullable 인 이유는 V3 마이그레이션 주석 참고 — 시드 창고는 주인 없이
+     * 만들어지고 계정 초기화가 귀속시킨다. API 로 만드는 창고는 항상 주인이 붙는다.
+     */
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "member_id")
+    private Member member;
 
     @Column(name = "name", nullable = false)
     private String name;
@@ -120,6 +132,16 @@ public class Warehouse {
                 inboundStart, inboundEnd, outboundStart, outboundEnd,
                 inboundAvg, outboundAvg, outboundRate,
                 targetThroughput, targetUtilization, budgetLimit);
+    }
+
+    /** 소유자 지정. 생성 API 가 세션 회원으로, 계정 초기화가 주인 없는 시드 창고에 쓴다. */
+    public void assignTo(Member member) {
+        this.member = member;
+    }
+
+    /** 이 회원이 볼 수 있는 창고인가. 주인 없는 창고는 ADMIN 만 본다. */
+    public boolean ownedBy(Long memberId) {
+        return member != null && member.getId().equals(memberId);
     }
 
     private static LocalDateTime anchor(LocalTime time) {

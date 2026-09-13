@@ -1,5 +1,6 @@
 package com.ssafy.santafactory.service;
 
+import static com.ssafy.santafactory.support.TestPrincipals.ADMIN;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
@@ -7,10 +8,13 @@ import static org.mockito.Mockito.when;
 
 import com.ssafy.santafactory.dto.warehouse.WarehouseCreateRequest;
 import com.ssafy.santafactory.dto.warehouse.WarehouseResponse;
+import com.ssafy.santafactory.entity.member.Member;
 import com.ssafy.santafactory.entity.warehouse.Warehouse;
 import com.ssafy.santafactory.entity.warehouse.WarehouseStatus;
 import com.ssafy.santafactory.global.exception.ErrorCode;
 import com.ssafy.santafactory.global.exception.GlobalException;
+import com.ssafy.santafactory.global.auth.OwnershipGuard;
+import com.ssafy.santafactory.repository.MemberRepository;
 import com.ssafy.santafactory.repository.WarehouseRepository;
 import java.time.LocalTime;
 import java.util.Optional;
@@ -27,11 +31,24 @@ class WarehouseServiceTest {
     @Mock
     WarehouseRepository warehouseRepository;
 
+    @Mock
+    MemberRepository memberRepository;
+
+    @Mock
+    OwnershipGuard ownershipGuard;
+
     @InjectMocks
     WarehouseService service;
 
+    /** 소유권은 이 테스트의 관심사가 아니다 — 생성 API 가 세션 회원을 붙이기만 하면 된다. */
+    private void givenOwner() {
+        when(memberRepository.findById(ADMIN.id()))
+                .thenReturn(Optional.of(Member.signUp("owner@test", "x", "주인", "회사", "01000000000")));
+    }
+
     @Test
     void creates_a_warehouse_from_the_form_values_and_fills_layout_defaults() {
+        givenOwner();
         ArgumentCaptor<Warehouse> saved = ArgumentCaptor.captor();
         when(warehouseRepository.save(saved.capture())).thenAnswer(call -> call.getArgument(0));
 
@@ -39,7 +56,7 @@ class WarehouseServiceTest {
                 null, null, null, 4,
                 LocalTime.of(1, 0), LocalTime.of(9, 0),
                 LocalTime.of(13, 0), LocalTime.of(18, 0),
-                480L, 500L, null, 90.0, null, 600_000_000L));
+                480L, 500L, null, 90.0, null, 600_000_000L), ADMIN);
 
         Warehouse w = saved.getValue();
         assertThat(w.getName()).isEqualTo(WarehouseCreateRequest.DEFAULT_NAME);
@@ -64,13 +81,14 @@ class WarehouseServiceTest {
 
     @Test
     void keeps_explicit_layout_and_goal_values() {
+        givenOwner();
         when(warehouseRepository.save(any())).thenAnswer(call -> call.getArgument(0));
 
         WarehouseResponse response = service.create(new WarehouseCreateRequest(
                 "테스트 창고", 24.0, 14.0, 2,
                 LocalTime.of(8, 0), null,
                 LocalTime.of(9, 0), null,
-                0L, 100L, 95.0, 80.0, 60.0, 1_000L));
+                0L, 100L, 95.0, 80.0, 60.0, 1_000L), ADMIN);
 
         assertThat(response.name()).isEqualTo("테스트 창고");
         assertThat(response.area()).isEqualTo(336.0);
@@ -83,7 +101,7 @@ class WarehouseServiceTest {
     void unknown_warehouse_is_a_404() {
         when(warehouseRepository.findById(99L)).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> service.get(99L))
+        assertThatThrownBy(() -> service.get(99L, ADMIN))
                 .isInstanceOf(GlobalException.class)
                 .extracting(e -> ((GlobalException) e).getErrorCode())
                 .isEqualTo(ErrorCode.WAREHOUSE_NOT_FOUND);

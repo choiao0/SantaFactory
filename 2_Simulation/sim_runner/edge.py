@@ -25,7 +25,9 @@ from .spb import EdgeSession
 log = logging.getLogger("sim_runner")
 
 SIM_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DEFAULT_ROS_SETUP = ("/opt/ros/humble/setup.bash", os.path.join(SIM_DIR, "t4_agent", "install", "setup.bash"))
+REPO_DIR = os.path.dirname(SIM_DIR)
+DEFAULT_ROS_SETUP = ("/opt/ros/humble/setup.bash",
+                     os.path.join(REPO_DIR, "1_Robot", "amr_agent", "install", "setup.bash"))   # 에이전트는 1_Robot 에 산다
 DEFAULT_STATE_DIR = os.path.expanduser("~/.local/state/sim_runner")
 ISAAC_DIR = os.path.expanduser("~/isaacsim")
 DEFAULT_ISAAC_CMD = f"cd {ISAAC_DIR} && ./python.sh {os.path.join(SIM_DIR, 'apps', 'warehouse_sim.py')}"
@@ -178,7 +180,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--mode", choices=("fake", "real"), default="fake", help="fake = fake_robot 에이전트만")
     p.add_argument("--group", default="santa")
     p.add_argument("--node-id", default="sim-runner-gpu01", help="edge_node_id = username = clientId")
-    p.add_argument("--ros-setup", action="append", help="source 할 setup.bash (반복). 기본 humble + t4_agent/install")
+    p.add_argument("--ros-setup", action="append", help="source 할 setup.bash (반복). 기본 humble + 1_Robot/amr_agent/install")
     p.add_argument("--isaac-cmd", help="실모드 Isaac 셸 명령 (기본 $SIM_RUNNER_ISAAC_CMD 또는 warehouse_sim.py)")
     p.add_argument("--isaac-warmup-s", type=float, default=0.0,
                    help="Isaac 기동 뒤 에이전트를 띄우기까지 (기본 0: 같이 띄우고 포즈가 올 때까지 STARTING 에서 기다린다)")

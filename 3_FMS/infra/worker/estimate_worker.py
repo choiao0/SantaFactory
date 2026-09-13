@@ -12,6 +12,9 @@
 #       THETA_PATH(기본 <3_FMS>/infra/out/theta_wallA_r24_g15.json, "" 이면 중립)
 #       SIM_TIMEOUT_S(기본 600)  SIM_REQUEST_QUEUE/SIM_RESULT_QUEUE(기본 sim.request/sim.result)
 #       ORDER_GEN_DIR(기본 <3_FMS>/order_gen)  WORKER_GEN_ORDERS(기본 1, 0 이면 주문 자체 생성 끄고 간격 모드 — -158)
+# 속도 (-116, 계약 v3.3): amr.avg_payload_kg(사용자 평균 적재 무게)가 있으면 contracts/speed_model.speed_for_load 로
+#       amr.speed_empty·speed_loaded·max_payload_kg 앵커에서 속도를 정하고, 없으면 SPEED_DEFAULT(물리 계획 속도 0.9).
+#       run 내내 고정. 초 단위 입력(horizon_s·gap·서비스 5 s)은 dt = CELL_M / speed 로 틱이 되고, KPI 초는 엔진 dt_s 로 되돌린다.
 # ============================================================
 import json
 import os
@@ -28,13 +31,18 @@ SIM_ENGINE_DIR = os.environ.get("SIM_ENGINE_DIR") or (
     "/work/sim_engine" if os.path.isdir("/work/sim_engine") else os.path.join(_LOCAL_FMS, "sim_engine"))
 FMS_DIR = os.path.dirname(SIM_ENGINE_DIR)
 THETA_PATH = os.environ.get("THETA_PATH", os.path.join(FMS_DIR, "infra", "out", "theta_wallA_r24_g15.json"))
+if FMS_DIR not in sys.path:                                                # contracts/ (이미지 안 /app/contracts, 로컬 3_FMS/contracts)
+    sys.path.insert(0, FMS_DIR)
+from contracts.speed_model import speed_for_load  # noqa: E402
 TIMEOUT_S = int(os.environ.get("SIM_TIMEOUT_S", "600"))
 ORDER_GEN_DIR = os.environ.get("ORDER_GEN_DIR", os.path.join(FMS_DIR, "order_gen"))
 GEN_ORDERS = os.environ.get("WORKER_GEN_ORDERS", "1") != "0"
 REQUEST_QUEUE = os.environ.get("SIM_REQUEST_QUEUE", "sim.request")
 RESULT_QUEUE = os.environ.get("SIM_RESULT_QUEUE", "sim.result")
 MAX_ROBOTS = 28            # 충전 존 초기 배치 상한 (SIM_RUN_CONTRACT §1 — 견적 제약)
-DT = 1.0                   # 1틱 = 1초 (CELL_M 1.0 m / SPEED 1.0 m/s). 속도 반영은 docs/견적_워커.md "미룬 것"
+CELL_M = 1.0               # 계획 격자 1칸 [m] (map_loader.CELL_M 와 같은 값). 틱 길이 = CELL_M / speed
+SPEED_DEFAULT = 0.9        # 무게 입력이 없을 때의 고정 속도 [m/s] = 물리 시뮬 계획 속도 (물리 팀 답신 2026-09-13 §2-4). 세 팀 합의 시 여기만
+SVC_PER_TOTE_S = 5.0       # 픽업·하역 각각 토트당 서비스 [초] (-177 승인값)
 
 
 WORKER_ID = os.environ.get("HOSTNAME", "")[:12]     # 컨테이너 id 앞 12자 — 병렬 5개(-182) 로그 구분용. 로컬은 빈 문자열
@@ -48,7 +56,7 @@ def log(msg):
 # 요청 → sim_v2 인자
 # ------------------------------------------------------------
 def _require_core(req):
-    """run_id · amr.count · horizon_s 검증 → (run_id, amr, n, horizon_ticks)."""
+    """run_id · amr.count · horizon_s 검증 → (run_id, amr, n, horizon_s). 틱 환산은 속도가 정해진 뒤 호출자가 한다."""
     if not isinstance(req, dict):
         raise ValueError("요청 본문이 JSON 객체가 아님")
     run_id = req.get("run_id")
@@ -61,11 +69,28 @@ def _require_core(req):
     horizon_s = req.get("horizon_s")
     if not isinstance(horizon_s, (int, float)) or horizon_s <= 0:
         raise ValueError(f"horizon_s 는 양수 (고정 시간 실행 필수, 명세 §1-1): {horizon_s!r}")
-    return run_id, amr, n, int(round(horizon_s / DT))
+    return run_id, amr, n, float(horizon_s)
 
 
-def _gap_flags(req):
-    """outbound_gap_s / inbound_gap_s → --order-gap / --inbound-gap (초 = 틱)."""
+def _speed(amr, run_id):
+    """run 고정 속도 [m/s]. 사용자 평균 적재 무게(amr.avg_payload_kg)가 있으면 기종 앵커로 함수, 없으면 SPEED_DEFAULT.
+    앵커(speed_empty·speed_loaded·max_payload_kg) 중 하나라도 없으면 계산할 수 없으니 기본값 + 로그 (run 은 돈다).
+    무게가 음수 같은 잘못된 값은 ValueError → 결과 failed (조용히 다른 속도로 돌지 않는다)."""
+    w = amr.get("avg_payload_kg")
+    if w is None:
+        return SPEED_DEFAULT
+    if isinstance(w, bool) or not isinstance(w, (int, float)) or w < 0:
+        raise ValueError(f"amr.avg_payload_kg 는 0 이상 숫자 (kg): {w!r}")
+    anchors = {k: amr.get(k) for k in ("speed_empty", "speed_loaded", "max_payload_kg")}
+    if any(v is None for v in anchors.values()):
+        log(f"{run_id}: 속도 앵커 없음 {anchors} → 기본 {SPEED_DEFAULT} m/s")
+        return SPEED_DEFAULT
+    return speed_for_load(w, v_empty=anchors["speed_empty"], v_full=anchors["speed_loaded"],
+                          max_load_kg=anchors["max_payload_kg"])
+
+
+def _gap_flags(req, dt):
+    """outbound_gap_s / inbound_gap_s → --order-gap / --inbound-gap (초 ÷ dt = 틱)."""
     flags = []
     for key, flag in (("outbound_gap_s", "order-gap"), ("inbound_gap_s", "inbound-gap")):
         v = req.get(key)
@@ -73,24 +98,21 @@ def _gap_flags(req):
             continue
         if not isinstance(v, (int, float)) or v <= 0:
             raise ValueError(f"{key} 는 양수: {v!r}")
-        flags.append(f"--{flag}={v / DT:g}")
+        flags.append(f"--{flag}={v / dt:g}")
     return flags
 
 
 def _log_ignored(req, amr, run_id):
     """V1 에서 읽지 않는 필드 — 값이 오면 로그만 (결과에 영향 없음). docs/견적_워커.md"""
-    for k in ("speed_empty", "speed_loaded"):
-        if amr.get(k) not in (None, 1.0):
-            log(f"{run_id}: amr.{k}={amr[k]} 는 V1 에서 무시 (커널 속도 1.0 m/s 고정)")
     if req.get("inbound"):
         log(f"{run_id}: 명시 inbound 리스트는 V1 에서 무시 (간격 기반 생성, 입고 시나리오 보류)")
 
 
-def _orders_flags(amr, orders_path):
-    """명시 출고 주문(v2.6): capacity=토트 수, tote_units 기본 8, 양 끝 서비스 5초/토트."""
+def _orders_flags(amr, orders_path, dt):
+    """명시 출고 주문(v2.6): capacity=토트 수, tote_units 기본 8, 양 끝 서비스 5초/토트(틱으로 반올림, 최소 1)."""
     if not orders_path:
         return []
-    flags = [f"--orders-file={orders_path}", "--svc-per-tote=5"]
+    flags = [f"--orders-file={orders_path}", f"--svc-per-tote={max(1, int(SVC_PER_TOTE_S / dt + 0.5))}"]
     cap = amr.get("capacity")
     if cap is not None:
         if isinstance(cap, bool) or not isinstance(cap, int) or not 1 <= cap <= 6:
@@ -107,13 +129,15 @@ def _orders_flags(amr, orders_path):
 def to_sim_args(req, orders_path=None):
     """명세 §1-1 요청 dict → run_once 키워드 인자. 잘못된 요청은 ValueError (시뮬을 돌리지 않는다).
     orders_path: 출고 주문을 써 둔 파일 (handle 이 만든다 — 요청 outbound[] 또는 자체 생성) → --orders-file (-156/-158)."""
-    run_id, amr, n, horizon = _require_core(req)
-    extra = [f"--horizon={horizon}"]
+    run_id, amr, n, horizon_s = _require_core(req)
+    speed = _speed(amr, run_id)
+    dt = CELL_M / speed
+    extra = [f"--horizon={int(round(horizon_s / dt))}", f"--speed={speed:g}"]
     if req.get("shifts"):
         extra.append(f"--shifts={req['shifts']}")
-    extra += _gap_flags(req)
+    extra += _gap_flags(req, dt)
     _log_ignored(req, amr, run_id)
-    extra += _orders_flags(amr, orders_path)
+    extra += _orders_flags(amr, orders_path, dt)
     seed = req.get("seed")
     return dict(tag=re.sub(r"[^A-Za-z0-9_.-]", "_", run_id), n_robots=n, n_orders=0,
                 seed=int(seed) if seed is not None else 42,
@@ -124,17 +148,18 @@ def to_sim_args(req, orders_path=None):
 # SUMMARY → 결과 KPI (명세 §1-2, 14키)
 # ------------------------------------------------------------
 def to_kpi(s):
+    dt = float(s.get("dt_s", 1.0))                        # 엔진 SUMMARY 의 틱 길이 (v3.3). 없으면 1틱 1초
     return dict(
         orders_total=int(s["n_orders"]), orders_completed=int(s["orders_done"]),
         inbound_total=int(s["inbound_total"]), inbound_completed=int(s["tasks_in"]),
-        makespan_s=int(round(s["makespan_steps"] * DT)),
+        makespan_s=int(round(s["makespan_steps"] * dt)),
         lead_time_mean_s=s.get("order_lead_mean_s", s["lead_mean_s"]),
         lead_time_p90_s=s.get("order_lead_p90_s", s["lead_p90_s"]), queue_time_mean_s=s["queue_mean_s"],
         throughput_orders_per_h=s["orders_per_h"], throughput_tasks_per_h=s["tasks_per_h"],
         amr_utilization=s["util_incl_service"],          # 주행+대기+서비스+회전 ÷ 대수×T (docs/견적_워커.md)
         conflict_wait_ratio=s["conflict_wait"],
         distance_total_m=int(s["distance_m"]),
-        charge_downtime_s=int(round(s.get("charging_steps", 0) * DT)),
+        charge_downtime_s=int(round(s.get("charging_steps", 0) * dt)),
     )
 
 
@@ -148,7 +173,7 @@ def _generate_orders(req):
         sys.path.insert(0, ORDER_GEN_DIR)
     import generate_orders                                                 # 이미지 안 /app/order_gen (estimate.Dockerfile)
     import slice_orders
-    _, _, _, horizon = _require_core(req)
+    _, _, _, horizon_s = _require_core(req)
     wh = req.get("warehouse") or {}
     n_day = int(wh.get("outbound_avg") or 500)                             # 500 = 프로파일 원본 규모
     seed = int(req.get("seed", 42))
@@ -160,7 +185,7 @@ def _generate_orders(req):
     end = slice_orders.to_seconds(wh["outbound_end"]) if wh.get("outbound_end") else 0
     if start < end:                                                        # 야간 교대(end <= start)는 매핑 없이 start 부터
         day = slice_orders.rescale_orders(day, start, end)
-    return slice_orders.slice_orders(day, start, min(start + int(horizon * DT), 86400))
+    return slice_orders.slice_orders(day, start, min(start + int(round(horizon_s)), 86400))
 
 
 def _orders_file(req):

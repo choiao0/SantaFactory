@@ -15,6 +15,8 @@ import com.ssafy.santafactory.entity.estimate.Estimate;
 import com.ssafy.santafactory.entity.estimate.RunStatus;
 import com.ssafy.santafactory.entity.simulation.SimScenario;
 import com.ssafy.santafactory.entity.warehouse.Warehouse;
+import com.ssafy.santafactory.global.auth.AuthenticatedMember;
+import com.ssafy.santafactory.global.auth.OwnershipGuard;
 import com.ssafy.santafactory.global.exception.ErrorCode;
 import com.ssafy.santafactory.global.exception.GlobalException;
 import com.ssafy.santafactory.repository.EstimateRepository;
@@ -68,6 +70,7 @@ public class EstimateService {
     private final CostCalculator costCalculator;
     private final EstimateEvaluator evaluator;
     private final EstimateProperties properties;
+    private final OwnershipGuard ownershipGuard;
     private final ApplicationEventPublisher eventPublisher;
     private final OutboundOrderGenerator outboundOrderGenerator;
     private final ObjectMapper objectMapper;
@@ -81,9 +84,11 @@ public class EstimateService {
      * 호출자에게 503 이 간다(명세 §1-4).
      */
     @Transactional
-    public EstimateCreateResponse create(EstimateCreateRequest request) {
+    public EstimateCreateResponse create(EstimateCreateRequest request, AuthenticatedMember me) {
         Warehouse warehouse = warehouseRepository.findById(request.warehouseId())
                 .orElseThrow(() -> new GlobalException(ErrorCode.WAREHOUSE_NOT_FOUND));
+        // 남의 창고로 견적을 만들지 못하게. 견적의 주인은 창고의 주인이다
+        ownershipGuard.checkWarehouse(warehouse, me);
 
         double targetThroughput = orDefault(request.targetThroughput(), warehouse.getTargetThroughput());
         double targetUtilization = orDefault(request.targetUtilization(), warehouse.getTargetUtilization());
@@ -215,22 +220,39 @@ public class EstimateService {
     // ── 조회 ─────────────────────────────────────────────────────────────────
 
     @Transactional(readOnly = true)
-    public EstimateDetailResponse detail(Long estimateId) {
+    public EstimateDetailResponse detail(Long estimateId, AuthenticatedMember me) {
+        Estimate estimate = estimateRepository.findById(estimateId)
+                .orElseThrow(() -> new GlobalException(ErrorCode.ESTIMATE_NOT_FOUND));
+        ownershipGuard.checkEstimate(estimate, me);
+        return EstimateDetailResponse.of(estimate, scenarioRepository.findByEstimateIdOrderByAmrCountAsc(estimateId));
+    }
+
+    /**
+     * <b>소유권 검사가 없는</b> 조회. SSE 스트림이 스냅샷을 만들 때만 쓴다 — 그 경로는 컨트롤러가
+     * {@link #checkAccess} 로 이미 걸렀다. 외부 요청을 직접 받는 자리에서는
+     * {@link #detail(Long, AuthenticatedMember)} 를 써야 한다.
+     */
+    @Transactional(readOnly = true)
+    public EstimateDetailResponse snapshot(Long estimateId) {
         Estimate estimate = estimateRepository.findById(estimateId)
                 .orElseThrow(() -> new GlobalException(ErrorCode.ESTIMATE_NOT_FOUND));
         return EstimateDetailResponse.of(estimate, scenarioRepository.findByEstimateIdOrderByAmrCountAsc(estimateId));
     }
 
     @Transactional(readOnly = true)
-    public Page<EstimateSummaryResponse> list(Pageable pageable) {
-        return estimateRepository.findAllByOrderByCreatedAtDesc(pageable).map(EstimateSummaryResponse::from);
+    public Page<EstimateSummaryResponse> list(Pageable pageable, AuthenticatedMember me) {
+        Page<Estimate> page = me.isAdmin()
+                ? estimateRepository.findAllByOrderByCreatedAtDesc(pageable)
+                : estimateRepository.findByWarehouseMemberIdOrderByCreatedAtDesc(me.id(), pageable);
+        return page.map(EstimateSummaryResponse::from);
     }
 
     /** 견적 취소. 이미 큐에 들어간 run 의 결과가 와도 판정은 확정되지 않는다. */
     @Transactional
-    public void cancel(Long estimateId) {
+    public void cancel(Long estimateId, AuthenticatedMember me) {
         Estimate estimate = estimateRepository.findById(estimateId)
                 .orElseThrow(() -> new GlobalException(ErrorCode.ESTIMATE_NOT_FOUND));
+        ownershipGuard.checkEstimate(estimate, me);
         estimate.cancel();
         log.info("견적 취소: estimateId={}, status={}", estimateId, estimate.getStatus());
         if (estimate.isCancelled()) {
@@ -248,9 +270,10 @@ public class EstimateService {
      * 추적용이라, 권장 대수의 DES run_id({@code est_{id}_n{count}})를 그대로 싣는다.
      */
     @Transactional(readOnly = true)
-    public void requestVerification(Long estimateId) {
+    public void requestVerification(Long estimateId, AuthenticatedMember me) {
         Estimate estimate = estimateRepository.findById(estimateId)
                 .orElseThrow(() -> new GlobalException(ErrorCode.ESTIMATE_NOT_FOUND));
+        ownershipGuard.checkEstimate(estimate, me);
         Integer recommendedCount = estimate.getRecommendedCount();
         if (recommendedCount == null) {
             throw new GlobalException(ErrorCode.ESTIMATE_NOT_VERIFIABLE);
@@ -426,6 +449,17 @@ public class EstimateService {
             return completed.longValue();
         }
         return Math.round(completed * (double) Duration.between(start, end).toSeconds() / simulated);
+    }
+
+    /**
+     * SSE 구독 전 접근 검사. 스트림은 견적 id 만으로 여는 구조라, 이걸 안 하면 id 를 바꿔가며
+     * 남의 견적 진행을 구독할 수 있다.
+     */
+    @Transactional(readOnly = true)
+    public void checkAccess(Long estimateId, AuthenticatedMember me) {
+        Estimate estimate = estimateRepository.findById(estimateId)
+                .orElseThrow(() -> new GlobalException(ErrorCode.ESTIMATE_NOT_FOUND));
+        ownershipGuard.checkEstimate(estimate, me);
     }
 
     /** 미완료 run 이 없으면 판정을 확정한다. 하나라도 남아 있으면 아무것도 하지 않는다. */

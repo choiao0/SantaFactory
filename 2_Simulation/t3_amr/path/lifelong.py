@@ -423,8 +423,21 @@ class Kernel(object):
                 base = self.dm(r["goal"])
                 d_now[a] = self.replan.dist_for(a, t, self.states, extra, r["goal"],
                                                 base, self.stag.get(a))
-        new, cells = step_h(self.states, d_now, self.edge_cost, self.wait_cost,
-                            self.free, prio, self.turn_cost, extra, bias)
+        # ★ 세 번째 반환값을 버린다 (2026-09-11).
+        #   `step_h` 는 -193(마주침 규칙 구간 대수 제한)에서 2-tuple → 3-tuple 이
+        #   됐다: (다음 상태, 예약 칸, **정원에 막힌 agent 집합**). 3_FMS 쪽
+        #   호출부는 같이 고쳤는데 여기가 빠져 develop 에서 계획이 통째로
+        #   죽었다 — `ValueError: too many values to unpack`.
+        #
+        #   `pibt_core_v2` 가 사본이 아니라 3_FMS 원본을 **직접 로드**하므로
+        #   상류 시그니처 변경이 여기를 즉시 깬다. 사본이 갈리는 것을 막으려고
+        #   택한 구조의 대가다. 상류가 `pibt/` 를 건드리면 여기도 보는 것이 규칙.
+        #
+        #   세 번째 값은 구간 대수 제한 **지표**일 뿐 이동 결정에 안 쓰인다
+        #   (FMS 는 section_blocks 카운터로만 쓴다). 우리는 `sec_limit` 을 안
+        #   넘기므로 장치가 꺼져 있고 항상 빈 집합이라, 이동 결과는 이전과 같다.
+        new, cells, _denied = step_h(self.states, d_now, self.edge_cost, self.wait_cost,
+                                     self.free, prio, self.turn_cost, extra, bias)
 
         for a in agents:
             s0, s1 = self.states[a], new[a]

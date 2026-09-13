@@ -85,7 +85,7 @@ FMS ↔ AMR 에이전트 ↔ sim-runner ↔ Host ↔ 시뮬 WMS 가 한 브로�
 | `connection` | AMR → FMS | `connectionState` ∈ ONLINE · OFFLINE · CONNECTIONBROKEN (retained QoS1, LWT) |
 | `factsheet` | AMR → FMS | `typeSpecification` · `physicalParameters` · `protocolLimits` · `protocolFeatures` · `agvGeometry` · `loadSpecification` (retained QoS1, ONLINE 직후) |
 
-### 4.2 factsheet ← 기종 프로파일 (적용 2026-09-08: `t4_agent/config/models/iw_hub.yaml` → `StateBuilder.factsheet()`, ONLINE 직후 retained QoS1. 숫자의 원천은 `2_Simulation/sil_isaac/robot/profile.py`)
+### 4.2 factsheet ← 기종 프로파일 (적용 2026-09-08: `1_Robot/amr_agent/config/models/iw_hub.yaml` + 런 프로파일(`profile_overrides` = BE amr 블록) → `StateBuilder.factsheet()`, ONLINE 직후 retained QoS1. 숫자의 원천은 `2_Simulation/sil_isaac/robot/profile.py`)
 
 | 프로파일 (yaml 키) | factsheet 필드 | iw.hub |
 |---|---|---|
@@ -95,7 +95,7 @@ FMS ↔ AMR 에이전트 ↔ sim-runner ↔ Host ↔ 시뮬 WMS 가 한 브로�
 | 바퀴 · 회전 외곽 | `agvGeometry.wheelDefinitions[] · envelopes2d[]` | r 0.08 · y ±0.29 · 스윙 반경 1.09 m |
 | 타이밍 | `protocolLimits.timing.{minOrderInterval, minStateInterval, defaultStateInterval}` | 0.5 · 0.5 · 0.5 (executor 2 Hz sim time) |
 
-### 4.3 orderUpdateId 스티칭 · 재발행 · 중복 (2_Simulation/t4_agent README 의 표를 옮김)
+### 4.3 orderUpdateId 스티칭 · 재발행 · 중복 (1_Robot/amr_agent README 의 표를 옮김)
 
 | PIBT 액션 | VDA 5050 표현 | 에이전트 동작 |
 |---|---|---|

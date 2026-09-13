@@ -81,10 +81,30 @@ _STREAM = _os.environ.get("STREAM", "1") not in ("0", "", "false", "False")
 LAUNCH = ("isaacsim isaacsim.exp.full.streaming --no-window" if _STREAM
           else "isaacsim isaacsim.exp.base.python --no-window")
 
+# ── 스트리밍 포트 ───────────────────────────────────────────────────
+# 기본은 Isaac 기본값 그대로다 (사내망 jupyter04 는 이 줄이 생기기 전과 동일).
+#
+# ★ 포트를 **바꿔서** 내보내는 클라우드가 있다 (2026-09-13 Brev 실측).
+#   Brev 는 공개 포트를 제가 정한다 — 49100 을 열어 달라고 해도 밖에서는
+#   57980 으로 뚫린다. WebRTC 는 SDP/ICE 후보에 **포트 번호가 그대로 실려서**
+#   나가므로, 서버가 47998 을 알리면 클라이언트는 47998 로 쏘고 닫힌 포트에
+#   부딪힌다 — 시그널링은 붙는데 화면만 안 나오는 그 증상이다.
+#   Brev 쪽 **Destination Port 는 편집이 되므로** 공개 포트에 맞춰 놓고,
+#   Isaac 도 같은 번호로 띄우면 번호가 끝까지 보존된다.
+#
+#   ★ `$VAR` 가 아니라 여기서 읽는다. `expand()`(=expandvars)는 정의가 없으면
+#     `$SIGNAL_PORT` 를 **글자 그대로 넘긴다** — paths.sh 없이 부르면 Kit 이
+#     포트를 파싱하다 죽는다. `_STREAM` 과 같은 방식으로 파이썬에서 받는다.
+_SIGNAL_PORT = _os.environ.get("SIGNAL_PORT", "49100")    # TCP 시그널링
+_STREAM_PORT = _os.environ.get("STREAM_PORT", "47998")    # UDP 미디어
+
 # 모든 계획기에 붙는 플래그. 스트리밍·GPU 지정은 계획기와 무관하다.
 _GPU_FLAG = "--/renderer/activeGpu=$GPU --/renderer/multiGpu/enabled=false"
+_LS = "--/exts/omni.kit.livestream.app/primaryStream"
 COMMON_FLAGS = ((
-    "--/exts/omni.kit.livestream.app/primaryStream/publicIp=$LAN_IP",
+    "%s/publicIp=$LAN_IP" % _LS,
+    "%s/signalPort=%s" % (_LS, _SIGNAL_PORT),
+    "%s/streamPort=%s" % (_LS, _STREAM_PORT),
     _GPU_FLAG,
 ) if _STREAM else (
     _GPU_FLAG,
