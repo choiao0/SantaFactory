@@ -88,15 +88,25 @@ if [ "$SKIP_CAM" = 1 ]; then
 else
     echo
     echo "── 카메라 ──────────────────────────────────────────"
-    CAM_LOG="$(python tools/add_onboard_cam.py \
+    # ★ stdout 과 stderr 를 **합치지 말 것.** pxr 이 창고 팔레트 참조 때문에
+    #   경고를 수백 줄 쏟는데, 그게 stderr 로 나온다. `2>&1` 로 합치면 마지막
+    #   줄이 카메라 경로가 아니라 **경고**가 된다 (2026-09-13 실측).
+    #   도구는 경로를 stdout 마지막 줄에 찍는다. stderr 는 따로 받아 걸러 보여준다.
+    CAM_ERR="$(mktemp)"
+    CAM_OUT="$(python tools/add_onboard_cam.py \
                   --stage "$STAGE_USD" --rec "$REC" --mode "$MODE" --link "$LINK" \
-                  ${AMR:+--amr "$AMR"} 2>&1)" || {
-        echo "$CAM_LOG"
+                  ${AMR:+--amr "$AMR"} 2>"$CAM_ERR")" || {
+        echo "$CAM_OUT"
+        grep -v -E "_ReportErrors|instantiating stage" "$CAM_ERR" | tail -20
+        rm -f "$CAM_ERR"
         echo "★ 카메라를 못 달았습니다."
         exit 1
     }
-    echo "$CAM_LOG"
-    CAM="$(echo "$CAM_LOG" | tail -1)"
+    grep -v -E "_ReportErrors|instantiating stage" "$CAM_ERR" | grep -q . \
+        && grep -v -E "_ReportErrors|instantiating stage" "$CAM_ERR" | tail -5
+    rm -f "$CAM_ERR"
+    echo "$CAM_OUT"
+    CAM="$(echo "$CAM_OUT" | tail -1)"
     case "$CAM" in
         /World/Robots/amr_*) : ;;
         *) echo "★ 카메라 경로를 못 읽었습니다: '$CAM'"; exit 1 ;;
