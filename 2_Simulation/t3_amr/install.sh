@@ -135,6 +135,15 @@ if [ -n "$MISS_LIB" ]; then
     echo "     안 되면 관리자에게 요청하세요. (설치는 계속합니다)"
 fi
 
+# --- ffmpeg ---------------------------------------------------------
+# 막지는 않는다 — 2b 단계에서 pip 로 넣는다. `--check` 가 여기서 멈추므로
+# 현재 상태만 알려 준다.
+if command -v ffmpeg >/dev/null 2>&1; then
+    note "ffmpeg 있음  $(command -v ffmpeg)"
+else
+    note "ffmpeg 없음 — 2b 단계에서 imageio-ffmpeg 로 넣습니다 (루트 불필요)"
+fi
+
 echo
 if [ "$fail" != 0 ]; then
     echo "★★ 조건이 안 맞습니다. 위 ★ 항목을 해결한 뒤 다시 돌리세요."
@@ -234,6 +243,58 @@ n = len(list(md.distributions()))
 print("  설치된 패키지 %d개" % n)
 PY
 note "isaacsim 런처: $(command -v isaacsim || echo '★ 없음 — 설치가 불완전합니다')"
+
+# ============================================================
+# 2b) ffmpeg
+# ============================================================
+head_ "2b) ffmpeg (영상 조립)"
+
+# `run_record.sh`·`run.sh` 는 프레임을 PNG 로 찍고 **끝나고 나서** ffmpeg 으로
+# mp4 를 만든다. 없으면 프레임만 남기고 조용히 넘어간다 — 20분 돌린 뒤에야
+# 영상이 없는 걸 알게 된다 (2026-09-13 Brev 에서 그렇게 날렸다).
+#
+# ★ apt 가 아니라 **pip 의 imageio-ffmpeg** 를 쓴다. 루트가 없어도 되고
+#   (사내망 jupyter04 가 그랬다), 저장소가 이미 그 규약이다
+#   (`runners/make_clip.sh:54`). 정적 빌드라 시스템 라이브러리도 안 탄다.
+#
+# 링크는 `~/bin` 이 아니라 **venv 의 bin** 에 건다. activate 가 거기를 PATH 에
+# 넣으므로 사용자가 PATH 를 따로 손질할 필요가 없다 — `~/bin` 은 기본 PATH 가
+# 아니라서 "깔았는데 command not found" 가 난다.
+if command -v ffmpeg >/dev/null 2>&1 && [ "$FORCE" != 1 ]; then
+    note "이미 있습니다: $(command -v ffmpeg)"
+else
+    pip install -q imageio-ffmpeg || soft "imageio-ffmpeg 설치가 실패했습니다."
+    FF="$(python -c 'import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())' 2>/dev/null)"
+    if [ -x "$FF" ]; then
+        ln -sf "$FF" "$VE/bin/ffmpeg"
+        note "ffmpeg -> $VE/bin/ffmpeg"
+    else
+        soft "ffmpeg 을 못 얻었습니다. 루트가 되면:  sudo apt-get install -y ffmpeg"
+        echo "     없어도 시뮬레이션은 돕니다 — 프레임(PNG)만 남고 mp4 조립을 못 합니다."
+    fi
+fi
+
+# ★ 버전 문자열만 보면 부족하다. `run_record.sh:234` 가 쓰는 것은 두 가지고,
+#   둘 다 **빌드 옵션**이라 있는 척하다 실행 때 죽는다:
+#     -c:v libx264          인코더
+#     -pattern_type glob    libavformat 이 HAVE_GLOB 으로 빌드돼야 한다
+#   그래서 진짜로 한 번 말아 본다. 프레임은 ffmpeg 이 직접 만든다(의존성 0).
+if command -v ffmpeg >/dev/null 2>&1; then
+    note "$(ffmpeg -version 2>/dev/null | head -1 | cut -c1-72)"
+    _T="$(mktemp -d)"
+    if ffmpeg -y -loglevel error -f lavfi \
+              -i testsrc=duration=1:size=64x64:rate=6 "$_T/f_%06d.png" 2>/dev/null \
+       && ffmpeg -y -loglevel error -framerate 6 -pattern_type glob \
+              -i "$_T/f_*.png" -c:v libx264 -pix_fmt yuv420p -crf 20 \
+              "$_T/o.mp4" 2>/dev/null \
+       && [ -s "$_T/o.mp4" ]; then
+        note "libx264 · pattern_type glob 동작 확인 (실제 mp4 인코딩)"
+    else
+        soft "이 ffmpeg 으로는 run_record.sh 의 조립이 실패합니다 (libx264 또는 glob 없음)."
+        echo "     루트가 되면:  sudo apt-get install -y ffmpeg"
+    fi
+    rm -rf "$_T"
+fi
 
 # ============================================================
 # 3) 로봇 에셋
