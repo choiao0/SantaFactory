@@ -31,6 +31,12 @@ services:
       RABBITMQ_HOST: rabbitmq
       RABBITMQ_USER: ${RABBITMQ_USER}
       RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
+      REDIS_HOST: redis
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET}
+      ADMIN_EMAIL: ${ADMIN_EMAIL}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      DEMO_PASSWORD: ${DEMO_PASSWORD}
     ports:
       - "127.0.0.1:8080:8080"
     depends_on:
@@ -39,6 +45,8 @@ services:
       rabbitmq:
         condition: service_healthy
       minio:
+        condition: service_healthy
+      redis:
         condition: service_healthy
 
   frontend:
@@ -86,7 +94,35 @@ services:
       timeout: 3s
       retries: 10
 
+  # refresh 토큰 저장소. access 토큰은 저장하지 않는다(짧은 만료 + 서명 검증으로 충분).
+  redis:
+    image: redis:7-alpine
+    container_name: a106-redis
+    restart: unless-stopped
+    command:
+      - redis-server
+      - --requirepass
+      - ${REDIS_PASSWORD:?.env 에 REDIS_PASSWORD 를 설정하세요}
+      # 재시작 때 토큰이 다 날아가면 전원 재로그인이다
+      - --appendonly
+      - "yes"
+      # 토큰 저장소다. LRU 로 두면 토큰이 조용히 증발해 랜덤 로그아웃이 난다
+      - --maxmemory-policy
+      - noeviction
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "--no-auth-warning", "-a", "$$REDIS_PASSWORD", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+
 volumes:
   db-data:
   rabbitmq-data:
   minio-data:
+  redis-data:
