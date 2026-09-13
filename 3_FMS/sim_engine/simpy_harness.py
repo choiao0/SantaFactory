@@ -26,7 +26,7 @@ except ImportError:                                   # pragma: no cover
     raise SystemExit(2)
 
 from fms_kernel import StallError
-from sim_v2_tasks import DT, build, parse_args, plot_heat, report
+from sim_v2_tasks import build, parse_args, plot_heat, report
 
 
 class ArrivalTimeout(simpy.Event):
@@ -38,27 +38,27 @@ class ArrivalTimeout(simpy.Event):
         env.schedule(self, URGENT, delay)
 
 
-def arrivals(env, kernel, stream):
-    """도착 프로세스: 도착이 있는 틱마다 깨어나 그 틱의 태스크를 커널에 넣는다."""
+def arrivals(env, kernel, stream, dt):
+    """도착 프로세스: 도착이 있는 틱마다 깨어나 그 틱의 태스크를 커널에 넣는다. dt = 틱 길이[초] (-116)."""
     for tk in stream.arrival_ticks():
-        delay = tk * DT - env.now
+        delay = tk * dt - env.now
         if delay > 0:
             yield ArrivalTimeout(env, delay)
         for task in stream.arrivals(tk):
             kernel.submit_task(task)
 
 
-def ticker(env, kernel, stream, horizon=None):
+def ticker(env, kernel, stream, dt, horizon=None):
     """틱 프로세스: dispatch → (유한 모드: outstanding == 0 이면 종료) → move. sim_v2_tasks.run_ticks 와 같은 순서."""
     t = 0
     while horizon is None or t < horizon:
-        assert int(round(env.now / DT)) == t, f"틱 시계 어긋남: env.now={env.now}, t={t}"
+        assert int(round(env.now / dt)) == t, f"틱 시계 어긋남: env.now={env.now}, t={t}"
         kernel.dispatch(t)
         if horizon is None and stream.outstanding == 0:
             break
         kernel.move(t)
         t += 1
-        yield env.timeout(DT)
+        yield env.timeout(dt)
 
 
 def main(argv=None):
@@ -67,17 +67,17 @@ def main(argv=None):
     for w in a.warnings:
         print(w)
     env = simpy.Environment()
-    env.process(arrivals(env, kernel, stream))
-    env.process(ticker(env, kernel, stream, a.horizon))
+    env.process(arrivals(env, kernel, stream, a.dt))
+    env.process(ticker(env, kernel, stream, a.dt, a.horizon))
     try:
         if a.horizon is None:
             env.run()
         else:
-            env.run(until=a.horizon * DT)
+            env.run(until=a.horizon * a.dt)
     except StallError as e:
         print(str(e))
         raise SystemExit("시뮬 정체 감지")
-    print(f"[SIMPY] env.now = {env.now:g} s (틱 {int(round(env.now / DT))})")
+    print(f"[SIMPY] env.now = {env.now:g} s (틱 {int(round(env.now / a.dt))})")
     summary, tag, tph = report(a, kernel, stream, ctx)
     if not os.environ.get("SIM_NO_PLOT"):
         plot_heat(a, kernel, ctx, tag, tph)
