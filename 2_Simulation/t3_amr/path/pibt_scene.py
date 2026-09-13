@@ -92,9 +92,16 @@ from pibt_core_v2 import valid_state, dist_map_h       # noqa: E402
 #   구동축은 chassis 원점(x=0). 캐스터가 뒤(x=-0.65)라 **구동축이 앞**이다.
 #   base_link 원점 = 구동축 중점이므로 axle_in_prim = (0, 0).
 GEOM_KW = dict(
-    rear_len=1.030,          # 구동축 -> 차체 뒷면
-    front_len=0.390,         # 구동축 -> 차체 앞면
-    width=0.650,
+    # --- 2026-09-13: 적재 선반(1,500 x 800 x 1,650)을 얹은 치수 (S15P21A106-196) ---
+    #   인포그래픽 외형 1,500 - 차체 1,420 = 80 mm 를 **전부 뒤로** 붙였다.
+    #   pitch 하한 = 2 * hypot(front_len, width/2) 라 **앞면과 폭만** 하한을 정한다.
+    #       앞뒤 40 씩 :  하한 1.1746  ->  pitch 1.2 여유 +25.4 mm  (살얼음)
+    #       뒤로 80    :  하한 1.1173  ->  pitch 1.2 여유 +82.7 mm  (채택)
+    #   pitch 1.0 을 깨뜨렸던 위반량이 -7.7 mm 였으므로 +25.4 mm 는 같은 등급이다.
+    #   ★ front_len 은 절대 건드리지 말 것 — 하한이 여기서 나온다.
+    rear_len=1.110,          # 구동축 -> 선반 베이스 뒷면 (차체 1.030 + 80 mm)
+    front_len=0.390,         # 구동축 -> 차체 앞면 ★ 불변
+    width=0.800,             # 선반 폭 (차체 0.650)
     v_max=0.9,               # config.SPEED_PLAN
     w_max=1.8,               # amr_driver_v2.OMEGA_MAX
     a_lin=0.8,               # config.ACCEL_MAX

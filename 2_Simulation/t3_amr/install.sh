@@ -89,8 +89,15 @@ if command -v nvidia-smi >/dev/null 2>&1; then
     note "$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1) × ${NGPU}장 · 드라이버 $drv · CUDA $cuda"
     # 문자열이 아니라 숫자로 비교한다 ("570.86.10" > "570.211.01" 가 되는 함정)
     _num() { echo "$1" | awk -F. '{printf "%d%03d%03d", $1, $2+0, $3+0}'; }
+    # ★ 경고이지 차단이 아니다 (2026-09-13 수정).
+    #   `NEED_DRV` 는 **jupyter04 에서 동작을 확인한 값**이지 Isaac 6.0.1 의 최소
+    #   요구가 아니다. 그런데 `bad` 라 fail=1 이 되어 설치가 통째로 막혔다 —
+    #   Brev(L40S 1장 · 드라이버 565.57.01)에서 걸렸다. 낮은 드라이버로 Kit 이
+    #   뜨는지는 **깔아서 띄워 봐야** 알고, 실패해도 venv 만 지우면 된다.
+    #   여기서 막으면 확인할 기회 자체가 없다.
     if [ -n "$drv" ] && [ "$(_num "$drv")" -lt "$(_num "$NEED_DRV")" ]; then
-        bad "드라이버가 확인된 값($NEED_DRV)보다 낮습니다 — Kit 이 안 뜰 수 있습니다."
+        soft "드라이버 $drv < 확인값 $NEED_DRV — Kit 이 안 뜰 수 있습니다."
+        soft "  뜨면 그대로 쓰고, 검은 화면이나 기동 실패면 드라이버를 올리세요."
     fi
     busy="$(nvidia-smi --query-compute-apps=gpu_uuid,used_memory --format=csv,noheader 2>/dev/null | wc -l)"
     [ "$busy" -gt 0 ] && soft "이미 ${busy}개 프로세스가 GPU 를 쓰고 있습니다 (공용 서버 — 4단계에서 빈 장치를 고릅니다)"
