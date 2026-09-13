@@ -43,7 +43,7 @@ import math
 import os
 import sys
 
-from pxr import Gf, Sdf, Usd, UsdGeom, UsdPhysics
+from pxr import Gf, Sdf, Usd, UsdGeom, UsdPhysics, UsdShade
 
 WHEEL_R = 0.081          # build_amr_scene_v2.py 와 같은 값. 로봇 prim 의 z
 
@@ -73,11 +73,20 @@ DECK_T = 0.030                       # 데크 두께. 베이스 플레이트와 
 #   폭      ±0.125  (전폭 ±0.400 안쪽)
 #   높이    상단 레일(1.610~1.650) 밑
 # 넘으면 pitch 하한이 올라가고 랙 간섭 판정을 다시 해야 한다.
-TAB_W, TAB_H, TAB_T = 0.250, 0.170, 0.014   # 가로 · 세로 · 두께
+# 치수는 갤럭시 탭 S9 11인치 실물 기준 (254.3 x 165.8 x 5.9 mm).
+TAB_W, TAB_H, TAB_T = 0.2543, 0.1658, 0.0059   # 가로 · 세로 · 두께
+TAB_BEZEL = 0.008                    # 베젤. 화면은 이만큼 안쪽
 TAB_TILT = -15.0                     # Y축 회전 [deg]. 음수 = 윗면이 뒤로 눕는다
 TAB_Z = 1.500                        # 화면 중심 높이 (바닥 기준)
 TAB_CLEAR = 0.005                    # 앞면에서 띄울 여유
-ARM_T = 0.020                        # 상단 레일에 매다는 브래킷 두께
+ARM_W, ARM_T = 0.070, 0.010          # 상단 레일에 매다는 브래킷 가로 · 두께
+
+# 재질 — 선반 본체는 기본 회색 그대로 두고 **태블릿에만** 준다.
+#   화면이 검게 안 나오면 태블릿으로 안 보인다. 기본 머티리얼은 전부 회색이다.
+#   UsdPreviewSurface 는 Isaac RTX 가 그대로 읽는다.
+MAT_BODY   = ((0.13, 0.14, 0.16), 0.35, 0.9)   # 그래파이트 알루미늄 (색, rough, metal)
+MAT_SCREEN = ((0.02, 0.02, 0.025), 0.04, 0.0)  # 꺼진 화면 — 거의 검고 매우 매끈
+MAT_ARM    = ((0.22, 0.23, 0.25), 0.5, 0.6)    # 마운트 브래킷
 
 
 def deck_levels(tiers, z0=BASE_Z1, z1=TOP_Z, th=DECK_T):
@@ -123,6 +132,24 @@ def _panel(stage, path, cx, cy, cz, w, h, t, tilt_deg):
     xf.AddRotateYOp().Set(tilt_deg)
     xf.AddScaleOp().Set(Gf.Vec3f(t / 2, w / 2, h / 2))
     return c
+
+
+def _material(stage, path, spec):
+    """UsdPreviewSurface 하나. spec = (색, roughness, metallic)."""
+    color, rough, metal = spec
+    mat = UsdShade.Material.Define(stage, path)
+    sh = UsdShade.Shader.Define(stage, path + "/PBR")
+    sh.CreateIdAttr("UsdPreviewSurface")
+    sh.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(Gf.Vec3f(*color))
+    sh.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(float(rough))
+    sh.CreateInput("metallic", Sdf.ValueTypeNames.Float).Set(float(metal))
+    mat.CreateSurfaceOutput().ConnectToSource(sh.ConnectableAPI(), "surface")
+    return mat
+
+
+def _bind(prim, mat):
+    UsdShade.MaterialBindingAPI.Apply(prim.GetPrim())
+    UsdShade.MaterialBindingAPI(prim.GetPrim()).Bind(mat)
 
 
 def _tablet_cx(h=TAB_H, t=TAB_T, tilt=TAB_TILT):
@@ -174,20 +201,29 @@ def build(out, top_rear, collide, tiers=TIERS, tablet=True):
          -hw, hw, BASE_Z1, TOP_Z)
     n += 1
 
-    # 태블릿 — 상단 레일에 매달린 HMI 패널
+    # 태블릿 — 상단 레일에 매달린 HMI 패널 (갤럭시 탭 S9 11인치 치수)
     if tablet:
+        m_body = _material(stage, "/AmrShelf/Looks/TabBody", MAT_BODY)
+        m_scr = _material(stage, "/AmrShelf/Looks/TabScreen", MAT_SCREEN)
+        m_arm = _material(stage, "/AmrShelf/Looks/TabArm", MAT_ARM)
+
         cx = _tablet_cx()
-        _panel(stage, "/AmrShelf/tablet_body", cx, 0.0, TAB_Z,
-               TAB_W, TAB_H, TAB_T, TAB_TILT)
-        # 화면 — 본체보다 한 겹 앞, 테두리 8 mm 안쪽
         r = math.radians(TAB_TILT)
-        _panel(stage, "/AmrShelf/tablet_screen",
-               cx + math.cos(r) * TAB_T * 0.6, 0.0, TAB_Z + math.sin(r) * TAB_T * 0.6,
-               TAB_W - 0.016, TAB_H - 0.016, TAB_T * 0.2, TAB_TILT)
+        # 화면 법선 = 눕힌 판의 +x 방향. 화면을 본체보다 이만큼 앞으로 띄운다.
+        off = TAB_T / 2 + 0.0004
+        nx, nz = math.cos(r) * off, -math.sin(r) * off
+
+        body = _panel(stage, "/AmrShelf/tablet_body", cx, 0.0, TAB_Z,
+                      TAB_W, TAB_H, TAB_T, TAB_TILT)
+        _bind(body, m_body)
+        screen = _panel(stage, "/AmrShelf/tablet_screen", cx + nx, 0.0, TAB_Z + nz,
+                        TAB_W - 2 * TAB_BEZEL, TAB_H - 2 * TAB_BEZEL, 0.0008, TAB_TILT)
+        _bind(screen, m_scr)
         # 브래킷 — 상단 레일 밑면(TOP_Z-RAIL)에서 패널 윗변까지
-        _box(stage, "/AmrShelf/tablet_arm",
-             cx - ARM_T / 2, cx + ARM_T / 2, -ARM_T, ARM_T,
-             TAB_Z + TAB_H / 2 * math.cos(r), TOP_Z - RAIL)
+        arm = _box(stage, "/AmrShelf/tablet_arm",
+                   cx - ARM_T / 2, cx + ARM_T / 2, -ARM_W / 2, ARM_W / 2,
+                   TAB_Z + TAB_H / 2 * math.cos(r), TOP_Z - RAIL)
+        _bind(arm, m_arm)
         n += 3
 
     if collide:
