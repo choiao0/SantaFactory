@@ -2,11 +2,17 @@
 # ============================================================
 # install.sh — 새 GPU 서버에서 이것 하나만 돌리면 된다.
 #
-#     git clone https://github.com/kimHySoo/Santa.git ~/khs/wh
-#     cd ~/khs/wh && bash install.sh
+#     git clone https://lab.ssafy.com/s15-mobility-smarthome-sub1/S15P21A106.git
+#     cd S15P21A106/2_Simulation/t3_amr && bash install.sh
+#
+#   이미 받아 뒀으면 최신화만 하고 다시 돌리면 된다 (재실행 안전):
+#     cd <저장소>/2_Simulation/t3_amr && git pull && bash install.sh
 #
 #     bash install.sh --check    설치하지 않고 조건만 본다
 #     bash install.sh --force    이미 있는 venv 를 지우고 다시 만든다
+#
+#   ★ 어디서 불러도 된다. `$W` 를 이 파일 위치에서 뽑으므로(44행) 저장소를
+#     어디에 두든, 어느 폴더에서 실행하든 t3_amr 을 기준으로 동작한다.
 #
 # 여러 번 돌려도 안전하다 (이미 된 단계는 건너뛴다).
 #
@@ -226,13 +232,24 @@ note "isaacsim 런처: $(command -v isaacsim || echo '★ 없음 — 설치가 �
 # 3) 로봇 에셋
 # ============================================================
 head_ "3) iw.hub 로봇 에셋 (236 MB)"
-if [ -f "$W/warehouse/robots/iwhub/iw_hub.usd" ]; then
+# ★ 받는 자리는 `paths.sh` 의 $ROBOT 하나다 — `$W/robots/iwhub/iw_hub.usd`.
+#
+#   [2026-09-13 수정] 여기가 이관 뒤에도 Santa 시절 경로를 보고 있었다.
+#     - 검사:  $W/warehouse/robots/iwhub/  ← `warehouse/` 가 한 겹 더 있다
+#     - 실행:  v2/server/fetch_iwhub.py    ← 옛 스크립트
+#   그쪽은 DEST 를 $ROBOT·$IWHUB_DEST 에서 역산하는데, install.sh 는 paths.sh 를
+#   source 하지 않아 그 변수가 없다. 그래서 엉뚱한 자리에 받거나 "다운로드는
+#   끝났는데 iw_hub.usd 가 없습니다" 로 빠졌다. 로봇이 없으면 씬 빌드가 안 되므로
+#   새 서버 설치가 **여기서 멈춘다.**
+#   정본은 `tools/fetch_iwhub.py` 다 — DEST 가 $ROBOT 부모로 고정돼 있다.
+ROBOT_USD="$W/robots/iwhub/iw_hub.usd"
+if [ -f "$ROBOT_USD" ]; then
     note "이미 있습니다."
 else
-    if python "$W/v2/server/fetch_iwhub.py"; then
-        [ -f "$W/warehouse/robots/iwhub/iw_hub.usd" ] \
-          && note "받았습니다." \
-          || bad "다운로드는 끝났는데 iw_hub.usd 가 없습니다 — fetch_iwhub.py 의 DEST 를 확인하세요."
+    if python "$W/tools/fetch_iwhub.py"; then
+        [ -f "$ROBOT_USD" ] \
+          && note "받았습니다: $ROBOT_USD" \
+          || bad "다운로드는 끝났는데 $ROBOT_USD 가 없습니다 — tools/fetch_iwhub.py 의 DEST 를 확인하세요."
     else
         bad "다운로드 실패. 망(S3)을 확인하세요. 로봇 없이는 씬 빌드가 안 됩니다."
     fi
@@ -244,9 +261,30 @@ fi
 head_ "3b) 결과 폴더"
 #   `run_record.sh` 는 `$LOGS/record_<태그>.log` 에 쓴다. 그 폴더가 없으면
 #   `script` 가 바로 실패한다. `$STAGE` 는 씬 빌드 출력이다.
-for d in out logs stage; do
+for d in out logs stage plan; do
     if [ -d "$W/$d" ]; then note "$d/  있음"
     else mkdir -p "$W/$d" && note "$d/  만들었습니다"; fi
+done
+
+# ============================================================
+# 3c) 입력 자산 — 이 셋이 없으면 설치가 끝나도 주행이 안 된다
+# ============================================================
+head_ "3c) 입력 자산 (paths.sh 의 \$SCENE · \$MAP · \$ROBOT)"
+#   paths.sh 끝에서도 없는 파일을 찍지만, 그때는 이미 주행을 시작한 뒤다.
+#   설치 단계에서 막는 게 싸다. 경로 정의는 paths.sh 가 단일 소스이므로
+#   여기서 다시 쓰지 않고 **그것을 읽어서** 확인한다 — 두 곳이 갈리지 않게.
+#   `#` 부터는 주석이므로 먼저 떼고 공백을 다듬는다. (`\(.*\)#*.*` 는 탐욕
+#   매칭이라 주석이 값에 딸려 온다 — 2026-09-13 실측으로 걸렀다.)
+_pv() { sed -n "s/^export $1=//p" "$W/paths.sh" | head -1 | sed 's/#.*//' | xargs; }
+_SCENE="$(_pv SCENE)"
+_MAP="$(_pv MAP)"
+SIM="$(cd "$W/.." && pwd)"
+for spec in "SCENE:$_SCENE" "MAP:$_MAP/occupancy_grid.npy" "ROBOT:$ROBOT_USD"; do
+    nm="${spec%%:*}"; p="${spec#*:}"
+    # paths.sh 의 $W·$SIM 을 실제 값으로 편다
+    p="${p//\$W/$W}"; p="${p//\$SIM/$SIM}"
+    if [ -e "$p" ]; then note "$nm  있음"
+    else bad "$nm  없음: $p"; fi
 done
 
 # ============================================================
@@ -310,14 +348,14 @@ if [ "$IMPORT_RC" != 0 ] || [ "$fail" != 0 ]; then
     echo "   패키지를 다시 깔려면:  bash install.sh --force"
     exit 1
 fi
-cat <<'EOF'
+cat <<EOF
 ════════════════════════════════════════════════════════════
  설치 완료
 ════════════════════════════════════════════════════════════
 
  매번 쓸 것:
-   cd ~/khs/wh
-   source ~/khs/venv/bin/activate
+   cd $W
+   source $VE/bin/activate
    source paths.sh
 
  ── 먼저 이것부터 — 물리가 옛 서버와 같은지 확인한다 ──────
@@ -330,12 +368,21 @@ cat <<'EOF'
      probe 지문   0.07323
      체크포인트   5,4 / 10,8 / 19,17
 
-   다르면 자산이나 코어가 갈린 것입니다. `pibt_core 출처` 줄과
-   `warehouse/` 의 씬·맵을 옛 서버와 비교하세요
+   다르면 자산이나 코어가 갈린 것입니다. \`pibt_core 출처\` 줄과
+   \`warehouse/\` 의 씬·맵을 옛 서버와 비교하세요
    (옛 서버에서 freeze_env.sh 를 돌려두면 체크섬으로 대조됩니다).
 
  ── 그 다음 ──────────────────────────────────────────────
 
    bash run_record.sh          녹화 + mp4 (약 29분, 10배속 73초 영상)
    python amr/main.py list     계획기 목록
+
+ ── 업무 종료 후 전원 충전존 복귀 (시연용) ────────────────
+
+   PIBT_HORIZON=550 PIBT_ORDER_END=315 PIBT_ORDER_GAP=40 \\
+     REPLAN=1 bash run_record.sh
+
+   시작 30초 안에 이 두 줄이 나와야 합니다 — 안 나오면 바로 끊으세요:
+     [pibt] ... 주문간격 40틱 · 업무종료 315틱
+     [pibt] 계획 종료 시 충전존 주차 12/12대
 EOF
