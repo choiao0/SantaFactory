@@ -13,6 +13,10 @@ import { useEstimateStream } from '../hooks/useEstimateStream.js'
 import { createEstimate, createWarehouse, getRobots } from '../api/estimates.js'
 
 const DEFAULT_FORM = {
+  // 화면에서는 받지 않는다 — 시뮬 엔진이 아직 이 값을 쓰지 않는다
+  // (FMS API 계약 문서: worker_count = 피커 작업 시간 모델, "로드맵 확정, 미구현").
+  // 다만 창고 생성 API 가 여전히 필수(@NotNull)라 보내긴 해야 해서 기본값으로 남긴다.
+  // 엔진이 실제로 반영하기 시작하면 입력 항목을 되살려야 한다.
   workerCount: 4,
   inboundStart: '01:00',
   inboundEnd: '09:00',
