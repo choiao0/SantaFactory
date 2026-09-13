@@ -71,8 +71,33 @@ done
 # ── 공인 IP ────────────────────────────────────────────────
 #   paths.sh 보다 **먼저** export 해야 한다. 이제 paths.sh 가
 #   `${LAN_IP:-...}` 라 미리 준 값을 존중한다 (2026-09-13 수정).
+#
+# ★★ `ifconfig.me` 는 **나가는(egress)** 주소다. 들어오는(ingress) 주소와
+#    다를 수 있고, Brev 가 정확히 그렇다 (2026-09-13 실측):
+#
+#      ifconfig.me   204.52.24.13                         <- inbound 는 전부 막힘
+#      실제 입구     global.prd.ga.run.brev.nvidia.com    <- 여기로만 들어온다
+#                    (75.2.122.140 · 99.83.144.240, AWS Global Accelerator 애니캐스트)
+#
+#    확인 방법: 서버에서 UDP 를 받아 두고 밖에서 쏴 봤다. 게이트웨이 주소로
+#    보낸 것만 도착했고(출발지가 100.73.81.42 로 바뀌어 찍힌다), 204.52.24.13
+#    으로 보낸 것은 안 왔다. TCP 도 같다 — ssh 포트조차 그 IP 로는 안 열린다.
+#
+#    `publicIp` 는 **미디어를 받을 주소**를 알리는 값이라 ingress 여야 한다.
+#    여기가 틀리면 시그널링은 붙고 화면만 안 온다.
+if [ -z "${PUBLIC_IP:-}" ] && case "$(hostname)" in brev-*) true ;; *) false ;; esac; then
+    BREV_GW="${BREV_GW:-global.prd.ga.run.brev.nvidia.com}"
+    PUBLIC_IP="$(getent hosts "$BREV_GW" 2>/dev/null | awk '{print $1; exit}')"
+    [ -n "$PUBLIC_IP" ] && echo "[webrtc] Brev 감지 — 입구 $BREV_GW -> $PUBLIC_IP"
+fi
 if [ -z "${PUBLIC_IP:-}" ]; then
     PUBLIC_IP="$(curl -s -m 10 ifconfig.me || true)"
+    [ -n "$PUBLIC_IP" ] && {
+        echo "[webrtc] ★ ifconfig.me 로 잡았습니다: $PUBLIC_IP"
+        echo "[webrtc]   이건 **나가는** 주소입니다. 게이트웨이 뒤라면 틀립니다."
+        echo "[webrtc]   화면이 안 오면 콘솔의 Endpoint 주소를 직접 주세요:"
+        echo "[webrtc]     PUBLIC_IP=<입구IP> bash run_webrtc.sh ..."
+    }
 fi
 if [ -z "$PUBLIC_IP" ]; then
     echo "★ 공인 IP 를 못 얻었습니다. 직접 주세요:  PUBLIC_IP=x.x.x.x bash run_webrtc.sh"
