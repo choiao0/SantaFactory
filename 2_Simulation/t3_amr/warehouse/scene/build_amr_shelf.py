@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""iw.hub 위에 얹는 2단 적재 선반 USD 를 만든다 (S15P21A106-196).
+"""iw.hub 위에 얹는 3단 적재 선반 USD 를 만든다 (S15P21A106-196).
 
     cd ~/isaacsim && ./python.sh $W/warehouse/scene/build_amr_shelf.py
     ./python.sh .../build_amr_shelf.py --top-rear 0.850     상부를 깎을 때
@@ -47,11 +47,40 @@ BASE_REAR = 1.110        # 구동축 -> 베이스 뒷면 (차체 1.030 + 80 mm)
 FRONT = 0.390            # 구동축 -> 앞면. ★ pitch 하한이 여기서 나온다
 WIDTH = 0.800            # 전폭
 BASE_Z0, BASE_Z1 = 0.220, 0.250      # 베이스 플레이트 (AMR 상면 위 30 mm)
-DECK_Z0, DECK_Z1 = 0.920, 0.950      # 중단 데크
-TOP_Z = 1.650                        # 총 높이
+TOP_Z = 1.650                        # 총 높이 ★ 단 수를 바꿔도 이 값은 유지한다
 POST = 0.040                         # 포스트 단면 40 x 40
 RAIL = 0.040                         # 상단 레일
 BACKSTOP = 0.020                     # 후면 낙하방지판 두께
+
+# --- 적재 단 ---------------------------------------------------------------
+# ★ 3단이 **시스템이 이미 전제하는 값**이다 (2026-09-13 정정).
+#   `3_FMS/sim_engine/kernel/core.py:37`
+#       MAX_TOTES_PER_TRIP = 6   # 선반형 AMR 3단 x 2 토트 (-177)
+#   토트 적재량 6이 "3단 x 2토트" 에서 나오는데 에셋만 2단이라 어긋나 있었다.
+#   단 수를 바꿔도 **총높이 1,650 mm 는 유지**한다 — 랙 데크(밑면 1,005 mm)
+#   간섭 판정과 pitch 하한이 전부 그 값을 기준으로 잡혀 있다.
+TIERS = 3                            # 적재 단 수 (베이스 포함)
+DECK_T = 0.030                       # 데크 두께. 베이스 플레이트와 같다
+
+
+def deck_levels(tiers, z0=BASE_Z1, z1=TOP_Z, th=DECK_T):
+    """베이스 윗면과 상단 사이에 (tiers-1)개의 데크를 **균등**하게 놓는다.
+
+    반환 [(z0, z1), ...] — 바닥 기준. 각 단의 유효 높이가 모두 같아진다.
+    3단: 유효 높이 446.7 mm x 3, 데크 2장.
+    """
+    n = tiers - 1
+    if n < 0:
+        raise ValueError(f"tiers 는 1 이상: {tiers}")
+    clear = (z1 - z0 - n * th) / tiers
+    if clear <= 0:
+        raise SystemExit(f"★ {tiers}단은 총높이 {z1*1000:.0f} mm 에 안 들어갑니다.")
+    out, z = [], z0
+    for _ in range(n):
+        z += clear
+        out.append((z, z + th))
+        z += th
+    return out
 
 
 def _box(stage, path, x0, x1, y0, y1, z0, z1):
@@ -65,7 +94,7 @@ def _box(stage, path, x0, x1, y0, y1, z0, z1):
     return c
 
 
-def build(out, top_rear, collide):
+def build(out, top_rear, collide, tiers=TIERS):
     stage = Usd.Stage.CreateNew(out)
     UsdGeom.SetStageUpAxis(stage, UsdGeom.Tokens.z)
     UsdGeom.SetStageMetersPerUnit(stage, 1.0)
@@ -79,9 +108,11 @@ def build(out, top_rear, collide):
     _box(stage, "/AmrShelf/base", -BASE_REAR, FRONT, -hw, hw, BASE_Z0, BASE_Z1)
     n += 1
 
-    # 중단 데크 — 상부 풋프린트
-    _box(stage, "/AmrShelf/deck", -top_rear, FRONT, -hw, hw, DECK_Z0, DECK_Z1)
-    n += 1
+    # 중단 데크 — 상부 풋프린트. tiers-1 장
+    decks = deck_levels(tiers)
+    for i, (z0, z1) in enumerate(decks):
+        _box(stage, f"/AmrShelf/deck_{i}", -top_rear, FRONT, -hw, hw, z0, z1)
+        n += 1
 
     # 포스트 4개 — 상부 외형에서 20 mm 안쪽
     inset = 0.020
@@ -115,7 +146,7 @@ def build(out, top_rear, collide):
         n += 1
 
     stage.GetRootLayer().Save()
-    return n
+    return n, decks
 
 
 def main():
@@ -130,6 +161,10 @@ def main():
     ap.add_argument("--top-rear", type=float, default=BASE_REAR,
                     help="상부 뒤 돌출 [m] (구동축 기준). 기본 1.110 = 안 깎음. "
                          "랙 데크를 피하려면 줄인다 (문서 제안 0.850)")
+    ap.add_argument("--tiers", type=int, default=TIERS,
+                    help="적재 단 수 (베이스 포함). 기본 3 — FMS 의 "
+                         "MAX_TOTES_PER_TRIP=6 이 '3단 x 2토트' 에서 나온다. "
+                         "★ 총높이 1,650 mm 는 단 수와 무관하게 유지된다")
     ap.add_argument("--collide", action="store_true",
                     help="상부에 단일 박스 콜라이더를 붙인다. 기본은 **비주얼 전용** — "
                          "물리를 그대로 둬야 주행 지문(ms/step·체크포인트)이 유지된다")
@@ -141,12 +176,19 @@ def main():
     os.makedirs(os.path.dirname(a.out), exist_ok=True)
     if os.path.exists(a.out):
         os.remove(a.out)                              # CreateNew 는 덮어쓰지 않는다
-    n = build(a.out, a.top_rear, a.collide)
+    n, decks = build(a.out, a.top_rear, a.collide, a.tiers)
 
     print(f"[shelf] {a.out}")
     print(f"[shelf] 부재 {n}개 · 베이스 {(BASE_REAR + FRONT) * 1000:.0f} x "
           f"{WIDTH * 1000:.0f} mm · 상부 {(a.top_rear + FRONT) * 1000:.0f} mm · "
           f"총높이 {TOP_Z * 1000:.0f} mm")
+    # 단 구성을 찍는다 — 눈으로 확인할 유일한 값이다
+    tops = [BASE_Z1] + [d[1] for d in decks]
+    bots = [d[0] for d in decks] + [TOP_Z]
+    print(f"[shelf] {a.tiers}단 · 데크 {len(decks)}장")
+    for i, (t, b) in enumerate(zip(tops, bots), 1):
+        print(f"[shelf]   {i}단  바닥 {t*1000:7.1f} → 천장 {b*1000:7.1f} mm"
+              f"   유효높이 {(b-t)*1000:.1f} mm")
     print(f"[shelf] 콜라이더 {'있음 (물리 포함)' if a.collide else '없음 (비주얼 전용)'}")
     if a.top_rear >= BASE_REAR:
         print("[shelf] ★ 상부를 안 깎았습니다. 랙 데크(밑면 1,005 mm) 밑을 지나는")
