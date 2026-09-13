@@ -332,6 +332,64 @@ class RobotGeom:
         h = 0.5 * self.pitch
         return (cx - h, cy - h, cx + h, cy + h)
 
+    def footprint_corners(self, x: float, y: float,
+                          yaw: float) -> tuple[tuple[float, float], ...]:
+        """차체 직사각형의 꼭짓점 4개 (전방 좌 · 전방 우 · 후방 우 · 후방 좌).
+
+        `footprint_cells` 와 `body_gap` 이 **같은 수식**을 쓰게 하려고 뺐다.
+        두 벌로 두면 치수를 바꿀 때 한쪽만 고쳐 조용히 갈린다.
+        """
+        cs, sn = math.cos(yaw), math.sin(yaw)
+        f, b, hw = self.front_len, self.rear_len, 0.5 * self.width
+        return ((x + cs * f - sn * hw, y + sn * f + cs * hw),
+                (x + cs * f + sn * hw, y + sn * f - cs * hw),
+                (x - cs * b + sn * hw, y - sn * b - cs * hw),
+                (x - cs * b - sn * hw, y - sn * b + cs * hw))
+
+    @staticmethod
+    def _seg_gap(a, b, c, d) -> float:
+        """선분 ab 와 cd 의 최소 거리."""
+        def pt_seg(p, q, r):                    # 점 p 와 선분 qr
+            vx, vy = r[0] - q[0], r[1] - q[1]
+            L2 = vx * vx + vy * vy
+            t = 0.0 if L2 <= 1e-18 else ((p[0] - q[0]) * vx + (p[1] - q[1]) * vy) / L2
+            t = 0.0 if t < 0.0 else (1.0 if t > 1.0 else t)
+            return math.hypot(p[0] - (q[0] + t * vx), p[1] - (q[1] + t * vy))
+        return min(pt_seg(a, c, d), pt_seg(b, c, d),
+                   pt_seg(c, a, b), pt_seg(d, a, b))
+
+    def body_gap(self, pa, pb) -> float:
+        """두 차체 사이 최소 거리 [m]. 겹치면 0.0.
+
+        ★ **겹침이 터졌을 때만** 부른다. 주행 루프에서 부르면 안 된다.
+
+        [왜 필요한가] `_check` 의 칸 공유(경보)와 **실제 접촉은 다르다.**
+        pitch 1.2 · 폭 0.8 에서 옆 칸 회전이면, 이상적 자세 기준으로
+
+            경보가 울리는 오차   41.3 mm   (앞 모서리 R=0.5587 vs 반칸 0.600)
+            실제로 닿는 오차    241.3 mm   (차체끼리의 간격)
+
+        즉 **5.8배** 차이다. 로그에 칸 개수만 남기면 "감시선이 보수적으로 운
+        것" 과 "진짜 접촉" 을 구별할 수 없다 (2026-09-13 실측 쌍 7-8).
+        """
+        A = self.footprint_corners(*pa)
+        B = self.footprint_corners(*pb)
+
+        def sep(P, Q):                          # P 의 변 법선으로 분리되나 (SAT)
+            for i in range(4):
+                ex = P[(i + 1) % 4][0] - P[i][0]
+                ey = P[(i + 1) % 4][1] - P[i][1]
+                ux, uy = -ey, ex
+                pv = [p[0] * ux + p[1] * uy for p in P]
+                qv = [q[0] * ux + q[1] * uy for q in Q]
+                if max(pv) < min(qv) - 1e-12 or max(qv) < min(pv) - 1e-12:
+                    return True
+            return False
+        if not (sep(A, B) or sep(B, A)):
+            return 0.0                          # 겹친다
+        return min(self._seg_gap(A[i], A[(i + 1) % 4], B[j], B[(j + 1) % 4])
+                   for i in range(4) for j in range(4))
+
     def footprint_cells(self, x: float, y: float, yaw: float) -> frozenset[Cell]:
         """차체가 실제로 덮는 칸 집합. 점 샘플링이 아니라 분리축 정리(SAT).
 
@@ -339,12 +397,7 @@ class RobotGeom:
         직사각형은 고유 분리축이 2개뿐(전방·좌측)이라 world 축까지 4개면 된다.
         """
         cs, sn = math.cos(yaw), math.sin(yaw)
-        f, b, hw = self.front_len, self.rear_len, 0.5 * self.width
-        # 꼭짓점 (전방 fx,fy / 좌측 -sn,cs)
-        p0 = (x + cs * f - sn * hw, y + sn * f + cs * hw)
-        p1 = (x + cs * f + sn * hw, y + sn * f - cs * hw)
-        p2 = (x - cs * b + sn * hw, y - sn * b - cs * hw)
-        p3 = (x - cs * b - sn * hw, y - sn * b + cs * hw)
+        p0, p1, p2, p3 = self.footprint_corners(x, y, yaw)
         poly = (p0, p1, p2, p3)
 
         minx = min(p0[0], p1[0], p2[0], p3[0])
@@ -1139,6 +1192,7 @@ class FleetController:
         self.rt.advance(dt)
         moved = False
         occ: dict[int, frozenset[Cell]] = {}
+        poses: dict[int, tuple[float, float, float]] = {}
 
         for a in self.agents:
             drv = self.drivers[a]
@@ -1146,6 +1200,7 @@ class FleetController:
             self._watch_open_loop(a, pose, dt)
             body = self.g.footprint_cells(*pose)         # 스텝당 로봇당 딱 한 번
             occ[a] = body
+            poses[a] = pose
             act = self.running[a]
 
             if act is not None:
@@ -1191,7 +1246,7 @@ class FleetController:
         if not moved:
             self.stats.stall_steps += 1
         if self.safety_check:
-            self._check(occ)
+            self._check(occ, poses)
 
     def _watch_open_loop(self, a: int, pose: tuple[float, float, float],
                          dt: float, hold: float = 1.0) -> None:
@@ -1231,11 +1286,18 @@ class FleetController:
                 f"{math.degrees(pose[2]):.0f}deg). 제어 루프가 끊겼다 — "
                 f"articulation root prim 과 물리 콜백에서의 pose 읽기를 확인하라.")
 
-    def _check(self, occ: dict[int, frozenset[Cell]]) -> None:
+    def _check(self, occ: dict[int, frozenset[Cell]],
+               poses: dict[int, tuple[float, float, float]] | None = None) -> None:
         """실제 차체 점유가 겹치는지 매 스텝 검사.
 
         ADG가 맞다면 절대 발동하지 않는다. 발동하면 브리지 버그이고, 물리
         시뮬에서 눈으로 찾는 것보다 여기서 잡는 게 훨씬 싸다.
+
+        ★ **칸 공유는 접촉이 아니다.** 이 검사는 일부러 보수적인 감시선이라
+          차체가 닿기 한참 전에 운다. 그래서 첫 건에 한해 자세와 **차체 사이
+          최소 거리**를 같이 남긴다 — 그 숫자가 있어야 "감시선이 보수적으로
+          운 것" 과 "진짜 접촉" 을 구별할 수 있다. 없으면 30분짜리 재현을
+          다시 돌려야 한다 (2026-09-13, 쌍 7-8 에서 실제로 그랬다).
         """
         ags = self.agents
         for i, a in enumerate(ags):
@@ -1246,6 +1308,25 @@ class FleetController:
                     self.stats.overlap_events += 1
                     self.stats.overlap_pairs.add((a, b))
                     self.stats.worst_overlap = max(self.stats.worst_overlap, len(shared))
+                    # 첫 건만. 물리 60 Hz 라 매번 찍으면 로그가 수천 줄이 된다.
+                    if self.stats.overlap_events == 1 and poses:
+                        self._report_overlap(a, b, shared, poses)
+
+    def _report_overlap(self, a, b, shared, poses) -> None:
+        """겹침 첫 건의 자세·거리. 이 숫자로 접촉 여부가 판정된다."""
+        try:
+            pa, pb = poses[a], poses[b]
+            gap = self.g.body_gap(pa, pb)
+            say = getattr(self, "_say", print)
+            say(f"★ 겹침 상세  쌍 ({a},{b})  공유칸 {sorted(shared)}")
+            for who, p in ((a, pa), (b, pb)):
+                say(f"   agent{who} pose ({p[0]:.3f}, {p[1]:.3f}, "
+                    f"{math.degrees(p[2]):.1f}도)")
+            say(f"   차체 최소거리 {gap:.3f} m   "
+                + ("★ 실제 접촉 — 물리적으로 닿았다"
+                   if gap <= 0.0 else "접촉 아님 — 칸만 공유했다 (감시선이 보수적)"))
+        except Exception as e:                     # 진단이 주행을 죽이면 안 된다
+            print(f"[adg] 겹침 상세 실패(주행은 계속): {e!r}")
 
     def diagnose(self) -> str:
         """정지했을 때 왜 멈췄는지."""
