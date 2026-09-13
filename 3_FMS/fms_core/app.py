@@ -18,6 +18,7 @@ from typing import Optional
 
 from .conductor import ERROR, IDLE, RUNNING, Conductor, ConductorConfig
 from .edge import TICK_S, Edge
+from .kernel_planner import des_dt
 from .spb import EdgeSession
 
 log = logging.getLogger("fms_core")
@@ -75,7 +76,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--planner", default="kernel", help="주행 로직 (fms_core.planner.PLANNERS)")
     p.add_argument("--planner-opt", action="append", metavar="KEY=VALUE",
                    help="플래너 옵션 (kernel: aisle_block · theta_path · lanes · yield_rule · fixed_homes · horizon_ticks …)")
-    p.add_argument("--tick-s", type=float, default=1.0, help="틱 최소 길이 [s] (= DES DT)")
+    p.add_argument("--tick-s", type=float, default=None,
+                   help="틱 최소 길이(벽시계) [s]. 기본 = DES 틱 길이 CELL_M / speed (speed 는 --planner-opt speed=, 없으면 0.9 → 1.11 s)")
     p.add_argument("--ack-timeout-s", type=float, default=30.0, help="노드 하나 도착 상한 [s]")
     p.add_argument("--ready-timeout-s", type=float, default=420.0, help="Start 뒤 전원 ONLINE+포즈 상한 [s]")
     p.add_argument("--heartbeat-s", type=float, default=5.0)
@@ -98,7 +100,9 @@ def build(args: argparse.Namespace) -> tuple:
     if not password:
         raise SystemExit("MQTT_PW_FMS_CORE must be set (env or --env-file)")
     session = EdgeSession(os.path.join(args.state_dir, "bdseq"))
-    cfg = ConductorConfig(args.group, args.node_id, args.planner, parse_options(args.planner_opt), args.tick_s,
+    opts = parse_options(args.planner_opt)
+    tick_s = des_dt(opts) if args.tick_s is None else args.tick_s      # 벽시계 틱 = DES 틱 (-116)
+    cfg = ConductorConfig(args.group, args.node_id, args.planner, opts, tick_s,
                           args.ack_timeout_s, args.ready_timeout_s, args.heartbeat_s, args.host_offline_s)
     conductor = Conductor(cfg, session, None)
     edge = Edge(args.node_id, password, session, conductor)
