@@ -56,6 +56,12 @@ export MODS=$W/path
 #   예전에는 무조건 덮어써서 셸에서 공인 IP 를 줘도 소용이 없었다.
 #       LAN_IP=$(curl -s ifconfig.me) bash run.sh ...
 export LAN_IP=${LAN_IP:-$(hostname -I | awk '{print $1}')}
+# ★ 포트를 바꿔서 내보내는 클라우드용 (2026-09-13 Brev). 기본은 Isaac 기본값이라
+#   사내망은 달라지는 것이 없다. 자세한 이유는 `amr/path/_common.py` 의 주석.
+#   Brev 는 공개 포트를 제가 정하고 **Destination Port 만 편집**을 받아 준다.
+#   그러니 공개 포트에 맞춰 Destination 을 고치고, 여기에 같은 번호를 준다.
+export SIGNAL_PORT=${SIGNAL_PORT:-49100}   # TCP 시그널링
+export STREAM_PORT=${STREAM_PORT:-47998}   # UDP 미디어
 # ★ 이 서버에 **실제로 있는** 장치 중 가장 한가한 것을 고른다 (2026-09-13).
 #
 #   예전에는 `${GPU:-3}` 하드코딩이었고, 서버가 바뀌면 `install.sh` 4단계가
@@ -94,7 +100,8 @@ echo "  입력  SCENE=$(basename $SCENE)  MAP=$(basename $MAP)  ROBOT=$(basename
 echo "  파생  STAGE=$STAGE"
 echo "  계획  PLAN=$PLAN"
 echo "  결과  OUT=$OUT  LOGS=$LOGS"
-echo "  LAN=$LAN_IP  GPU=$GPU  CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-<격리 해제>}"
+echo "  LAN=$LAN_IP  시그널 =$SIGNAL_PORT/TCP  미디어 =$STREAM_PORT/UDP"
+echo "  GPU=$GPU  CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-<격리 해제>}"
 for f in "$SCENE" "$ROBOT" "$MAP/occupancy_grid.npy"; do
     [ -e "$f" ] || echo "  ★ 없음: $f"
 done

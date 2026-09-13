@@ -26,6 +26,18 @@
 #      ★ SSH 터널로는 안 된다. 미디어가 UDP 라 `ssh -L` 이 못 나른다.
 #        Brev/클라우드 콘솔에서 인바운드를 열어야 한다.
 #
+#      ★★ 여는 것만으로는 부족하다 — **번호가 그대로여야** 한다 (2026-09-13).
+#         Brev 는 공개 포트를 제가 정한다: 49100 을 요청해도 밖에서는 57980,
+#         47998 은 11237 로 뚫린다. WebRTC 는 포트 번호를 SDP/ICE 후보에
+#         실어 보내므로, 서버가 "47998 로 보내라" 고 알리면 클라이언트는
+#         닫힌 47998 로 쏜다. 화면이 안 나오는 이유가 이것이다.
+#         Brev 는 **Destination Port 를 편집**할 수 있으니 공개 포트와 같게
+#         맞춘 뒤, 여기에도 같은 번호를 준다:
+#
+#           bash run_webrtc.sh --signal-port 57980 --stream-port 11237
+#
+#         그러면 클라이언트 Server 는 `204.52.24.13:57980` 이 된다.
+#
 # 그리고 `NVST_R_BUSY` — 스트리밍 앱이 둘이면 NVENC 를 두고 싸워 검은 화면이
 # 된다. 기동 전에 정리하고 **한 자리 수까지 떨어지는지** 확인한다 (한 번의
 # pkill 을 믿지 말 것 — 692 MiB 로 남아 있던 적이 있다).
@@ -50,6 +62,8 @@ while [ $# -gt 0 ]; do
         --top-rear) TOP_REAR="$2"; shift 2 ;;
         --no-shelf) SHELF=0; shift ;;
         --skip-build) SKIP_BUILD=1; shift ;;
+        --signal-port) export SIGNAL_PORT="$2"; shift 2 ;;
+        --stream-port) export STREAM_PORT="$2"; shift 2 ;;
         *) PASS+=("$1"); shift ;;
     esac
 done
@@ -76,9 +90,16 @@ echo "  선반        $([ "$SHELF" = 1 ] && echo "ON${TOP_REAR:+ (상부 뒤 $TO
 echo "  씬 빌드     $([ "$SKIP_BUILD" = 1 ] && echo 건너뜀 || echo 실행)"
 echo "════════════════════════════════════════════════════"
 echo
-echo "  ★ 콘솔에서 인바운드가 열려 있어야 합니다:"
-echo "      49100/TCP   시그널링"
-echo "      47998/UDP   미디어   <- UDP 여야 합니다. TCP 로 열면 영상만 안 옵니다"
+echo "  ★ 콘솔에서 인바운드가 열려 있어야 하고, **공개 포트 번호가 아래와 같아야** 합니다:"
+echo "      $SIGNAL_PORT/TCP   시그널링"
+echo "      $STREAM_PORT/UDP   미디어   <- UDP 여야 합니다. TCP 로 열면 영상만 안 옵니다"
+echo
+echo "    공개 포트가 다르면(Brev 는 제가 정합니다) Destination Port 를 공개 포트와"
+echo "    같게 고친 뒤 --signal-port / --stream-port 로 같은 번호를 주세요."
+echo "    번호가 하나라도 어긋나면 '연결됨' 인데 화면만 검게 나옵니다."
+echo
+echo "  접속:  Isaac Sim WebRTC Streaming Client 의 Server 에"
+echo "         $PUBLIC_IP:$SIGNAL_PORT"
 echo
 
 # ── 남은 Kit 정리 (NVST_R_BUSY 예방) ───────────────────────
@@ -146,7 +167,7 @@ fi
 # ── 스트리밍 ───────────────────────────────────────────────
 echo
 echo "── 스트리밍 ────────────────────────────────────────"
-echo "  Isaac Sim WebRTC Streaming Client 에서 Server = $PUBLIC_IP"
+echo "  Isaac Sim WebRTC Streaming Client 에서 Server = $PUBLIC_IP:$SIGNAL_PORT"
 echo "  (첫 실행은 셰이더 컴파일로 수 분 걸립니다 — 정상입니다)"
 echo
 exec bash "$W/run.sh" --planner pibt_h "${PASS[@]}"
