@@ -559,12 +559,34 @@ def _rec_setup(drivers, arts):
                "flush": flush, "flush_next": flush if flush > 0 else float("inf"),
                "nflush": 0}
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        # ★ 실제로 한 번 써 본다 (2026-09-13). 위 `makedirs(exist_ok=True)` 는
+        #   **폴더가 있기만 하면 통과**한다 — 쓰기 권한을 안 본다. 그래서 못 쓰는
+        #   경로를 줘도 여기서는 `자세 기록 ON` 이 찍히고, 첫 주기저장(기본 60초)
+        #   에서야 PermissionError 가 난다. 주행은 멀쩡히 계속되므로 **기록만
+        #   조용히 빠진 채 20분이 흐른다.**
+        #
+        #   실제로 당했다 (jupyter04): `source paths.sh` 없이
+        #   `PIBT_RECORD=$OUT/...` 를 주면 부모 셸에서 `$OUT` 이 비어
+        #   `/rec_pibt12.npz` 가 된다. 루트에 쓸 수 있을 리 없다.
+        probe = path + ".probe"
+        try:
+            with open(probe, "wb"):
+                pass
+        finally:
+            try:
+                os.remove(probe)
+            except OSError:
+                pass
         carb.log_warn(f"[pibt] 자세 기록 ON: {path}  {hz:g} Hz · "
                       f"로봇 {len(keys)}대 · 주기저장 "
                       f"{('%g초' % flush) if flush > 0 else '없음'}")
         return rec
     except Exception as e:
-        carb.log_error(f"[pibt] 자세 기록 준비 실패 — 기록 없이 진행합니다: {e!r}")
+        carb.log_error(f"[pibt] ★ 자세 기록 준비 실패 — 기록 없이 진행합니다: {e!r}")
+        carb.log_error(f"[pibt]   경로: {os.environ.get('PIBT_RECORD', '')!r}")
+        if isinstance(e, PermissionError):
+            carb.log_error("[pibt]   못 쓰는 경로입니다. `$OUT` 이 비어서 / 로 간 것이")
+            carb.log_error("[pibt]   흔합니다 — `source paths.sh` 를 먼저 하거나 절대경로를 주세요.")
         return None
 
 
