@@ -19,6 +19,8 @@ import com.ssafy.santafactory.repository.EstimateRepository;
 import com.ssafy.santafactory.repository.SimScenarioRepository;
 import com.ssafy.santafactory.repository.WarehouseRepository;
 import com.ssafy.santafactory.service.SimulationService;
+import com.ssafy.santafactory.service.estimate.ordergen.OutboundOrderGenerator;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -40,6 +42,8 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.within;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -64,18 +68,31 @@ class EstimateServiceTest {
 
     @Mock
     ApplicationEventPublisher eventPublisher;
+    @Mock
+    OutboundOrderGenerator outboundOrderGenerator;
 
     private final CostCalculator costCalculator = new CostCalculator(PROPS);
+    private final ObjectMapper objectMapper = new ObjectMapper();
     private EstimateService service;
 
-    private EstimateService service() {
-        if (service == null) {
-            service = new EstimateService(estimateRepository, scenarioRepository, warehouseRepository,
-                    simulationService, costCalculator, new EstimateEvaluator(), PROPS,
-                    new OwnershipGuard(), eventPublisher);
-        }
-        return service;
+ private EstimateService service() {
+    if (service == null) {
+        service = new EstimateService(
+                estimateRepository,
+                scenarioRepository,
+                warehouseRepository,
+                simulationService,
+                costCalculator,
+                new EstimateEvaluator(),
+                PROPS,
+                new OwnershipGuard(),
+                eventPublisher,
+                outboundOrderGenerator,
+                objectMapper
+        );
     }
+    return service;
+}
 
     // ── 생성 ─────────────────────────────────────────────────────────────────
 
@@ -98,6 +115,32 @@ class EstimateServiceTest {
         verify(simulationService).publishRuns(base.capture(), counts.capture());
         assertThat(counts.getValue()).containsExactlyElementsOf(IntStream.rangeClosed(1, 20).boxed().toList());
         assertThat(base.getValue().runId()).isEqualTo("est_77");
+    }
+
+    @Test
+    void generates_and_persists_the_same_outbound_orders_used_by_the_sweep() throws Exception {
+        givenWarehouse(1L);
+        givenSavedEstimateId(77L);
+        List<SimulationRequest.Outbound> orders = List.of(
+                new SimulationRequest.Outbound(1L, 120L, List.of(new SimulationRequest.Line(5L, "A1", 2))));
+        when(outboundOrderGenerator.generate(any(), anyLong(), anyInt(), anyLong())).thenReturn(orders);
+        when(simulationService.publishRuns(any(), any())).thenReturn(List.of("est_77_n1"));
+
+        service().create(new EstimateCreateRequest(1L, null, null, null, null, null, null));
+
+        // 대수별로 다시 생성하지 않고, 스윕 전체가 같은 리스트를 그대로 싣는다
+        ArgumentCaptor<SimulationRequest> base = ArgumentCaptor.captor();
+        verify(simulationService).publishRuns(base.capture(), any());
+        assertThat(base.getValue().outbound()).isEqualTo(orders);
+
+        // 그 리스트가 estimates.outbound_orders_json 에도 그대로 저장된다
+        ArgumentCaptor<Estimate> saved = ArgumentCaptor.captor();
+        verify(estimateRepository).save(saved.capture());
+        String json = saved.getValue().getOutboundOrdersJson();
+        assertThat(json).isNotNull();
+        List<SimulationRequest.Outbound> roundTripped = objectMapper.readValue(json,
+                objectMapper.getTypeFactory().constructCollectionType(List.class, SimulationRequest.Outbound.class));
+        assertThat(roundTripped).isEqualTo(orders);
     }
 
     @Test
@@ -466,6 +509,26 @@ class EstimateServiceTest {
         assertThat(request.getValue().sourceRunId()).isEqualTo(recommendedRun.getRunId());
         assertThat(request.getValue().estimateId()).isEqualTo(77L);
         assertThat(request.getValue().seed()).isEqualTo(101L);
+        assertThat(request.getValue().scenario()).isNull();   // outbound_orders_json 없는(1단계 이전) 견적 — 하위 호환
+    }
+
+    @Test
+    void ships_the_full_outbound_order_list_as_the_verify_scenario() throws Exception {
+        Estimate estimate = withId(estimate(85.0, 90.0, 1_000_000_000L), 77L);
+        estimate.complete(4, 6, null, false);
+        List<SimulationRequest.Outbound> orders = List.of(
+                new SimulationRequest.Outbound(1L, 120L, List.of(new SimulationRequest.Line(5L, "A1", 2))));
+        estimate.applyOutboundOrders(objectMapper.writeValueAsString(orders));
+        SimScenario recommendedRun = run(estimate, 4);
+        when(estimateRepository.findById(77L)).thenReturn(Optional.of(estimate));
+        when(scenarioRepository.findByEstimateIdAndAmrCount(77L, 4)).thenReturn(Optional.of(recommendedRun));
+
+        service().requestVerification(77L);
+
+        ArgumentCaptor<VerifyRequest> request = ArgumentCaptor.captor();
+        verify(simulationService).publishVerify(request.capture());
+        assertThat(request.getValue().scenario().seed()).isEqualTo(101L);
+        assertThat(request.getValue().scenario().orders().outbound()).isEqualTo(orders);
     }
 
     // ── TIMEOUT 스윕 ─────────────────────────────────────────────────────────
@@ -544,6 +607,7 @@ class EstimateServiceTest {
         lenient().when(warehouse.getInboundAvg()).thenReturn(600L);
         lenient().when(warehouse.getOutboundAvg()).thenReturn(800L);
         when(warehouseRepository.findById(warehouseId)).thenReturn(Optional.of(warehouse));
+        lenient().when(outboundOrderGenerator.generate(any(), anyLong(), anyInt(), anyLong())).thenReturn(List.of());
     }
 
     /** save() 가 PK 를 채워 돌려주는 것을 흉내낸다 — run_id 접두사가 견적 번호로 만들어진다. */
