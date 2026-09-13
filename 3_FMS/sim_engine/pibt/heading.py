@@ -2,35 +2,37 @@
 
 import numpy as np
 
-from .geometry import (DIRS, REVERSE_FACTOR, TURN_TICKS, _inb, occupied,
+from .geometry import (DIRS, REVERSE_FACTOR, TURN_TICKS, _inb, front_cells, occupied,
                        stay_map_h, swing_cells, turn_ok, valid_state)
 from .hgraph import dist_map_h
 from .liveness import Replanner, Stagnation, wait_bias
 
 
 def candidates_h(s, dist, edge_cost, wait_cost, free, turn_cost, bias=0.0):
-    """s에서 가능한 다음 상태 후보를 score 오름차순으로: [(상태, 점유칸 집합), ...].
+    """s에서 가능한 다음 상태 후보를 score 오름차순으로: [(상태, 점유칸 집합, soft 칸 집합), ...].
     score = 액션 비용 + dist[결과 상태]. 대기 후보에는 bias(대기 상승)가 더해진다.
-    대기 후보의 점유칸은 호출자가 extra(회전 중 스윙)까지 합쳐 덮어쓴다."""
+    대기 후보의 점유칸은 호출자가 extra(회전 중 스윙)까지 합쳐 덮어쓴다.
+    soft 칸(-203) = 회전 중 코가 스치는 앞 2칸: 다른 로봇의 **축**이 있거나 들어오면 못 돈다(뒤 칸은 무관)."""
     r, c, h = s
+    none = frozenset()
     scored = []
     if dist[r, c, h] >= 0:
-        scored.append((wait_cost[r, c] + bias + dist[r, c, h], 0, s, frozenset(occupied(s))))
+        scored.append((wait_cost[r, c] + bias + dist[r, c, h], 0, s, frozenset(occupied(s)), none))
     dr, dc = DIRS[h]
     rr, cc = r + dr, c + dc
     if _inb(free, (rr, cc)) and dist[rr, cc, h] >= 0:
         scored.append((edge_cost[r, c, h] + dist[rr, cc, h], 1, (rr, cc, h),
-                       frozenset(((rr, cc), (r, c)))))
+                       frozenset(((rr, cc), (r, c))), none))
     for i, h2 in enumerate(((h + 1) % 4, (h - 1) % 4)):
         if dist[r, c, h2] >= 0 and turn_ok(free, r, c, h, h2):
             scored.append((turn_cost + dist[r, c, h2], 2 + i, (r, c, h2),
-                           frozenset({(r, c)} | swing_cells(r, c, h, h2))))
+                           frozenset({(r, c)} | swing_cells(r, c, h, h2)), frozenset(front_cells(r, c, h, h2))))
     br, bc = r - dr, c - dc                            # 후진: pos→rear, rear→rear의 뒤
     if valid_state(free, (br, bc, h)) and dist[br, bc, h] >= 0:
         scored.append((edge_cost[r, c, (h + 2) % 4] * REVERSE_FACTOR + dist[br, bc, h],
-                       4, (br, bc, h), frozenset(occupied((br, bc, h)))))
+                       4, (br, bc, h), frozenset(occupied((br, bc, h))), none))
     scored.sort(key=lambda x: (x[0], x[1]))
-    return [(st, cells) for _, _, st, cells in scored]
+    return [(st, cells, soft) for _, _, st, cells, soft in scored]
 
 
 class _PIBTStepH:
@@ -56,6 +58,12 @@ class _PIBTStepH:
         self.next_of = {}       # agent -> 다음 상태
         self.next_cells = {}    # agent -> 예약 칸 집합
         self.occ_next = {}      # cell -> 예약 agent
+        # soft 칸 (-203): 회전하는 로봇의 앞 2칸. 축(pos)만 막는다 — 지금 축이 있거나(pos_now) 이번 틱 축이 들어오는(pos_next)
+        # 로봇이 있으면 그 회전은 안 되고, 반대로 soft 예약된 칸에는 다른 로봇이 축을 들여놓지 못한다. 뒤 칸은 자유.
+        self.pos_now = {s[:2]: a for a, s in states.items()}
+        self.pos_next = {}      # cell -> 이번 틱 축이 놓일 agent
+        self.soft_next = {}     # cell -> soft 예약 agent
+        self.next_soft = {}     # agent -> soft 칸 집합
         # 구간 대수 제한 (S15P21A106-193). sec_map 은 칸 -> 구간번호(-1 = 구간 밖).
         self.sec_map = sec_map
         self.sec_limit = sec_limit
@@ -112,11 +120,15 @@ class _PIBTStepH:
         for s in now - nxt:
             self.sec_cnt[s] = self.sec_cnt.get(s, 0) - sign
 
-    def _reserve(self, a, s2, cells):
+    def _reserve(self, a, s2, cells, soft=frozenset()):
         self.next_of[a] = s2
         self.next_cells[a] = cells
         for cell in cells:
             self.occ_next[cell] = a
+        self.pos_next[s2[:2]] = a
+        self.next_soft[a] = soft
+        for cell in soft:
+            self.soft_next[cell] = a
         self._count(a, cells, +1)          # 미정(현 위치) → 확정(예약 위치)로 계수 이전
 
     def _release(self, a):
@@ -124,7 +136,18 @@ class _PIBTStepH:
         for cell in self.next_cells.pop(a):
             if self.occ_next.get(cell) == a:       # 밀린 쪽이 제자리 예약으로
                 del self.occ_next[cell]            # 덮어썼으면 보존
-        del self.next_of[a]
+        pos = self.next_of.pop(a)[:2]
+        if self.pos_next.get(pos) == a:
+            del self.pos_next[pos]
+        for cell in self.next_soft.pop(a):
+            if self.soft_next.get(cell) == a:
+                del self.soft_next[cell]
+
+    def _soft_blocked(self, a, s2, soft):
+        """soft 충돌: 내 앞 2칸에 다른 축이 있거나/들어오거나, 내 축이 놓일 칸을 다른 로봇이 soft 예약했다."""
+        if self.soft_next.get(s2[:2], a) != a:
+            return True
+        return any(self.pos_now.get(cell, a) != a or self.pos_next.get(cell, a) != a for cell in soft)
 
     def _push_occupants(self, a, cells):
         """cells 의 현 점유자(자기 제외, 미결정)를 칸 순서대로 밀어낸다. 하나라도 실패하면 False."""
@@ -137,18 +160,20 @@ class _PIBTStepH:
 
     def resolve(self, a, parent=None):
         cur = self.states[a]
-        for s2, cells in candidates_h(cur, self.dists[a], self.edge_cost,
-                                      self.wait_cost, self.free, self.turn_cost,
-                                      self.bias.get(a, 0.0)):
+        for s2, cells, soft in candidates_h(cur, self.dists[a], self.edge_cost,
+                                            self.wait_cost, self.free, self.turn_cost,
+                                            self.bias.get(a, 0.0)):
             if s2 == cur:
                 cells = self.now_cells[a]                   # 대기 = 현 점유(스윙 포함) 유지
             if any(self.occ_next.get(cell, a) != a for cell in cells):
                 continue                                    # 타 agent 예약 칸
+            if self._soft_blocked(a, s2, soft):
+                continue                                    # 앞 2칸 축 충돌 (-203)
             if parent is not None and cells & self.now_cells[parent]:
                 continue                                    # 부모와 맞교환(swap) 금지
             if not self._entry_ok(a, cells):
                 continue                                    # 정원 찬 구간 진입 금지
-            self._reserve(a, s2, cells)
+            self._reserve(a, s2, cells, soft)
             if self._push_occupants(a, cells):
                 return True
             self._release(a)
@@ -193,13 +218,15 @@ def dump_candidates_h(states, dists, goals, extra, bias, free, edge_cost, wait_c
                       turn_cost, only=None, label=lambda a: f"agent{a}"):
     """정체 진단: 각 agent의 후보 상태·거리·차단 agent를 출력 (run_h / sim_v2 공용)."""
     occ = _occupancy(states, extra)
+    axle = {s[:2]: a for a, s in states.items()}
     for a, s in states.items():
         if only is not None and a not in only:
             continue
         d = dists[a]
         print(f"  {label(a)} {s} goal={goals[a]} dist={d[s]:.1f} bias={bias.get(a, 0):.0f}")
-        for st, cc in candidates_h(s, d, edge_cost, wait_cost, free, turn_cost):
+        for st, cc, soft in candidates_h(s, d, edge_cost, wait_cost, free, turn_cost):
             blk = {cell: occ[cell] for cell in cc if occ.get(cell, a) != a}
+            blk.update({cell: axle[cell] for cell in soft if axle.get(cell, a) != a})    # soft: 앞 칸의 축
             print(f"     {_action_kind(s, st):4s} -> {st} dist={d[st]:.1f} blocked_by={blk}")
 
 

@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from map_loader import K, OX, front_swing, turn_mask_from_grid  # noqa: E402
 import pibt.geometry as geo  # noqa: E402
-from pibt.geometry import DIRS, swing_cells, turn_ok  # noqa: E402
+from pibt.geometry import DIRS, front_cells, swing_cells, turn_ok  # noqa: E402
 from pibt.hgraph import HGraph, _dist_map_h_ref  # noqa: E402
 
 DIMS = (0.39, 1.11, 0.80)
@@ -46,15 +46,15 @@ def test_front_swing_general_formula():
     assert not front_swing((0.30, 1.0, 0.60))       # 0.424
 
 
-def test_swing_cells_legacy_3_exact_5():
-    legacy = swing_cells(R, C, 0, 1)
-    assert legacy == {(1, 2), (2, 1), (1, 1)}                       # 옛 뒤·새 뒤·대각
+def test_swing_cells_hard_3_and_front_cells_soft_2():
+    assert swing_cells(R, C, 0, 1) == {(1, 2), (2, 1), (1, 1)}       # 옛 뒤·새 뒤·대각 (hard)
+    assert front_cells(R, C, 0, 1) == set()                          # legacy: soft 없음
     geo.configure(front_swing=True)
-    exact = swing_cells(R, C, 0, 1)
-    assert exact == legacy | {(3, 2), (2, 3)}                        # + 앞(옛 헤딩)·앞(새 헤딩)
+    assert swing_cells(R, C, 0, 1) == {(1, 2), (2, 1), (1, 1)}       # hard 는 그대로
+    assert front_cells(R, C, 0, 1) == {(3, 2), (2, 3)}               # 앞(옛 헤딩)·앞(새 헤딩)
     for h, h2 in TURNS:
-        cells = swing_cells(R, C, h, h2)
-        assert len(cells) == 5
+        cells = front_cells(R, C, h, h2)
+        assert len(cells) == 2
         assert (R + DIRS[h][0], C + DIRS[h][1]) in cells
         assert (R + DIRS[h2][0], C + DIRS[h2][1]) in cells
 
