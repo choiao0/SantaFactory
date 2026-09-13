@@ -32,9 +32,14 @@ translate 가 (0, 0, 0) 이 된다.
   **서버에서 눈으로 확인한 뒤 정할 것** — 랙 콜라이더가 없어(인스턴스 참조)
   물리로는 안 잡히고 영상에서만 보인다.
 
-[태블릿 제외] 요청대로 넣지 않는다.
+[태블릿] 2026-09-13 추가 (`--no-tablet` 으로 끈다).
+상단 앞쪽에 HMI 패널을 단다. **기존 외형을 한 치도 안 넘도록** 넣는다 —
+앞면 0.390 에서 5 mm 안쪽, 폭 ±0.125(전폭 ±0.400 안), 높이 1.585(총높이 1.650 안).
+그래야 pitch 하한(hypot(front_len, width/2))도 랙 데크 간섭 판정도 그대로다.
+빌드가 끝나면 실제 bbox 를 재서 넘으면 죽는다 — 눈으로 못 잡는 종류라서.
 """
 import argparse
+import math
 import os
 import sys
 
@@ -61,6 +66,18 @@ BACKSTOP = 0.020                     # 후면 낙하방지판 두께
 #   간섭 판정과 pitch 하한이 전부 그 값을 기준으로 잡혀 있다.
 TIERS = 3                            # 적재 단 수 (베이스 포함)
 DECK_T = 0.030                       # 데크 두께. 베이스 플레이트와 같다
+
+# --- 태블릿 (HMI 패널) -----------------------------------------------------
+# 10인치급을 상단 앞쪽에 눕혀 단다. **외형을 넘지 않는 것이 유일한 제약이다.**
+#   앞      FRONT(0.390) 에서 5 mm 안쪽까지만
+#   폭      ±0.125  (전폭 ±0.400 안쪽)
+#   높이    상단 레일(1.610~1.650) 밑
+# 넘으면 pitch 하한이 올라가고 랙 간섭 판정을 다시 해야 한다.
+TAB_W, TAB_H, TAB_T = 0.250, 0.170, 0.014   # 가로 · 세로 · 두께
+TAB_TILT = -15.0                     # Y축 회전 [deg]. 음수 = 윗면이 뒤로 눕는다
+TAB_Z = 1.500                        # 화면 중심 높이 (바닥 기준)
+TAB_CLEAR = 0.005                    # 앞면에서 띄울 여유
+ARM_T = 0.020                        # 상단 레일에 매다는 브래킷 두께
 
 
 def deck_levels(tiers, z0=BASE_Z1, z1=TOP_Z, th=DECK_T):
@@ -94,7 +111,28 @@ def _box(stage, path, x0, x1, y0, y1, z0, z1):
     return c
 
 
-def build(out, top_rear, collide, tiers=TIERS):
+def _panel(stage, path, cx, cy, cz, w, h, t, tilt_deg):
+    """Y축으로 눕힌 평판. cx/cy/cz 는 **바닥 기준** 중심.
+
+    Cube 로컬축: x=두께 y=가로 z=세로. 스케일 -> 회전 -> 이동 순으로 적용된다.
+    """
+    c = UsdGeom.Cube.Define(stage, path)
+    c.GetSizeAttr().Set(2.0)
+    xf = UsdGeom.Xformable(c)
+    xf.AddTranslateOp().Set(Gf.Vec3d(cx, cy, cz - WHEEL_R))
+    xf.AddRotateYOp().Set(tilt_deg)
+    xf.AddScaleOp().Set(Gf.Vec3f(t / 2, w / 2, h / 2))
+    return c
+
+
+def _tablet_cx(h=TAB_H, t=TAB_T, tilt=TAB_TILT):
+    """눕힌 뒤에도 앞면이 FRONT-TAB_CLEAR 를 넘지 않는 중심 x."""
+    r = math.radians(abs(tilt))
+    hx = (t / 2) * math.cos(r) + (h / 2) * math.sin(r)    # 회전 후 x 반폭
+    return FRONT - TAB_CLEAR - hx
+
+
+def build(out, top_rear, collide, tiers=TIERS, tablet=True):
     stage = Usd.Stage.CreateNew(out)
     UsdGeom.SetStageUpAxis(stage, UsdGeom.Tokens.z)
     UsdGeom.SetStageMetersPerUnit(stage, 1.0)
@@ -136,6 +174,22 @@ def build(out, top_rear, collide, tiers=TIERS):
          -hw, hw, BASE_Z1, TOP_Z)
     n += 1
 
+    # 태블릿 — 상단 레일에 매달린 HMI 패널
+    if tablet:
+        cx = _tablet_cx()
+        _panel(stage, "/AmrShelf/tablet_body", cx, 0.0, TAB_Z,
+               TAB_W, TAB_H, TAB_T, TAB_TILT)
+        # 화면 — 본체보다 한 겹 앞, 테두리 8 mm 안쪽
+        r = math.radians(TAB_TILT)
+        _panel(stage, "/AmrShelf/tablet_screen",
+               cx + math.cos(r) * TAB_T * 0.6, 0.0, TAB_Z + math.sin(r) * TAB_T * 0.6,
+               TAB_W - 0.016, TAB_H - 0.016, TAB_T * 0.2, TAB_TILT)
+        # 브래킷 — 상단 레일 밑면(TOP_Z-RAIL)에서 패널 윗변까지
+        _box(stage, "/AmrShelf/tablet_arm",
+             cx - ARM_T / 2, cx + ARM_T / 2, -ARM_T, ARM_T,
+             TAB_Z + TAB_H / 2 * math.cos(r), TOP_Z - RAIL)
+        n += 3
+
     if collide:
         # ★ 부재별로 주지 않는다. 12개면 브로드페이즈 비용이 는다.
         #   상부 전체를 **단일 박스** 하나로 단순화한다.
@@ -145,8 +199,24 @@ def build(out, top_rear, collide, tiers=TIERS):
         UsdPhysics.CollisionAPI.Apply(box.GetPrim())
         n += 1
 
+    # ★ 외형 초과 검사 — 저작 실수가 조용히 pitch 하한을 올리는 것을 막는다.
+    #   `hypot(front_len, width/2)` 가 격자 하한을 정하므로 **앞과 폭**이 특히
+    #   중요하다. 눈으로는 절대 못 잡는다 (2026-09-13 태블릿 추가하며 넣음).
     stage.GetRootLayer().Save()
-    return n, decks
+    bb = UsdGeom.BBoxCache(0, ["default"]).ComputeWorldBound(root.GetPrim())
+    mn, mx = bb.ComputeAlignedBox().GetMin(), bb.ComputeAlignedBox().GetMax()
+    lim = ((-top_rear, FRONT), (-WIDTH / 2, WIDTH / 2),
+           (BASE_Z0 - WHEEL_R, TOP_Z - WHEEL_R))
+    names = ("x(앞뒤)", "y(폭)", "z(높이)")
+    bad = []
+    for i, (lo, hi) in enumerate(lim):
+        if mn[i] < lo - 1e-6 or mx[i] > hi + 1e-6:
+            bad.append(f"{names[i]}  실제 [{mn[i]:+.4f}, {mx[i]:+.4f}]  "
+                       f"허용 [{lo:+.4f}, {hi:+.4f}]")
+    if bad:
+        raise SystemExit("★ 부재가 외형을 넘습니다 — pitch 하한·랙 간섭을 다시 재야 합니다:\n  "
+                         + "\n  ".join(bad))
+    return n, decks, (mn, mx)
 
 
 def main():
@@ -165,6 +235,8 @@ def main():
                     help="적재 단 수 (베이스 포함). 기본 3 — FMS 의 "
                          "MAX_TOTES_PER_TRIP=6 이 '3단 x 2토트' 에서 나온다. "
                          "★ 총높이 1,650 mm 는 단 수와 무관하게 유지된다")
+    ap.add_argument("--no-tablet", dest="tablet", action="store_false",
+                    help="상단 앞쪽 HMI 태블릿을 빼고 만든다 (기본은 넣는다)")
     ap.add_argument("--collide", action="store_true",
                     help="상부에 단일 박스 콜라이더를 붙인다. 기본은 **비주얼 전용** — "
                          "물리를 그대로 둬야 주행 지문(ms/step·체크포인트)이 유지된다")
@@ -176,7 +248,7 @@ def main():
     os.makedirs(os.path.dirname(a.out), exist_ok=True)
     if os.path.exists(a.out):
         os.remove(a.out)                              # CreateNew 는 덮어쓰지 않는다
-    n, decks = build(a.out, a.top_rear, a.collide, a.tiers)
+    n, decks, (mn, mx) = build(a.out, a.top_rear, a.collide, a.tiers, a.tablet)
 
     print(f"[shelf] {a.out}")
     print(f"[shelf] 부재 {n}개 · 베이스 {(BASE_REAR + FRONT) * 1000:.0f} x "
@@ -189,6 +261,14 @@ def main():
     for i, (t, b) in enumerate(zip(tops, bots), 1):
         print(f"[shelf]   {i}단  바닥 {t*1000:7.1f} → 천장 {b*1000:7.1f} mm"
               f"   유효높이 {(b-t)*1000:.1f} mm")
+    if a.tablet:
+        print(f"[shelf] 태블릿 {TAB_W*1000:.0f} x {TAB_H*1000:.0f} mm · "
+              f"중심 높이 {TAB_Z*1000:.0f} mm · 기울기 {abs(TAB_TILT):.0f}도")
+    print(f"[shelf] 외형 실측  x [{mn[0]:+.3f}, {mx[0]:+.3f}]  "
+          f"y [{mn[1]:+.3f}, {mx[1]:+.3f}]  z(로봇로컬) [{mn[2]:+.3f}, {mx[2]:+.3f}]")
+    print(f"[shelf]   -> 앞 여유 {(FRONT - mx[0])*1000:+.1f} mm · "
+          f"폭 여유 {(WIDTH/2 - mx[1])*1000:+.1f} mm · "
+          f"높이 여유 {((TOP_Z - WHEEL_R) - mx[2])*1000:+.1f} mm")
     print(f"[shelf] 콜라이더 {'있음 (물리 포함)' if a.collide else '없음 (비주얼 전용)'}")
     if a.top_rear >= BASE_REAR:
         print("[shelf] ★ 상부를 안 깎았습니다. 랙 데크(밑면 1,005 mm) 밑을 지나는")
