@@ -1,0 +1,135 @@
+# -*- coding: utf-8 -*-
+"""회전 발자국 (S15P21A106-203): 앞 스윙 5칸 + 0.1 m 정적 마스크. 합성 맵, configure/reset 으로 상태 격리."""
+import math
+import os
+import sys
+
+import numpy as np
+import pytest
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+from map_loader import K, OX, front_swing, turn_mask_from_grid  # noqa: E402
+import pibt.geometry as geo  # noqa: E402
+from pibt.geometry import DIRS, swing_cells, turn_ok  # noqa: E402
+from pibt.hgraph import HGraph, _dist_map_h_ref  # noqa: E402
+
+DIMS = (0.39, 1.11, 0.80)
+N = 5                                   # 합성 맵 5×5 칸, 로봇은 중앙 (2,2)
+R = C = 2
+TURNS = [(h, h2) for h in range(4) for h2 in ((h + 1) % 4, (h - 1) % 4)]
+
+
+@pytest.fixture(autouse=True)
+def _legacy_after():
+    yield
+    geo.reset()
+
+
+def _grid(rack_rows=(), rack_cols=range(2 * K, 3 * K)):
+    """0.1 m 원본(패딩 전). 패딩 좌표 (row, col) 로 랙(값 2)을 놓는다 — col 은 OX 만큼 빼서 원본에."""
+    g = np.zeros((N * K, N * K - OX), dtype=np.uint8)
+    for row in rack_rows:
+        for col in rack_cols:
+            g[row, col - OX] = 2
+    return g
+
+
+def _free(grid):
+    m2 = np.pad(np.isin(grid, (1, 2, 5, 6)).astype(np.uint8), ((0, 0), (OX, 0)), constant_values=1)
+    return m2.reshape(N, K, N, K).max(axis=(1, 3)) == 0
+
+
+def test_front_swing_general_formula():
+    assert front_swing((0.39, 1.11, 0.80))          # 0.559 > 0.5
+    assert front_swing((0.40, 1.03, 0.66))          # 0.518 > 0.5
+    assert not front_swing((0.30, 1.0, 0.60))       # 0.424
+
+
+def test_swing_cells_legacy_3_exact_5():
+    legacy = swing_cells(R, C, 0, 1)
+    assert legacy == {(1, 2), (2, 1), (1, 1)}                       # 옛 뒤·새 뒤·대각
+    geo.configure(front_swing=True)
+    exact = swing_cells(R, C, 0, 1)
+    assert exact == legacy | {(3, 2), (2, 3)}                        # + 앞(옛 헤딩)·앞(새 헤딩)
+    for h, h2 in TURNS:
+        cells = swing_cells(R, C, h, h2)
+        assert len(cells) == 5
+        assert (R + DIRS[h][0], C + DIRS[h][1]) in cells
+        assert (R + DIRS[h2][0], C + DIRS[h2][1]) in cells
+
+
+def test_mask_open_space_allows_all_8_turns():
+    m = turn_mask_from_grid(_grid(), DIMS)
+    assert m.shape == (N, N, 4, 4)
+    for h, h2 in TURNS:
+        assert m[R, C, h, h2]
+    assert not m[R, C, 0, 2] and not m[R, C, 0, 0]                  # 180°·제자리는 미정의 = False
+
+
+NOSE_TURNS = {(0, 1), (0, 3), (1, 0), (3, 0)}     # 옛 또는 새 헤딩이 h=0(랙 쪽) 인 회전 = 코가 랙 쪽으로 스윙
+
+
+def test_mask_rack_at_front_cell_edge_blocks_nose_turns():
+    # 앞 칸(h=0 → 행 3) 경계 첫 0.1 m 줄에 랙: 코 반경 hypot(0.44, 0.45) = 0.63 > 0.5 → 침범.
+    # h=2 가 낀 회전 4개는 뒤 차체(1.16 m)가 같은 줄을 쓸어 마스크만으로도 False (valid_state 도 막는다).
+    grid = _grid(rack_rows=[3 * K])
+    m = turn_mask_from_grid(grid, DIMS)
+    assert all(not m[R, C, h, h2] for h, h2 in TURNS)
+    free = _free(grid)
+    assert {(h, h2) for h, h2 in TURNS if turn_ok(free, R, C, h, h2)} == NOSE_TURNS   # legacy: 앞 칸 안 봄
+    geo.configure(turn_mask=m, front_swing=True)
+    assert not any(turn_ok(free, R, C, h, h2) for h, h2 in TURNS)                    # exact: 코 침범 → 전부 금지
+
+
+def test_mask_rack_set_back_is_allowed():
+    # 랙을 경계에서 0.2 m 뒤로(행 3 의 세 번째 줄): 코 최대 0.63 < 0.7 → 허용. 1 m 격자에서는 그 칸이 막힌 칸이라
+    # "앞 칸 free 요구" 규칙이면 전부 금지됐을 것 — 마스크가 더 정밀하다. 뒤 차체가 닿는 h=2 회전만 False.
+    grid = _grid(rack_rows=[3 * K + 2])
+    m = turn_mask_from_grid(grid, DIMS)
+    assert {(h, h2) for h, h2 in TURNS if m[R, C, h, h2]} == NOSE_TURNS
+    assert not _free(grid)[3, 2]
+    free = _free(grid)
+    legacy = {(h, h2) for h, h2 in TURNS if turn_ok(free, R, C, h, h2)}
+    geo.configure(turn_mask=m, front_swing=True)
+    assert {(h, h2) for h, h2 in TURNS if turn_ok(free, R, C, h, h2)} == legacy == NOSE_TURNS
+
+
+def test_sweep_radius_matches_geometry():
+    from map_loader import _sweep_offsets
+    off = _sweep_offsets(DIMS, 0.05, 0, 1)
+    far = np.hypot(off[:, 0] + 0.5 - K / 2, off[:, 1] + 0.5 - K / 2) * 0.1     # 칸 중심 거리(m)
+    assert far.max() <= math.hypot(1.16, 0.45) + 0.1 * math.sqrt(2)
+    assert off[:, 0].max() == K // 2 + 6                              # 코 0.63 m → 앞 칸 두 번째 줄까지(인덱스 5+6)
+
+
+def test_turn_ok_legacy_ignores_mask_and_exact_uses_it():
+    grid = _grid(rack_rows=[3 * K])
+    free = _free(grid)
+    assert turn_ok(free, R, C, 0, 1)                                 # legacy: 앞 칸은 안 본다
+    geo.configure(turn_mask=turn_mask_from_grid(grid, DIMS), front_swing=True)
+    assert not turn_ok(free, R, C, 0, 1)
+    geo.reset()
+    assert turn_ok(free, R, C, 0, 1)
+
+
+def test_hgraph_static_edges_follow_mask_and_match_reference():
+    grid = _grid(rack_rows=[3 * K])
+    free = _free(grid)
+    geo.configure(turn_mask=turn_mask_from_grid(grid, DIMS), front_swing=True)
+    goal = (1, 3)
+    fast = HGraph(free).dist(goal)
+    ref = _dist_map_h_ref(free, goal)
+    assert np.array_equal(fast, ref)
+    geo.reset()
+    legacy = HGraph(free).dist(goal)
+    assert np.array_equal(legacy, _dist_map_h_ref(free, goal))
+    assert (fast[free] >= 0).sum() <= (legacy[free] >= 0).sum()        # 마스크는 간선을 빼기만 한다
+    assert not np.array_equal(fast, legacy)
+
+
+def test_configure_does_not_touch_stay_cache():
+    free = _free(_grid())
+    before = geo.stay_map_h(free, (R, C, 0))
+    geo.configure(front_swing=True)
+    assert geo.stay_map_h(free, (R, C, 0)) is before

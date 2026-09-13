@@ -7,6 +7,7 @@
 # 같은 규칙의 복사본)는 레거시 정리에서 삭제됨 — 패리티 값(2384틱/181.2 tasks/h)은 docs 에만 남는다.
 # ============================================================
 import json
+import math
 import os
 
 import numpy as np
@@ -26,6 +27,16 @@ AISLE_ROWS = WALL_A.va_rows
 MAP_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "map")
 
 
+def _padded_obstacles(grid01):
+    """0.1 m 원본 → 장애물 uint8 (H·K, W·K): 왼쪽 OX 칸 패딩, K 배수로 오른·아래 패딩(패딩 = 장애물).
+    load_map 의 다운샘플과 turn_mask 의 스윕 조회가 같은 좌표계를 보도록 한 곳에 둔다."""
+    # 1=구조물 2=랙 5=컨베이어 6=바닥 파렛트 블록 (v5.8, 맵 세트 수신 후 등장 — 빠지면 그 위를 지나감)
+    raw = np.isin(grid01, OBSTACLE_VALUES).astype(np.uint8)
+    m2 = np.pad(raw, ((0, 0), (OX, 0)), constant_values=1)
+    h, w = m2.shape
+    return np.pad(m2, ((0, (-h) % K), (0, (-w) % K)), constant_values=1)
+
+
 def load_map(base_dir=None, aisle_block=False):
     """0.1m 원본을 1.0m coarse로 다운샘플(max pooling, 보수적).
     base_dir 생략 = 공식 맵 폴더 MAP_DIR (3_FMS/map, build_fms_map.py 산출물).
@@ -34,11 +45,7 @@ def load_map(base_dir=None, aisle_block=False):
         base_dir = MAP_DIR
     grid01 = np.load(os.path.join(base_dir, "occupancy_grid.npy"))
     stations = json.load(open(os.path.join(base_dir, "stations.json"), encoding="utf-8"))
-    # 1=구조물 2=랙 5=컨베이어 6=바닥 파렛트 블록 (v5.8, 맵 세트 수신 후 등장 — 빠지면 그 위를 지나감)
-    raw = np.isin(grid01, OBSTACLE_VALUES).astype(np.uint8)
-    m2 = np.pad(raw, ((0, 0), (OX, 0)), constant_values=1)
-    h, w = m2.shape
-    m2 = np.pad(m2, ((0, (-h) % K), (0, (-w) % K)), constant_values=1)
+    m2 = _padded_obstacles(grid01)
     coarse = m2.reshape(m2.shape[0] // K, K, m2.shape[1] // K, K).max(axis=(1, 3))
     free = coarse == 0
     H, W = coarse.shape
@@ -55,6 +62,63 @@ def load_map(base_dir=None, aisle_block=False):
             free[r0:r1, c0:c1] = False
 
     return free, _station_cells(stations, free), stations
+
+
+# ---- 회전 발자국 마스크 (S15P21A106-203, docs/2026-09-13_S15P21A106-203_회전발자국마스크_설계.md §2) ----
+ROBOT_DIMS = (0.39, 1.11, 0.80)   # 기종 카드(선반형, 물리 팀 2026-09-13 확정): 구동축 앞·뒤·폭 (m)
+_DIRS = ((1, 0), (0, 1), (-1, 0), (0, -1))   # pibt.geometry.DIRS 와 같은 순서 (0=N 1=E 2=S 3=W, (dr, dc))
+_SAMPLE_M, _ANGLE_DEG = 0.05, 1
+
+
+def front_swing(dims=ROBOT_DIMS):
+    """회전 중 코가 앞 칸에 들어가는가: hypot(앞, 반폭) > 반 칸. (0.39, 0.80) → 0.559 > 0.5 → True."""
+    return math.hypot(dims[0], dims[2] / 2) > CELL_M / 2
+
+
+def _sweep_offsets(dims, margin, h, h2):
+    """h→h2 90° 회전 중 차체(여유 포함) 가 지나는 0.1 m 칸 오프셋 (dy, dx) — 칸 중심 기준, 위치 불변.
+    사각형 [-rear-m, front+m] × [-w/2-m, w/2+m] 을 0.05 m 로 표본화, 1° 간격으로 회전."""
+    front, rear, width = dims
+    a = np.arange(-rear - margin, front + margin + 1e-9, _SAMPLE_M)
+    b = np.arange(-width / 2 - margin, width / 2 + margin + 1e-9, _SAMPLE_M)
+    A, B = np.meshgrid(a, b, indexing="ij")
+    A, B = A.ravel(), B.ravel()
+    th0 = math.radians(90 * h)
+    step = 1 if h2 == (h + 1) % 4 else -1
+    angles = th0 + np.radians(step * np.arange(0, 90 + _ANGLE_DEG, _ANGLE_DEG))
+    cos, sin = np.cos(angles)[:, None], np.sin(angles)[:, None]
+    dy = A * cos - B * sin                       # 전방 (cos, sin), 좌측 (-sin, cos) — DIRS 순서 (dr, dc)
+    dx = A * sin + B * cos
+    half = K / 2
+    oy = np.floor(half + dy / (CELL_M / K)).astype(np.int64)
+    ox = np.floor(half + dx / (CELL_M / K)).astype(np.int64)
+    return np.unique(np.stack([oy.ravel(), ox.ravel()], axis=1), axis=0)
+
+
+def turn_mask_from_grid(grid01, dims=ROBOT_DIMS, margin=0.05):
+    """0.1 m 원본 → bool[H, W, 4, 4]. [r, c, h, h2] = (r,c)에서 h→h2 90° 회전 시 차체 스윕이 장애물과 안 겹침.
+    h2 ∉ {h±1} 은 False. 통행 불가 칸·범위 밖은 장애물로 본다(load_map 패딩 규칙과 같다)."""
+    m2 = _padded_obstacles(grid01)
+    H, W = m2.shape[0] // K, m2.shape[1] // K
+    free = m2.reshape(H, K, W, K).max(axis=(1, 3)) == 0
+    pad = 2 * K
+    obst = np.pad(m2, pad, constant_values=1).astype(bool)
+    rs, cs = np.nonzero(free)
+    base_r, base_c = rs * K + pad, cs * K + pad
+    mask = np.zeros((H, W, 4, 4), dtype=bool)
+    for h in range(4):
+        for h2 in ((h + 1) % 4, (h - 1) % 4):
+            off = _sweep_offsets(dims, margin, h, h2)
+            hit = obst[base_r[:, None] + off[:, 0], base_c[:, None] + off[:, 1]].any(axis=1)
+            mask[rs, cs, h, h2] = ~hit
+    return mask
+
+
+def turn_mask(base_dir=None, dims=ROBOT_DIMS, margin=0.05):
+    """`<base_dir>/occupancy_grid.npy` 로 turn_mask_from_grid. 시작 시 1회(< 1 s)."""
+    if base_dir is None:
+        base_dir = MAP_DIR
+    return turn_mask_from_grid(np.load(os.path.join(base_dir, "occupancy_grid.npy")), dims, margin)
 
 
 def load_topology_spec(map_dir=None):
