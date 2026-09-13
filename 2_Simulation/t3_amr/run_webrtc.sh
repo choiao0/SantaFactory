@@ -35,6 +35,12 @@ set -uo pipefail
 W="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$W"
 
+# ── venv ──────────────────────────────────────────────────
+#   `run.sh:53` 과 **같은 규약**이다. 여기서도 잡아야 한다 — 이 스크립트는
+#   run.sh 에 넘기기 **전에** 파이썬을 두 번(선반 USD·씬 빌드) 쓴다.
+#   안 잡으면 로그인 셸이 아닌 곳(ssh 일회성 명령 등)에서 `python: not found`.
+[ -n "${VIRTUAL_ENV:-}" ] || source "${VENV:-$HOME/khs/venv}/bin/activate"
+
 TOP_REAR=""
 SHELF=1
 SKIP_BUILD=0
@@ -98,12 +104,11 @@ SHELF_USD="$W/robots/shelf/amr_shelf.usd"
 if [ "$SHELF" = 1 ]; then
     echo
     echo "── 선반 USD ────────────────────────────────────────"
-    ISAAC_PY="$(command -v isaacsim >/dev/null 2>&1 && echo python || echo python)"
-    $ISAAC_PY "$W/warehouse/scene/build_amr_shelf.py" \
+    python "$W/warehouse/scene/build_amr_shelf.py" \
         ${TOP_REAR:+--top-rear "$TOP_REAR"} || {
             echo "★ 선반 USD 생성 실패."
-            echo "  Isaac 파이썬이 필요합니다 (pxr). venv 가 켜져 있는지 보세요:"
-            echo "    source ~/khs/venv/bin/activate"
+            echo "  Isaac 파이썬이 필요합니다 (pxr). venv 를 확인하세요:"
+            echo "    source ${VENV:-$HOME/khs/venv}/bin/activate"
             exit 1
         }
     [ -f "$SHELF_USD" ] || { echo "★ $SHELF_USD 가 없습니다."; exit 1; }
@@ -122,14 +127,19 @@ if [ "$SKIP_BUILD" != 1 ]; then
         echo "         cp -a v2/traj_pibt_h/. plan/traj_pibt_h/"
         exit 1
     }
-    isaacsim isaacsim.exp.base.python --no-window \
-        --/renderer/activeGpu="$GPU" --/renderer/multiGpu/enabled=false \
-        --exec "$W/runners/build_amr_scene_v2.py \
-                --warehouse $SCENE --robot $ROBOT \
-                --traj $PLAN_DIR/trajectories.json \
-                --starts $PLAN_DIR/starts.json --n $N \
-                --out $STAGE/pibt$(printf '%02d' "$N").usd \
-                $([ "$SHELF" = 1 ] && echo "--shelf $SHELF_USD")" || {
+    # ★ **그냥 `python`** 으로 부른다. `isaacsim ... --exec` 이 아니다.
+    #   빌더는 39번 줄에서 스스로 `SimulationApp` 을 띄운다. Kit 안에서 --exec 로
+    #   또 띄우면 이중 기동이 되고, GUI 확장(preferences viewport_page) shutdown
+    #   중에 **세그폴트(rc=139)** 로 죽는다 — 스테이지는 저장도 안 된 채 예전
+    #   파일이 남아 "선반이 안 붙었다" 로 보인다 (2026-09-13 Brev 실측).
+    #   `isaacsim ... --exec` 은 `amr/path/_common.py:LAUNCH` 처럼 **런타임**
+    #   기동에만 쓴다. 빌드는 `_common.py:scene_cmd` 대로 `python <빌더>` 다.
+    python "$W/runners/build_amr_scene_v2.py" --n "$N" \
+        --warehouse "$SCENE" --robot "$ROBOT" \
+        --traj   "$PLAN_DIR/trajectories.json" \
+        --starts "$PLAN_DIR/starts.json" \
+        --out    "$STAGE/pibt$(printf '%02d' "$N").usd" \
+        $([ "$SHELF" = 1 ] && echo "--shelf $SHELF_USD") || {
         echo "★ 씬 빌드 실패."; exit 1; }
 fi
 
