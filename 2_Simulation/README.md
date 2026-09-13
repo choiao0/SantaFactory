@@ -12,11 +12,11 @@ SimPy DES가 낸 "최적 구성"이 실제 로봇 스택에서 성립하는지 �
 | [`t3_warehouse/`](t3_warehouse/) | 그리드 → Isaac USD 씬 (건물 실측·화물·omap V&V) + iw.hub ×N·물리 라이다·AMCL 개통(`WSIM_N`으로 `/amr01~/…` 네임스페이스) | 완료 |
 | [`calibration/turn_probe/`](calibration/turn_probe/) | iw.hub 스팟턴 실측 — 회전 중심 = 구동축 = 포즈 원점, 차체 앞 0.40 m·뒤 1.03 m(뒤 칸 1개 점유, 스윙 반경 1.09 m), 90° 폐루프 1.9 s → FMS 헤딩 상수 | 완료 (9/6) |
 | `isaac_replay.py` + `isaac_export_t3/` | 그리드 시뮬 궤적을 실물 씬에서 재생 (WebRTC) | 도구 |
-| [`t4_agent/`](t4_agent/) | ROS 2 AMR 에이전트 — VDA 5050 MQTT 브리지 + order executor(틱당 노드 1개 스티칭·`lastNodeId` ack) + 그리드 프리미티브(스팟턴 · 직진 · 후진 1칸) + fake robot/fake FMS | 뼈대 완료 — Isaac 없이 배리어 틱 E2E 통과(7틱, 정지 오차 4 mm) |
+| [`../1_Robot/amr_agent/`](../1_Robot/amr_agent/) | ROS 2 AMR 에이전트 (VDA 5050 브리지 · order executor · 그리드 프리미티브 · fake robot/FMS). **2026-09-11 에 `1_Robot/` 로 이동** — 로봇 쪽 배포 단위를 시뮬과 분리, 동작 값은 BE 파라미터(프로파일)로 | Isaac 없이 배리어 틱 E2E 통과(7틱, 정지 오차 4 mm) |
 
 | [`sim_runner/`](sim_runner/) | GPU 서버 상시 Sparkplug B Edge 데몬 `sim-runner-gpu01` — host-orch 의 NCMD Start/Stop 으로 에이전트 ×N(+Isaac) 기동·정리, VDA state 를 `Robot/*` DDATA 로 거울, 하트비트·RTF·RAM·VRAM. `--fake` 로 Isaac 없이 동작, `tools/spb_tap.py` 가 host-orch 대역 | fake 모드 EC2 브로커 E2E 통과 (9/8) |
 
-노드·토픽 구조(FMS 틱 ↔ VDA 5050 매핑, 실행 방법, 남은 일)는 [`t4_agent/README.md`](t4_agent/README.md) 참조.
+노드·토픽 구조(FMS 틱 ↔ VDA 5050 매핑, 실행 방법, 파라미터)는 [`../1_Robot/amr_agent/README.md`](../1_Robot/amr_agent/README.md) 참조.
 
 ## 코드 구조 (2026-09-07 리팩토링)
 
@@ -42,7 +42,6 @@ T1~T4 스크립트를 라이브러리 패키지로 분할했다. 옛 경로의 `
 ├─ sil_ros/         ROS 2 쪽 (시스템 python3 + rclpy). geometry · gridmap(A*) 공용 + nodes/(patrol · multi_check · follower · measure_accel · spin_probe) + tools/export_replay
 ├─ scene_builder/   build_scene.py 분할 패키지 (config · prims · materials · building · roof · racks · stations · offices · vnv · shots · build)
 ├─ tests/           pytest — Isaac·rclpy 없이 도는 순수부 (sil_isaac 명세·운동학·스폰 좌표·경량 프로파일, sil_ros gridmap, scene_builder gridutil)
-├─ t4_agent/        ROS 2 에이전트 패키지 (VDA 5050 브리지 · order executor · 그리드 프리미티브) — 구조 변경 없음
 ├─ t1_teleop/ t2_mapping/ t2_follower/ t3_warehouse/  옛 경로: 실행 셔임 + 데이터(USD·YAML·out)   ← 문서·README 의 경로가 그대로 동작
 ├─ t3_warehouse_map/  DXF → occupancy grid 파이프라인 (단일 소스 map/)
 └─ calibration/     스팟턴 실측(wsim_wrap 은 새 엔트리에 훅)
@@ -70,7 +69,8 @@ cd ~/isaacsim && ./python.sh <repo>/2_Simulation/apps/mapping_sim.py --laps 2   
 ## 테스트
 
 ```bash
-cd <repo>/2_Simulation && python3 -m pytest      # sil_isaac 순수부 · sil_ros · scene_builder · t4_agent 단위 테스트 (Isaac 불필요)
+cd <repo>/2_Simulation && python3 -m pytest      # sil_isaac 순수부 · sil_ros · scene_builder · sim_runner 단위 테스트 (Isaac 불필요)
+cd <repo>/1_Robot/amr_agent && python3 -m pytest  # 에이전트 순수부 (profile · battery · state · order book · primitives)
 ```
 Isaac 실물 검증(리팩토링 후): `WSIM_N=2 apps/warehouse_sim.py` 부팅 → `multi_check --n 2 --drive amr02` PASS
 (odom·scan 45 Hz, amr02 만 이동, TF 프레임 전부 확인). `scene_builder` 재빌드는 리팩토링 전과 byte 동일한 `warehouse_scene.usd` 를 낸다.

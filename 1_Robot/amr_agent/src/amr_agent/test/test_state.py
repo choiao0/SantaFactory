@@ -29,7 +29,7 @@ def test_factsheet_from_model_profile():
     assert fs["manufacturer"] == "idealworks" and fs["serialNumber"] == "amr01" and fs["version"] == "2.0.0"
     ts, pp, geo = fs["typeSpecification"], fs["physicalParameters"], fs["agvGeometry"]
     assert ts["seriesName"] == "iw.hub" and ts["agvKinematic"] == "DIFF" and ts["agvClass"] == "CARRIER"
-    assert pp["speedMax"] == 1.2 and pp["length"] == 1.43 and pp["width"] == 0.66 and pp["heightMax"] == 0.41
+    assert pp["speedMax"] == 0.8 and pp["length"] == 1.43 and pp["width"] == 0.66 and pp["heightMax"] == 0.41
     assert fs["protocolLimits"]["timing"]["defaultStateInterval"] == 0.5
     drive = [w for w in geo["wheelDefinitions"] if w["type"] == "DRIVE"]
     assert len(drive) == 2 and {w["position"]["y"] for w in drive} == {0.29, -0.29} and drive[0]["diameter"] == 0.16

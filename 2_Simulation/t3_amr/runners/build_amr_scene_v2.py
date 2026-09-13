@@ -30,6 +30,12 @@ ap.add_argument("--n", type=int, default=2)
 ap.add_argument("--starts", default=None,
                 help="계획기가 낸 starts.json. 주면 이 좌표에 로봇을 세운다(권장).")
 ap.add_argument("--out", default=os.path.expanduser("<t3_amr>/warehouse_v59_amr2.usd"))
+ap.add_argument("--shelf", default=None,
+                help="적재 선반 USD (warehouse/scene/build_amr_shelf.py 산출). "
+                     "주면 로봇마다 얹는다. 없으면 예전과 똑같이 로봇만 세운다.")
+ap.add_argument("--shelf-link", default="chassis",
+                help="선반을 매달 **강체 링크** 이름. 아티큘레이션 루트에 매달면 "
+                     "물리가 안 옮겨 줘서 선반만 제자리에 남는다. 기본 chassis")
 args = ap.parse_args()
 
 from isaacsim import SimulationApp
@@ -131,6 +137,33 @@ for i, rid in enumerate(rids):
     xf = UsdGeom.Xformable(prim)
     xf.AddTranslateOp().Set(Gf.Vec3d(x0, y0, WHEEL_R))
     xf.AddRotateZOp().Set(yaw)
+
+    # --- 적재 선반 (S15P21A106-196) ---
+    #   `amr_shelf.usd` 는 구동축 원점 · +X 전진 · 로봇 로컬 z 로 저작돼 있어
+    #   추가 변환이 필요 없다.
+    #
+    #   ★★ **로봇 루트가 아니라 `chassis` 링크 밑에 붙인다** (2026-09-13 실측).
+    #     `/World/Robots/amr_i` 는 ArticulationRoot Xform 이고, 물리는 그걸
+    #     안 움직인다 — PhysX 는 **각 링크 prim**(chassis·wheel·…)에 자세를
+    #     쓴다. 그래서 루트 밑에 두면 로봇만 달리고 **선반은 출발 자리에
+    #     그대로 서 있다.** 영상에서 바로 보인다.
+    #     `chassis` 의 로컬 변환은 항등(translate 0 · orient 단위 · scale 1)
+    #     이라 좌표 보정은 필요 없다 — 부모만 바꾸면 된다.
+    #
+    #   ★ `XformCommonAPI` 를 쓰지 말 것. 이 저장소는 위처럼 `AddTranslateOp` +
+    #     `AddRotateZOp` 조합으로 저작하는데, 그 위에서 `SetTranslate()` 를 부르면
+    #     **False 를 돌려주고 아무 일도 하지 않는다 — 예외조차 없다.**
+    #     그래서 여기서도 op 를 안 걸고 참조만 얹는다 (원점 일치 저작이라 0 이면 된다).
+    if args.shelf:
+        link = st.GetPrimAtPath(f"{path}/{args.shelf_link}")
+        if not link:
+            raise SystemExit(
+                f"★ 로봇에 '{args.shelf_link}' 링크가 없습니다: {path}\n"
+                f"  선반을 매달 강체 링크 이름을 --shelf-link 로 주세요.\n"
+                f"  (iw.hub 은 chassis. 루트에 매달면 물리가 안 옮겨 줍니다)")
+        sh = st.DefinePrim(f"{path}/{args.shelf_link}/shelf", "Xform")
+        sh.GetReferences().AddReference(args.shelf)
+
     placed.append((path, rid, x0, y0, yaw))
     print(f"[s] amr_{i} <- robot {rid}  pos=({x0:.1f}, {y0:.1f}) yaw={yaw:.0f}도  "
           f"궤적시작 ({wp[0][1]:.1f},{wp[0][2]:.1f}) 차이 {gap:.2f}m  "

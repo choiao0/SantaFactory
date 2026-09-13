@@ -75,3 +75,12 @@ def test_build_wires_conductor(tmp_path, monkeypatch):
     assert (host, port) == ("b", 1999)
     assert edge.conductor.pub is edge and edge.conductor.cfg.tick_s == 2.0
     assert edge.conductor.cfg.planner_options == {"aisle_block": True}
+
+
+def test_build_tick_defaults_to_des_dt(tmp_path, monkeypatch):
+    """--tick-s 를 안 주면 벽시계 틱 = DES 틱 길이 CELL_M / speed (워커 기본 0.9 → 1.11 s, speed 옵션이면 그 값) (-116)."""
+    monkeypatch.setenv("MQTT_PW_FMS_CORE", "pw")
+    edge, _, _ = A.build(A.build_parser().parse_args(["--state-dir", str(tmp_path)]))
+    assert edge.conductor.cfg.tick_s == pytest.approx(1.0 / 0.9)
+    edge, _, _ = A.build(A.build_parser().parse_args(["--state-dir", str(tmp_path), "--planner-opt", "speed=1.0"]))
+    assert edge.conductor.cfg.tick_s == pytest.approx(1.0)

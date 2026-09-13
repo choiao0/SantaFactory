@@ -1,12 +1,13 @@
 # -*- coding: utf-8 -*-
 import json
+import math
 import os
 
 import numpy as np
 
 from pibt_core import TURN_TICKS
 
-from .common import DT, OUT, SPEED
+from .common import OUT, SPEED
 from .export_isaac import export_isaac
 
 
@@ -24,10 +25,11 @@ def _header_line(a, kernel, stream, ctx, lifelong):
             + (f" + 입고 {stream.n_inbound}건" if a.flow == "main" else "")
             + f", seed={a.seed}, flow={a.flow}, 통로차단={'ON' if a.aisle_block else 'OFF'}"
             + (f", 헤딩 모델(회전 {TURN_TICKS}틱)" if kernel.heading else "")
+            + ("" if math.isclose(a.speed, SPEED) else f", 속도 {a.speed:g} m/s (틱 {a.dt:g} s)")
             + (f", 충전 존({len(kernel.zone_cells)}칸, 홈 간격≥2)" if kernel.zone else ", 고정 홈 12칸")
             + (f", 주문 간격 {a.order_gap:g}틱" if a.order_gap_arg is not None else "")
             + (f", 입고 간격 {a.inbound_gap_arg:g}틱" if a.inbound_gap_arg is not None else "")
-            + (f", 고정 시간 {a.horizon}틱 = {a.horizon*DT/3600:.1f}h, 교대 {'/'.join(a.shifts)} "
+            + (f", 고정 시간 {a.horizon}틱 = {a.horizon*a.dt/3600:.1f}h, 교대 {'/'.join(a.shifts)} "
                + " ".join(f"{k}[{s},{e})" for k, s, e in stream.windows) if lifelong else "")
             + (f", 배터리(도크 {len(kernel.docks)}, 가동 {a.runtime_h:g}h/충전 {a.charge_h:g}h, "
                f"SoC {a.soc[0]*100:.0f}/{a.soc[1]*100:.0f}/{a.soc[2]*100:.0f}%)" if a.battery else ""))
@@ -39,9 +41,9 @@ def _print_completion(a, kernel, tasks_done, orders_done, T_END, lifelong):
     if lifelong:
         n_in = sum(1 for tk in tasks_done if tk["kind"] == "in")
         print(f"[2] 완료: 태스크 {n_tasks}개 (입고 {n_in} / 출고 {n_tasks - n_in}), 미완료 {kernel.n_submitted - n_tasks}개, "
-              f"주문 완료 {orders_done}/{a.n_orders}, 고정 시간 {T_END}틱 = {T_END*DT/3600:.2f}h")
+              f"주문 완료 {orders_done}/{a.n_orders}, 고정 시간 {T_END}틱 = {T_END*a.dt/3600:.2f}h")
     else:
-        print(f"[2] 완료: 태스크 {n_tasks}개, makespan {T_END}틱 = {T_END*DT/60:.1f}분")
+        print(f"[2] 완료: 태스크 {n_tasks}개, makespan {T_END}틱 = {T_END*a.dt/60:.1f}분")
 
 
 def _print_kpi(kernel, tot, n_tasks, sim_hours, orders_ph, lat, util, util_incl, conflict_wait):
@@ -132,10 +134,11 @@ def report(a, kernel, stream, ctx):
     # 고정 시간 모드의 분모는 T (Lifelong: T 안의 완료 수), 리드타임 표본은 T 안에 완료된 태스크만 (-145 §1-1)
     T_END = a.horizon if lifelong else max(tk["completed"] for tk in tasks_done)
     n_tasks = len(tasks_done)
-    lat_total = np.array([tk["completed"] - tk["created"] for tk in tasks_done]) * DT
-    lat_drive = np.array([tk["completed"] - tk["assigned"] for tk in tasks_done]) * DT
-    lat_queue = np.array([tk["assigned"] - tk["created"] for tk in tasks_done]) * DT
-    sim_hours = T_END * DT / 3600
+    dt = a.dt                                            # 틱 길이[초] (-116: --speed)
+    lat_total = np.array([tk["completed"] - tk["created"] for tk in tasks_done]) * dt
+    lat_drive = np.array([tk["completed"] - tk["assigned"] for tk in tasks_done]) * dt
+    lat_queue = np.array([tk["assigned"] - tk["created"] for tk in tasks_done]) * dt
+    sim_hours = T_END * dt / 3600
     tot = kernel.totals()
     busy_v1 = tot["drive"] + 2 * tot["wait"]              # v1 호환 (대기 이중계산, 서비스 제외)
     util = busy_v1 / (a.n_robots * T_END)
@@ -143,7 +146,7 @@ def report(a, kernel, stream, ctx):
     conflict_wait = tot["wait"] / max(busy_v1, 1)
     orders_done = sum(1 for od in stream.orders.values() if od["completed"] is not None)
     order_lat = np.array([od["completed"] - od["created"] for od in stream.orders.values()
-                          if od["completed"] is not None]) * DT
+                          if od["completed"] is not None]) * dt
     orders_ph = (orders_done if lifelong else a.n_orders) / sim_hours
 
     print(_header_line(a, kernel, stream, ctx, lifelong))
@@ -158,6 +161,7 @@ def report(a, kernel, stream, ctx):
         variant=a.variant, n_robots=a.n_robots, n_orders=a.n_orders, seed=a.seed,
         aisle_block=int(a.aisle_block), flow=a.flow, lanes=int(a.lanes),
         yield_rule=int(a.yield_rule), yield_events=len(kernel.yield_events), makespan_steps=int(T_END),
+        speed=a.speed, dt_s=round(dt, 6),                  # v3.3 (-116): 초 단위 키의 환산 근거
         tasks_per_h=round(n_tasks / sim_hours, 1),
         orders_per_h=round(orders_ph, 1),
         lead_mean_s=round(_mean(lat_total), 1),

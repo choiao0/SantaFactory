@@ -86,10 +86,11 @@ def test_kpi_matches_cli_report():
     T = 400
     for t in range(T):
         p.step(t)
-    ours = K.summary(p.kernel, p.stream, 2, T)
+    ours = K.summary(p.kernel, p.stream, 2, T, p.dt)
     cfg = p.kernel.cfg
     a = SimpleNamespace(variant="base", n_robots=2, n_orders=p.stream.n_orders, seed=42, aisle_block=False, flow="main",
                         horizon=T, shifts=("out",), order_gap=50, order_gap_arg=None, inbound_gap_arg=None, battery=False,
+                        speed=1.0 / p.dt, dt=p.dt,
                         capacity=cfg.capacity, tote_units=8, lanes=True, yield_rule=cfg.yield_rule,
                         theta_path=None, dirflow=False, export=False)
     ctx = SimpleNamespace(H=p.kernel.H, W=p.kernel.W)
@@ -102,7 +103,7 @@ def test_kpi_matches_cli_report():
     assert set(block) == {"orders_total", "orders_completed", "inbound_total", "inbound_completed", "makespan_s",
                           "lead_time_mean_s", "lead_time_p90_s", "queue_time_mean_s", "throughput_orders_per_h",
                           "throughput_tasks_per_h", "amr_utilization", "conflict_wait_ratio", "distance_total_m", "charge_downtime_s"}
-    assert block["makespan_s"] == T and block["throughput_tasks_per_h"] == theirs["tasks_per_h"]
+    assert block["makespan_s"] == round(T * p.dt) and block["throughput_tasks_per_h"] == theirs["tasks_per_h"]   # 초 = 틱 × dt (-116)
 
 
 def test_defaults_are_the_des_estimate_conditions():

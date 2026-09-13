@@ -20,6 +20,7 @@
 #                              [--horizon=<틱>] [--shifts=in,out,out]                     (고정 시간·교대, -145 §1)
 #                              [--battery] [--chargers=6] [--runtime-h=8] [--charge-h=1.5] [--soc=20,80,95]  (배터리, -145 §2)
 #                              [--orders-file=<json>] [--capacity=<토트 수>] [--tote-units=<상품 수>] [--svc-per-tote=<초>]
+#                              [--speed=<m/s>]   (v3.3, -116: 틱 길이 = CELL_M / speed. 1칸 = 1틱은 그대로, 초 환산만 바뀐다)
 #   기본 = 헤딩 모델 (상태 (r,c,h), 자기+뒤 칸 2칸 점유, 90° 회전 = TURN_TICKS 틱, 회전 중 스윙 칸
 #              예약, 라이브니스 장치 5종). docs/이동계층_PIBT.md#라이브니스-장치-5종
 #   --cell:    칸 모델(점로봇) opt-in — 기준선 CSV 재현·A/B 비교축. (--heading 은 호환용, 무시)
@@ -88,6 +89,11 @@ def _parse_positional(argv):
             # 맵 세트 폴더 (기본 = 공식 맵 3_FMS/map). 합성 창고를 돌릴 때만 쓴다 (-139).
             a.map_dir = f.split("=", 1)[1]
     assert a.flow in ("main", "v1compat"), f"알 수 없는 flow: {a.flow}"
+    # 속도 (-116, 계약 v3.3): 커널은 1칸 = 1틱 그대로, 틱의 길이(초)만 CELL_M / speed 로 잡는다.
+    # 입구(창·서비스·주문 도착 초 → 틱)와 출구(틱 → 초) 환산만 바뀌고, 1.0 이면 비트 동일.
+    a.speed = _opt(argv, "speed", float, SPEED)
+    assert 0.1 <= a.speed <= 5.0, f"--speed 는 0.1~5.0 m/s: {a.speed}"
+    a.dt = CELL_M / a.speed
     if a.map_dir is not None:
         assert os.path.isdir(a.map_dir), f"--map-dir 폴더가 없다: {a.map_dir}"
     return a, pos
@@ -282,7 +288,7 @@ def build(a):
         rack_map = load_rack_map(map_dir)
         assert rack_map, f"{map_dir}/rack_buffers.json 없음 — map/build_rack_map.py 로 생성 " \
                          "(합성 창고는 WMS 마스터가 없어 명시 주문 모드를 못 쓴다 — -139)"
-        explicit = dict(orders=load_orders_file(a.orders_file), rack_map=rack_map, tote_units=a.tote_units)
+        explicit = dict(orders=load_orders_file(a.orders_file), rack_map=rack_map, tote_units=a.tote_units, dt=a.dt)
     stream = OrderStream(rng, a.flow, a.n_orders, a.order_gap, st_cell, stations, inbound_gap=a.inbound_gap_arg,
                          k_line_p=K_LINE_P, horizon=a.horizon, shifts=a.shifts, **explicit)
     if a.horizon is not None or explicit:
@@ -296,12 +302,12 @@ def build(a):
     if a.battery:
         docks = tuple(st_cell[f"charger[{i}]"] for i in range(a.chargers))
         soc_init = tuple(float(x) for x in np.random.default_rng([a.seed, 0x145]).uniform(0.3, 1.0, a.n_robots))
-        drain_drive = 1.0 / (a.runtime_h * 3600 / DT * (0.7 + 0.3 * 0.25))
+        drain_drive = 1.0 / (a.runtime_h * 3600 / a.dt * (0.7 + 0.3 * 0.25))
         bat = dict(battery=True, dock_cells=docks, soc_init=soc_init, drain_drive=drain_drive,
-                   drain_idle=0.25 * drain_drive, charge_rate=1.0 / (a.charge_h * 3600 / DT),
+                   drain_idle=0.25 * drain_drive, charge_rate=1.0 / (a.charge_h * 3600 / a.dt),
                    soc_low=a.soc[0], soc_go=a.soc[1], soc_leave=a.soc[2], soc_yield=(a.soc[0] + a.soc[1]) / 2)
     cfg = KernelConfig(heading=a.heading, zone=a.zone, theta=bool(a.theta_path or a.lanes), check=a.check,
-                       dock_prio=a.dock_prio, export=a.export, service_steps=SERVICE_STEPS,
+                       dock_prio=a.dock_prio, export=a.export, service_steps=round(SERVICE_TIME_S / a.dt),
                        capacity=a.capacity, svc_per_tote=a.svc_per_tote,
                        yield_rule=a.yield_rule, section_limit=a.section_limit,
                        turn_ticks=TURN_TICKS, stall_warn_only=a.horizon is not None, **bat)

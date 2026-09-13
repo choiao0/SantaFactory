@@ -1,4 +1,4 @@
-# 시뮬 실행 계약 — `sim_engine/sim_v2_tasks.py` 호출 규약 (v3.2, 2026-09-11)
+# 시뮬 실행 계약 — `sim_engine/sim_v2_tasks.py` 호출 규약 (v3.3, 2026-09-13)
 
 > **v2 비호환 변경 (2026-09-04, S15P21A106-143):** 기본 이동 모델이 **헤딩 PIBT**로 바뀌었다. 칸 모델은 `--cell` opt-in.
 > `--heading`은 그대로 받되 무시한다. **`--heading`을 넘기지 않아 칸 모델을 얻던 호출자는 `--cell`을 넘겨야 한다**
@@ -17,6 +17,12 @@
 > `--no-lanes`·`--no-yield`로 각각 끌 수 있다. 차선 비용은 **θ 밖**의 시뮬 인자 `--lane-gain`·`--pocket-gain`(기본 2.0)이다 —
 > θ 스키마(A트랙 계약, 11개·v2)는 바뀌지 않는다. 2.0 근거: 2·3·5 A/B 에서 5 는 평가 시드 102 의 L1 12·20대에서 새 STALL, 3·2 완주 → 안정적인 2.
 > **헤딩 main 전용** — 칸 모델(`--cell`)과 v1compat 은 A/B 기준 축이라 적용하지 않는다. 패리티·기준선 비교는 두 스위치를 모두 끈다.
+>
+> **v3.3 호환 변경 (2026-09-13, S15P21A106-116):** `--speed=<m/s>` 추가. **커널은 1칸 = 1틱 그대로**이고 틱의 길이만
+> `dt = CELL_M / speed`[초]가 된다. 초 단위 입력(창·서비스·주문 도착 시각)은 dt 로 나눠 틱이 되고, 초 단위 출력은 dt 를 곱해 나온다.
+> **틱 단위 인자(`--horizon`·`--order-gap`·`--inbound-gap`·`--svc-per-tote`)는 틱 그대로** — 초를 넘기는 호출자(견적 워커)가 dt 로 환산한다.
+> SUMMARY 에 `speed`·`dt_s` 항상 출력. `--speed` 를 안 주면(1.0) v3.2 와 비트 동일(기준값 4개·동일성 12행 확인).
+> 회전은 속도와 무관하게 1틱(= dt 초)으로 잡히므로 물리 실측 1.511 s 와의 차이는 속도에 따라 ±(태스크당 3~6 %, docs/2026-09-11_안건6건_평가.md §5).
 
 대상: 시뮬을 **프로세스로 호출하는 쪽** — A트랙 θ 탐색 워커(`infra/worker/objective.py`), 견적 엔진 배치 워커, fleet 스윕 스크립트.
 θ 스키마가 `guidance_types.py`로 고정된 것과 같은 이유로, 시뮬 호출 방법도 여기 고정한다. **이 문서에 없는 인자·출력 키에 의존하지 말 것.**
@@ -32,6 +38,7 @@ python sim_v2_tasks.py <tag> <n_robots> <n_orders> <seed> <aisle_block> [--flow=
                        [--orders-file=<json>] [--capacity=1] [--tote-units=<상품 수>] [--svc-per-tote=0]
                        [--no-lanes] [--no-yield] [--map-dir=<맵 세트 폴더>]
                        [--section-limit=0] [--section-grid=3]                    (v3.2 구간 대수 제한)
+                       [--speed=1.0]                                             (v3.3 속도: 틱 길이 = CELL_M / speed)
 ```
 작업 디렉토리 = `3_FMS/sim_engine/` (상대 import). 맵은 `3_FMS/map/occupancy_grid.npy`·`stations.json`·`charge_zone.json`을 읽는다
 (컨테이너는 `3_FMS/`를 통째로 마운트하면 된다). `--map-dir`을 주면 그 폴더에서 같은 파일들을 읽는다.
@@ -57,6 +64,7 @@ python sim_v2_tasks.py <tag> <n_robots> <n_orders> <seed> <aisle_block> [--flow=
 | `--no-yield` | 8틱 이상 지속된 정면 조우의 양보 규칙을 끔 | main 헤딩 기본 ON |
 | `--section-limit=<N>` | 블록당 동시 대수 상한. **0 = 끔** | 실질 0/1 스위치다 — N≥2 는 같은 블록 안 두 대가 마주보는 걸 못 막아 무효거나 악화(실측 §5-2) |
 | `--section-grid=<k>` | 블록 한 변[칸]. `--section-limit>0` 일 때만 의미 | 기본 3. 크면 정체 면제로 풀려 무력해진다 |
+| `--speed=<m/s>` | 로봇 속도 → **틱 길이** `dt = CELL_M / speed`[초]. 0.1~5.0 | v3.3. 기본 1.0(= 1틱 1초, 비트 동일). 틱 단위 인자는 환산하지 않는다 — 초를 가진 호출자가 `초 / dt` 로 넘길 것. 서비스 틱 `round(3.64 / dt)`·토트당 서비스는 호출자 반올림이라 속도에 따라 ±1틱 |
 | (기본) | **헤딩 PIBT**(2칸 차체·회전·후진·라이브니스 5종). v2부터 플래그 없이 기본 | SUMMARY에 `heading=1` |
 | `--cell` | 칸 모델(점로봇). 기준선 CSV 재현·A/B 비교축 전용 | v1compat은 플래그와 무관하게 항상 칸 |
 | `--heading` | **호환용, 무시** (v1 호출자가 넘기던 플래그) | v1compat에서 넘기면 `[WARN]` 한 줄 |
@@ -83,7 +91,8 @@ JSON 키 (항상 있는 것):
 | 키 | 의미 | 단위 |
 |---|---|---|
 | `variant, n_robots, n_orders, seed, aisle_block, flow` | 입력 에코 | |
-| `makespan_steps` | 마지막 태스크 완료 틱 | 틱(=초) |
+| `speed, dt_s` | `--speed` 에코와 틱 길이[초] (v3.3). 아래 초 단위 키는 전부 `틱 × dt_s` | m/s, 초 |
+| `makespan_steps` | 마지막 태스크 완료 틱 | 틱(초 = `× dt_s`) |
 | `tasks_per_h` | 태스크 처리량 **(권장 목적함수)** | 태스크/시간 |
 | `orders_per_h` | 주문 처리량 | 주문/시간 |
 | `lead_mean_s, lead_p90_s` | 태스크 생성→완료(기존 키) | 초 |
@@ -221,6 +230,7 @@ SIM_NO_PLOT=1 PYTHONIOENCODING=utf-8 python sim_v2_tasks.py bo17 24 120 42 1 --o
 | **v2.6** | 2026-09-09 | **비호환**(-177): `capacity` 단위 상품 수→토트 수. `tote_units`·`svc_per_tote`, 동승 완료, 6토트 초과 제외, 토트·왕복·주문 리드타임 SUMMARY 추가. `capacity=1`, `svc_per_tote=0`, `tote_units` 미지정 시 기존 KPI 비트 동일 |
 | v3.1 | 2026-09-10 | 호환(추가만, -139·-183): `--map-dir=<맵 세트 폴더>`, 조건부 SUMMARY 키 `map_dir`. 맵 세트에 `topology.json`이 있으면 통로·밴드 좌표를 거기서 읽는다(없으면 wallA 상수). `n_robots` 상한이 그 맵의 충전 존 용량이 된다. 인자를 안 주면 v3와 비트 동일(기준값 3개·동일성 12행 확인). θ 탐색 워커 `run_study.py --map-dir`이 이 인자로 호출하고 `meta.condition.map_dir`에 fms_root 기준 상대 경로를 남긴다 |
 | **v3.2** | 2026-09-11 | 호환(추가만, -193): `--section-limit=<N>`·`--section-grid=<k>`, 조건부 SUMMARY 키 `section_limit`·`section_grid`·`section_blocks`·`section_releases`. 통행 칸을 k×k 블록으로 자르고 블록당 동시 대수를 N 으로 묶어 정면 조우(소싸움)를 줄인다. `--section-limit` 을 안 주면 v3.1과 비트 동일(기준값 3개 확인). 측정·한계는 §5-2 |
+| **v3.3** | 2026-09-13 | 호환(추가만, -116): `--speed=<m/s>`(틱 길이 = CELL_M / speed), SUMMARY `speed`·`dt_s` 항상 출력. 커널 틱 동역학 불변, 초 환산만. 인자 없으면 v3.2 와 비트 동일(기준값 4개·동일성 12행). 견적 워커가 `amr.avg_payload_kg`+앵커로 `contracts/speed_model.speed_for_load`, 없으면 0.9 m/s(물리 계획 속도)를 넘긴다 |
 | **v3** | 2026-09-09 | **결과 변경**(-177): 헤딩 main 기본 차선(`--lane-gain`·`--pocket-gain` 2.0, θ 밖)·양보, `--no-lanes`·`--no-yield`, SUMMARY `lanes`·`yield_rule`·`yield_events`. θ 스키마는 11개 v2 그대로. 기준선은 두 스위치를 끄면 비트 동일 |
 
 관련: [고부하 기준](../docs/θ_경로_기준선.md#고부하-l1l2), [θ 로드맵](../docs/남은과업_계획.md#부록-a-θ-로드맵-단계표),
