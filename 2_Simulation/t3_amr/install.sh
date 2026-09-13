@@ -297,22 +297,24 @@ done
 # ============================================================
 # 4) GPU 번호
 # ============================================================
-head_ "4) paths.sh 의 GPU 번호"
-CUR="$(sed -n 's/^export GPU=\${GPU:-\([0-9]*\)}.*/\1/p' "$W/paths.sh" | head -1)"
-note "지금 값: GPU=${CUR:-?} · 이 서버의 장치 수: $NGPU"
-if [ -n "$CUR" ] && [ "$NGPU" -gt 0 ] && [ "$CUR" -ge "$NGPU" ]; then
-    # 없는 장치를 가리키므로 이건 고민할 것이 없다
-    BEST=$(nvidia-smi --query-gpu=index,memory.used --format=csv,noheader,nounits 2>/dev/null \
-           | sort -t, -k2 -n | head -1 | cut -d, -f1 | tr -dc '0-9')
-    BEST="${BEST:-0}"
-    sed -i "s/^export GPU=\${GPU:-$CUR}/export GPU=\${GPU:-$BEST}/" "$W/paths.sh"
-    note "★ GPU=$CUR 는 이 서버에 없는 장치입니다 — 가장 한가한 GPU=$BEST 로 고쳤습니다."
-elif [ "$NGPU" -gt 0 ]; then
-    echo
+head_ "4) GPU 선택 확인"
+# ★ 더 이상 `paths.sh` 를 고치지 않는다 (2026-09-13).
+#
+#   예전에는 `sed -i` 로 저장소 파일을 직접 고쳤다. 그래서 설치 뒤 `git pull`
+#   마다 "Your local changes would be overwritten" 이 났다 (Brev 에서 발생).
+#   **설치가 저장소를 더럽히면 안 된다.** 이제 `paths.sh` 가 실행 시점에
+#   nvidia-smi 로 가장 한가한 장치를 스스로 고른다 — 여기서는 확인만 한다.
+if [ "$NGPU" -gt 0 ]; then
+    # shellcheck disable=SC1091
+    ( unset GPU; . "$W/paths.sh" >/dev/null 2>&1; echo "$GPU" ) > /tmp/_gpu_pick 2>/dev/null
+    PICK="$(cat /tmp/_gpu_pick 2>/dev/null)"; rm -f /tmp/_gpu_pick
+    note "이 서버 장치 ${NGPU}개 · paths.sh 가 고른 값: GPU=${PICK:-?}"
+    if [ -n "$PICK" ] && [ "$PICK" -ge "$NGPU" ] 2>/dev/null; then
+        bad "고른 GPU=$PICK 가 장치 수(${NGPU})를 넘습니다 — paths.sh 의 선택 로직을 보세요."
+    fi
     nvidia-smi --query-gpu=index,memory.used,memory.total,utilization.gpu \
                --format=csv 2>/dev/null | sed 's/^/    /'
-    note "위 표에서 한가한 장치가 다르면 직접 고치세요:"
-    note "  sed -i 's/GPU:-$CUR/GPU:-<번호>/' paths.sh     또는  GPU=<번호> bash run_record.sh"
+    note "다른 장치를 쓰려면:  GPU=<번호> bash run_record.sh   (파일은 안 고칩니다)"
 fi
 
 # ============================================================

@@ -56,7 +56,21 @@ export MODS=$W/path
 #   예전에는 무조건 덮어써서 셸에서 공인 IP 를 줘도 소용이 없었다.
 #       LAN_IP=$(curl -s ifconfig.me) bash run.sh ...
 export LAN_IP=${LAN_IP:-$(hostname -I | awk '{print $1}')}
-export GPU=${GPU:-3}
+# ★ 이 서버에 **실제로 있는** 장치 중 가장 한가한 것을 고른다 (2026-09-13).
+#
+#   예전에는 `${GPU:-3}` 하드코딩이었고, 서버가 바뀌면 `install.sh` 4단계가
+#   **이 파일을 sed 로 고쳤다.** 추적 중인 파일이라 그 뒤 `git pull` 마다
+#       error: Your local changes to the following files would be overwritten
+#   가 났다 (2026-09-13 Brev 에서 발생). 설치가 저장소를 더럽히면 안 된다.
+#
+#   nvidia-smi 가 없으면(로컬 개발·WSL) 0 으로 떨어진다 — 어차피 안 쓴다.
+#   특정 장치를 쓰려면 여전히 `GPU=1 bash run.sh ...` 로 이긴다.
+#   ★ `cut -d, -f1` 로 **index 만** 떼야 한다. `tr -dc '0-9'` 만 쓰면
+#     "2, 100" 이 `2100` 이 된다 (2026-09-13 실측으로 걸렀다).
+export GPU=${GPU:-$(nvidia-smi --query-gpu=index,memory.used \
+                      --format=csv,noheader,nounits 2>/dev/null \
+                    | sort -t, -k2 -n | head -1 | cut -d, -f1 | tr -dc '0-9')}
+export GPU=${GPU:-0}          # nvidia-smi 가 없거나 비었을 때
 
 # [patch_gpu_isolate] GPU 격리 — 이 한 줄이 run.sh·run_record.sh·build_scene 전부에 적용된다
 #   `--/renderer/activeGpu=$GPU` 는 **렌더러(Vulkan)만** 묶는다. PhysX/warp 쪽
