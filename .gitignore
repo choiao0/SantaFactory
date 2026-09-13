@@ -28,6 +28,15 @@ server-setup/
 !3_FMS/docs/2026-09-04_θ탐색_예산_측정.md
 !3_FMS/docs/api_response_schema_v1.html
 
+# t3_amr 날짜 기록도 로컬 보관 (3_FMS 와 같은 방식).
+# 팀 공유·FMS 회신용 3건만 계속 추적한다 — README 가 링크하고 있다.
+2_Simulation/t3_amr/docs/20*
+2_Simulation/t3_amr/docs/*.png
+2_Simulation/t3_amr/docs/*.html
+!2_Simulation/t3_amr/docs/2026-09-13_격자_1.2m_근거.md
+!2_Simulation/t3_amr/docs/2026-09-13_이동회전_실측시간.md
+!2_Simulation/t3_amr/docs/2026-09-13_FMS_격자1.0m_제안_답신.md
+
 # from_theta·개별 실행이 다시 만드는 검증 산출물
 3_FMS/sim_engine/results/b2_from_theta_dirflow.png
 3_FMS/sim_engine/results/sim_v2_b2demo_r10_main_dirflow.npz
