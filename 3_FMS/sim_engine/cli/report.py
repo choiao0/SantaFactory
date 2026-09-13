@@ -1,12 +1,13 @@
 # -*- coding: utf-8 -*-
 import json
+import math
 import os
 
 import numpy as np
 
 from pibt_core import TURN_TICKS
 
-from .common import OUT
+from .common import OUT, SPEED
 from .export_isaac import export_isaac
 
 
@@ -24,7 +25,7 @@ def _header_line(a, kernel, stream, ctx, lifelong):
             + (f" + 입고 {stream.n_inbound}건" if a.flow == "main" else "")
             + f", seed={a.seed}, flow={a.flow}, 통로차단={'ON' if a.aisle_block else 'OFF'}"
             + (f", 헤딩 모델(회전 {TURN_TICKS}틱)" if kernel.heading else "")
-            + (f", 속도 {a.speed:g} m/s (틱 {a.dt:g} s)" if a.speed != 1.0 else "")
+            + ("" if math.isclose(a.speed, SPEED) else f", 속도 {a.speed:g} m/s (틱 {a.dt:g} s)")
             + (f", 충전 존({len(kernel.zone_cells)}칸, 홈 간격≥2)" if kernel.zone else ", 고정 홈 12칸")
             + (f", 주문 간격 {a.order_gap:g}틱" if a.order_gap_arg is not None else "")
             + (f", 입고 간격 {a.inbound_gap_arg:g}틱" if a.inbound_gap_arg is not None else "")

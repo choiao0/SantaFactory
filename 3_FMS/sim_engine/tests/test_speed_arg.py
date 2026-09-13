@@ -23,7 +23,8 @@ def test_default_speed_is_one_tick_per_second():
 
 def test_speed_sets_tick_length():
     a = parse_args(BASE + ["--speed=1.1"])
-    assert a.speed == 1.1 and a.dt == pytest.approx(CELL_M / 1.1)
+    assert a.speed == 1.1
+    assert a.dt == pytest.approx(CELL_M / 1.1)
     # 서비스 틱은 초를 틱으로 반올림: 1.1 m/s 에서도 4틱(= 기준값과 같은 틱 동역학), 0.5 m/s 에서는 2틱
     assert round(SERVICE_TIME_S / a.dt) == 4
     assert round(SERVICE_TIME_S / parse_args(BASE + ["--speed=0.5"]).dt) == 2
@@ -45,4 +46,5 @@ def test_explicit_order_seconds_become_ticks_by_dt():
         stream = OrderStream(np.random.default_rng(0), "main", 0, 50, st_cell, stations, horizon=1000,
                              shifts=("out",), orders=orders, rack_map=rack_map, tote_units=8, dt=dt)
         ticks[dt] = stream.explicit_orders[0][0]
-    assert ticks[1.0] == 100 and ticks[2.0] == 50          # 100 s → 100틱(dt 1) / 50틱(dt 2)
+    assert ticks[1.0] == 100          # 100 s → 100틱 (dt 1)
+    assert ticks[2.0] == 50           # 100 s → 50틱 (dt 2)

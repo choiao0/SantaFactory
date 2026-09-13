@@ -55,7 +55,7 @@ python3 -m fms_core --spawn 3                                            # DES �
 python3 -m pytest fms_core/tests host_orch/tests sim_engine/tests -q   # MR CI(.gitlab-ci.yml fms-python-test)가 도는 것과 같은 묶음
 ```
 
-옵션: `--planner kernel` · `--tick-s 1.0`(틱 최소 길이 = DES DT) · `--ack-timeout-s 30`(노드 하나 도착 상한) · `--ready-timeout-s 420` ·
+옵션: `--planner kernel` · `--tick-s`(틱 최소 길이, 기본 = DES 틱 길이 1 m ÷ 속도, 속도 0.9 → 1.11 s; `--planner-opt speed=` 로 속도 지정) · `--ack-timeout-s 30`(노드 하나 도착 상한) · `--ready-timeout-s 420` ·
 `--heartbeat-s 5` · `--host-offline-s 15` · `--state-dir`(bdseq) · `--node-id fms-core` · `--group santa`.
 
 EC2 배포(compose, k3s 전까지): `infra/fms_core.Dockerfile` + `infra/compose.fms-core.yml` (EMQX 네트워크 backbone_default 만).

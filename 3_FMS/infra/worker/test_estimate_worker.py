@@ -39,7 +39,9 @@ def test_request_to_args():
 
 def test_defaults_and_tag_sanitizing():
     kw = w.to_sim_args({"run_id": "a/b c", "horizon_s": 3600, "amr": {"count": 1}})
-    assert kw["tag"] == "a_b_c" and kw["seed"] == 42 and kw["extra_args"] == ("--horizon=3240", "--speed=0.9")
+    assert kw["tag"] == "a_b_c"
+    assert kw["seed"] == 42
+    assert kw["extra_args"] == ("--horizon=3240", "--speed=0.9")
 
 
 @pytest.mark.parametrize("bad", [
@@ -73,7 +75,8 @@ def test_speed_from_payload_and_anchors():
     """평균 무게 + 기종 앵커 → speed_for_load. 50/100 kg, 1.2→1.0 이면 1.1 m/s, horizon 21600 s = 23760 틱."""
     amr = {"count": 3, "speed_empty": 1.2, "speed_loaded": 1.0, "max_payload_kg": 100, "avg_payload_kg": 50}
     extra = w.to_sim_args({**REQ, "amr": amr})["extra_args"]
-    assert "--speed=1.1" in extra and "--horizon=23760" in extra
+    assert "--speed=1.1" in extra
+    assert "--horizon=23760" in extra
     # 앵커가 하나라도 없으면 계산 불가 → 기본 0.9 (run 은 돈다)
     extra = w.to_sim_args({**REQ, "amr": {"count": 3, "speed_empty": 1.2, "avg_payload_kg": 50}})["extra_args"]
     assert "--speed=0.9" in extra

@@ -48,7 +48,7 @@ class ConductorConfig:
     node_id: str = "fms-core"
     planner: str = "kernel"
     planner_options: dict = field(default_factory=dict)
-    tick_s: float = 1.0                 # 틱 최소 길이(벽시계) = DES DT. 이동 틱은 로봇 도착이 늦으면 그만큼 늘어난다
+    tick_s: float = 1.0                 # 틱 최소 길이(벽시계) = DES 틱 길이 CELL_M/speed (app 이 des_dt 로 채움). 이동 틱은 로봇 도착이 늦으면 그만큼 늘어난다
     ack_timeout_s: float = 30.0         # 노드 하나(1 m · 90°)에 이 이상 걸리면 로봇 정체 → 런 실패
     ready_timeout_s: float = 420.0      # Start 뒤 전원 ONLINE+포즈 (실모드 Isaac 부팅 포함, sim-runner 와 같은 값)
     heartbeat_s: float = 5.0
