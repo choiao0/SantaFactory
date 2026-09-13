@@ -1,14 +1,5 @@
 import { formatWon } from '../utils/format.js'
 
-function hoursBetween(start, end) {
-  if (!start || !end) return null
-  const [sh, sm] = start.split(':').map(Number)
-  const [eh, em] = end.split(':').map(Number)
-  let minutes = eh * 60 + em - (sh * 60 + sm)
-  if (minutes <= 0) minutes += 24 * 60
-  return minutes / 60
-}
-
 export default function WarehouseStep({ form, onChange, models, modelsError, model, onSelectModel }) {
   const number = (key) => (e) => onChange({ [key]: e.target.value === '' ? '' : Number(e.target.value) })
   const text = (key) => (e) => onChange({ [key]: e.target.value })
@@ -16,9 +7,6 @@ export default function WarehouseStep({ form, onChange, models, modelsError, mod
     const v = e.target.value.replace(/[^0-9]/g, '')
     onChange({ [key]: v === '' ? '' : Number(v) })
   }
-
-  const outboundHours = hoursBetween(form.outboundStart, form.outboundEnd)
-  const arrivalsPerHour = outboundHours ? Math.round(form.outboundAvg / outboundHours) : null
 
   return (
     <section className="step section-light reveal" id="s1">
@@ -32,21 +20,15 @@ export default function WarehouseStep({ form, onChange, models, modelsError, mod
       <div className="duo">
         <form onSubmit={(e) => e.preventDefault()}>
           <div className="formgrid">
+            {/* 입고·출고를 물량 → 시간대 → 목표·예산 순으로, 줄마다 좌우 한 쌍씩 놓는다 */}
             <div className="span2">
-              <label htmlFor="workers">작업자 수</label>
-              <div className="field">
-                <input id="workers" type="number" value={form.workerCount} min={1} onChange={number('workerCount')} />
-                <span className="suffix">명</span>
-              </div>
-            </div>
-            <div>
               <label htmlFor="inbound-avg">일 평균 입고</label>
               <div className="field">
                 <input id="inbound-avg" type="text" inputMode="numeric" value={form.inboundAvg} onChange={digits('inboundAvg')} />
                 <span className="suffix">건/일</span>
               </div>
             </div>
-            <div>
+            <div className="span2">
               <label htmlFor="outbound-avg">일 평균 출고 주문</label>
               <div className="field">
                 <input id="outbound-avg" type="text" inputMode="numeric" value={form.outboundAvg} onChange={digits('outboundAvg')} />
@@ -86,12 +68,6 @@ export default function WarehouseStep({ form, onChange, models, modelsError, mod
               </div>
             </div>
           </div>
-
-          <p className="formsum">
-            출고 <b>{form.outboundStart}–{form.outboundEnd}</b>
-            {arrivalsPerHour != null && <> · 시간당 <b>{arrivalsPerHour}건</b> 도착</>}
-            {' '}→ 목표 처리율 <b>{form.targetThroughput}%</b> · 예산 <b>{formatWon(form.budgetMan * 10000)}</b>
-          </p>
 
           <div className="runcta">
             <button type="button" className="ghost">주문 로그 CSV 업로드 (선택)</button>
