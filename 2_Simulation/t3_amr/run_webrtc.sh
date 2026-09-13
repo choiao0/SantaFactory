@@ -137,7 +137,12 @@ if pgrep -f 'bin/isaacsim isaacsim\.exp' >/dev/null 2>&1; then
         echo "  ${i}0초 · GPU ${used:-?} MiB"
         [ -n "$used" ] && [ "$used" -lt 100 ] && break
     done
-    still="$(pgrep -cf 'bin/isaacsim isaacsim\.exp' 2>/dev/null || echo 0)"
+    # ★ `|| echo 0` 을 쓰면 안 된다 (2026-09-13). `pgrep -c` 는 안 맞아도
+    #   **"0" 을 찍고 종료코드 1** 을 준다. 그래서 `$(pgrep -c ... || echo 0)`
+    #   이 "0\n0" 이 되고, 아래 비교가 참이 되어 **정리가 다 끝났는데도**
+    #   "Kit 이 아직 0/0개 남아 있습니다" 로 죽었다. 종료코드는 버리고 숫자만 쓴다.
+    still="$(pgrep -cf 'bin/isaacsim isaacsim\.exp' 2>/dev/null | head -1)"
+    still="${still:-0}"
     if [ "$still" != 0 ]; then
         echo "★ Kit 이 아직 ${still}개 남아 있습니다. 강제 종료 후 다시 도세요:"
         echo "    pkill -9 -f 'bin/isaacsim isaacsim.exp'"
