@@ -49,8 +49,34 @@ export AMR_BASE=$W
 export MODS=$W/path
 
 # --- 스트리밍 ---
-export LAN_IP=$(hostname -I | awk '{print $1}')
-export GPU=${GPU:-3}
+# ★ 미리 준 값이 있으면 그것을 쓴다 (2026-09-13).
+#   `hostname -I` 는 **내부 IP** 다. 사내망(jupyter04)에서는 그게 접속 주소라
+#   맞지만, 클라우드(Brev 등)에서는 밖에서 그 주소로 못 붙는다 — WebRTC 서버가
+#   "미디어를 여기로 보내라"고 알려주는 주소라서 틀리면 화면이 안 나온다.
+#   예전에는 무조건 덮어써서 셸에서 공인 IP 를 줘도 소용이 없었다.
+#       LAN_IP=$(curl -s ifconfig.me) bash run.sh ...
+export LAN_IP=${LAN_IP:-$(hostname -I | awk '{print $1}')}
+# ★ 포트를 바꿔서 내보내는 클라우드용 (2026-09-13 Brev). 기본은 Isaac 기본값이라
+#   사내망은 달라지는 것이 없다. 자세한 이유는 `amr/path/_common.py` 의 주석.
+#   Brev 는 공개 포트를 제가 정하고 **Destination Port 만 편집**을 받아 준다.
+#   그러니 공개 포트에 맞춰 Destination 을 고치고, 여기에 같은 번호를 준다.
+export SIGNAL_PORT=${SIGNAL_PORT:-49100}   # TCP 시그널링
+export STREAM_PORT=${STREAM_PORT:-47998}   # UDP 미디어
+# ★ 이 서버에 **실제로 있는** 장치 중 가장 한가한 것을 고른다 (2026-09-13).
+#
+#   예전에는 `${GPU:-3}` 하드코딩이었고, 서버가 바뀌면 `install.sh` 4단계가
+#   **이 파일을 sed 로 고쳤다.** 추적 중인 파일이라 그 뒤 `git pull` 마다
+#       error: Your local changes to the following files would be overwritten
+#   가 났다 (2026-09-13 Brev 에서 발생). 설치가 저장소를 더럽히면 안 된다.
+#
+#   nvidia-smi 가 없으면(로컬 개발·WSL) 0 으로 떨어진다 — 어차피 안 쓴다.
+#   특정 장치를 쓰려면 여전히 `GPU=1 bash run.sh ...` 로 이긴다.
+#   ★ `cut -d, -f1` 로 **index 만** 떼야 한다. `tr -dc '0-9'` 만 쓰면
+#     "2, 100" 이 `2100` 이 된다 (2026-09-13 실측으로 걸렀다).
+export GPU=${GPU:-$(nvidia-smi --query-gpu=index,memory.used \
+                      --format=csv,noheader,nounits 2>/dev/null \
+                    | sort -t, -k2 -n | head -1 | cut -d, -f1 | tr -dc '0-9')}
+export GPU=${GPU:-0}          # nvidia-smi 가 없거나 비었을 때
 
 # [patch_gpu_isolate] GPU 격리 — 이 한 줄이 run.sh·run_record.sh·build_scene 전부에 적용된다
 #   `--/renderer/activeGpu=$GPU` 는 **렌더러(Vulkan)만** 묶는다. PhysX/warp 쪽
@@ -74,7 +100,8 @@ echo "  입력  SCENE=$(basename $SCENE)  MAP=$(basename $MAP)  ROBOT=$(basename
 echo "  파생  STAGE=$STAGE"
 echo "  계획  PLAN=$PLAN"
 echo "  결과  OUT=$OUT  LOGS=$LOGS"
-echo "  LAN=$LAN_IP  GPU=$GPU  CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-<격리 해제>}"
+echo "  LAN=$LAN_IP  시그널 =$SIGNAL_PORT/TCP  미디어 =$STREAM_PORT/UDP"
+echo "  GPU=$GPU  CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-<격리 해제>}"
 for f in "$SCENE" "$ROBOT" "$MAP/occupancy_grid.npy"; do
     [ -e "$f" ] || echo "  ★ 없음: $f"
 done
