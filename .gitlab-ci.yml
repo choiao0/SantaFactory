@@ -105,6 +105,27 @@ fms-python-test:
     # fms_core/tests/test_des_parity.py 가 견적 워커·sim_v2 와 커널 조건을 직접 대조한다 — sim_engine 이 바뀌면 여기서 빨개진다.
     - python -m pytest fms_core/tests host_orch/tests sim_engine/tests -q
 
+robot-python-test:
+  stage: test
+  image: python:3.11.9-slim
+  tags:
+    - sonar-ec2
+  variables:
+    PIP_CACHE_DIR: "${CI_PROJECT_DIR}/.cache/pip"
+  cache:
+    key: robot-pip-cache
+    paths:
+      - .cache/pip
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - 1_Robot/**/*
+  script:
+    - pip install --no-cache-dir pytest==8.3.4 pyyaml==6.0.2
+    - cd 1_Robot/amr_agent
+    # 에이전트 순수부만 (ROS 불필요): profile(BE 파라미터 병합) · battery · state · order book · primitives
+    - python -m pytest -q
+
 sonarqube-analysis:
   stage: sonar
   image:

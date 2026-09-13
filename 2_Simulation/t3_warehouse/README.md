@@ -112,7 +112,7 @@ warehouse_sim.py가 런타임 수술(깨진 콜리전 비활성 + 자체 하부 
 | `WSIM_SPAWN` | — | `"x,y;x,y;…"`로 직접 지정(개수 = N) |
 
 이름 규칙: 프림 `/World/amr01`, 토픽 `/amr01/{cmd_vel,odom,scan}`, 프레임 `amr01/{odom,base_link,laser}`.
-`../t4_agent/` `agent.launch.py serial:=amr01`의 기본 토픽과 같아서 `flat_topics` 없이 붙는다. 단일 모드(기본)는 예전 그대로 `/World/iw_hub` · `/odom` · `/cmd_vel`이라 `loc.launch.py`·`patrol.py`가 그대로 돈다.
+`../../1_Robot/amr_agent/` `agent.launch.py serial:=amr01`의 기본 토픽과 같아서 `flat_topics` 없이 붙는다. 단일 모드(기본)는 예전 그대로 `/World/iw_hub` · `/odom` · `/cmd_vel`이라 `loc.launch.py`·`patrol.py`가 그대로 돈다.
 
 ```bash
 cd <isaacsim> && WSIM_N=3 ./python.sh <repo>/2_Simulation/t3_warehouse/warehouse_sim.py     # 3대
@@ -124,6 +124,6 @@ source /opt/ros/humble/setup.bash && python3 <repo>/2_Simulation/t3_warehouse/ro
 
 ## 남은 것 (T3 본편 다음 단계)
 
-경로 추종은 `../t4_agent/`의 그리드 프리미티브 컨트롤러가 맡는다(개루프 직진의 슬립 비대칭 휨은 셀 단위 폐루프가 흡수).
+경로 추종은 `../../1_Robot/amr_agent/`의 그리드 프리미티브 컨트롤러가 맡는다(개루프 직진의 슬립 비대칭 휨은 셀 단위 폐루프가 흡수).
 스테이션 왕복 order 연쇄, 리프트 도킹 1장면, 사이클 타임 분해 + 도킹 시간 분포
 실측(DES 환류), 오돔 노이즈 주입(현재는 정답 오돔이라 AMCL alpha 최소 설정).

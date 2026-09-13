@@ -22,7 +22,7 @@ DEFAULT_MODEL = "iw_hub"
 MAX_ROBOTS = 64
 MAX_ROS_DOMAIN_ID = 232
 DEFAULT_TIMEOUT_S = 3600.0
-FAKE_SPACING_M = 3.0            # 가짜 로봇 초기 x 간격 (t4_agent README: fake_x:=3.0)
+FAKE_SPACING_M = 3.0            # 가짜 로봇 초기 x 간격 (1_Robot/amr_agent README: fake_x:=3.0)
 AGENT_GRACE_S = 5.0             # SIGINT 뒤 OFFLINE 발행 여유
 ISAAC_GRACE_S = 20.0
 TERM_GRACE_S = 3.0
@@ -103,6 +103,8 @@ def _scenario(obj: Any, given_sha: Any) -> tuple:
     spawn = obj.get("spawn")
     if spawn is not None and not isinstance(spawn, str):
         raise ValueError("scenario.spawn must be a string 'x,y;x,y;…'")
+    if obj.get("amr") is not None and not isinstance(obj["amr"], dict):
+        raise ValueError("scenario.amr must be an object (BE amr block)")
     return obj, sha
 
 
@@ -140,16 +142,26 @@ def bash_wrap(setups: tuple, argv: list) -> list:
     return ["bash", "-c", " && ".join(parts)]
 
 
-def agent_cmd(robot: RobotSpec, index: int, env: LaunchEnv, fake: bool) -> list:
+def agent_cmd(robot: RobotSpec, index: int, env: LaunchEnv, fake: bool,
+              profile_overrides: Optional[dict] = None) -> list:
+    """에이전트 런치 argv. profile_overrides = scenario.amr (BE amr 블록 그대로) → 에이전트 프로파일 덮어쓰기."""
     launch = ["ros2", "launch", "amr_agent", "agent.launch.py", f"serial:={robot.serial}",
               f"manufacturer:={robot.manufacturer}", f"model:={robot.model}",
               f"mqtt_host:={env.mqtt_host}", f"mqtt_port:={env.mqtt_port}",
               f"mqtt_username:={robot.serial}", f"mqtt_password:={env.amr_password}"]
+    if profile_overrides:
+        launch.append("profile_overrides:=" + json.dumps(profile_overrides, separators=(",", ":"), ensure_ascii=False))
     if fake:
         launch += ["fake_robot:=true", f"fake_x:={index * FAKE_SPACING_M:g}"]
     else:
         launch += ["pose_source:=odom", "use_sim_time:=true"]
     return bash_wrap(env.ros_setup, launch)
+
+
+def agent_profile_overrides(scenario: Optional[dict]) -> Optional[dict]:
+    """scenario.amr 이 dict 이면 그대로 (계약 §2: DES 요청 amr pass-through). 아니면 None."""
+    amr = (scenario or {}).get("amr")
+    return dict(amr) if isinstance(amr, dict) and amr else None
 
 
 def isaac_cmd(env: LaunchEnv) -> list:
@@ -289,7 +301,8 @@ class ProcessManager:
             self._start_agents(self.spec)
 
     def _start_agents(self, spec: RunSpec) -> None:
-        self.agents = [Managed(r.serial, self._spawn(r.serial, agent_cmd(r, i, self.env, self.fake), spec),
+        overrides = agent_profile_overrides(spec.scenario)
+        self.agents = [Managed(r.serial, self._spawn(r.serial, agent_cmd(r, i, self.env, self.fake, overrides), spec),
                                AGENT_GRACE_S) for i, r in enumerate(spec.robots)]
 
     def _spawn(self, name: str, argv: list, spec: RunSpec) -> Any:

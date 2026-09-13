@@ -4,6 +4,8 @@ Per released node: [TURN to face the edge] → DRIVE (forward or reverse) → [T
 A zero-length edge (node at the same position) is a pure spot turn.
 State is published on every change (order accepted/rejected, node reached, pause, error)
 plus a slow heartbeat; the FMS barrier tick keys on state.lastNodeId.
+Tolerances, the state period and the battery model come from the resolved robot profile
+(amr_agent/profile.py: model yaml + profile_file + profile_overrides — BE's amr block).
 """
 from __future__ import annotations
 
@@ -11,6 +13,7 @@ import json
 import math
 
 import rclpy
+from rclpy.executors import ExternalShutdownException   # ros2 launch 의 SIGINT 는 이걸로 온다
 from action_msgs.msg import GoalStatus
 from geometry_msgs.msg import PoseWithCovarianceStamped
 from nav_msgs.msg import Odometry
@@ -22,8 +25,12 @@ from std_msgs.msg import String
 
 from amr_agent_msgs.action import MovePrimitive
 
-from ..vda5050.order import Edge, Node as VNode, Order, OrderBook, OrderError, OrderUpdateError, wrap
+from ..battery import BatteryModel
+from ..profile import PROFILE_PARAMS, ProfileError, resolve_from_values, state_rate_hz, summary
+from ..vda5050.order import Node as VNode, Order, OrderBook, OrderError, OrderUpdateError, wrap
 from ..vda5050.state import StateBuilder, make_error
+
+STEP_S = 0.05      # 실행 루프 주기 = 배터리 적분 간격
 
 
 def yaw_of(q) -> float:
@@ -34,17 +41,22 @@ class OrderExecutor(Node):
     def __init__(self) -> None:
         super().__init__("order_executor")
         p = self.declare_parameters("", [
-            ("serial", "amr01"), ("manufacturer", "santa"), ("map_id", ""),
-            ("pose_source", "odom"), ("tol_xy", 0.05), ("tol_theta", 0.03),
-            ("turn_threshold", 0.12), ("zero_edge_eps", 0.05),
-            ("state_rate_hz", 2.0), ("first_node_tol", 0.5),
+            ("serial", "amr01"), ("manufacturer", "santa"), ("map_id", ""), ("pose_source", "odom"),
+            *PROFILE_PARAMS,
         ])
         g = {x.name: x.value for x in p}
+        try:
+            profile = resolve_from_values(g)
+        except ProfileError as e:
+            self.get_logger().error(f"profile: {e}")
+            raise SystemExit(2) from e
+        c = profile["control"]
         self.serial, self.manufacturer = g["serial"], g["manufacturer"]
         self.pose_source = g["pose_source"]
-        self.tol_xy, self.tol_theta = g["tol_xy"], g["tol_theta"]
-        self.turn_threshold, self.zero_edge_eps = g["turn_threshold"], g["zero_edge_eps"]
-        self.first_node_tol = g["first_node_tol"]
+        self.tol_xy, self.tol_theta = float(c["tol_xy"]), float(c["tol_theta"])
+        self.turn_threshold, self.zero_edge_eps = float(c["turn_threshold"]), float(c["zero_edge_eps"])
+        self.first_node_tol = float(c["first_node_tol"])
+        self.battery = BatteryModel.from_profile(profile["battery"])
 
         self.book = OrderBook()
         self.sb = StateBuilder(self.manufacturer, self.serial, g["map_id"])
@@ -65,9 +77,10 @@ class OrderExecutor(Node):
         self.create_subscription(PoseWithCovarianceStamped, "amcl_pose", self._on_amcl, qos_tl)
         self.state_pub = self.create_publisher(String, "state", 10)
         self.client = ActionClient(self, MovePrimitive, "move_primitive")
-        self.create_timer(0.05, self._step)
-        self.create_timer(1.0 / float(g["state_rate_hz"]), self._publish_state)
-        self.get_logger().info(f"order executor up — serial={self.serial} pose_source={self.pose_source}")
+        self.create_timer(STEP_S, self._step)
+        self.create_timer(1.0 / state_rate_hz(profile), self._publish_state)
+        self.get_logger().info(f"order executor up — serial={self.serial} pose_source={self.pose_source} "
+                               f"state_rate={state_rate_hz(profile):g}Hz profile[{summary(profile)}]")
 
     # ---- inputs ----------------------------------------------------------------
     def _on_odom(self, m: Odometry) -> None:
@@ -148,6 +161,7 @@ class OrderExecutor(Node):
 
     # ---- execution ---------------------------------------------------------------
     def _step(self) -> None:
+        self.battery.step(STEP_S, self.driving)
         if self.paused or self.inflight is not None or self.pose is None:
             return
         if self.queue:
@@ -239,9 +253,17 @@ class OrderExecutor(Node):
             self.inflight.cancel_goal_async()
         self.inflight = None
 
+    def _battery_information(self) -> list:
+        if not self.battery.low:
+            return []
+        return [{"infoType": "batteryLow", "infoLevel": "INFO",
+                 "infoDescription": f"SoC {self.battery.soc_pct:.1f}% <= threshold {self.battery.charge_threshold_pct:g}%",
+                 "infoReferences": []}]
+
     def _publish_state(self) -> None:
         msg = self.sb.state(self.book, self.pose, self.vel, self.driving, self.paused,
-                            self.errors, action_states=self.action_states)
+                            self.errors, self._battery_information(), action_states=self.action_states,
+                            battery=self.battery.state())
         self.state_pub.publish(String(data=json.dumps(msg)))
 
 
@@ -250,8 +272,11 @@ def main() -> None:
     n = OrderExecutor()
     try:
         rclpy.spin(n)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):   # 정상 종료 — 트레이스백·exit 1 없이
         pass
+    except Exception:                                        # noqa: BLE001 — 종료 레이스(컨텍스트 무효)만 삼킨다
+        if rclpy.ok():
+            raise
     finally:
         n.destroy_node()
         rclpy.try_shutdown()

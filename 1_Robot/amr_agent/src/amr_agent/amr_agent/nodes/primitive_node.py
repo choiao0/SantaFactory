@@ -1,5 +1,8 @@
 """Primitive controller node — MovePrimitive action server → /cmd_vel.
 
+Limits (v/w/a/alpha), tolerances, timeout and gains come from the resolved robot profile
+(amr_agent/profile.py: model yaml + profile_file + profile_overrides) — the same profile the bridge
+publishes as factsheet, so what the FMS reads is what the controller enforces.
 Pose source is ground-truth odom by default (Isaac publishes it); set pose_source:=amcl
 to close the loop on AMCL instead. One goal at a time; a new goal while busy is rejected.
 """
@@ -10,6 +13,7 @@ import threading
 import time
 
 import rclpy
+from rclpy.executors import ExternalShutdownException   # ros2 launch 의 SIGINT 는 이걸로 온다
 from geometry_msgs.msg import PoseWithCovarianceStamped, Twist
 from nav_msgs.msg import Odometry
 from rclpy.action import ActionServer, CancelResponse, GoalResponse
@@ -21,6 +25,7 @@ from rclpy.qos import DurabilityPolicy, QoSProfile
 from amr_agent_msgs.action import MovePrimitive
 
 from ..control.primitives import DriveController, Gains, Limits, TurnController, wrap
+from ..profile import PROFILE_PARAMS, ProfileError, gains, limits, resolve_from_values, summary
 
 
 def yaw_of(q) -> float:
@@ -30,19 +35,19 @@ def yaw_of(q) -> float:
 class PrimitiveController(Node):
     def __init__(self) -> None:
         super().__init__("primitive_controller")
-        p = self.declare_parameters("", [
-            ("pose_source", "odom"), ("rate_hz", 20.0),
-            ("tol_xy", 0.05), ("tol_theta", 0.03), ("timeout_s", 30.0),
-            ("v_max", 0.8), ("w_max", 1.2), ("a_max", 1.0), ("alpha_max", 2.5),
-            ("v_min", 0.05), ("w_min", 0.12),
-            ("k_turn", 2.5), ("k_heading", 2.5), ("k_lateral", 1.5),
-        ])
+        p = self.declare_parameters("", [("pose_source", "odom"), *PROFILE_PARAMS])
         g = {x.name: x.value for x in p}
+        try:
+            profile = resolve_from_values(g)
+        except ProfileError as e:
+            self.get_logger().error(f"profile: {e}")
+            raise SystemExit(2) from e
+        c = profile["control"]
         self.pose_source = g["pose_source"]
-        self.dt = 1.0 / float(g["rate_hz"])
-        self.tol_xy, self.tol_theta, self.timeout = g["tol_xy"], g["tol_theta"], g["timeout_s"]
-        self.limits = Limits(g["v_max"], g["w_max"], g["a_max"], g["alpha_max"], g["v_min"], g["w_min"])
-        self.gains = Gains(g["k_turn"], g["k_heading"], g["k_lateral"])
+        self.dt = 1.0 / float(c["rate_hz"])
+        self.tol_xy, self.tol_theta, self.timeout = float(c["tol_xy"]), float(c["tol_theta"]), float(c["timeout_s"])
+        self.limits = Limits(**limits(profile))
+        self.gains = Gains(**gains(profile))
 
         self._pose = None
         self._lock = threading.Lock()
@@ -57,7 +62,8 @@ class PrimitiveController(Node):
         self._server = ActionServer(self, MovePrimitive, "move_primitive", self._execute,
                                     goal_callback=self._on_goal, cancel_callback=self._on_cancel,
                                     callback_group=cb)
-        self.get_logger().info(f"primitive controller up — pose_source={self.pose_source}")
+        self.get_logger().info(f"primitive controller up — pose_source={self.pose_source} "
+                               f"limits={self.limits} tol=({self.tol_xy}, {self.tol_theta}) profile[{summary(profile)}]")
 
     # ---- pose ----------------------------------------------------------------
     def _on_odom(self, m: Odometry) -> None:
@@ -164,10 +170,14 @@ def main() -> None:
     ex.add_node(node)
     try:
         ex.spin()
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):   # 정상 종료 — 트레이스백·exit 1 없이
         pass
+    except Exception:                                        # noqa: BLE001 — 종료 레이스(컨텍스트 무효)만 삼킨다
+        if rclpy.ok():
+            raise
     finally:
-        node._stop()
+        if rclpy.ok():                 # 컨텍스트가 이미 닫혔으면 publish 가 RCLError 를 던진다
+            node._stop()
         node.destroy_node()
         rclpy.try_shutdown()
 

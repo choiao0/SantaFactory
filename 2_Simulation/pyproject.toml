@@ -1,12 +1,12 @@
 [tool.pytest.ini_options]
-testpaths = ["tests", "t4_agent/src/amr_agent/test"]
-pythonpath = [".", "t4_agent/src/amr_agent"]
+testpaths = ["tests"]
+pythonpath = ["."]
 addopts = "-q"
 
 [tool.ruff]
 line-length = 120
 target-version = "py310"
-extend-exclude = ["t4_agent/install", "t4_agent/build", "t4_agent/log", "**/out"]
+extend-exclude = ["**/out"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP"]
