@@ -49,7 +49,13 @@ export AMR_BASE=$W
 export MODS=$W/path
 
 # --- 스트리밍 ---
-export LAN_IP=$(hostname -I | awk '{print $1}')
+# ★ 미리 준 값이 있으면 그것을 쓴다 (2026-09-13).
+#   `hostname -I` 는 **내부 IP** 다. 사내망(jupyter04)에서는 그게 접속 주소라
+#   맞지만, 클라우드(Brev 등)에서는 밖에서 그 주소로 못 붙는다 — WebRTC 서버가
+#   "미디어를 여기로 보내라"고 알려주는 주소라서 틀리면 화면이 안 나온다.
+#   예전에는 무조건 덮어써서 셸에서 공인 IP 를 줘도 소용이 없었다.
+#       LAN_IP=$(curl -s ifconfig.me) bash run.sh ...
+export LAN_IP=${LAN_IP:-$(hostname -I | awk '{print $1}')}
 export GPU=${GPU:-3}
 
 # [patch_gpu_isolate] GPU 격리 — 이 한 줄이 run.sh·run_record.sh·build_scene 전부에 적용된다
