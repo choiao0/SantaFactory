@@ -30,6 +30,9 @@ ap.add_argument("--n", type=int, default=2)
 ap.add_argument("--starts", default=None,
                 help="계획기가 낸 starts.json. 주면 이 좌표에 로봇을 세운다(권장).")
 ap.add_argument("--out", default=os.path.expanduser("<t3_amr>/warehouse_v59_amr2.usd"))
+ap.add_argument("--shelf", default=None,
+                help="적재 선반 USD (warehouse/scene/build_amr_shelf.py 산출). "
+                     "주면 로봇마다 얹는다. 없으면 예전과 똑같이 로봇만 세운다.")
 args = ap.parse_args()
 
 from isaacsim import SimulationApp
@@ -131,6 +134,19 @@ for i, rid in enumerate(rids):
     xf = UsdGeom.Xformable(prim)
     xf.AddTranslateOp().Set(Gf.Vec3d(x0, y0, WHEEL_R))
     xf.AddRotateZOp().Set(yaw)
+
+    # --- 적재 선반 (S15P21A106-196) ---
+    #   로봇 **아래**에 붙여 같이 움직이게 한다. `amr_shelf.usd` 는 구동축 원점 ·
+    #   +X 전진 · 로봇 로컬 z 로 저작돼 있으므로 추가 변환이 필요 없다.
+    #
+    #   ★ `XformCommonAPI` 를 쓰지 말 것. 이 저장소는 위처럼 `AddTranslateOp` +
+    #     `AddRotateZOp` 조합으로 저작하는데, 그 위에서 `SetTranslate()` 를 부르면
+    #     **False 를 돌려주고 아무 일도 하지 않는다 — 예외조차 없다.**
+    #     그래서 여기서도 op 를 안 걸고 참조만 얹는다 (원점 일치 저작이라 0 이면 된다).
+    if args.shelf:
+        sh = st.DefinePrim(f"{path}/shelf", "Xform")
+        sh.GetReferences().AddReference(args.shelf)
+
     placed.append((path, rid, x0, y0, yaw))
     print(f"[s] amr_{i} <- robot {rid}  pos=({x0:.1f}, {y0:.1f}) yaw={yaw:.0f}도  "
           f"궤적시작 ({wp[0][1]:.1f},{wp[0][2]:.1f}) 차이 {gap:.2f}m  "
