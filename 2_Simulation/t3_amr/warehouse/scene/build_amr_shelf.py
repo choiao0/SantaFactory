@@ -120,8 +120,11 @@ def build(out, top_rear, collide):
 
 def main():
     ap = argparse.ArgumentParser()
-    here = os.path.dirname(os.path.abspath(__file__))
-    root = os.path.dirname(here)                      # t3_amr/
+    # ★ 이 파일은 `warehouse/scene/` 에 있다 — t3_amr 까지 **두 단계** 올라간다.
+    #   한 단계만 올라가면 `warehouse/robots/shelf/` 에 쓰고, run_webrtc.sh 는
+    #   `$W/robots/shelf/` 를 봐서 "가 없습니다" 로 죽는다 (2026-09-13 실측).
+    here = os.path.dirname(os.path.abspath(__file__))     # warehouse/scene
+    root = os.path.dirname(os.path.dirname(here))         # t3_amr/
     ap.add_argument("--out", default=os.path.join(root, "robots", "shelf",
                                                   "amr_shelf.usd"))
     ap.add_argument("--top-rear", type=float, default=BASE_REAR,
