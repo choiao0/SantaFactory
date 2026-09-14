@@ -56,7 +56,7 @@ import static org.mockito.Mockito.when;
 class EstimateServiceTest {
 
     private static final EstimateProperties PROPS =
-            new EstimateProperties(15_000_000L, 5_000_000L, 500_000L, 28, 6, 4, 1, Duration.ofMinutes(30), Duration.ofHours(6), "in,in,out,out,out,out", false, Duration.ofMinutes(10));
+            new EstimateProperties(15_000_000L, 5_000_000L, 500_000L, 28, 6, 4, 1, Duration.ofMinutes(30), Duration.ofHours(6), "out", false, Duration.ofMinutes(10));
 
     @Mock
     EstimateRepository estimateRepository;
@@ -220,7 +220,7 @@ class EstimateServiceTest {
         // 실행 시간을 명시하지 않으면 시뮬이 유한 주문 모드로 돌아 처리율이 전 대수 100 % 가 된다
         assertThat(sent.seed()).isEqualTo(101L);                          // 평가 시드, API 로 받지 않는다
         assertThat(sent.horizonS()).isEqualTo(21600L);                    // 6시간
-        assertThat(sent.shifts()).isEqualTo("in,in,out,out,out,out", false, Duration.ofMinutes(10));     // 입고 2h + 출고 4h
+        assertThat(sent.shifts()).isEqualTo("out");                        // 출고 전용 — 팀 결정(2026-09-11) 견적 부하 = 출고만 (S15P21A106-214)
         assertThat(sent.inboundGapS()).isEqualTo(48.0);                   // 600건 / 8시간
         assertThat(sent.outboundGapS()).isEqualTo(22.5);                  // 800건 / 5시간
     }

@@ -26,7 +26,9 @@ import java.time.Duration;
  * @param runTimeout        발행 후 이 시간이 지나도 결과가 없으면 TIMEOUT 처리 (명세 §1-4 는 30분)
  * @param horizon           시뮬 고정 시간 실행 길이. 성능 제약(견적 1회 90초)으로 정해지는 값이라
  *                          창고 데이터가 아니라 설정으로 둔다. 하루 전량으로 바꾸려면 24h
- * @param shifts            입고/출고 교대 토큰열. horizon 을 토큰 수로 등분한다
+ * @param shifts            입고/출고 교대 토큰열. horizon 을 토큰 수로 등분해 입고(in)를 켤 구간을 정한다 — 출고는
+ *                          백엔드가 만든 주문 목록의 시각을 따르므로(명시 주문 모드) 토큰의 영향을 받지 않는다.
+ *                          팀 결정(2026-09-11) 견적 부하 = 출고만이라 기본 out (S15P21A106-214)
  * @param verifyWindow      물리 검증(Isaac) 창 길이. SIM_VERIFY_CONTRACT.md 기본값(600s)과 같다
  * @param exportReplay      run 마다 앞 구간 궤적을 함께 받을지 (S15P21A106-205). 워커 시간이 run 당 약
  *                          35 % 늘고 견적당 약 1 MB 를 저장한다. 끄면 대수별 재생 화면이 비어 보인다
@@ -42,7 +44,7 @@ public record EstimateProperties(
         @DefaultValue("1") int amrCountMargin,
         @DefaultValue("30m") Duration runTimeout,
         @DefaultValue("6h") Duration horizon,
-        @DefaultValue("in,in,out,out,out,out") String shifts,
+        @DefaultValue("out") String shifts,
         @DefaultValue("true") boolean exportReplay,
         @DefaultValue("10m") Duration verifyWindow
 ) {
