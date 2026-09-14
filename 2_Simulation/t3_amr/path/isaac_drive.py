@@ -187,6 +187,13 @@ YAW = (math.pi / 2.0, 0.0, -math.pi / 2.0, math.pi)   # N, E, S, W
 
 MOVE, TURN, REVERSE, WAIT = "move", "turn", "reverse", "wait"
 
+# 겹침 심각도를 가르는 차체 간격 [m]. 이 아래면 "근접" 으로 올려 본다.
+#   ★ 칸 공유(= `overlap_events`)는 접촉이 아니다. 1.2 m 칸을 공유 단위로
+#     쓰면 **0.5 m 넘게 떨어진 두 대도 걸린다.** 2026-09-14 실측: 대각선
+#     이웃이 칸 하나를 각각 5.1 mm · 2.7 mm 씩 스쳤는데 간격은 0.568 m 였다.
+#     0.10 은 "이 정도면 눈으로 확인할 값" 이라는 뜻이고 물리 한계가 아니다.
+CONTACT_NEAR = 0.10
+
 
 def wrap(a: float) -> float:
     """각도를 (-pi, pi]로."""
@@ -1069,12 +1076,35 @@ class FleetStats:
     overlap_events: int = 0
     overlap_pairs: set[tuple[int, int]] = field(default_factory=set)
     worst_overlap: int = 0
+    # 겹침 중 관측된 **차체 사이 최소 거리** [m]. 겹침이 없으면 inf.
+    #   ★ `worst_overlap`(공유 칸 수)만으로는 심각도를 못 잰다. 1.2 m 칸을
+    #     공유 단위로 쓰면 **57 cm 떨어진 두 대도 "겹침"** 이 된다 — 2026-09-14
+    #     실측: 대각선 이웃이 칸 하나를 각각 5.1 mm · 2.7 mm 씩 스쳤는데
+    #     차체 간격은 0.568 m 였다. 심각도를 가르는 것은 이 거리다.
+    worst_gap: float = float("inf")
     stall_steps: int = 0
     sim_time: float = 0.0
 
     @property
     def clean(self) -> bool:
         return self.overlap_events == 0
+
+    @property
+    def contact(self) -> bool:
+        """차체가 **실제로 닿았는가.** 칸 공유(보수적 감시선)와 구별된다."""
+        return self.worst_gap <= 0.0
+
+    def overlap_grade(self) -> str:
+        """겹침 심각도 한 줄. 거리로 가른다."""
+        if self.overlap_events == 0:
+            return "겹침 없음"
+        g = self.worst_gap
+        if g <= 0.0:
+            return f"★★ 실제 접촉 (차체 간격 {g:.3f} m) — 브리지 버그"
+        if g < CONTACT_NEAR:
+            return f"★ 근접 (차체 간격 {g:.3f} m) — 확인 필요"
+        return (f"⚠ 칸 공유만 (차체 간격 {g:.3f} m) — 접촉 아님. "
+                f"감시선이 보수적으로 운 것")
 
 
 class FleetController:
@@ -1120,6 +1150,7 @@ class FleetController:
         self._frozen: dict[int, int] = {a: 0 for a in self.agents}
         self.open_loop: list[str] = []
         self.stats = FleetStats()
+        self._reported: set[tuple[int, int]] = set()   # 겹침 상세를 찍은 쌍
         if starts is not None:
             self.verify_start()
 
@@ -1308,23 +1339,33 @@ class FleetController:
                     self.stats.overlap_events += 1
                     self.stats.overlap_pairs.add((a, b))
                     self.stats.worst_overlap = max(self.stats.worst_overlap, len(shared))
-                    # 첫 건만. 물리 60 Hz 라 매번 찍으면 로그가 수천 줄이 된다.
-                    if self.stats.overlap_events == 1 and poses:
-                        self._report_overlap(a, b, shared, poses)
+                    if poses:
+                        gap = self.g.body_gap(poses[a], poses[b])
+                        self.stats.worst_gap = min(self.stats.worst_gap, gap)
+                        # **쌍마다 첫 건만** 찍는다. 물리 60 Hz 라 매 스텝 찍으면
+                        # 로그가 수천 줄이 되고, 반대로 전체 첫 건만 찍으면
+                        # 뒤에 난 다른 쌍의 정보를 통째로 잃는다.
+                        if (a, b) not in self._reported:
+                            self._reported.add((a, b))
+                            self._report_overlap(a, b, shared, poses, gap)
 
-    def _report_overlap(self, a, b, shared, poses) -> None:
-        """겹침 첫 건의 자세·거리. 이 숫자로 접촉 여부가 판정된다."""
+    def _report_overlap(self, a, b, shared, poses, gap) -> None:
+        """쌍마다 첫 겹침의 자세·거리·심각도. 이 숫자로 접촉 여부가 판정된다."""
         try:
             pa, pb = poses[a], poses[b]
-            gap = self.g.body_gap(pa, pb)
             say = getattr(self, "_say", print)
-            say(f"★ 겹침 상세  쌍 ({a},{b})  공유칸 {sorted(shared)}")
+            if gap <= 0.0:
+                tag = "★★ 실제 접촉 — 물리적으로 닿았다. 브리지 버그"
+            elif gap < CONTACT_NEAR:
+                tag = f"★ 근접 — {CONTACT_NEAR:.2f} m 안까지 붙었다. 확인 필요"
+            else:
+                tag = "⚠ 접촉 아님 — 칸만 공유했다 (감시선이 보수적)"
+            say(f"겹침 상세  쌍 ({a},{b})  공유칸 {sorted(shared)}  →  {tag}")
             for who, p in ((a, pa), (b, pb)):
                 say(f"   agent{who} pose ({p[0]:.3f}, {p[1]:.3f}, "
                     f"{math.degrees(p[2]):.1f}도)")
-            say(f"   차체 최소거리 {gap:.3f} m   "
-                + ("★ 실제 접촉 — 물리적으로 닿았다"
-                   if gap <= 0.0 else "접촉 아님 — 칸만 공유했다 (감시선이 보수적)"))
+            say(f"   차체 최소거리 {gap:.3f} m   축 사이 "
+                f"{math.hypot(pb[0] - pa[0], pb[1] - pa[1]):.3f} m")
         except Exception as e:                     # 진단이 주행을 죽이면 안 된다
             print(f"[adg] 겹침 상세 실패(주행은 계속): {e!r}")
 

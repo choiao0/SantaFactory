@@ -714,13 +714,22 @@ def _tick(f, dt):
         state["done"] = True
         return
 
-    # 차체 겹침은 브리지 버그다. 조용히 넘기지 않는다.
+    # 칸 겹침은 조용히 넘기지 않는다. 다만 **심각도는 거리로 가른다.**
     #   overlap_events 는 **정수 카운터**다 (리스트가 아니다 — FleetStats 참조).
-    #   쌍은 overlap_pairs(set), 최악값은 worst_overlap 에 있다.
+    #   쌍은 overlap_pairs(set), 공유 칸 수는 worst_overlap 에 있다.
+    #
+    #   ★ `overlap_events` 는 **칸** 공유다. 접촉이 아니다. 1.2 m 칸을 공유
+    #     단위로 쓰면 0.5 m 넘게 떨어진 두 대도 걸린다 — 2026-09-14 실측:
+    #     대각선 이웃이 칸 하나를 각각 5.1 mm · 2.7 mm 씩 스쳤는데 차체
+    #     간격은 **0.568 m** 였다. 예전에는 이 셋을 전부 같은 문구
+    #     ("플랜과 실제 기하가 어긋났다")로 찍어서 오탐을 심각하게 읽었다.
+    #     판정은 `worst_gap`(차체 최소거리)이 한다.
     if f.stats.overlap_events:
-        carb.log_error(f"[pibt] ★ 차체 겹침 {f.stats.overlap_events}건  "
-                       f"쌍 {sorted(f.stats.overlap_pairs)}  "
-                       f"최악 {f.stats.worst_overlap}  — 플랜과 실제 기하가 어긋났다는 뜻")
+        grade = f.stats.overlap_grade()
+        log = carb.log_error if f.stats.worst_gap < 0.10 else carb.log_warn
+        log(f"[pibt] 칸 겹침 {f.stats.overlap_events}건  "
+            f"쌍 {sorted(f.stats.overlap_pairs)}  "
+            f"공유칸 최대 {f.stats.worst_overlap}  →  {grade}")
         try:
             for line in str(f.diagnose()).splitlines()[:25]:
                 carb.log_error("   " + line)
