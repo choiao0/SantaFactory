@@ -5,6 +5,7 @@ import com.ssafy.santafactory.entity.store.Product;
 import com.ssafy.santafactory.entity.warehouse.Warehouse;
 import com.ssafy.santafactory.repository.ProductRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
@@ -19,8 +20,8 @@ import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 /**
- * 출고 주문을 자체 생성한다 — {@code 3_FMS/order_gen/generate_orders.py}의 가중 추첨 알고리즘을
- * Java로 옮긴 것이다(파이썬 RNG와 비트 단위로 같을 필요는 없음, seed별 내부 재현성만 보장).
+ * 출고 주문을 자체 생성한다 — 3_FMS 의 {@code order_gen/generate_orders.py}(S15P21A106-212 로 삭제, 마지막 판은
+ * 커밋 7cd68ce)의 가중 추첨 알고리즘을 Java로 옮긴 것이다(파이썬 RNG와 비트 단위로 같을 필요는 없음, seed별 내부 재현성만 보장).
  *
  * <p>창고별로 다른 상품 마스터를 쓰지 않는다 — 물리 레이아웃(zone·store·rack·product)은 창고마다
  * 있는 게 아니라 앱 전체에 하나뿐인 고정 데이터라({@code ProductRepository}), 견적이 어느 창고
@@ -34,9 +35,24 @@ import java.util.stream.IntStream;
  * {@code slice_orders.rescale_orders}/{@code slice_orders}와 정확히 같은 문제) — 그래서 창고의 실제
  * 출고 시간대로 밀도를 재매핑(rescale)한 뒤, horizon 기준으로 자르고 시각을 0부터 다시 매긴다(slice).
  */
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class OutboundOrderGenerator {
+
+    private static final long SECONDS_PER_DAY = 86_400L;
+    /**
+     * 토트 하나에 담는 상품 수 — 견적 워커({@code amr.tote_units} 없을 때)·시뮬 {@code --tote-units} 기본값과
+     * 같은 가정값이다. 실제값은 팀 미확인(16 이면 총 토트가 약 19 % 준다). 바꾸면 워커 기본값도 같이 바꿀 것.
+     */
+    static final int TOTE_UNITS = 8;
+    /**
+     * 주문 하나의 토트 합계 상한 — 시뮬 {@code --max-order-totes} 기본값({@code order_stream.MAX_ORDER_TOTES})과
+     * 같다. 개인 소비자 창고 전제라 업자(팔레트) 주문은 없다.
+     */
+    static final int MAX_ORDER_TOTES = 24;
+    /** 상한을 넘는 주문의 수량 재추첨 한도 — 파이썬 원본과 같은 값. */
+    private static final int MAX_CAP_ATTEMPTS = 1_000;
 
     private final ProductRepository productRepository;
     private final OrderRuleProfileLoader profileLoader;
@@ -74,6 +90,7 @@ public class OutboundOrderGenerator {
         }
 
         List<Draft> drafts = new ArrayList<>(orderCount);
+        int cappedOrders = 0;
         for (int sequence = 0; sequence < orderCount; sequence++) {
             int originalK = weightedChoice(contentRng, lineValues, lineWeights);
             Product first = weightedChoice(contentRng, sortedProducts, globalWeights);
@@ -91,11 +108,9 @@ public class OutboundOrderGenerator {
                 remaining.remove(choice);
             }
 
-            List<SimulationRequest.Line> lines = selected.stream()
-                    .sorted(Comparator.comparing(Product::getId))
-                    .map(p -> new SimulationRequest.Line(p.getId(), p.getRack().getField(),
-                            weightedChoice(contentRng, qtyValues, qtyWeights)))
-                    .toList();
+            LineDraw draw = drawWithinToteCap(selected, contentRng, qtyValues, qtyWeights, sequence);
+            cappedOrders += draw.redraws() > 0 ? 1 : 0;
+            List<SimulationRequest.Line> lines = draw.lines();
 
             int minute = weightedChoice(releaseRng, minuteIndices, minuteWeights);
             long orderedAtS = minute * 60L + releaseRng.nextInt(60);
@@ -111,9 +126,76 @@ public class OutboundOrderGenerator {
             outbound.add(new SimulationRequest.Outbound((long) (i + 1), d.orderedAtS(), d.lines()));
         }
 
+        List<SimulationRequest.Outbound> window = mapToOutboundWindow(warehouse, outbound, horizonSeconds);
+        log.info("출고 주문 생성: 하루 {}건 중 실행 창 {}건 (seed {}), {}토트 상한 재추첨 {}건",
+                orderCount, window.size(), seed, MAX_ORDER_TOTES, cappedOrders);
+        return window;
+    }
+
+    /** 한 주문의 라인과, 그걸 상한 안에 넣느라 수량을 다시 뽑은 횟수. */
+    private record LineDraw(List<SimulationRequest.Line> lines, int redraws) {
+    }
+
+    /**
+     * 상품·줄 수는 그대로 두고 수량만 뽑되, 토트 합계가 {@link #MAX_ORDER_TOTES} 를 넘으면 수량을 다시 뽑는다
+     * (S15P21A106-214). 참조 데이터의 수량 꼬리(한 줄 1,000·2,400개)가 6,000건에 몇 줄 섞이는데, 시뮬은
+     * {@code --max-order-totes 24} 로 그런 주문을 빼 버리므로 백엔드가 저장한 목록과 시뮬이 실제로 돈 목록이
+     * 시드당 3~7건 어긋났다. 여기서 막으면 두 목록이 같아지고 검증 런(Isaac)에도 같은 목록이 간다.
+     * 파이썬 원본({@code generate_with_context})과 같은 규칙·한도다.
+     */
+    private LineDraw drawWithinToteCap(List<Product> selected, Random rng,
+                                       List<Integer> qtyValues, List<Double> qtyWeights, int sequence) {
+        List<Product> chosen = selected.stream().sorted(Comparator.comparing(Product::getId)).toList();
+        List<SimulationRequest.Line> lines = drawLines(chosen, rng, qtyValues, qtyWeights);
+        int redraws = 0;
+        while (orderTotes(lines, TOTE_UNITS) > MAX_ORDER_TOTES) {
+            if (++redraws > MAX_CAP_ATTEMPTS) {
+                throw new IllegalStateException(String.format(
+                        "주문 %d: %d줄이 %d토트 안에 안 들어감 (토트당 %d개, %d회 재추첨)",
+                        sequence, lines.size(), MAX_ORDER_TOTES, TOTE_UNITS, MAX_CAP_ATTEMPTS));
+            }
+            lines = drawLines(chosen, rng, qtyValues, qtyWeights);
+        }
+        return new LineDraw(lines, redraws);
+    }
+
+    private List<SimulationRequest.Line> drawLines(List<Product> chosen, Random rng,
+                                                   List<Integer> qtyValues, List<Double> qtyWeights) {
+        return chosen.stream()
+                .map(p -> new SimulationRequest.Line(p.getId(), p.getRack().getField(),
+                        weightedChoice(rng, qtyValues, qtyWeights)))
+                .toList();
+    }
+
+    /**
+     * 주문의 토트 수 — 시뮬({@code order_stream._order_totes})과 같은 셈: 같은 랙(버퍼) 수량을 합쳐
+     * ceil(합 / toteUnits) 을 랙별로 더한다. 라인마다 따로 올림하면 시뮬보다 크게 세어 상한이 어긋난다.
+     */
+    static int orderTotes(List<SimulationRequest.Line> lines, int toteUnits) {
+        Map<String, Integer> byRack = new HashMap<>();
+        for (SimulationRequest.Line line : lines) {
+            byRack.merge(line.rackId(), line.qty(), Integer::sum);
+        }
+        return byRack.values().stream().mapToInt(qty -> (qty + toteUnits - 1) / toteUnits).sum();
+    }
+
+    /**
+     * 하루 시각 → 창고 출고 시간대 [start, end) 로 재매핑 → 실행 창 [start, start+horizon) 으로 자르기.
+     *
+     * <p>종료 시각이 없거나 시작보다 앞이면(자정을 넘는 교대) 실행 창 자체를 출고 시간대로 본다. 이 경우
+     * 재매핑을 건너뛰면 참조 분포에서 그 시간대에 원래 있던 몫(07시 시작이면 73 %)만 남고 나머지 하루치는
+     * 잘려 나가 처리율·필요 대수가 낙관적으로 나온다 (S15P21A106-214). 이 폴백 창은 24:00 에서 잘리므로
+     * 자정을 넘는 교대는 남은 하루까지만 쓰고 그만큼 밀도가 높아진다 — 하루 경계를 넘겨 매핑하는 건 별도 판단.
+     * 종료 시각이 있는 창은 그대로 [start, end) 에 눌러 넣으므로 start+horizon 이 자정을 넘어도 주문이 잘리지 않는다.
+     */
+    private List<SimulationRequest.Outbound> mapToOutboundWindow(
+            Warehouse warehouse, List<SimulationRequest.Outbound> outbound, long horizonSeconds) {
         long startS = secondOfDay(warehouse.getOutboundStart());
         long endS = warehouse.getOutboundEnd() != null ? secondOfDay(warehouse.getOutboundEnd()) : 0;
-        return sliceToWindow(startS < endS ? rescale(outbound, startS, endS) : outbound, startS, horizonSeconds);
+        if (endS <= startS) {
+            endS = Math.min(startS + horizonSeconds, SECONDS_PER_DAY);
+        }
+        return sliceToWindow(rescale(outbound, startS, endS), startS, horizonSeconds);
     }
 
     private long secondOfDay(LocalDateTime dateTime) {
@@ -146,7 +228,7 @@ public class OutboundOrderGenerator {
      */
     private List<SimulationRequest.Outbound> sliceToWindow(
             List<SimulationRequest.Outbound> orders, long start, long horizonSeconds) {
-        long end = Math.min(start + horizonSeconds, 86400);
+        long end = Math.min(start + horizonSeconds, SECONDS_PER_DAY);
         List<SimulationRequest.Outbound> kept = new ArrayList<>();
         for (SimulationRequest.Outbound o : orders) {
             if (o.orderedAtS() >= start && o.orderedAtS() < end) {

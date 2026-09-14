@@ -56,7 +56,7 @@ import static org.mockito.Mockito.when;
 class EstimateServiceTest {
 
     private static final EstimateProperties PROPS =
-            new EstimateProperties(15_000_000L, 5_000_000L, 500_000L, 28, 6, 4, 1, Duration.ofMinutes(30), Duration.ofHours(6), "in,in,out,out,out,out", false, Duration.ofMinutes(10));
+            new EstimateProperties(15_000_000L, 5_000_000L, 500_000L, 28, 6, 4, 1, Duration.ofMinutes(30), Duration.ofHours(6), "out", false, Duration.ofMinutes(10));
 
     @Mock
     EstimateRepository estimateRepository;
@@ -220,7 +220,7 @@ class EstimateServiceTest {
         // 실행 시간을 명시하지 않으면 시뮬이 유한 주문 모드로 돌아 처리율이 전 대수 100 % 가 된다
         assertThat(sent.seed()).isEqualTo(101L);                          // 평가 시드, API 로 받지 않는다
         assertThat(sent.horizonS()).isEqualTo(21600L);                    // 6시간
-        assertThat(sent.shifts()).isEqualTo("in,in,out,out,out,out", false, Duration.ofMinutes(10));     // 입고 2h + 출고 4h
+        assertThat(sent.shifts()).isEqualTo("out");                        // 출고 전용 — 팀 결정(2026-09-11) 견적 부하 = 출고만 (S15P21A106-214)
         assertThat(sent.inboundGapS()).isEqualTo(48.0);                   // 600건 / 8시간
         assertThat(sent.outboundGapS()).isEqualTo(22.5);                  // 800건 / 5시간
     }
@@ -419,6 +419,50 @@ class EstimateServiceTest {
 
         assertThat(run.getThroughput()).isNull();                 // 처리율을 계산할 수 없다
         assertThat(estimate.getReasonCode()).isEqualTo(ReasonCode.ALL_FAILED);
+    }
+
+    // ── 건/일 환산 (S15P21A106-214) ───────────────────────────────────────────
+
+    /**
+     * 시뮬은 백엔드가 생성한 하루치 주문 목록을 그대로 받는다(-197). 목록이 하루 전량이면 완료 건수가 곧
+     * 건/일이다 — 옛 배율(실제 출고창 ÷ 시뮬 출고창)은 간격 모드 잔재라 5시간 창고에서 ×1.25 로 부풀렸다.
+     */
+    @Test
+    void reports_completed_orders_as_daily_volume_when_the_whole_day_was_sent() throws Exception {
+        Estimate estimate = estimateWithOrders(4, 4);   // 하루 4건, 4건 전부 전송
+        SimScenario run = run(estimate, 4);
+        when(scenarioRepository.findByRunId(run.getRunId())).thenReturn(Optional.of(run));
+        when(scenarioRepository.findByEstimateIdOrderByAmrCountAsc(any())).thenReturn(List.of(run));
+
+        service().applyResult(done(run.getRunId(), 4, 4, 0.9));
+
+        assertThat(run.getOutbound()).isEqualTo(4L);
+    }
+
+    /** 실제 출고창이 horizon 보다 길어 목록 앞부분만 잘려 갔으면 하루 물량 ÷ 보낸 건수로 되돌린다. */
+    @Test
+    void scales_completed_orders_by_the_share_of_the_day_that_was_sent() throws Exception {
+        Estimate estimate = estimateWithOrders(6, 4);   // 하루 6건 중 4건 전송
+        SimScenario run = run(estimate, 4);
+        when(scenarioRepository.findByRunId(run.getRunId())).thenReturn(Optional.of(run));
+        when(scenarioRepository.findByEstimateIdOrderByAmrCountAsc(any())).thenReturn(List.of(run));
+
+        service().applyResult(done(run.getRunId(), 4, 2, 0.9));
+
+        assertThat(run.getOutbound()).isEqualTo(3L);   // 2 × 6/4
+    }
+
+    /** 주문 목록이 없는 옛 견적(1단계 이전)은 환산 근거가 없으니 실측값을 그대로 둔다. */
+    @Test
+    void keeps_the_completed_count_for_an_estimate_without_a_stored_order_list() {
+        Estimate estimate = estimate(85.0, 90.0, 1_000_000_000L);
+        SimScenario run = run(estimate, 4);
+        when(scenarioRepository.findByRunId(run.getRunId())).thenReturn(Optional.of(run));
+        when(scenarioRepository.findByEstimateIdOrderByAmrCountAsc(any())).thenReturn(List.of(run));
+
+        service().applyResult(done(run.getRunId(), 100, 90, 0.9));
+
+        assertThat(run.getOutbound()).isEqualTo(90L);
     }
 
     // ── 물리 검증 결과 반영 ──────────────────────────────────────────────────
@@ -623,6 +667,20 @@ class EstimateServiceTest {
 
     private Estimate estimate(double targetThroughput, double targetUtilization, long budgetLimit) {
         return Estimate.open(mock(Warehouse.class), "iw.hub", targetThroughput, targetUtilization, budgetLimit);
+    }
+
+    /** 하루 출고 {@code dailyOutbound} 건인 창고(품고 시간대 13~18시)의 견적에 {@code sentOrders} 건의 주문 목록을 붙인다. */
+    private Estimate estimateWithOrders(long dailyOutbound, int sentOrders) throws Exception {
+        Warehouse warehouse = mock(Warehouse.class);
+        lenient().when(warehouse.getOutboundAvg()).thenReturn(dailyOutbound);
+        lenient().when(warehouse.getOutboundStart()).thenReturn(LocalDateTime.of(2026, 1, 1, 13, 0));
+        lenient().when(warehouse.getOutboundEnd()).thenReturn(LocalDateTime.of(2026, 1, 1, 18, 0));
+        Estimate estimate = Estimate.open(warehouse, "iw.hub", 85.0, 90.0, 1_000_000_000L);
+        List<SimulationRequest.Outbound> orders = IntStream.rangeClosed(1, sentOrders)
+                .mapToObj(i -> new SimulationRequest.Outbound((long) i, 60L * i, List.of(new SimulationRequest.Line(5L, "A1", 1))))
+                .toList();
+        estimate.applyOutboundOrders(objectMapper.writeValueAsString(orders));
+        return estimate;
     }
 
     private SimScenario run(Estimate estimate, int amrCount) {
