@@ -62,20 +62,34 @@ export LAN_IP=${LAN_IP:-$(hostname -I | awk '{print $1}')}
 #   그러니 공개 포트에 맞춰 Destination 을 고치고, 여기에 같은 번호를 준다.
 export SIGNAL_PORT=${SIGNAL_PORT:-49100}   # TCP 시그널링
 export STREAM_PORT=${STREAM_PORT:-47998}   # UDP 미디어
-# ★ 이 서버에 **실제로 있는** 장치 중 가장 한가한 것을 고른다 (2026-09-13).
+# ★ 장치 선택 (2026-09-14 수정)
+#
+#   1) `GPU=1 bash run.sh ...` 로 준 값이 항상 이긴다
+#   2) **3번이 있으면 3번** — 여러 장 꽂힌 서버(jupyter04 L40S x4)에서 0~2 는
+#      다른 팀이 쓴다. 다른 번호를 쓰려면 `PREFER_GPU=2 source paths.sh`
+#   3) 3번이 없으면(Brev 처럼 1장) **가장 한가한 장치**
+#   4) nvidia-smi 가 없으면(로컬·WSL) 0 — 어차피 안 쓴다
 #
 #   예전에는 `${GPU:-3}` 하드코딩이었고, 서버가 바뀌면 `install.sh` 4단계가
 #   **이 파일을 sed 로 고쳤다.** 추적 중인 파일이라 그 뒤 `git pull` 마다
 #       error: Your local changes to the following files would be overwritten
 #   가 났다 (2026-09-13 Brev 에서 발생). 설치가 저장소를 더럽히면 안 된다.
+#   그래서 하드코딩이 아니라 **있으면 쓰고 없으면 떨어지는** 방식으로 둔다.
 #
-#   nvidia-smi 가 없으면(로컬 개발·WSL) 0 으로 떨어진다 — 어차피 안 쓴다.
-#   특정 장치를 쓰려면 여전히 `GPU=1 bash run.sh ...` 로 이긴다.
 #   ★ `cut -d, -f1` 로 **index 만** 떼야 한다. `tr -dc '0-9'` 만 쓰면
 #     "2, 100" 이 `2100` 이 된다 (2026-09-13 실측으로 걸렀다).
-export GPU=${GPU:-$(nvidia-smi --query-gpu=index,memory.used \
-                      --format=csv,noheader,nounits 2>/dev/null \
-                    | sort -t, -k2 -n | head -1 | cut -d, -f1 | tr -dc '0-9')}
+if [ -z "${GPU:-}" ]; then
+    _pg="${PREFER_GPU:-3}"
+    if nvidia-smi --query-gpu=index --format=csv,noheader,nounits 2>/dev/null \
+         | tr -d ' ' | grep -qx "$_pg"; then
+        GPU="$_pg"
+    else
+        GPU="$(nvidia-smi --query-gpu=index,memory.used \
+                 --format=csv,noheader,nounits 2>/dev/null \
+               | sort -t, -k2 -n | head -1 | cut -d, -f1 | tr -dc '0-9')"
+    fi
+    unset _pg
+fi
 export GPU=${GPU:-0}          # nvidia-smi 가 없거나 비었을 때
 
 # [patch_gpu_isolate] GPU 격리 — 이 한 줄이 run.sh·run_record.sh·build_scene 전부에 적용된다
