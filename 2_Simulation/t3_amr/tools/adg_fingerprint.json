@@ -1,28 +1,28 @@
 {
  "fp": {
   "1": {
-   "actions": 2405,
-   "actions_sig": "3b976bdf2ba0ca99",
+   "actions": 1931,
+   "actions_sig": "5f8e6a4ebac9803a",
    "acyclic": true,
-   "edges_sig": "63100c3252330b0c",
-   "type1": 2393,
-   "type2": 1694
+   "edges_sig": "b73db5bf21ed0075",
+   "type1": 1919,
+   "type2": 1326
   },
   "2": {
-   "actions": 2423,
-   "actions_sig": "d383c2c7c0ff6fbf",
+   "actions": 1791,
+   "actions_sig": "115bee96c430cf88",
    "acyclic": true,
-   "edges_sig": "92923025686a8ca8",
-   "type1": 2411,
-   "type2": 1673
+   "edges_sig": "9bb62b7523f65cb7",
+   "type1": 1779,
+   "type2": 1061
   },
   "4": {
-   "actions": 2433,
-   "actions_sig": "3b1057c4b01ce72b",
+   "actions": 1914,
+   "actions_sig": "381d9ffc9cf0107c",
    "acyclic": true,
-   "edges_sig": "a8b0a21b436f9485",
-   "type1": 2421,
-   "type2": 1688
+   "edges_sig": "aa7925fed62765a7",
+   "type1": 1902,
+   "type2": 1308
   }
  },
  "gap": 15,
