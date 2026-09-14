@@ -52,16 +52,4 @@ public record EstimateProperties(
         return amrPrice + installPerUnit;
     }
 
-    /**
-     * 시뮬이 출고 주문을 받는 시간(초) — horizon 을 shifts 토큰 수로 등분한 중 out 토큰 몫.
-     * 기본값(6h, in,in,out,out,out,out)이면 4시간이다. 실측 출고 건수를 건/일 로 환산할 때 쓴다.
-     */
-    public long simulatedOutboundSeconds() {
-        String[] tokens = shifts == null ? new String[0] : shifts.split(",");
-        long outbound = java.util.Arrays.stream(tokens).map(String::trim).filter("out"::equals).count();
-        if (tokens.length == 0 || outbound == 0) {
-            return horizon.toSeconds();   // 교대를 안 쓰면 전 구간이 출고인 셈으로 본다
-        }
-        return horizon.toSeconds() * outbound / tokens.length;
-    }
 }

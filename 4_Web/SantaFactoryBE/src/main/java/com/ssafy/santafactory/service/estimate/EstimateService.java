@@ -495,25 +495,26 @@ public class EstimateService {
     /**
      * 출고 처리 건수를 <b>건/일</b>로 환산한다 ({@code SimScenarios.outbound} 단위).
      *
-     * <p>시뮬은 horizon 중 출고 구간(기본 4시간)만 출고를 받는데, 도착 간격은 실제 도착률을 그대로
-     * 쓰므로 실측 건수 × (실제 출고창 ÷ 시뮬 출고창) 이 하루 물량이 된다. 기본 설정이면 배율 1.25다
-     * (실제 5시간 ÷ 시뮬 4시간). 하루 전량 실행(horizon 24h)으로 바꾸면 배율이 1에 가까워진다.
+     * <p>시뮬은 백엔드가 생성한 하루치 주문 목록({@code outboundOrdersJson})을 그대로 받는다(-197). 그 목록이
+     * 하루 전량이면 완료 건수가 곧 건/일이고, 실제 출고창이 horizon 보다 길어 앞부분만 잘려 갔으면
+     * 하루 물량 ÷ 보낸 건수 배율로 되돌린다 (S15P21A106-214). 이전의 (실제 출고창 ÷ 시뮬 출고창) 배율은
+     * 워커가 도착 간격으로 주문을 만들던 시절(-82)의 식이라 5시간 창고에서 ×1.25 로 부풀리고 있었다.
      *
-     * <p>창고 출고창을 알 수 없으면 환산 근거가 없으므로 실측값을 그대로 남긴다.
+     * <p>주문 목록이 없는 옛 견적(1단계 이전)은 환산 근거가 없으므로 실측값을 그대로 남긴다.
      */
     private Long dailyOutbound(SimScenario run, SimulationResponse.Kpi kpi) {
         Integer completed = kpi.ordersCompleted();
         if (completed == null) {
             return null;
         }
-        Warehouse warehouse = run.getEstimate().getWarehouse();
-        LocalDateTime start = warehouse.getOutboundStart();
-        LocalDateTime end = warehouse.getOutboundEnd();
-        long simulated = properties.simulatedOutboundSeconds();
-        if (start == null || end == null || !end.isAfter(start) || simulated <= 0) {
+        Estimate estimate = run.getEstimate();
+        String json = estimate.getOutboundOrdersJson();
+        int sent = json == null ? 0 : readOutboundOrders(json).size();
+        if (sent <= 0) {
             return completed.longValue();
         }
-        return Math.round(completed * (double) Duration.between(start, end).toSeconds() / simulated);
+        long daily = outboundOrderCount(estimate.getWarehouse());
+        return Math.round(completed * (double) daily / sent);
     }
 
     /**
