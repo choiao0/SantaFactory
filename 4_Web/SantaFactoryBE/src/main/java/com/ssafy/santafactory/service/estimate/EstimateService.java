@@ -24,7 +24,9 @@ import com.ssafy.santafactory.repository.SimScenarioRepository;
 import com.ssafy.santafactory.repository.WarehouseRepository;
 import com.ssafy.santafactory.service.SimulationService;
 import com.ssafy.santafactory.service.estimate.ordergen.OutboundOrderGenerator;
+import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.JsonToken;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -37,6 +39,7 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.io.IOException;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
@@ -339,6 +342,26 @@ public class EstimateService {
         return orders.isEmpty() ? null : new VerifyRequest.Scenario(FIXED_SEED, new VerifyRequest.Orders(null, orders));
     }
 
+    /**
+     * 저장된 출고 주문 목록의 건수. 결과가 올 때마다(대수당 1회, 견적당 최대 28회) 부르므로 700 KB 안팎의
+     * JSON 을 객체로 풀지 않고 최상위 배열 원소만 스트리밍으로 센다.
+     */
+    private int countOutboundOrders(String json) {
+        try (JsonParser parser = objectMapper.getFactory().createParser(json)) {
+            if (parser.nextToken() != JsonToken.START_ARRAY) {
+                return 0;
+            }
+            int count = 0;
+            while (parser.nextToken() == JsonToken.START_OBJECT) {
+                parser.skipChildren();
+                count++;
+            }
+            return count;
+        } catch (IOException e) {
+            throw new IllegalStateException("출고 주문 목록 역직렬화 실패", e);
+        }
+    }
+
     private List<SimulationRequest.Outbound> readOutboundOrders(String json) {
         try {
             return objectMapper.readValue(json,
@@ -509,7 +532,7 @@ public class EstimateService {
         }
         Estimate estimate = run.getEstimate();
         String json = estimate.getOutboundOrdersJson();
-        int sent = json == null ? 0 : readOutboundOrders(json).size();
+        int sent = json == null ? 0 : countOutboundOrders(json);
         if (sent <= 0) {
             return completed.longValue();
         }

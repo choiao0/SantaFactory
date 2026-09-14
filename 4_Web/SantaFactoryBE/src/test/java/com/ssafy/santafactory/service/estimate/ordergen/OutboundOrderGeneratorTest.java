@@ -7,6 +7,7 @@ import com.ssafy.santafactory.entity.warehouse.Rack;
 import com.ssafy.santafactory.entity.warehouse.Warehouse;
 import com.ssafy.santafactory.repository.ProductRepository;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
@@ -24,10 +25,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
-// 픽스처(상품 8개·매장 2곳)는 모든 테스트가 공유하는데, orderTotes 단위 테스트는 생성기를 안 부르고
-// 상한 실패 테스트는 첫 주문에서 던져 일부 stub 만 읽는다 — strict 로 두면 그 둘이 stub 미사용으로 깨진다
 @ExtendWith(MockitoExtension.class)
-@MockitoSettings(strictness = Strictness.LENIENT)
 class OutboundOrderGeneratorTest {
 
     @Mock
@@ -131,17 +129,6 @@ class OutboundOrderGeneratorTest {
 
     // ── 주문 크기 상한 24토트 (S15P21A106-214) ───────────────────────────────
 
-    /** 시뮬과 같은 셈: 같은 랙 수량을 합쳐 ceil(합 / toteUnits) 을 랙별로 더한다. */
-    @Test
-    void orderTotes_sums_ceil_of_quantity_per_rack() {
-        List<SimulationRequest.Line> lines = List.of(
-                new SimulationRequest.Line(1L, "A1", 5),
-                new SimulationRequest.Line(2L, "A1", 4),     // A1 합 9 → 2토트
-                new SimulationRequest.Line(5L, "A2", 1));    // A2 1 → 1토트
-
-        assertThat(OutboundOrderGenerator.orderTotes(lines, 8)).isEqualTo(3);
-    }
-
     /**
      * 참조 데이터의 수량 꼬리(한 줄 1,000·2,400개)가 섞이면 시뮬이 --max-order-totes 24 로 그 주문을 빼 버려
      * 백엔드가 저장한 목록과 시뮬이 돈 목록이 어긋난다. 초과 주문은 수량만 다시 뽑아 상한 안에 넣는다.
@@ -156,14 +143,34 @@ class OutboundOrderGeneratorTest {
         assertThat(orders).allSatisfy(o -> assertThat(OutboundOrderGenerator.orderTotes(o.lines(), 8)).isLessThanOrEqualTo(24));
     }
 
-    /** 어떤 수량을 뽑아도 상한을 못 맞추면 무한히 돌지 않고 실패한다 (파이썬 구현과 같은 1,000회 한도). */
-    @Test
-    void fails_when_no_quantity_draw_fits_the_cap() {
-        when(profileLoader.getProfile()).thenReturn(profileWithQuantities(new int[]{300}, new double[]{1}));   // 38토트
+    /**
+     * 공용 픽스처(상품 8개·매장 2곳)를 일부만 읽는 테스트 — orderTotes 단위 테스트는 생성기를 안 부르고,
+     * 상한 실패 테스트는 첫 주문에서 던진다. 이 둘만 stub 미사용 검사를 끈다(바깥 테스트는 strict 유지).
+     */
+    @Nested
+    @MockitoSettings(strictness = Strictness.LENIENT)
+    class PartialFixtureUse {
 
-        assertThatThrownBy(() -> generator.generate(warehouse, HORIZON_S, 5, 101L))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("24");
+        /** 시뮬과 같은 셈: 같은 랙 수량을 합쳐 ceil(합 / toteUnits) 을 랙별로 더한다. */
+        @Test
+        void orderTotes_sums_ceil_of_quantity_per_rack() {
+            List<SimulationRequest.Line> lines = List.of(
+                    new SimulationRequest.Line(1L, "A1", 5),
+                    new SimulationRequest.Line(2L, "A1", 4),     // A1 합 9 → 2토트
+                    new SimulationRequest.Line(5L, "A2", 1));    // A2 1 → 1토트
+
+            assertThat(OutboundOrderGenerator.orderTotes(lines, 8)).isEqualTo(3);
+        }
+
+        /** 어떤 수량을 뽑아도 상한을 못 맞추면 무한히 돌지 않고 실패한다 (파이썬 구현과 같은 1,000회 한도). */
+        @Test
+        void fails_when_no_quantity_draw_fits_the_cap() {
+            when(profileLoader.getProfile()).thenReturn(profileWithQuantities(new int[]{300}, new double[]{1}));   // 38토트
+
+            assertThatThrownBy(() -> generator.generate(warehouse, HORIZON_S, 5, 101L))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("24");
+        }
     }
 
     private OrderRuleProfile profileWithQuantities(int[] values, double[] weights) {

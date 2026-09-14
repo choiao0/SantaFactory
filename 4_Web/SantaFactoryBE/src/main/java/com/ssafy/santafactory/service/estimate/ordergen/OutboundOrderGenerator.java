@@ -184,8 +184,9 @@ public class OutboundOrderGenerator {
      *
      * <p>종료 시각이 없거나 시작보다 앞이면(자정을 넘는 교대) 실행 창 자체를 출고 시간대로 본다. 이 경우
      * 재매핑을 건너뛰면 참조 분포에서 그 시간대에 원래 있던 몫(07시 시작이면 73 %)만 남고 나머지 하루치는
-     * 잘려 나가 처리율·필요 대수가 낙관적으로 나온다 (S15P21A106-214). 자정을 넘는 창은 남은 하루까지만
-     * 쓰므로 그만큼 밀도가 높아진다 — 하루 경계를 넘겨 매핑하는 건 별도 판단.
+     * 잘려 나가 처리율·필요 대수가 낙관적으로 나온다 (S15P21A106-214). 이 폴백 창은 24:00 에서 잘리므로
+     * 자정을 넘는 교대는 남은 하루까지만 쓰고 그만큼 밀도가 높아진다 — 하루 경계를 넘겨 매핑하는 건 별도 판단.
+     * 종료 시각이 있는 창은 그대로 [start, end) 에 눌러 넣으므로 start+horizon 이 자정을 넘어도 주문이 잘리지 않는다.
      */
     private List<SimulationRequest.Outbound> mapToOutboundWindow(
             Warehouse warehouse, List<SimulationRequest.Outbound> outbound, long horizonSeconds) {
