@@ -51,6 +51,15 @@ if [ -n "$TITLE" ]; then
            /usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc; do
     [ -f "$f" ] && { FONT="$f"; break; }
   done
+  # ★ 폰트만 보면 안 된다 (2026-09-14). `install.sh` 가 까는
+  #   `imageio-ffmpeg` 정적 빌드에는 **libfreetype 이 없어 drawtext 필터가
+  #   통째로 빠져 있다.** 폰트는 시스템에 있으니 위 검사는 통과하고, 인코딩
+  #   단계에서 "No such filter: .drawtext." 로 죽는다 — 프레임을 다 뽑아 놓고
+  #   마지막에 실패하는 가장 나쁜 자리다. 필터 목록을 직접 확인한다.
+  if [ -n "$FONT" ] && ! ffmpeg -hide_banner -filters 2>/dev/null | grep -q " drawtext "; then
+    echo "   (이 ffmpeg 에 drawtext 필터가 없어 제목은 생략합니다 — imageio-ffmpeg 정적 빌드)"
+    FONT=""
+  fi
   if [ -n "$FONT" ]; then
     VF="$VF,drawtext=fontfile='$FONT':text='$TITLE':x=28:y=24:fontsize=36:\
 fontcolor=white:box=1:boxcolor=black@0.55:boxborderw=12"
