@@ -87,18 +87,39 @@ def _quiet(fn, *a, **kw):
         sys.stdout = old
 
 
+# 계획기는 **못 푸는 시나리오를 SystemExit 로 알린다.** 이 도구는 그 정체를
+# 세는 것이 목적이라 그 신호를 잡아야 하지만, 아무 SystemExit 이나 삼키면 안 된다.
+#
+#   [잡는다] 계획기 신호 — 이 시드만 못 푼다. 그게 바로 세려는 값이다
+#     heading.py:350   "PIBT(헤딩) 정체: N스텝 내 미도달 {...}"
+#
+#   [안 잡는다] 설정 오류 — 전 시드가 똑같이 죽는다. 한 번 죽고 끝내야 한다
+#
+# ★ 삼키면 여기서는 특히 나쁘다 — 설정 오류까지 "정체" 로 세어 **수정안이
+#   정체를 고친 것처럼 보이게 한다.** 이 도구의 결론 자체가 거짓이 된다.
+#   (`pibt_scene.setup` 은 `main` 이 여기 **밖에서** 부른다. 맵·pitch·스테이션
+#    오류는 이미 그대로 올라간다.)
+_PLANNER_STALL = ("정체", "미도달")
+
+
+def _run_seed(scen, s):
+    """시드 하나 — "완주 N" 또는 "정체"."""
+    _, free, starts, goals = scen[s]
+    try:
+        hist, _ = _quiet(HD.run_h, free, starts, goals, max_steps=STEPS)
+    except SystemExit as e:
+        if not any(k in str(e) for k in _PLANNER_STALL):
+            raise           # 계획기 정체가 아니면 설정 오류다 — 삼키지 않는다
+        return "정체"
+    return f"완주 {len(hist)}"
+
+
 def trial(scen, patched):
     HD.candidates_h = _goal_exempt if patched else _ORIG
-    out = []
-    for s in SEEDS:
-        _, free, starts, goals = scen[s]
-        try:
-            hist, _ = _quiet(HD.run_h, free, starts, goals, max_steps=STEPS)
-            out.append(f"완주 {len(hist)}")
-        except SystemExit:
-            out.append("정체")
-    HD.candidates_h = _ORIG
-    return out
+    try:
+        return [_run_seed(scen, s) for s in SEEDS]
+    finally:
+        HD.candidates_h = _ORIG     # 예외로 빠져나가도 몽키패치를 되돌린다
 
 
 def main():

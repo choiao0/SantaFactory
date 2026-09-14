@@ -90,44 +90,73 @@ def legal(kind, A, B):
     return not ((B[0], B[1]) in sf(*A) or (A[0], A[1]) in sf(*B))
 
 
+def candidates():
+    """B 후보 — A 둘레 7x7 칸 × 8가지 90° 회전."""
+    return [(R0 + dr, C0 + dc, h0, h1)
+            for dr in range(-3, 4) for dc in range(-3, 4)
+            for h0 in range(4) for h1 in ((h0 + 1) % 4, (h0 - 1) % 4)]
+
+
+def min_gaps(g, pa, cand):
+    """B 마다 A 와의 **최소 차체거리** — 두 회전을 훑어 가장 가까운 순간."""
+    return {B: min(g.body_gap(u, v) for u in pa for v in poses(g, *B))
+            for B in cand}
+
+
+def report_rule(kind, A, cand, gaps):
+    """규칙 하나 — 합법쌍·접촉·최악 쌍을 찍고 **접촉한 쌍**을 돌려준다."""
+    ok = [B for B in cand if legal(kind, A, B)]
+    hit = [B for B in ok if gaps[B] <= 0.0]
+    worst = min(ok, key=lambda B: gaps[B]) if ok else None
+    best = gaps[worst] if worst else float("nan")
+    at = (f"  최악 B=축({worst[0]},{worst[1]}) h {worst[2]}->{worst[3]}"
+          if worst else "")
+    print(f"   {kind:<10} 합법쌍 {len(ok):4d}   접촉 {len(hit):3d}   "
+          f"최소 차체거리 {best*1000:+8.1f} mm{at}")
+    return hit
+
+
+def check1(A, hit):
+    """확인 1 — 닿은 쌍이 전부 "상대 축 ∈ soft" 로 설명되는가.
+
+    하나라도 설명이 안 되면 축 규칙은 불완전하다 — 규칙 밖에서 닿는다.
+    """
+    print(f"      ↓ 확인 1 — 닿은 {len(hit)}쌍의 축이 soft(A) 안에 있나")
+    inside = 0
+    for B in hit:
+        ax = (B[0], B[1])
+        a_in_b = (R0, C0) in soft(*B)
+        b_in_a = ax in soft(*A)
+        inside += bool(a_in_b or b_in_a)
+        print(f"        B=축{ax} h {B[2]}->{B[3]}   "
+              f"B축∈soft(A) {str(b_in_a):<5}  A축∈soft(B) {str(a_in_b):<5}"
+              f"   {'OK' if (a_in_b or b_in_a) else '★규칙 밖'}")
+    print(f"        -> {inside}/{len(hit)} 쌍이 축 규칙으로 설명된다")
+
+
+def one_pitch(p):
+    """pitch 하나에서 네 규칙을 같은 후보·같은 거리표로 비교한다."""
+    g = make_geom(p)
+    A = (R0, C0, 1, 0)
+    cand = candidates()
+    gaps = min_gaps(g, poses(g, *A), cand)
+
+    print(f"── pitch {p:.2f} " + "─" * 54)
+    print(f"   A = 축({R0},{C0})  h 1->0   "
+          f"soft {sorted(soft(*A))}   soft3 {sorted(soft3(*A))}")
+    for kind in ("현행", "5칸 hard", "축 규칙", "축+대각"):
+        hit = report_rule(kind, A, cand, gaps)
+        # 확인 1 은 **현행에서 실제로 닿은 쌍**에만 묻는다. 그게 규칙이
+        # 설명해야 할 대상이기 때문이다.
+        if kind == "현행" and hit:
+            check1(A, hit)
+    print()
+
+
 def main():
     print("FMS 「앞 칸 축 규칙」 검증 —  hard=몸 금지 · soft=축 금지\n")
     for p in PITCHES:
-        g = make_geom(p)
-        A = (R0, C0, 1, 0)
-        pa = poses(g, *A)
-        cand = [(R0 + dr, C0 + dc, h0, h1)
-                for dr in range(-3, 4) for dc in range(-3, 4)
-                for h0 in range(4) for h1 in ((h0 + 1) % 4, (h0 - 1) % 4)]
-        gaps = {}
-        for B in cand:
-            gaps[B] = min(g.body_gap(u, v) for u in pa for v in poses(g, *B))
-
-        print(f"── pitch {p:.2f} " + "─" * 54)
-        print(f"   A = 축({R0},{C0})  h 1->0   "
-              f"soft {sorted(soft(*A))}   soft3 {sorted(soft3(*A))}")
-        for kind in ("현행", "5칸 hard", "축 규칙", "축+대각"):
-            ok = [B for B in cand if legal(kind, A, B)]
-            hit = [B for B in ok if gaps[B] <= 0.0]
-            worst = min(ok, key=lambda B: gaps[B]) if ok else None
-            best = gaps[worst] if worst else float("nan")
-            at = (f"  최악 B=축({worst[0]},{worst[1]}) h {worst[2]}->{worst[3]}"
-                  if worst else "")
-            print(f"   {kind:<10} 합법쌍 {len(ok):4d}   접촉 {len(hit):3d}   "
-                  f"최소 차체거리 {best*1000:+8.1f} mm{at}")
-            if kind == "현행" and hit:
-                print(f"      ↓ 확인 1 — 닿은 {len(hit)}쌍의 축이 soft(A) 안에 있나")
-                inside = 0
-                for B in hit:
-                    ax = (B[0], B[1])
-                    a_in_b = (R0, C0) in soft(*B)
-                    b_in_a = ax in soft(*A)
-                    inside += bool(a_in_b or b_in_a)
-                    print(f"        B=축{ax} h {B[2]}->{B[3]}   "
-                          f"B축∈soft(A) {str(b_in_a):<5}  A축∈soft(B) {str(a_in_b):<5}"
-                          f"   {'OK' if (a_in_b or b_in_a) else '★규칙 밖'}")
-                print(f"        -> {inside}/{len(hit)} 쌍이 축 규칙으로 설명된다")
-        print()
+        one_pitch(p)
     print("확인 1 이 전부 OK 이고 확인 2 에서 축 규칙의 접촉이 0 이면 FMS 제안이 맞다.")
     print("합법쌍이 5칸 hard 보다 많으면 그만큼 동시성을 덜 잃는다.")
 
