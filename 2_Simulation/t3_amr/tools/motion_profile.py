@@ -16,6 +16,7 @@
     source paths.sh
     python tools/motion_profile.py $OUT/rec_full.npz $OUT/rec_carry.npz
     AMR=6 python tools/motion_profile.py $OUT/rec_carry.npz
+    AMR=6 START=300 DURATION=120 python tools/motion_profile.py ...   구간만
 """
 import os
 import sys
@@ -31,10 +32,20 @@ def wrap(a):
     return (a + np.pi) % (2.0 * np.pi) - np.pi
 
 
-def profile(path, amr=None):
+def profile(path, amr=None, t0=0.0, dur=0.0):
     z = np.load(path, allow_pickle=True)
     t = z["t"].astype(np.float64)
     p = z["pose"].astype(np.float64)              # (T, N, 3)
+    # ★ 구간을 자를 수 있어야 한다 (2026-09-14). 앞 120초는 12대가 충전존에서
+    #   한꺼번에 나오는 **가장 막히는 때**다. 거기만 보고 "이어달리기가 안
+    #   걸렸다" 고 판단하면 틀린다 — 실제로 그렇게 볼 뻔했다.
+    if t0 > 0.0 or dur > 0.0:
+        lo = t0
+        hi = (t0 + dur) if dur > 0.0 else t[-1]
+        m = (t >= lo) & (t <= hi)
+        t, p = t[m], p[m]
+        if len(t) < 2:
+            raise SystemExit(f"★ 구간 {lo:.0f}~{hi:.0f}s 에 프레임이 없습니다")
     dt = np.diff(t)
     dt[dt <= 0] = np.nan
     dx = np.diff(p[:, :, 0], axis=0)
@@ -58,7 +69,7 @@ def profile(path, amr=None):
         return int(np.sum((m[1:] == 1) & (m[:-1] == 0)) + m[0].sum())
 
     return dict(
-        name=os.path.basename(path), dur=float(t[-1]), frames=len(t),
+        name=os.path.basename(path), dur=float(t[-1] - t[0]), frames=len(t),
         turn=turn.sum() / n, wait=wait.sum() / n,
         slow=slow.sum() / n, cru=cru.sum() / n,
         v_mean=float(np.nanmean(v)), v_p95=float(np.nanpercentile(v, 95)),
@@ -72,12 +83,21 @@ def main():
         raise SystemExit(__doc__)
     amr = os.environ.get("AMR")
     amr = int(amr) if amr else None
+    t0 = float(os.environ.get("START", "0"))
+    dur = float(os.environ.get("DURATION", "0"))
     tag = f"amr_{amr}" if amr is not None else "전체"
-    print(f"대상 {tag}   정지 {V_STOP} m/s · 회전 {W_TURN} rad/s · 순항 {V_CRUISE} m/s\n")
+    if t0 <= 0 and dur <= 0:
+        win = "전체"
+    elif dur > 0:
+        win = f"{t0:.0f}~{t0 + dur:.0f}s"
+    else:
+        win = f"{t0:.0f}s~끝"
+    print(f"대상 {tag}   구간 {win}   "
+          f"정지 {V_STOP} m/s · 회전 {W_TURN} rad/s · 순항 {V_CRUISE} m/s\n")
     print(f"{'기록':<16}{'길이':>8}{'거리':>9}{'회전':>8}{'대기':>8}"
           f"{'감속':>8}{'순항':>8}{'평균v':>8}{'p95 v':>8}{'회전수':>7}{'대기수':>7}")
     for f in args:
-        r = profile(f, amr)
+        r = profile(f, amr, t0, dur)
         print(f"{r['name']:<16}{r['dur']:7.1f}s{r['dist']:8.1f}m"
               f"{r['turn']*100:7.1f}%{r['wait']*100:7.1f}%"
               f"{r['slow']*100:7.1f}%{r['cru']*100:7.1f}%"
