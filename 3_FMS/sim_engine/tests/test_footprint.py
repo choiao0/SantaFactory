@@ -205,12 +205,25 @@ def test_failed_push_keeps_forced_stay_in_legacy_mode():
     assert new["K"] == (2, 1, 3)                          # legacy: 밀기 실패의 강제 제자리가 남는다 (v3.3 비트 동일 유지)
 
 
-def test_front_cells_6_with_diag():
-    """-79: front_diag 면 앞 2 + 대각 4 = 6칸(soft). front_swing 없으면 diag 도 무시."""
+def test_front_cells_4_with_mixed_diagonals():
+    """-79: front_diag 면 앞 2(f0,f1) + 섞임 대각 2(mA,mB) = 4칸(soft). 코 대각·뒤 대각은 제외, hard 와 겹치지 않는다."""
     geo.configure(front_swing=True, front_diag=True)
-    cells = front_cells(R, C, 0, 1)
-    assert cells == {(3, 2), (2, 3), (3, 3), (3, 1), (1, 3), (1, 1)}
-    assert swing_cells(R, C, 0, 1) == {(1, 2), (2, 1), (1, 1)}       # hard 는 그대로 (대각 (1,1) 은 hard 이자 soft)
+    cells = front_cells(R, C, 0, 1)                                   # d1=(1,0), d2=(0,1)
+    assert cells == {(3, 2), (2, 3), (3, 1), (1, 3)}                  # f0, f1, mA=(r+1, c-1), mB=(r-1, c+1)
+    assert not (cells & swing_cells(R, C, 0, 1))                       # 몸 칸(hard)과 겹치지 않음
+    for h, h2 in TURNS:
+        assert len(front_cells(R, C, h, h2)) == 4
+        assert not (front_cells(R, C, h, h2) & swing_cells(R, C, h, h2))
     geo.configure(front_swing=False, front_diag=True)
     assert front_cells(R, C, 0, 1) == set()
     assert not geo.front_diag_on()
+
+
+def test_pitch_gating_in_configure():
+    """규칙 함수 쪽 pitch 게이팅: 코 반경 × 2 ≤ pitch 면 규칙 불필요(∅)."""
+    assert geo.front_needed(DIMS, 1.0)
+    assert not geo.front_needed(DIMS, 1.2)
+    geo.configure(front_swing=True, front_diag=True, robot_dims=DIMS, pitch=1.2)
+    assert front_cells(R, C, 0, 1) == set()
+    geo.configure(front_swing=True, front_diag=True, robot_dims=DIMS, pitch=1.0)
+    assert len(front_cells(R, C, 0, 1)) == 4

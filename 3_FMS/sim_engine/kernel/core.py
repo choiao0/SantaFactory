@@ -55,6 +55,8 @@ class KernelConfig:
     yield_rule: bool = False      # 헤딩 정면 조우 양보
     yield_ticks: int = 20         # 양보 임시 목표 유지 상한
     yield_after: int = 8          # 이 틱 이상 실제로 막힌 정면 조우만 양보 대상 (PIBT 가 스스로 푸는 마주침은 제외)
+    hd_after: int = 4             # -79 대치(standoff) 감지: 같은 칸을 다투는 두 로봇이 둘 다 이 틱 이상 무진전 (exact,front 만)
+    hd_timeout: int = 60          # -79 대치 상한(틱): 넘으면 역할 교대 1회, 그래도 넘으면 해제
     turn_ticks: int = TURN_TICKS  # 90° 회전 틱
     # 회전 발자국 (-203, 계약 v3.4). footprint: "legacy"(v3.3 비트 동일) / "exact"(0.1 m 지도 정적 회전 마스크)
     # / "exact,front"(+ 앞 2칸 축 규칙·양보 v2 — 소싸움 미해결, 인자로만). 마스크 배열은 FmsKernel(turn_mask=) 로 따로 받는다.
@@ -83,8 +85,8 @@ class FmsKernel(BatteryMixin, MetricsMixin):
                  zone_mask=None, on_task_completed=None, lane_dir=None, sec_map=None, turn_mask=None):
         # 회전 발자국 설정은 모듈 전역(pibt.geometry) — Replanner/HGraph 를 만들기 전에 넣는다 (-203).
         configure_footprint(turn_mask if cfg.footprint != "legacy" else None,
-                            "front" in cfg.footprint and front_swing(cfg.robot_dims),
-                            front_diag=cfg.footprint == "exact,front")          # front = 6칸, front_2cell = 2칸 (-79)
+                            "front" in cfg.footprint, front_diag=cfg.footprint == "exact,front",
+                            robot_dims=cfg.robot_dims)                          # front = 4칸, front_2cell = 2칸; pitch 게이팅은 geometry (-79)
         self.free, self.st_cell = free, st_cell
         self.H, self.W = free.shape
         self.edge_cost, self.wait_cost = edge_cost, wait_cost
@@ -121,7 +123,8 @@ class FmsKernel(BatteryMixin, MetricsMixin):
         self.waiting = []                       # 배차 대기 태스크 (FIFO)
         self.tasks_done = []
         self.trips = 0                            # 완료된 출고 왕복 수
-        self.yield_events = []                    # 정면 조우 진단 이벤트
+        self.yield_events = []                    # 정면 조우 진단 이벤트 (양보 v2 legacy / -79 대치 "standoff")
+        self.standoffs = self.standoff_swaps = 0  # -79 대치 수·역할 교대 수 (SUMMARY, exact,front 만)
         self.n_submitted = 0
         self._progress = [0, 0]                 # (완료 수, 그때 t) — 워치독
         self.export_log = {}
@@ -155,6 +158,7 @@ class FmsKernel(BatteryMixin, MetricsMixin):
                                     h=None, busy=0, swing=set(), rot=0, rev=0, replan=0,
                                     turns_idle=0, goal_prev=None, goal_t=0, idle_moves=0, leave_from=None,
                                     yield_peer=None, yield_target=None, yield_until=-1, yield_hold=False,
+                                    hd_peer=None, hd_role=None, hd_until=-1, hd_swapped=False,
                                     soc=1.0, charge_n=0, chg=0, soc_empty=0)
             if self.battery:
                 self.robots[rid]["soc"] = float(cfg.soc_init[rid])
@@ -427,20 +431,28 @@ class FmsKernel(BatteryMixin, MetricsMixin):
         if cfg.dock_prio:
             self._update_dock_leave()
         states = {rid: (robots[rid]["pos"][0], robots[rid]["pos"][1], robots[rid]["h"]) for rid in rids}
-        if cfg.yield_rule:
+        standoff = front_swing_on()               # -79 V1: exact,front 는 양보 v2 대신 대치 상태기계 (legacy 경로 불변)
+        if cfg.yield_rule and not standoff:
             self._refresh_yields(t, states)
+        if standoff:
+            self._refresh_standoffs(t, states)
         prio = self._priority_h(t)
         extra = {rid: robots[rid]["swing"] for rid in rids if robots[rid]["busy"] > 0}
         dists = self._dists_h(t, states, extra)
-        if cfg.yield_rule and self._detect_headons(t, states, prio, dists):
+        if standoff:
+            if self._detect_standoffs(t, states, prio, dists):
+                prio = self._priority_h(t)
+        elif cfg.yield_rule and self._detect_headons(t, states, prio, dists):
             prio = self._priority_h(t)
             dists = self._dists_h(t, states, extra)
         # 비켜 주는 로봇의 대기 상승: legacy 는 없음. exact 에선 유지 — 대피 경로의 첫 수(회전)가 상대 축에 막히면
         # 대기(d+1)가 후진(d+3)보다 싸서 영영 기다린다 (-203 실측, exp 22 마감 2대 교착).
-        if front_swing_on():
-            # exact: 비켜 주는 쪽은 대기 상승을 **유지**(대피 첫 수가 막히면 대기 d+1 이 후진 d+3 보다 싸서 영영 기다린다),
-            # 이기는 쪽은 상승 **없음**(상승이 붙으면 앞뒤로 흔들려 비켜 주는 쪽의 앞 칸에 축을 들락거린다) (-203 실측).
-            calm = {robots[rid]["yield_peer"] for rid in rids if robots[rid]["yield_peer"] is not None}
+        forbid = forbid_axle = None
+        if standoff:
+            # -79 V1: 대치 중인 둘은 대기 상승 0 (상승이 대기보다 후진을 싸게 만들어 매 틱 전진·후진 핑퐁 — 시드 7·101 실측).
+            # 지는 쪽은 이기는 쪽의 몸·원하는 자리가 금지 → 후진·회전·대기 중에서 고르고, 뒤차는 PIBT 밀기로 따라 물러난다.
+            calm = {rid for rid in rids if robots[rid]["hd_peer"] is not None}
+            forbid, forbid_axle = self._standoff_forbid(states, dists)
         else:
             calm = {rid for rid in rids if robots[rid]["yield_peer"] is not None}        # legacy: 비켜 주는 쪽만 상승 없음
         bias = {rid: 0.0 if rid in calm else wait_bias(self._stag.get(rid)) for rid in rids}
@@ -450,7 +462,7 @@ class FmsKernel(BatteryMixin, MetricsMixin):
                     if cfg.section_limit else ())
         new, cells, denied = step_h(states, dists, self.edge_cost, self.wait_cost, free, prio,
                                     self.turn_cost, extra, bias,
-                                    self.sec_map, cfg.section_limit, sec_free)
+                                    self.sec_map, cfg.section_limit, sec_free, forbid, forbid_axle)
         self.section_blocks += len(denied)      # 정원에 막힌 (로봇 × 틱). 0 이면 제한이 논 것
         self.section_releases += len(sec_free)
         if cfg.check:
@@ -666,6 +678,98 @@ class FmsKernel(BatteryMixin, MetricsMixin):
             changed = True
         return changed
 
+    # ------------------------------------------------------------
+    # 대치(standoff) 상태기계 V1 (-79 B4) — exact,front 전용. 설계 docs/2026-09-14_S15P21A106-79_B4_정면대치해소_계획.md §3.3
+    # ------------------------------------------------------------
+    def _wish_cells(self, rid, states, dists):
+        """이번 틱 최선 후보(대기 제외)가 필요로 하는 칸 = 로봇이 원하는 자리. (hard 칸, soft(축) 칸) 두 집합."""
+        s = states[rid]
+        for st, cells, soft in candidates_h(s, dists[rid], self.edge_cost, self.wait_cost, self.free, self.turn_cost):
+            if st != s:
+                return set(cells), set(soft)
+        return set(), set()
+
+    def _detect_standoffs(self, t, states, priority, dists):
+        """같은 자리를 다투며 둘 다 hd_after 틱 이상 무진전인 두 로봇 → 대치. 이기는 쪽 = 우선순위 앞. 걸었으면 True.
+        정면(코 맞댐)뿐 아니라 같은 방향(앞차 후진·뒤차 전진)·회전을 막는 옆 축까지 같은 매듭으로 본다 (시드 7·101 실측)."""
+        order = {rid: i for i, rid in enumerate(priority)}
+        body_owner = {cell: rid for rid, s in states.items() for cell in occupied(s)}
+        axle_owner = {s[:2]: rid for rid, s in states.items()}
+        changed = False
+        for rid in priority:
+            if not self._standoff_free(rid):
+                continue
+            hard, soft = self._wish_cells(rid, states, dists)
+            peers = {body_owner[c] for c in hard if c in body_owner} | {axle_owner[c] for c in soft if c in axle_owner}
+            peers.discard(rid)
+            for peer in sorted(peers, key=order.get):
+                if self._standoff_free(peer):
+                    winner, loser = (rid, peer) if order[rid] < order[peer] else (peer, rid)
+                    self._start_standoff(t, winner, loser)
+                    changed = True
+                    break
+        return changed
+
+    def _standoff_free(self, rid):
+        rb = self.robots[rid]
+        return (rb["hd_peer"] is None and rb["state"] in NAV and not rb["busy"]
+                and self._stag.get(rid) >= self.cfg.hd_after)
+
+    def _start_standoff(self, t, winner, loser, swap=False):
+        for rid, role, peer in ((winner, "W", loser), (loser, "L", winner)):
+            rb = self.robots[rid]
+            rb["hd_peer"], rb["hd_role"], rb["hd_until"], rb["hd_swapped"] = peer, role, t + self.cfg.hd_timeout, swap
+        if swap:
+            self.standoff_swaps += 1
+        else:
+            self.standoffs += 1
+        self.yield_events.append(dict(t=t, yielder=loser, peer=winner, action="swap" if swap else "standoff", target=None))
+
+    def _clear_standoff(self, rid):
+        peer = self.robots[rid]["hd_peer"]
+        for r in (rid, peer):
+            if r is not None:
+                rb = self.robots[r]
+                rb["hd_peer"], rb["hd_role"], rb["hd_until"], rb["hd_swapped"] = None, None, -1, False
+
+    def _refresh_standoffs(self, t, states):
+        """해제: 한쪽이 서비스·충전에 들어갔거나 두 몸이 더 이상 인접하지 않음(체비쇼프 > 1). 상한: 역할 교대 1회 → 해제."""
+        seen = set()
+        for rid in self.rids:
+            rb = self.robots[rid]
+            peer = rb["hd_peer"]
+            if peer is None or rid in seen:
+                continue
+            seen.add(peer)
+            pb = self.robots[peer]
+            ended = rb["state"] not in NAV or pb["state"] not in NAV
+            if not ended:
+                ca, cb = occupied(states[rid]), occupied(states[peer])
+                ended = not any(max(abs(x[0] - y[0]), abs(x[1] - y[1])) <= 1 for x in ca for y in cb)
+            if ended:
+                self._clear_standoff(rid)
+            elif t >= rb["hd_until"]:
+                if rb["hd_swapped"]:
+                    self._clear_standoff(rid)
+                else:
+                    w = rid if rb["hd_role"] == "W" else peer
+                    self._start_standoff(t, peer if w == rid else rid, w, swap=True)     # 역할 교대
+
+    def _standoff_forbid(self, states, dists):
+        """(금지 칸, 축 금지 칸) — 지는 쪽: 이기는 쪽의 몸(회전 중이면 스윙 포함) ∪ 원하는 hard 칸은 못 밟고,
+        이기는 쪽이 원하는 soft 칸(회전 앞·대각)에는 축을 두지 못한다(제자리 대기도 금지 → 물러나야 한다)."""
+        forbid, forbid_axle = {}, {}
+        for rid in self.rids:
+            rb = self.robots[rid]
+            if rb["hd_role"] == "L":
+                w = rb["hd_peer"]
+                wb = self.robots[w]
+                hard, soft = self._wish_cells(w, states, dists)
+                swing = set(wb["swing"]) if wb["busy"] > 0 else set()
+                forbid[rid] = frozenset(set(occupied(states[w])) | swing | hard)
+                forbid_axle[rid] = frozenset(soft)
+        return forbid, forbid_axle
+
     def _priority_h(self, t):
         robots = self.robots
 
@@ -673,6 +777,8 @@ class FmsKernel(BatteryMixin, MetricsMixin):
             rb = robots[r]
             if rb["busy"] or rb["leave_from"] is not None or rb["yield_hold"]:
                 return 0
+            if rb["hd_role"] == "W":
+                return 0        # -79 대치: 이기는 쪽이 먼저 예약한다(고정) — 지는 쪽은 밀려서 물러난다
             if front_swing_on() and rb["yield_peer"] is not None:
                 return 0        # 비켜 주는 쪽이 먼저 예약한다 — 뒤따라오는 상대가 앞 칸에 축을 들이면 영영 못 돈다 (-203)
             return RANK[rb["state"]]
@@ -687,6 +793,10 @@ class FmsKernel(BatteryMixin, MetricsMixin):
                 dists[rid] = stay_map_h(self.free, states[rid])
             elif rb["yield_peer"] is not None:
                 dists[rid] = self.dmap_h(rb["yield_target"])
+            elif rb["hd_peer"] is not None:
+                # -79 V1b: 대치 중에는 **기본** 거리장 — 재계획 거리장은 주변 칸을 -1 로 막아 후진 후보 자체를 없앤다
+                # (시드 42 실측: 지는 쪽의 rev 가 후보에 없어 60틱 상한까지 대기 → 역할 교대만 반복).
+                dists[rid] = self.dmap_h(rb["goal"])
             elif rb["pos"] != rb["goal"]:
                 base = self.dmap_h(rb["goal"])
                 dists[rid] = self._replan.dist_for(rid, t, states, extra, rb["goal"], base, self._stag.get(rid))

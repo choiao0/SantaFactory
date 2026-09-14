@@ -1,0 +1,8 @@
+name,args,stall,makespan_steps,tasks_per_h,yield_events,conflict_wait,wall_s,aisle_block,capacity,distance_m,drive_mean_s,dt_s,flow,footprint,heading,idle_moves,inbound_total,lanes,lead_mean_s,lead_p90_s,n_orders,n_robots,order_lead_mean_s,order_lead_p90_s,orders_oversize,orders_per_h,pushed_steps,queue_mean_s,replan_steps,rev_steps,robot_dims,rot_steps,seed,speed,stall_t,standoff_swaps,standoffs,tote_units,totes,trips,turn_masked,turns_per_task,util,util_incl_service,variant,yield_rule,zone,zone_degraded,zone_occ_mean,zone_occ_p90,zone_retargets,zone_wait_steps
+S1_base7,"--footprint=exact,front",1,,,,,2.6,1,,,,,,,,,,,,,40,6,,,,,,,,,,,7,,4200,,,,,,,,,,base,,,,,,,
+S2_base44,"--footprint=exact,front",0,3084,131.9,43,0.0905,2.1,1,1,14239,153.3,1.0,main,"exact,front",1,0,40,1,613.8,953.0,40,6,648.8,1006.1,0,46.7,866,460.5,1241,1046,"[0.39, 1.11, 0.8]",941,44,1.0,,9,34,,73,73,0.0354,8.33,0.94,0.954,base,1,1,0,0.28,0.0,0,9
+S3_base101,"--footprint=exact,front",1,,,,,3.7,1,,,,,,,,,,,,,40,6,,,,,,,,,,,101,,6960,,,,,,,,,,base,,,,,,,
+S4_base42,"--footprint=exact,front",1,,,,,2.9,1,,,,,,,,,,,,,40,6,,,,,,,,,,,42,,6915,,,,,,,,,,base,,,,,,,
+S5_exp22,"--order-gap=15 --footprint=exact,front",1,,,,,11.3,1,,,,,,,,,,,,,120,22,,,,,,,,,,,101,,6299,,,,,,,,,,exp,,,,,,,
+S6_exp16,"--order-gap=15 --footprint=exact,front",1,,,,,5.5,1,,,,,,,,,,,,,120,16,,,,,,,,,,,102,,3685,,,,,,,,,,exp,,,,,,,
+S9_base44_nolanes,"--no-lanes --footprint=exact,front",0,3156,128.9,71,0.1084,2.0,1,1,14447,155.2,1.0,main,"exact,front",1,17,40,0,598.6,998.0,40,6,632.9,1026.9,0,45.6,1124,443.4,1495,1246,"[0.39, 1.11, 0.8]",860,44,1.0,,11,60,,73,73,0.0354,7.68,0.974,0.962,base,1,1,0,0.24,0.0,2,4

@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import math
 import numpy as np
 
 DIRS = [(1, 0), (0, 1), (-1, 0), (0, -1)]  # 0=N 1=E 2=S 3=W
@@ -41,16 +42,27 @@ FOOTPRINT_MARGIN_M = 0.05  # 회전 마스크 여유 = Isaac 정지 허용 오�
 # 치수가 다른 커널 2개가 필요해지면 turn_ok/swing_cells 인자로 승격.
 _TURN_MASK = None     # bool[H, W, 4, 4] — [r, c, h, h2] = 회전 스윕이 장애물과 안 겹침. None = 마스크 없음
 _FRONT_SWING = False  # 회전 시 앞 칸(front(h), front(h2))을 soft 칸으로 검사
-_FRONT_DIAG = False   # soft 에 대각 4칸도 포함 (-79: 물리 팀 6칸 안. 금지 반경 = 코 0.559 + 상대 뒤 1.180 = 1.739 m > 대각 1.414)
+_FRONT_DIAG = False   # soft 에 섞임 대각 2칸(mA, mB)도 포함 = 4칸 (-79, 물리 팀 2026-09-14 답신: 뒤 대각은 몸 칸(hard), 코 대각은 여유 무관)
 
 
-def configure(turn_mask=None, front_swing=False, front_diag=False):
+def configure(turn_mask=None, front_swing=False, front_diag=False, robot_dims=None, pitch=1.0):
     """회전 발자국 설정. FmsKernel.__init__ 가 Replanner/HGraph 를 만들기 **전에** 부른다.
-    front_swing: 앞 2칸 soft. front_diag: 대각 4칸도 soft(6칸, `--footprint=exact,front`; 2칸은 `exact,front_2cell`)."""
+    front_swing: 앞 2칸(f0, f1) soft. front_diag: 섞임 대각 2칸(mA, mB)도 soft = 4칸(`--footprint=exact,front`; 2칸은 `exact,front_2cell`).
+    robot_dims=(앞, 뒤, 폭) 를 주면 pitch 게이팅을 여기서 한다: 코 반경 hypot(앞, 폭/2) × 2 ≤ pitch 면 코가 칸을 안 벗어나
+    규칙이 필요 없다(∅) — 계획기와 실행층(ADG)이 같은 판정을 보게 규칙 함수 쪽에 둔다(물리 팀 2026-09-14 §1)."""
     global _TURN_MASK, _FRONT_SWING, _FRONT_DIAG
     _TURN_MASK = None if turn_mask is None else np.asarray(turn_mask, dtype=bool)
+    if front_swing and robot_dims is not None:
+        front_swing = front_needed(robot_dims, pitch)
     _FRONT_SWING = bool(front_swing)
     _FRONT_DIAG = bool(front_swing and front_diag)
+
+
+def front_needed(robot_dims, pitch=1.0):
+    """코 모서리 반경 hypot(앞, 폭/2) 가 반 칸(pitch/2) 을 넘으면 회전 중 코가 앞 칸에 들어간다 → soft 규칙 필요.
+    (0.39, 1.11, 0.80): 0.559 > 0.5 → True. pitch 1.2 면 0.559 < 0.6 → False (규칙 불필요)."""
+    front, _, width = robot_dims
+    return math.hypot(front, width / 2) > pitch / 2
 
 
 def reset():
@@ -98,14 +110,16 @@ def swing_cells(r, c, h, h2):
 
 def front_cells(r, c, h, h2):
     """h→h2 회전 중 코가 스치는 앞 2칸(옛·새 헤딩 앞) — soft 칸(축만 금지). front_swing 설정이 아니면 빈 집합.
-    front_diag 면 대각 4칸도 (6칸): 상대 축이 대각(1.414 m)에 있어도 내 코 반경 + 상대 뒤 반경(1.739 m) 안이라 닿을 수 있다.
-    뒤쪽 직교 2칸은 hard(rear/swing)가 이미 덮으므로 6칸이 상한 (물리 팀 2026-09-14, 합법쌍 322→300, 여유 41→200 mm)."""
+    front_diag 면 섞임 대각 2칸 mA=(r+d1−d2), mB=(r−d1+d2) 도 (4칸): 상대 축이 대각(1.414 m)에 있어도 내 코 반경 + 상대 뒤 반경
+    (1.739 m) 안이라 닿을 수 있다 → 여유 41 → 200 mm. 코 대각(r+d1+d2)은 여유를 안 올리고 합법쌍만 줄이며, 뒤 대각(r−d1−d2)은
+    몸이 실제로 지나는 hard 칸이라 soft 에 넣지 않는다 (물리 팀 2026-09-14: 4칸 합법쌍 302 / 200 mm, hard ∪ soft = 3×3 중 8칸).
+    의미는 **더하기**: hard(축·뒤·스윙 3칸)는 그대로 두고 soft 는 "축만 금지" 추가 제약. 스윕 밖 soft 칸도 순수 추가 제약."""
     if not _FRONT_SWING:
         return set()
     d1, d2 = DIRS[h], DIRS[h2]
     cells = {(r + d1[0], c + d1[1]), (r + d2[0], c + d2[1])}
     if _FRONT_DIAG:
-        cells |= {(r + 1, c + 1), (r + 1, c - 1), (r - 1, c + 1), (r - 1, c - 1)}
+        cells |= {(r + d1[0] - d2[0], c + d1[1] - d2[1]), (r - d1[0] + d2[0], c - d1[1] + d2[1])}
     return cells
 
 
