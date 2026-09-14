@@ -103,32 +103,29 @@ class OrderStream:
         assert flow == "main", "명시 주문 모드는 main 흐름만"
         assert rack_map, "명시 주문 모드는 rack_map(map/rack_buffers.json) 필요"
         assert tote_units is None or tote_units >= 1, f"tote_units 는 1 이상 (상품 개수): {tote_units}"
-        parsed = []
-        for od in orders:
-            assert od["ordered_at_s"] >= 0, f"ordered_at_s 는 0 이상: {od}"
-            t = int(od["ordered_at_s"] / dt)
-            groups = {}
-            for ln in od["lines"]:
-                rid = ln["rack_id"]
-                if rid not in rack_map:
-                    raise KeyError(f"rack_id {rid!r} 가 rack_buffers.json 에 없음 (order {od.get('order_id')})")
-                groups[rack_map[rid]] = groups.get(rack_map[rid], 0) + int(ln.get("qty", 1))
-            totes = [(b, -(-q // tote_units) if tote_units else 1) for b, q in sorted(groups.items())]
-            parsed.append((t, totes))
-        if horizon is not None:
-            kept = [p for p in parsed if p[0] < horizon]
-            self.orders_skipped = len(parsed) - len(kept)
-            parsed = kept
-        # 로봇 한 대 적재(MAX_TOTES_PER_TRIP=6)를 넘는 주문은 토트마다 태스크 하나라 커널이 여러 왕복으로 나눠 나른다(-177 은 제외했음).
-        # 다만 토트 합계가 max_order_totes 를 넘는 주문은 팔레트 출고로 보고 시뮬 밖 — 개인 소비자 창고에 업자 주문은 없다 (2026-09-14).
-        if max_order_totes:
-            self.orders_oversize = sum(sum(n for _, n in p[1]) > max_order_totes for p in parsed)
-            parsed = [p for p in parsed if sum(n for _, n in p[1]) <= max_order_totes]
+        parsed = [_parse_order(od, rack_map, tote_units, dt) for od in orders]
+        parsed = self._filter_orders(parsed, horizon, max_order_totes)
         parsed.sort(key=lambda p: p[0])                              # 안정 정렬: 같은 틱은 파일 순서
         self.explicit_orders = parsed
         self.n_orders = len(parsed)
         self.order_times = np.array([p[0] for p in parsed], dtype=int)
-        # 입고: 고정 시간이면 in 창에서 간격 생성, 유한이면 주문 수만큼(기본) 간격 생성 — 간격 모드와 같은 식
+        self._init_explicit_inbound(horizon, shifts, gap_in, n_inbound)
+
+    def _filter_orders(self, parsed, horizon, max_order_totes):
+        """horizon 밖(t ≥ T) 제외 → orders_skipped. 토트 합계가 max_order_totes 초과 → 팔레트 출고로 시뮬 밖, orders_oversize.
+        로봇 한 대 적재(MAX_TOTES_PER_TRIP=6)를 넘는 주문은 토트마다 태스크 하나라 커널이 여러 왕복으로 나른다(-177 은 제외했음).
+        개인 소비자 창고에 업자 주문은 없다 (2026-09-14)."""
+        if horizon is not None:
+            kept = [p for p in parsed if p[0] < horizon]
+            self.orders_skipped = len(parsed) - len(kept)
+            parsed = kept
+        if max_order_totes:
+            self.orders_oversize = sum(_order_totes(p) > max_order_totes for p in parsed)
+            parsed = [p for p in parsed if _order_totes(p) <= max_order_totes]
+        return parsed
+
+    def _init_explicit_inbound(self, horizon, shifts, gap_in, n_inbound):
+        """입고: 고정 시간이면 in 창에서 간격 생성, 유한이면 주문 수만큼(기본) 간격 생성 — 간격 모드와 같은 식."""
         if horizon is not None:
             self.windows = shift_windows(horizon, tuple(shifts))
             self.inbound_times = np.concatenate([self._window_times(s, e, gap_in)
@@ -249,3 +246,21 @@ class OrderStream:
             od["completed"] = t
             self.outstanding_orders -= 1
         return follow
+
+
+def _parse_order(od, rack_map, tote_units, dt):
+    """큐 명세 §1-1 주문 하나 → (도착 틱, [(버퍼, 토트 수)]). 같은 버퍼는 qty 합쳐 ceil(합 / tote_units), tote_units 없으면 버퍼당 1."""
+    assert od["ordered_at_s"] >= 0, f"ordered_at_s 는 0 이상: {od}"
+    groups = {}
+    for ln in od["lines"]:
+        rid = ln["rack_id"]
+        if rid not in rack_map:
+            raise KeyError(f"rack_id {rid!r} 가 rack_buffers.json 에 없음 (order {od.get('order_id')})")
+        groups[rack_map[rid]] = groups.get(rack_map[rid], 0) + int(ln.get("qty", 1))
+    totes = [(b, -(-q // tote_units) if tote_units else 1) for b, q in sorted(groups.items())]
+    return int(od["ordered_at_s"] / dt), totes
+
+
+def _order_totes(parsed_order):
+    """(틱, [(버퍼, n)]) 의 토트 합계."""
+    return sum(n for _, n in parsed_order[1])

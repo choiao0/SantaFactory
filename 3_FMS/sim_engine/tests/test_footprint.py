@@ -64,7 +64,8 @@ def test_mask_open_space_allows_all_8_turns():
     assert m.shape == (N, N, 4, 4)
     for h, h2 in TURNS:
         assert m[R, C, h, h2]
-    assert not m[R, C, 0, 2] and not m[R, C, 0, 0]                  # 180°·제자리는 미정의 = False
+    assert not m[R, C, 0, 2]                                        # 180° 는 미정의 = False
+    assert not m[R, C, 0, 0]                                        # 제자리도 미정의 = False
 
 
 NOSE_TURNS = {(0, 1), (0, 3), (1, 0), (3, 0)}     # 옛 또는 새 헤딩이 h=0(랙 쪽) 인 회전 = 코가 랙 쪽으로 스윙
