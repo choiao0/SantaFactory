@@ -801,6 +801,32 @@ class AdgRuntime:
         ch = self.adg.chains[i]
         return ch[k] if k < len(ch) else None
 
+    # [patch_carry] 이어달리기 — 다음 액션 엿보기 -----------------------------
+    def after(self, i: int) -> "Action | None":
+        """**지금 돌고 있는** 액션의 다음 액션. `pending` 과 다르다.
+
+        `next_idx` 는 `complete()` 에서만 오른다. 그래서 액션이 도는 동안
+        `pending(i)` 은 **그 액션 자신**을 돌려준다. 하나 더 봐야 한다.
+        """
+        k = self.next_idx[i] + 1
+        ch = self.adg.chains[i]
+        return ch[k] if k < len(ch) else None
+
+    def can_follow(self, running: "Action", nxt: "Action") -> bool:
+        """현재 액션이 끝나는 **즉시** 다음 액션을 시작할 수 있는가.
+
+        ★ `can_start(nxt)` 를 쓰면 안 된다. `nxt` 의 선행에는 지금 돌고 있는
+          액션이 type 1 엣지로 들어 있고, 그건 아직 `done` 이 아니다. 그래서
+          항상 False 가 나온다 — 이어달리기가 영영 안 걸린다.
+          그 하나만 이미 끝난 것으로 보고 나머지를 본다.
+        """
+        if nxt.cells & self.blocked_cells:
+            return False
+        if self.clock + 1e-9 < self.release_time(nxt):
+            return False
+        return all(u in self.done or u == running.uid
+                   for u in self.adg.preds[nxt.uid])
+
     # [patch_adg_why]
     def _why_hit(self, action, k: int) -> None:
         a = getattr(action, "agent", -1)
@@ -982,10 +1008,21 @@ class MotionController:
         self.tol = tol or Tolerance()
         self.action: Action | None = None
         self._v = 0.0
+        # [patch_carry] 이어달리기 종단속도. 0 이면 목표에서 완전히 선다.
+        #   FleetController 가 매 스텝 정해 준다 — 다음 액션이 같은 방향
+        #   직진이고 곧바로 시작 가능할 때만 0 보다 크다.
+        self.exit_v = 0.0
 
-    def begin(self, action: Action) -> None:
+    def begin(self, action: Action, keep_speed: bool = False) -> None:
+        """`keep_speed` 면 현재 속도를 물려받는다 (이어달리기).
+
+        회전으로 넘어갈 때는 반드시 False 다 — 제자리 선회에 선속도를 들고
+        들어가면 칸을 벗어난다.
+        """
         self.action = action
-        self._v = 0.0
+        if not keep_speed:
+            self._v = 0.0
+        self.exit_v = 0.0
         self.tx, self.ty, self.tyaw = self.g.state_pose(action.to)
         sx, sy, _ = self.g.state_pose(action.frm)
         self.sx, self.sy = sx, sy
@@ -1025,9 +1062,15 @@ class MotionController:
         # 속도는 대칭으로: 지나쳤으면(along < 0) 되돌아올 수 있어야 한다.
         # 감속 계수는 **물리적** 후진에 붙인다 (센서가 없는 방향이므로).
         v_cap = g.v_max * (1.0 if sign > 0 else 1.0 / REVERSE_FACTOR)
-        brake = math.sqrt(2.0 * g.a_lin * abs(along)) if along else 0.0
+        # [patch_carry] 종단속도를 0 이 아니게 둘 수 있다 (이어달리기).
+        #   sqrt(2a|d|) 는 "목표에서 정확히 0" 이 되는 곡선이다. 칸마다 이걸
+        #   쓰면 칸마다 선다. exit_v 를 실으면 그 속도로 목표를 통과한다.
+        brake = (math.sqrt(self.exit_v ** 2 + 2.0 * g.a_lin * abs(along))
+                 if along else self.exit_v)
         lim = min(v_cap, max(brake, 0.05))
         want = clamp(1.6 * along, -lim, lim)
+        if self.exit_v > 0.0 and along > 0.0:
+            want = max(want, min(lim, self.exit_v))   # 목표 근처에서 0 으로 안 죽게
         self._v += clamp(want - self._v, -g.a_lin * dt, g.a_lin * dt)
         return (sign * self._v, w)
 
@@ -1074,6 +1117,7 @@ class FleetStats:
     started: int = 0
     completed: int = 0
     overlap_events: int = 0
+    carried: int = 0           # [patch_carry] 정지 없이 다음 칸으로 이어간 횟수
     overlap_pairs: set[tuple[int, int]] = field(default_factory=set)
     worst_overlap: int = 0
     # 겹침 중 관측된 **차체 사이 최소 거리** [m]. 겹침이 없으면 inf.
@@ -1140,7 +1184,7 @@ class FleetController:
                  order: Sequence[int] | None = None, tol: Tolerance | None = None,
                  safety_check: bool = True, action_timeout: float = 60.0,
                  starts: dict[int, State] | None = None,
-                 release: bool = False):
+                 release: bool = False, carry: bool = True):
         self.g = geom
         # release=True 면 계획의 출발 시각을 지킨다 (lifelong 에서 필수).
         # one-shot 은 도착 시각이라는 개념이 없으니 기본값 False 로 둔다.
@@ -1167,6 +1211,21 @@ class FleetController:
         self.open_loop: list[str] = []
         self.stats = FleetStats()
         self._reported: set[tuple[int, int]] = set()   # 겹침 상세를 찍은 쌍
+        # [patch_carry] 이어달리기 ------------------------------------------
+        #   칸마다 정지하면 1.2 m 의 84%가 가감속 램프다. 0.9 m/s 를 쓰는 시간이
+        #   한 칸당 0.21 s(8.5%)뿐이다 (2026-09-14 실측 2.367 s/칸).
+        #
+        #   ★ 안전 근거는 기하다. 구동축이 목표 칸 중심에 있을 때 차체 앞끝은
+        #     front_len(0.390 m) 앞이고, 칸 반폭은 0.600 m 다. 즉 축이 중심을
+        #     **0.210 m** 지나야 몸이 다음 칸에 들어간다. 그 거리 안에 설 수
+        #     있는 속도까지만 싣는다 — 다음 칸을 못 잡아도 칸 밖에서 멈춘다.
+        #
+        #   `can_start` 의 세 조건 중 선행/릴리스는 단조지만 `blocked_cells` 는
+        #   아니다(장애물이 새로 생길 수 있다). 그래서 "한 번 참이면 계속 참"
+        #   에 기대지 않고 이 거리 여유로 막는다.
+        margin = 0.5 * geom.pitch - geom.front_len
+        self.carry_v = (min(geom.v_max, math.sqrt(2.0 * geom.a_lin * margin))
+                        if carry and margin > 0.0 else 0.0)
         if starts is not None:
             self.verify_start()
 
@@ -1233,6 +1292,28 @@ class FleetController:
 
     # ---- 루프 --------------------------------------------------------------
 
+    # [patch_carry]
+    def _carry(self, a: int, act: Action) -> float:
+        """이 액션의 종단속도. 0 이면 목표 칸에서 완전히 선다.
+
+        **같은 방향 직진이 곧바로 이어질 때만** 속도를 싣는다. 회전이 오면
+        반드시 0 이다 — 제자리 선회에 선속도를 들고 들어가면 칸을 벗어난다.
+        """
+        if self.carry_v <= 0.0 or act.kind != MOVE:
+            return 0.0
+        nxt = self.rt.after(self.slot[a])
+        if nxt is None or nxt.kind != MOVE:
+            return 0.0
+        if nxt.frm[2] != act.to[2]:                      # 헤딩이 바뀐다
+            return 0.0
+        d0 = (act.to[0] - act.frm[0], act.to[1] - act.frm[1])
+        d1 = (nxt.to[0] - nxt.frm[0], nxt.to[1] - nxt.frm[1])
+        if d0 != d1:                                     # 방향이 바뀐다
+            return 0.0
+        if not self.rt.can_follow(act, nxt):             # 아직 못 들어간다
+            return 0.0
+        return self.carry_v
+
     def step(self, dt: float) -> None:
         self.stats.steps += 1
         self.stats.sim_time += dt
@@ -1258,14 +1339,30 @@ class FleetController:
                     self.running[a] = None
                     self.elapsed[a] = 0.0
                     self.stats.completed += 1
-                    drv.command(0.0, 0.0)
-                    self._last_cmd[a] = (0.0, 0.0)
+                    # [patch_carry] 속도를 실은 채 끝났으면 **같은 스텝에**
+                    #   다음 액션을 시작한다. 예전에는 여기서 0 을 명령하고
+                    #   다음 스텝에 시작해서, 감속과 별개로 한 스텝을 더 버렸다.
+                    nxt = self.rt.pending(self.slot[a])
+                    if (c.exit_v > 0.0 and nxt is not None
+                            and self.rt.can_start(nxt)):
+                        c.begin(nxt, keep_speed=True)
+                        self.running[a] = nxt
+                        self.stats.started += 1
+                        self.stats.carried += 1
+                        c.exit_v = self._carry(a, nxt)
+                        cmd = c.update(pose, dt)
+                        drv.command(*cmd)
+                        self._last_cmd[a] = cmd
+                    else:
+                        drv.command(0.0, 0.0)
+                        self._last_cmd[a] = (0.0, 0.0)
                 else:
                     if self.elapsed[a] > self.action_timeout:
                         self.timeouts.append(
                             f"agent{a} {act} 가 {self.elapsed[a]:.0f}s 동안 완료되지 않음 "
                             f"(pose={pose[0]:.2f},{pose[1]:.2f},{math.degrees(pose[2]):.0f}deg)")
                         self.elapsed[a] = 0.0
+                    c.exit_v = self._carry(a, act)
                     cmd = c.update(pose, dt)
                     drv.command(*cmd)
                     self._last_cmd[a] = cmd
@@ -1282,6 +1379,7 @@ class FleetController:
                 self.running[a] = nxt
                 self.elapsed[a] = 0.0
                 self.stats.started += 1
+                self.ctrl[a].exit_v = self._carry(a, nxt)
                 cmd = self.ctrl[a].update(pose, dt)
                 drv.command(*cmd)
                 self._last_cmd[a] = cmd
