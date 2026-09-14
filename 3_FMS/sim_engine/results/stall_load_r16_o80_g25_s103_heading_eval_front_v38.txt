@@ -1,0 +1,73 @@
+[WARN] 헤딩 모델: 목표 칸 간격 <3인 쌍 1개 (차체 겹침 가능) 예: [((53, 105), (55, 105))]
+[STALL] t=11398, done=202/204, waiting=0
+  robot0 pos=(48, 103) h=0 state=IDLE goal=(48, 103) busy=0 stag=0
+  robot1 pos=(48, 105) h=0 state=IDLE goal=(48, 105) busy=0 stag=0
+  robot2 pos=(50, 103) h=3 state=IDLE goal=(50, 103) busy=0 stag=0
+  robot3 pos=(62, 103) h=1 state=IDLE goal=(62, 103) busy=0 stag=0
+  robot4 pos=(58, 23) h=2 state=TO_PICK goal=(52, 24) busy=0 stag=3484
+  robot5 pos=(56, 23) h=3 state=TO_PICK goal=(64, 24) busy=1 stag=3438
+  robot6 pos=(52, 103) h=1 state=IDLE goal=(52, 103) busy=0 stag=0
+  robot7 pos=(66, 105) h=0 state=IDLE goal=(66, 105) busy=0 stag=0
+  robot8 pos=(64, 105) h=0 state=IDLE goal=(64, 105) busy=0 stag=0
+  robot9 pos=(64, 103) h=1 state=IDLE goal=(64, 103) busy=0 stag=0
+  robot10 pos=(50, 102) h=0 state=TO_HOME goal=(50, 107) busy=3 stag=3138
+  robot11 pos=(48, 107) h=0 state=IDLE goal=(48, 107) busy=0 stag=0
+  robot12 pos=(50, 105) h=3 state=IDLE goal=(50, 105) busy=0 stag=0
+  robot13 pos=(48, 104) h=0 state=TO_HOME goal=(54, 103) busy=2 stag=3173
+  robot14 pos=(66, 103) h=1 state=IDLE goal=(66, 103) busy=0 stag=0
+  robot15 pos=(48, 102) h=0 state=TO_HOME goal=(52, 105) busy=1 stag=3113
+  robot4 (58, 23, 2) goal=(52, 24) dist=8.2 bias=20
+     fwd  -> (57, 23, 2) dist=7.2 blocked_by={(57, 23): 5}
+     wait -> (58, 23, 2) dist=8.2 blocked_by={}
+     turn -> (58, 23, 1) dist=8.2 blocked_by={}
+     turn -> (58, 23, 3) dist=9.5 blocked_by={}
+     rev  -> (59, 23, 2) dist=9.2 blocked_by={}
+  robot5 (56, 23, 3) goal=(64, 24) dist=11.5 bias=20
+     turn -> (56, 23, 0) dist=10.2 blocked_by={}
+     wait -> (56, 23, 3) dist=11.5 blocked_by={}
+     turn -> (56, 23, 2) dist=11.5 blocked_by={}
+     fwd  -> (56, 22, 3) dist=12.5 blocked_by={}
+  robot10 (50, 102, 0) goal=(50, 107) dist=6.2 bias=20
+     turn -> (50, 102, 1) dist=5.0 blocked_by={(50, 103): 2}
+     wait -> (50, 102, 0) dist=6.2 blocked_by={}
+     turn -> (50, 102, 3) dist=7.5 blocked_by={(50, 103): 2}
+     fwd  -> (51, 102, 0) dist=8.5 blocked_by={}
+     rev  -> (49, 102, 0) dist=7.2 blocked_by={(48, 102): 15}
+  robot13 (48, 104, 0) goal=(54, 103) dist=8.2 bias=20
+     fwd  -> (49, 104, 0) dist=7.2 blocked_by={}
+     wait -> (48, 104, 0) dist=8.2 blocked_by={}
+     turn -> (48, 104, 3) dist=8.2 blocked_by={(48, 105): 1, (47, 105): 1, (48, 103): 0}
+     turn -> (48, 104, 1) dist=9.5 blocked_by={(47, 103): 0, (48, 103): 0, (48, 105): 1}
+     rev  -> (47, 104, 0) dist=9.2 blocked_by={}
+  robot15 (48, 102, 0) goal=(52, 105) dist=8.2 bias=20
+     fwd  -> (49, 102, 0) dist=7.2 blocked_by={(49, 102): 10}
+     wait -> (48, 102, 0) dist=8.2 blocked_by={}
+     turn -> (48, 102, 1) dist=8.2 blocked_by={(48, 103): 0}
+     turn -> (48, 102, 3) dist=9.5 blocked_by={(47, 103): 0, (48, 103): 0}
+     rev  -> (47, 102, 0) dist=9.2 blocked_by={}
+  [최근 12틱 이력, 미도달 로봇 [4, 5, 10, 13, 15]]
+   t=11386 r4:(58, 23, 2) busy  r5:(56, 23, 1) busy  r10:(51, 102, 0) busy  r13:(46, 104, 3) busy  r15:(47, 102, 0) busy
+   t=11387 r4:(58, 23, 2) busy  r5:(56, 23, 1) busy  r10:(51, 102, 0) busy  r13:(46, 104, 3) turn  r15:(47, 102, 0) fwd
+   t=11388 r4:(58, 23, 2) turn  r5:(56, 23, 1) busy  r10:(51, 102, 0) busy  r13:(46, 104, 0) busy  r15:(48, 102, 0) busy
+   t=11389 r4:(58, 23, 3) busy  r5:(56, 23, 1) turn  r10:(51, 102, 0) rev  r13:(46, 104, 0) busy  r15:(48, 102, 0) busy
+   t=11390 r4:(58, 23, 3) busy  r5:(56, 23, 2) busy  r10:(50, 102, 0) busy  r13:(46, 104, 0) busy  r15:(48, 102, 0) busy
+   t=11391 r4:(58, 23, 3) busy  r5:(56, 23, 2) busy  r10:(50, 102, 0) busy  r13:(46, 104, 0) busy  r15:(48, 102, 0) rev
+   t=11392 r4:(58, 23, 3) busy  r5:(56, 23, 2) busy  r10:(50, 102, 0) busy  r13:(46, 104, 0) fwd  r15:(47, 102, 0) busy
+   t=11393 r4:(58, 23, 3) turn  r5:(56, 23, 2) busy  r10:(50, 102, 0) fwd  r13:(47, 104, 0) busy  r15:(47, 102, 0) busy
+   t=11394 r4:(58, 23, 2) busy  r5:(56, 23, 2) turn  r10:(51, 102, 0) busy  r13:(47, 104, 0) busy  r15:(47, 102, 0) busy
+   t=11395 r4:(58, 23, 2) busy  r5:(56, 23, 3) busy  r10:(51, 102, 0) busy  r13:(47, 104, 0) busy  r15:(47, 102, 0) fwd
+   t=11396 r4:(58, 23, 2) busy  r5:(56, 23, 3) busy  r10:(51, 102, 0) busy  r13:(47, 104, 0) fwd  r15:(48, 102, 0) busy
+   t=11397 r4:(58, 23, 2) busy  r5:(56, 23, 3) busy  r10:(51, 102, 0) rev  r13:(48, 104, 0) busy  r15:(48, 102, 0) busy
+  [YIELD] {'t': 11127, 'yielder': 15, 'peer': 10, 'action': 'standoff', 'target': None}
+  [YIELD] {'t': 11151, 'yielder': 15, 'peer': 10, 'action': 'standoff', 'target': None}
+  [YIELD] {'t': 11175, 'yielder': 15, 'peer': 10, 'action': 'standoff', 'target': None}
+  [YIELD] {'t': 11199, 'yielder': 15, 'peer': 10, 'action': 'standoff', 'target': None}
+  [YIELD] {'t': 11223, 'yielder': 15, 'peer': 10, 'action': 'standoff', 'target': None}
+  [YIELD] {'t': 11247, 'yielder': 15, 'peer': 10, 'action': 'standoff', 'target': None}
+  [YIELD] {'t': 11271, 'yielder': 15, 'peer': 10, 'action': 'standoff', 'target': None}
+  [YIELD] {'t': 11295, 'yielder': 15, 'peer': 10, 'action': 'standoff', 'target': None}
+  [YIELD] {'t': 11319, 'yielder': 15, 'peer': 10, 'action': 'standoff', 'target': None}
+  [YIELD] {'t': 11343, 'yielder': 15, 'peer': 10, 'action': 'standoff', 'target': None}
+  [YIELD] {'t': 11367, 'yielder': 15, 'peer': 10, 'action': 'standoff', 'target': None}
+  [YIELD] {'t': 11391, 'yielder': 15, 'peer': 10, 'action': 'standoff', 'target': None}
+시뮬 정체 감지
