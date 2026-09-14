@@ -302,16 +302,12 @@ section.step > p.desc { font-size: 18px; line-height: 1.7; max-width: 760px; mar
 .rp-bar h4 span { font: 500 14px var(--font-mono); letter-spacing: .05em; color: #999; margin-left: 10px; }
 .rp-ctrl { display: flex; gap: 8px; align-items: center; }
 .rp-clock { font: 600 16px var(--font-mono); color: var(--red); min-width: 100px; }
-.sim-board { background: #111; border: 1px solid #2c2c2c; padding: 18px; max-width: 920px; position: relative; }
-.board-head, .board-foot { display: flex; justify-content: space-between; color: #aaa; font: 500 13px var(--font-mono); letter-spacing: .05em; }
-.board-head { margin-bottom: 14px; }
-.board-foot { margin-top: 12px; }
-.board-foot b { color: #eee; margin-left: 6px; }
-/* 리플레이 캔버스 (S15P21A106-205). 격자·로봇은 캔버스가 그리므로 CSS 로는 색만 넘긴다 —
-   ReplayCanvas 가 getComputedStyle 로 읽어가고, 테마를 바꾸면 캔버스도 따라온다. */
+/* 격자·로봇은 캔버스가 그리므로 CSS 로는 색만 넘긴다 — ReplayCanvas 가 getComputedStyle 로
+   읽어가고, 테마를 바꾸면 캔버스도 따라온다. 스테이션은 역할별로 색이 다르다:
+   출고 지점(packing)이 어디인지 보여야 AMR 의 목적지가 읽힌다 */
 .sim-board {
+  background: #111; border: 1px solid #2c2c2c; padding: 18px; max-width: 920px; position: relative;
   --rp-floor: #161616; --rp-wall: #3f3f3d; --rp-picker: #2a2a28; --rp-zone: #16241d;
-  /* 스테이션은 역할별로 색이 다르다 — 출고 지점(packing)이 어디인지 보여야 AMR 의 목적지가 읽힌다 */
   --rp-pack: #e72d2d;     /* 출고 — AMR 이 토트를 내려놓는 곳 */
   --rp-pick: #4fd18b;     /* 통로 집하 — 집으러 가는 곳 */
   --rp-in: #4dc3e8;       /* 입고 버퍼 */
@@ -322,6 +318,10 @@ section.step > p.desc { font-size: 18px; line-height: 1.7; max-width: 760px; mar
      아무 근거 없이 다른 상태인 척하게 된다 */
   --rp-amr: #f5b641;
 }
+.board-head, .board-foot { display: flex; justify-content: space-between; color: #aaa; font: 500 13px var(--font-mono); letter-spacing: .05em; }
+.board-head { margin-bottom: 14px; }
+.board-foot { margin-top: 12px; }
+.board-foot b { color: #eee; margin-left: 6px; }
 .rp-canvas {
   display: block; width: 100%; height: auto;
   background: #1d1d1d; border: 1px solid #353535; image-rendering: pixelated;
@@ -561,7 +561,6 @@ footer a:hover { color: #fff; }
 }
 .admin-pager .mono.dim { color: #77776f; }
 .admin-grid .spec { margin-top: 0; position: relative; }
-.admin-grid .spec.selectable { margin-top: 0; position: relative; }
 .admin-card .status { float: right; margin-left: 10px; }
 /* .status 색상은 어두운 배경(.run 카드) 기준이라, 밝은 .spec 카드 위에서는 더 진한 톤으로 바꾼다 */
 .admin-card .status.DONE { color: var(--ok); border-color: var(--ok); background: rgba(28, 124, 79, .12); }

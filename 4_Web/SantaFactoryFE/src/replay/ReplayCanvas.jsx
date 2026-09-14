@@ -21,6 +21,58 @@ const TRAIL_TICKS = 30
  */
 const cssVar = (el, name) => getComputedStyle(el).getPropertyValue(name).trim()
 
+/** 배경 레이어를 통째로 복사한다. 매 프레임 격자 수천 칸을 다시 그리면 대수가 늘수록 버벅인다. */
+function restoreBackground(ctx, { layer, dpr }) {
+  ctx.setTransform(1, 0, 0, 1, 0, 0)
+  ctx.drawImage(layer, 0, 0)
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+}
+
+/** 최근 지나온 자리. 정지 화면에서도 어디서 왔는지 읽히게 한다. */
+function drawTrails(ctx, canvas, { cell, px, py }, model, ti) {
+  ctx.lineWidth = 2
+  ctx.lineCap = 'round'
+  ctx.strokeStyle = cssVar(canvas, '--rp-amr')
+  ctx.globalAlpha = 0.28
+  for (const rid of Object.keys(model.robots)) {
+    const back = Math.max(0, ti - TRAIL_TICKS)
+    ctx.beginPath()
+    for (let k = back; k <= ti; k += 1) {
+      const p = poseAt(model, rid, k)
+      const x = px(p.c) + cell / 2
+      const y = py(p.r) + cell / 2
+      if (k === back) ctx.moveTo(x, y); else ctx.lineTo(x, y)
+    }
+    ctx.stroke()
+  }
+  ctx.globalAlpha = 1
+}
+
+/** 로봇 한 대. heading 모델이면 두 칸을 차지하는 차체를 방향대로 돌려 그린다. */
+function drawRobot(ctx, canvas, { cell, px, py }, model, rid, tick) {
+  const p = poseAt(model, rid, tick)
+  const [dr, dc] = DIRS[p.h]
+  ctx.fillStyle = cssVar(canvas, '--rp-amr')
+  if (model.twoCell) {
+    // 위치가 앞축 기준이라 차체 중심은 뒤로 0.39 m 물러나 있다 (export_isaac 규약)
+    const [len, wid] = model.meta.robot_dim_m || [1.5, 0.92]
+    const axleToCenter = len / 2 - 0.39
+    ctx.save()
+    ctx.translate(px(p.c) + cell / 2 - dc * axleToCenter * cell,
+                  py(p.r) + cell / 2 + dr * axleToCenter * cell)
+    ctx.rotate(Math.atan2(-dr, dc))
+    ctx.fillRect((-len * cell) / 2, (-wid * cell) / 2, len * cell, wid * cell)
+    ctx.restore()
+  } else {
+    ctx.fillRect(px(p.c) + 0.5, py(p.r) + 0.5, cell - 1, cell - 1)
+  }
+  // 진행 방향 표식 — 회전만으로는 앞뒤가 구분되지 않는다
+  ctx.fillStyle = 'rgba(255,255,255,0.92)'
+  ctx.beginPath()
+  ctx.arc(px(p.c) + cell / 2 + dc * cell * 0.28, py(p.r) + cell / 2 - dr * cell * 0.28, 1.3, 0, Math.PI * 2)
+  ctx.fill()
+}
+
 export default function ReplayCanvas({ replay, tick, showTrails = true }) {
   const canvasRef = useRef(null)
   const staticRef = useRef(null)
@@ -86,57 +138,12 @@ export default function ReplayCanvas({ replay, tick, showTrails = true }) {
     const canvas = canvasRef.current
     const base = staticRef.current
     if (!canvas || !base) return
-    const { layer, cell, dpr, px, py } = base
     const ctx = canvas.getContext('2d')
-    ctx.setTransform(1, 0, 0, 1, 0, 0)
-    ctx.drawImage(layer, 0, 0)
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
 
-    const rids = Object.keys(model.robots)
-    const ti = Math.floor(tick)
-
-    if (showTrails) {
-      ctx.lineWidth = 2
-      ctx.lineCap = 'round'
-      ctx.strokeStyle = cssVar(canvas, '--rp-amr')
-      ctx.globalAlpha = 0.28
-      for (const rid of rids) {
-        const back = Math.max(0, ti - TRAIL_TICKS)
-        ctx.beginPath()
-        for (let k = back; k <= ti; k += 1) {
-          const p = poseAt(model, rid, k)
-          const x = px(p.c) + cell / 2
-          const y = py(p.r) + cell / 2
-          if (k === back) ctx.moveTo(x, y); else ctx.lineTo(x, y)
-        }
-        ctx.stroke()
-      }
-      ctx.globalAlpha = 1
-    }
-
-    for (const rid of rids) {
-      const p = poseAt(model, rid, tick)
-      const [dr, dc] = DIRS[p.h]
-      ctx.fillStyle = cssVar(canvas, '--rp-amr')
-      if (model.twoCell) {
-        // 위치가 앞축 기준이라 차체 중심은 뒤로 0.39 m 물러나 있다 (export_isaac 규약)
-        const [len, wid] = model.meta.robot_dim_m || [1.5, 0.92]
-        const axleToCenter = len / 2 - 0.39
-        const x = px(p.c) + cell / 2 - dc * axleToCenter * cell
-        const y = py(p.r) + cell / 2 + dr * axleToCenter * cell
-        ctx.save()
-        ctx.translate(x, y)
-        ctx.rotate(Math.atan2(-dr, dc))
-        ctx.fillRect((-len * cell) / 2, (-wid * cell) / 2, len * cell, wid * cell)
-        ctx.restore()
-      } else {
-        ctx.fillRect(px(p.c) + 0.5, py(p.r) + 0.5, cell - 1, cell - 1)
-      }
-      // 진행 방향 표식 — 회전만으로는 앞뒤가 구분되지 않는다
-      ctx.fillStyle = 'rgba(255,255,255,0.92)'
-      ctx.beginPath()
-      ctx.arc(px(p.c) + cell / 2 + dc * cell * 0.28, py(p.r) + cell / 2 - dr * cell * 0.28, 1.3, 0, Math.PI * 2)
-      ctx.fill()
+    restoreBackground(ctx, base)
+    if (showTrails) drawTrails(ctx, canvas, base, model, Math.floor(tick))
+    for (const rid of Object.keys(model.robots)) {
+      drawRobot(ctx, canvas, base, model, rid, tick)
     }
   }, [model, tick, showTrails])
 

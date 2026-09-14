@@ -62,6 +62,9 @@ public class EstimateService {
     /** 시뮬 평가 시드 */
     private static final long FIXED_SEED = 101L;
 
+    /** 리플레이에서 맵을 담는 키. 저장할 때 떼어내고 조회할 때 다시 붙이므로 양쪽이 같아야 한다. */
+    private static final String REPLAY_SCENE = "scene";
+
     /** 아직 결과를 기다리는 상태 — TIMEOUT 스윕 대상. */
     private static final List<RunStatus> PENDING = List.of(RunStatus.QUEUED, RunStatus.RUNNING);
 
@@ -256,7 +259,7 @@ public class EstimateService {
         }
         try {
             ObjectNode replay = (ObjectNode) objectMapper.readTree(run.getReplayJson());
-            replay.set("scene", objectMapper.readTree(estimate.getReplaySceneJson()));
+            replay.set(REPLAY_SCENE, objectMapper.readTree(estimate.getReplaySceneJson()));
             return replay;
         } catch (JsonProcessingException | ClassCastException e) {
             log.error("리플레이 JSON 이 깨졌습니다: estimateId={}, amrCount={}", estimateId, amrCount, e);
@@ -456,13 +459,13 @@ public class EstimateService {
             return;
         }
         try {
-            JsonNode scene = replay.get("scene");
+            JsonNode scene = replay.get(REPLAY_SCENE);
             if (scene != null && !scene.isNull()) {
                 run.getEstimate().applyReplayScene(objectMapper.writeValueAsString(scene));
             }
             // 맵을 뺀 나머지(dt_s·model·seconds·robots·headings)가 run 별로 다른 부분이다
             ObjectNode trajectory = ((ObjectNode) replay).deepCopy();
-            trajectory.remove("scene");
+            trajectory.remove(REPLAY_SCENE);
             run.applyReplay(objectMapper.writeValueAsString(trajectory));
         } catch (JsonProcessingException | ClassCastException e) {
             log.warn("리플레이 저장 실패 — run 은 그대로 둔다: runId={}, {}", run.getRunId(), e.toString());
