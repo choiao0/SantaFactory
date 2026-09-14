@@ -40,8 +40,11 @@ class _PIBTStepH:
     """헤딩 모델 한 틱: 칸 하나 → 칸 집합으로 일반화한 우선순위 상속 + 백트래킹."""
 
     def __init__(self, states, dists, edge_cost, wait_cost, free, turn_cost, extra,
-                 bias, sec_map=None, sec_limit=0, sec_free=()):
+                 bias, sec_map=None, sec_limit=0, sec_free=(), forbid=None, forbid_axle=None, soft_hold=None):
         self.states = states
+        self.forbid = forbid or {}             # agent -> 금지 칸 (-79 대치: 지는 쪽은 이기는 쪽의 몸·원하는 자리에 못 들어간다)
+        # agent -> 축 금지 칸 (-79): 다음 상태의 축이 여기 있으면 안 됨. 대치의 지는 쪽(이기는 쪽 soft 칸) + soft 밀기로 임시 부여.
+        self.forbid_axle = {a: set(v) for a, v in (forbid_axle or {}).items()}
         self.dists = dists
         self.edge_cost = edge_cost
         self.wait_cost = wait_cost
@@ -64,7 +67,7 @@ class _PIBTStepH:
         # 로봇이 있으면 그 회전은 안 되고, 반대로 soft 예약된 칸에는 다른 로봇이 축을 들여놓지 못한다. 뒤 칸은 자유.
         self.pos_now = {s[:2]: a for a, s in states.items()}
         self.pos_next = {}      # cell -> 이번 틱 축이 놓일 agent
-        self.soft_next = {}     # cell -> soft 예약 agent
+        self.soft_next = dict(soft_hold or {})   # cell -> soft 예약 agent. 회전 진행 중(-194 다틱) 로봇의 soft 칸은 미리 채워 온다 (-79)
         self.next_soft = {}     # agent -> soft 칸 집합
         # 구간 대수 제한 (S15P21A106-193). sec_map 은 칸 -> 구간번호(-1 = 구간 밖).
         self.sec_map = sec_map
@@ -151,6 +154,47 @@ class _PIBTStepH:
             return True
         return any(self.pos_now.get(cell, a) != a or self.pos_next.get(cell, a) != a for cell in soft)
 
+    def _make_room(self, a, cur, soft, parent):
+        """soft 밀기(-79 V1b): 회전 후보가 다른 로봇의 **축**(pos_now)에 막혔고 그 로봇들이 아직 미결정이면, 나는 제자리를 예약하고
+        그들에게 '축을 soft 칸 밖으로'(forbid_axle) 제약을 준 채 재귀 해결한다 — hard 밀기(_push_occupants)의 축 버전.
+        이번 틱 결정된 축(pos_next)이나 이미 정해진 로봇이 막고 있으면 못 밀고 False."""
+        if front_swing_on() is False:
+            return False
+        owners = {self.pos_now[c] for c in soft if self.pos_now.get(c, a) != a}
+        if not owners or any(k in self.next_of for k in owners):
+            return False
+        if any(self.pos_next.get(c, a) != a for c in soft):
+            return False
+        if parent is not None and self.now_cells[a] & self.now_cells[parent]:
+            return False
+        self._reserve(a, cur, self.now_cells[a])
+        saved = {k: self.forbid_axle.get(k) for k in owners}
+        for k in owners:
+            self.forbid_axle[k] = set(saved[k] or ()) | set(soft)
+        ok = True
+        for k in sorted(owners):
+            if k in self.next_of:
+                # 앞 owner 의 재귀 밀기로 이미 결정된 로봇 — 다시 풀면 예약이 꼬여 점유 겹침(실측 exp22 --section-limit=2).
+                # 결정된 축이 soft 밖이면 그대로 두고, 안이면 실패.
+                if self.next_of[k][:2] in soft:
+                    ok = False
+                    break
+                continue
+            if not self.resolve(k, a):
+                ok = False
+                if self.release_failed_push:
+                    self._release(k)
+                break
+        for k in owners:
+            if saved[k] is None:
+                self.forbid_axle.pop(k, None)
+            else:
+                self.forbid_axle[k] = saved[k]
+        if ok:
+            return True
+        self._release(a)
+        return False
+
     def _push_occupants(self, a, cells):
         """cells 의 현 점유자(자기 제외, 미결정)를 칸 순서대로 밀어낸다. 하나라도 실패하면 False."""
         for cell in sorted(cells):
@@ -176,8 +220,15 @@ class _PIBTStepH:
                 cells = self.now_cells[a]                   # 대기 = 현 점유(스윙 포함) 유지
             if any(self.occ_next.get(cell, a) != a for cell in cells):
                 continue                                    # 타 agent 예약 칸
+            if cells & self.forbid.get(a, frozenset()):
+                continue                                    # 대치 금지 칸 (-79 V1)
+            fa = self.forbid_axle.get(a)
+            if fa and s2[:2] in fa:
+                continue                                    # 축 금지 칸 (-79 V1b)
             if self._soft_blocked(a, s2, soft):
-                continue                                    # 앞 2칸 축 충돌 (-203)
+                if self._make_room(a, cur, soft, parent):
+                    return True                             # soft 밀기 성공: 이번 틱 대기, 다음 틱 회전 (-79 V1b)
+                continue                                    # 앞 칸 축 충돌 (-203)
             if parent is not None and cells & self.now_cells[parent]:
                 continue                                    # 부모와 맞교환(swap) 금지
             if not self._entry_ok(a, cells):
@@ -191,7 +242,8 @@ class _PIBTStepH:
 
 
 def step_h(states, dists, edge_cost, wait_cost, free, priority_order,
-           turn_cost=None, extra=None, bias=None, sec_map=None, sec_limit=0, sec_free=()):
+           turn_cost=None, extra=None, bias=None, sec_map=None, sec_limit=0, sec_free=(), forbid=None,
+           forbid_axle=None, soft_hold=None):
     """헤딩 모델 한 틱. states: {a: (r,c,h)}, dists: {a: (H,W,4)},
     extra: {a: 추가 점유 칸(회전 중 스윙)}, bias: {a: 대기 점수 가산(wait_bias)}.
     sec_map/sec_limit: 구간 대수 제한(-193) — sec_limit 0 이면 장치가 통째로 꺼진다.
@@ -199,7 +251,7 @@ def step_h(states, dists, edge_cost, wait_cost, free, priority_order,
     if turn_cost is None:
         turn_cost = float(TURN_COST)
     ps = _PIBTStepH(states, dists, edge_cost, wait_cost, free, turn_cost,
-                    extra or {}, bias or {}, sec_map, sec_limit, sec_free)
+                    extra or {}, bias or {}, sec_map, sec_limit, sec_free, forbid, forbid_axle, soft_hold)
     for a in priority_order:
         if a not in ps.next_of:
             ps.resolve(a)

@@ -22,7 +22,7 @@
 #                              [--orders-file=<json>] [--capacity=<토트 수>] [--tote-units=<상품 수>] [--svc-per-tote=<초>]
 #                              [--max-order-totes=24]  (v3.5: 토트 합계 초과 주문 = 팔레트 흐름 제외, 그 아래 큰 주문은 여러 왕복. 0 = 제한 없음)
 #                              [--speed=<m/s>]   (v3.3, -116: 틱 길이 = CELL_M / speed. 1칸 = 1틱은 그대로, 초 환산만 바뀐다)
-#                              [--footprint=exact|legacy|exact,front] [--robot-dims=0.39,1.11,0.80]   (v3.4, -203 회전 발자국)
+#                              [--footprint=exact|legacy|exact,front|exact,front_2cell] [--robot-dims=0.39,1.11,0.80]   (v3.4 -203, front 6칸 -79)
 #   --footprint: 회전할 때 차체가 실제로 쓸고 가는 자리. exact(기본) = 0.1 m 지도로 만든 정적 마스크(랙·벽 침범 금지),
 #              legacy = v3.3 과 비트 동일(뒤 3칸만), exact,front = 앞 2칸 축 규칙 + 양보 v2 까지(소싸움 미해결 — 실험용,
 #              양보 규칙 강제 ON). --robot-dims 는 구동축 앞·뒤·폭 [m](기종 카드). SUMMARY footprint·robot_dims·turn_masked.
@@ -149,14 +149,15 @@ def _parse_model(a, argv):
     a.pocket_gain = _opt(argv, "pocket-gain", float, 2.0)
     # 회전 발자국 (-203, 계약 v3.4 결과 변경). 기본 exact = 정적 마스크. 회전이 없는 칸 모델·v1compat 은 legacy 로 둔다.
     a.footprint = _opt(argv, "footprint", str, "exact")
-    assert a.footprint in ("legacy", "exact", "exact,front"), f"--footprint 는 legacy|exact|exact,front: {a.footprint}"
+    assert a.footprint in ("legacy", "exact", "exact,front", "exact,front_2cell"), \
+        f"--footprint 는 legacy|exact|exact,front|exact,front_2cell: {a.footprint}"
     dims = _opt(argv, "robot-dims", str, ",".join(f"{v:g}" for v in ROBOT_DIMS))
     a.robot_dims = tuple(float(x) for x in dims.split(","))
     assert len(a.robot_dims) == 3 and all(v > 0 for v in a.robot_dims), f"--robot-dims 는 앞,뒤,폭 양수 셋: {dims}"
     if not a.heading:
         a.footprint = "legacy"
     elif "front" in a.footprint and not a.yield_rule:
-        a.warnings.append("[WARN] --footprint=exact,front 는 양보 규칙이 유일한 정면 해소 장치 — --no-yield 무시")
+        a.warnings.append(f"[WARN] --footprint={a.footprint} 는 양보 규칙이 유일한 정면 해소 장치 — --no-yield 무시")
         a.yield_rule = True
     assert a.lane_gain >= 1.0 and a.pocket_gain >= 1.0, f"--lane-gain/--pocket-gain 은 1.0 이상: {a.lane_gain}, {a.pocket_gain}"
     # 주문 도착 간격 평균 [틱] (지수분포). 기본 50 = B-0 이후 전 기준선. --order-gap=<틱> 으로 부하 조절
