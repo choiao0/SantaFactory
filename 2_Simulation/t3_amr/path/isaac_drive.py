@@ -1082,11 +1082,26 @@ class FleetStats:
     #     실측: 대각선 이웃이 칸 하나를 각각 5.1 mm · 2.7 mm 씩 스쳤는데
     #     차체 간격은 0.568 m 였다. 심각도를 가르는 것은 이 거리다.
     worst_gap: float = float("inf")
+    # **실제로 차체가 닿은** 스텝 수. `overlap_events`(칸 공유)와 구별된다.
+    #   판정을 칸에서 거리로 옮긴 이유 (2026-09-14):
+    #   ADG 는 **이상적 칸 중심 자세**로 `swept_cells` 를 계산하는데 실행은
+    #   그만큼 정확하지 않다. 실측에서 회전 중인 로봇이 칸 중심에서 0.051 m
+    #   어긋나 있었고, 그 때문에 차체 모서리가 옆 칸으로 **2.7 mm** 밀려
+    #   칸 공유가 떴다. 그때 두 차체 사이는 **0.568 m** 였다.
+    #   즉 칸 공유는 "모델과 실행이 어긋났다" 는 신호이지 충돌이 아니다.
+    #   구조적으로 계속 나므로, 주행의 합불은 이 값으로 가른다.
+    contact_events: int = 0
     stall_steps: int = 0
     sim_time: float = 0.0
 
     @property
     def clean(self) -> bool:
+        """**차체가 닿지 않았는가.** 칸 공유는 합불에 넣지 않는다 (위 주석)."""
+        return self.contact_events == 0
+
+    @property
+    def cells_clean(self) -> bool:
+        """칸 공유조차 없었는가 — 모델과 실행이 완전히 일치했다는 뜻."""
         return self.overlap_events == 0
 
     @property
@@ -1116,8 +1131,9 @@ class FleetController:
         while app.is_running():
             world.step(render=True)
             fleet.step(world.get_physics_dt())
-            if fleet.stats.overlap_events:
-                break                      # 브리지 버그 — 조용히 넘기지 말 것
+            if fleet.stats.contact_events:
+                break             # 차체 접촉 — 브리지 버그. 조용히 넘기지 말 것
+                                  # (칸 공유는 stats.overlap_events 로 따로 본다)
     """
 
     def __init__(self, geom: RobotGeom, adg: ADG, drivers: dict[int, RobotDriver],
@@ -1342,6 +1358,8 @@ class FleetController:
                     if poses:
                         gap = self.g.body_gap(poses[a], poses[b])
                         self.stats.worst_gap = min(self.stats.worst_gap, gap)
+                        if gap <= 0.0:                 # 실제 접촉만 합불에 넣는다
+                            self.stats.contact_events += 1
                         # **쌍마다 첫 건만** 찍는다. 물리 60 Hz 라 매 스텝 찍으면
                         # 로그가 수천 줄이 되고, 반대로 전체 첫 건만 찍으면
                         # 뒤에 난 다른 쌍의 정보를 통째로 잃는다.
@@ -1547,7 +1565,9 @@ def selftest(geom: RobotGeom, n_agents: int = 12, max_steps: int = 120,
             clean = fleet.stats.clean and fleet.finished
             all_clean += clean
             if not clean:
-                say(f"    seed {sd}/{run_seed}: 충돌 {fleet.stats.overlap_events}건, "
+                say(f"    seed {sd}/{run_seed}: 접촉 {fleet.stats.contact_events}건 "
+                    f"(칸 공유 {fleet.stats.overlap_events}건 · 최소 간격 "
+                    f"{fleet.stats.worst_gap:.3f} m), "
                     f"완주 {fleet.finished}, 액션 {fleet.stats.completed}/"
                     f"{len(adg.actions)}")
                 if not fleet.finished:
@@ -1709,8 +1729,8 @@ fleet = FleetController(geom, adg, drivers, order=order)
 while simulation_app.is_running():
     world.step(render=True)
     fleet.step(world.get_physics_dt())
-    if fleet.stats.overlap_events:
-        print("★ 차체 겹침 — 브리지 버그. 조용히 넘기지 말 것")
+    if fleet.stats.contact_events:
+        print("★ 차체 접촉 — 브리지 버그. 조용히 넘기지 말 것")
         print(fleet.diagnose())
         break
     if fleet.finished:

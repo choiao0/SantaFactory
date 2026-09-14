@@ -724,12 +724,15 @@ def _tick(f, dt):
     #     간격은 **0.568 m** 였다. 예전에는 이 셋을 전부 같은 문구
     #     ("플랜과 실제 기하가 어긋났다")로 찍어서 오탐을 심각하게 읽었다.
     #     판정은 `worst_gap`(차체 최소거리)이 한다.
-    if f.stats.overlap_events:
-        grade = f.stats.overlap_grade()
-        log = carb.log_error if f.stats.worst_gap < 0.10 else carb.log_warn
-        log(f"[pibt] 칸 겹침 {f.stats.overlap_events}건  "
-            f"쌍 {sorted(f.stats.overlap_pairs)}  "
-            f"공유칸 최대 {f.stats.worst_overlap}  →  {grade}")
+    #   ★★ **칸 공유로는 주행을 멈추지 않는다** (2026-09-14). 예전에는 멈췄다.
+    #     실측에서 차체 간격 0.568 m 짜리 오탐 하나가 300초짜리 주행을 죽였다 —
+    #     2.7 mm 스침 때문에. ADG 는 **이상적 칸 중심 자세**로 스윕을 계산하는데
+    #     실행은 그만큼 정확하지 않으므로(실측 어긋남 0.051 m) 칸 공유는
+    #     구조적으로 계속 난다. 멈추는 기준은 **접촉**이다.
+    if f.stats.contact_events:
+        carb.log_error(f"[pibt] ★★ 차체 접촉 {f.stats.contact_events}건  "
+                       f"쌍 {sorted(f.stats.overlap_pairs)}  "
+                       f"차체 최소거리 {f.stats.worst_gap:.3f} m  — 브리지 버그")
         try:
             for line in str(f.diagnose()).splitlines()[:25]:
                 carb.log_error("   " + line)
@@ -738,6 +741,15 @@ def _tick(f, dt):
         _shot_report()
         state["done"] = True
         return
+
+    # 접촉이 아닌 칸 공유 — **한 번만** 알리고 주행은 계속한다.
+    if f.stats.overlap_events and not state.get("cell_warned"):
+        state["cell_warned"] = True
+        carb.log_warn(f"[pibt] 칸 겹침 {f.stats.overlap_events}건  "
+                      f"쌍 {sorted(f.stats.overlap_pairs)}  "
+                      f"공유칸 최대 {f.stats.worst_overlap}  →  "
+                      f"{f.stats.overlap_grade()}")
+        carb.log_warn("[pibt]   주행은 계속합니다 — 멈추는 기준은 접촉입니다.")
 
     if f.finished:
         carb.log_warn(f"[pibt] 전원 완주 — 시뮬 {state['t']:.1f}s")
