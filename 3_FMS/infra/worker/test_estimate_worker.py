@@ -176,3 +176,80 @@ def test_shifts_default_out_but_explicit_kept():
 
 def test_timeout_default_is_1200():
     assert w.TIMEOUT_S == 1200 or "SIM_TIMEOUT_S" in os.environ
+# ------------------------------------------------------------
+# 리플레이 내보내기 (S15P21A106-205) — 시뮬 없이 산출물만 흉내 낸다
+# ------------------------------------------------------------
+def _write_export(tag, ticks, dt_s=0.5, robots=2, move_from=None):
+    """export_isaac 이 만드는 모양의 디렉터리를 세운다. 경로를 돌려준다.
+
+    move_from 을 주면 그 틱부터만 로봇이 움직인다 — 구간 선택을 시험하는 데 쓴다."""
+    import os
+    d = w._export_dir(tag)
+    os.makedirs(d, exist_ok=True)
+    with open(os.path.join(d, "scene.json"), "w", encoding="utf-8") as f:
+        json.dump({"meta": {"map": "wallA"}, "grid": []}, f)
+
+    def x_at(t):
+        if move_from is None:
+            return 1.0
+        return 1.0 + max(0, t - move_from)
+
+    traj = {"dt_s": dt_s, "model": "heading",
+            "robots": {str(i): [[t * dt_s, x_at(t) + i, 2.0] for t in range(ticks)] for i in range(robots)},
+            "headings": {str(i): [0.0] * ticks for i in range(robots)},
+            # 주문 7 은 토트 2개(틱 4·20)로 나뉘었다 — 마지막이 배달된 20 이 그 주문의 완료다
+            "tasks": [{"kind": "out", "order": 7, "completed": 20},
+                      {"kind": "in", "order": 1, "completed": 10},
+                      {"kind": "out", "order": 7, "completed": 4},
+                      {"kind": "out", "order": 9, "completed": 8},
+                      {"kind": "out", "order": 3},
+                      {"kind": "supply"}]}
+    with open(os.path.join(d, "trajectories.json"), "w", encoding="utf-8") as f:
+        json.dump(traj, f)
+    return d
+
+
+def test_replay_thins_the_whole_run(monkeypatch):
+    """run 전체를 담되 stride 간격으로 솎는다 — 원본은 run 하나가 28대 기준 19 MB 라 큐에 못 싣는다."""
+    import os
+    monkeypatch.setattr(w, "REPLAY_STRIDE", 4)
+    d = _write_export("thin_case", ticks=400, dt_s=0.5)
+    try:
+        r = w._read_replay("thin_case")
+        assert len(r["robots"]["0"]) == 100                  # 400 ÷ 4
+        assert len(r["headings"]["0"]) == 100
+        assert r["stride"] == 4
+        # 샘플 간격이 화면의 dt 다. 원본 dt 를 주면 재생이 4배 느려진다
+        assert r["dt_s"] == 2.0
+        assert r["seconds"] == 200.0                          # 100 샘플 × 2초 = 원본 400틱 × 0.5초
+        assert r["scene"]["meta"]["map"] == "wallA"
+    finally:
+        import shutil
+        shutil.rmtree(d, ignore_errors=True)
+    assert not os.path.exists(d)                              # 읽고 나면 지운다 (상주 워커 디스크 보호)
+
+
+def test_replay_keeps_every_tick_when_stride_is_one(monkeypatch):
+    """솎기를 끄면 원본 그대로 — 간격도 원본 dt 다."""
+    monkeypatch.setattr(w, "REPLAY_STRIDE", 1)
+    _write_export("full_case", ticks=30, dt_s=0.5)
+    r = w._read_replay("full_case")
+    assert len(r["robots"]["0"]) == 30
+    assert r["dt_s"] == 0.5
+
+
+def test_replay_counts_outbound_orders_not_trips(monkeypatch):
+    """주문 단위로 센다.
+
+    주문 하나가 여러 통로에 걸치면 토트가 나뉘어 AMR 왕복이 여러 번이다(실측 500주문 → 630태스크).
+    왕복을 세면 사용자가 입력한 출고 건수와 어긋난다. 주문은 마지막 토트가 배달돼야 끝난다.
+    입고는 담지 않고, 창 안에 못 끝난 주문(completed 없음)도 완료로 세지 않는다."""
+    monkeypatch.setattr(w, "REPLAY_STRIDE", 4)
+    _write_export("tasks_case", ticks=40, dt_s=0.5)
+    done = w._read_replay("tasks_case")["outbound_done"]
+    assert done == [4.0, 10.0]      # 주문 9 = 틱 8, 주문 7 = 틱 20(마지막 토트) → ×0.5초
+
+
+def test_replay_missing_export_is_not_an_error():
+    """내보내기가 꺼졌거나 시뮬이 중간에 죽으면 None. 리플레이 때문에 견적을 실패시키지 않는다."""
+    assert w._read_replay("no_such_run") is None
