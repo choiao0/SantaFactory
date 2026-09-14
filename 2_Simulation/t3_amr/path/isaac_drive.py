@@ -1004,11 +1004,30 @@ class MotionController:
     방향이 이미 맞으므로, 추종은 횡오차와 방향오차를 죽이는 것으로 충분하다.
     """
 
-    def __init__(self, geom: RobotGeom, tol: Tolerance | None = None):
+    def __init__(self, geom: RobotGeom, tol: Tolerance | None = None,
+                 v_exec: float | None = None, a_exec: float | None = None):
         self.g = geom
         self.tol = tol or Tolerance()
         self.action: Action | None = None
         self._v = 0.0
+        # [patch_vexec] **실행 속도는 계획 속도와 다른 값이다** (2026-09-14).
+        #   `geom.v_max`(= config.SPEED_PLAN 0.9)는 계획의 틱 길이
+        #   `pitch / v_max` 와 ADG 릴리스 일정을 정한다. 그걸 올리면 계획이
+        #   통째로 바뀐다. 그래서 실행 상한을 따로 둔다.
+        #
+        #   ★ 실행만 빠르게 하는 것은 **안전한 방향**이다. ADG 는 시간표가
+        #     아니라 순서로 돌기 때문에, 일찍 도착하면 선행을 기다릴 뿐이다.
+        #     위험한 것은 반대(계획보다 느림)이고, 그래서 SPEED_PLAN 을
+        #     1.2 -> 0.9 로 내렸었다 (config.py:49). 그 근거는 시간표 기반
+        #     드라이버 것이라 ADG 에는 그대로 적용되지 않는다.
+        #
+        #   이어달리기가 없을 때는 올려도 거의 소용이 없었다 — 1.2 m 칸
+        #   안에서 정지->정지면 램프가 84%라 속도를 쓸 구간이 없다
+        #   (0.9 -> 무한대가 칸당 9 ms). 이어달리기가 들어간 지금은 직진
+        #   구간(중앙값 7칸 = 8.4 m)을 연속으로 가므로 쓸 구간이 생긴다:
+        #     v 0.9 -> 1.2  -18.7%    v 0.9 -> 1.6  -30.7%   (8.4 m 기준)
+        self.v_exec = float(v_exec) if v_exec else geom.v_max
+        self.a_exec = float(a_exec) if a_exec else geom.a_lin
         # [patch_carry] 이어달리기 종단속도. 0 이면 목표에서 완전히 선다.
         #   FleetController 가 매 스텝 정해 준다 — 다음 액션이 같은 방향
         #   직진이고 곧바로 시작 가능할 때만 0 보다 크다.
@@ -1062,17 +1081,17 @@ class MotionController:
 
         # 속도는 대칭으로: 지나쳤으면(along < 0) 되돌아올 수 있어야 한다.
         # 감속 계수는 **물리적** 후진에 붙인다 (센서가 없는 방향이므로).
-        v_cap = g.v_max * (1.0 if sign > 0 else 1.0 / REVERSE_FACTOR)
+        v_cap = self.v_exec * (1.0 if sign > 0 else 1.0 / REVERSE_FACTOR)
         # [patch_carry] 종단속도를 0 이 아니게 둘 수 있다 (이어달리기).
         #   sqrt(2a|d|) 는 "목표에서 정확히 0" 이 되는 곡선이다. 칸마다 이걸
         #   쓰면 칸마다 선다. exit_v 를 실으면 그 속도로 목표를 통과한다.
-        brake = (math.sqrt(self.exit_v ** 2 + 2.0 * g.a_lin * abs(along))
+        brake = (math.sqrt(self.exit_v ** 2 + 2.0 * self.a_exec * abs(along))
                  if along else self.exit_v)
         lim = min(v_cap, max(brake, 0.05))
         want = clamp(1.6 * along, -lim, lim)
         if self.exit_v > 0.0 and along > 0.0:
             want = max(want, min(lim, self.exit_v))   # 목표 근처에서 0 으로 안 죽게
-        self._v += clamp(want - self._v, -g.a_lin * dt, g.a_lin * dt)
+        self._v += clamp(want - self._v, -self.a_exec * dt, self.a_exec * dt)
         return (sign * self._v, w)
 
     def at_target(self, pose: tuple[float, float, float]) -> bool:
@@ -1185,7 +1204,8 @@ class FleetController:
                  order: Sequence[int] | None = None, tol: Tolerance | None = None,
                  safety_check: bool = True, action_timeout: float = 60.0,
                  starts: dict[int, State] | None = None,
-                 release: bool = False, carry: bool = True):
+                 release: bool = False, carry: bool = True,
+                 v_exec: float | None = None, a_exec: float | None = None):
         self.g = geom
         # release=True 면 계획의 출발 시각을 지킨다 (lifelong 에서 필수).
         # one-shot 은 도착 시각이라는 개념이 없으니 기본값 False 로 둔다.
@@ -1198,7 +1218,23 @@ class FleetController:
             raise ValueError(f"order {len(self.order)}개 != chains {len(adg.chains)}개")
         self.agents = [a for a in self.order if a in drivers]
         self.slot = {a: i for i, a in enumerate(self.order)}
-        self.ctrl = {a: MotionController(geom, tol) for a in self.agents}
+        # [patch_vexec] 실행 속도·가속. 환경변수 > 인자 > 계획값 순.
+        #   `geom.v_max` 는 계획이 쓰는 값이라 건드리지 않는다 (tick_s, 릴리스).
+        self.v_exec = float(os.environ.get("PIBT_V_EXEC", "") or v_exec or geom.v_max)
+        self.a_exec = float(os.environ.get("PIBT_A_EXEC", "") or a_exec or geom.a_lin)
+        # ★ 도착 판정이 속도를 못 따라가면 안 된다. 한 스텝에 움직이는 거리가
+        #   허용오차 지름(2 * tol.pos)보다 크면 `at_target` 창을 건너뛰어
+        #   완료가 영영 안 뜬다 — 오버슈트하고 되돌아오기를 반복한다.
+        #   60 Hz · tol.pos 0.05 -> 안전 상한 6.0 m/s. 여유를 보고 절반에서 경고.
+        _hz = 60.0
+        _lim = 2.0 * (tol or Tolerance()).pos * _hz
+        if self.v_exec > 0.5 * _lim:
+            print(f"★ 실행 속도 {self.v_exec:.2f} m/s 가 도착 판정 한계 "
+                  f"{_lim:.2f} m/s 의 절반을 넘습니다 (tol.pos="
+                  f"{(tol or Tolerance()).pos} m @ {_hz:.0f} Hz). "
+                  f"완료를 놓칠 수 있으니 tol.pos 를 키우세요.")
+        self.ctrl = {a: MotionController(geom, tol, self.v_exec, self.a_exec)
+                     for a in self.agents}
         self.running: dict[int, Action | None] = {a: None for a in self.agents}
         self.elapsed: dict[int, float] = {a: 0.0 for a in self.agents}
         self.safety_check = safety_check
@@ -1242,9 +1278,9 @@ class FleetController:
         #     0.0% 였다). 즉 0.580 상한은 **일어나지 않는 경우**를 막고 있었다.
         #     장애물 보고가 들어오면 자동으로 안전한 쪽으로 내려간다.
         margin = 0.5 * geom.pitch - geom.front_len
-        self.carry_safe = (min(geom.v_max, math.sqrt(2.0 * geom.a_lin * margin))
+        self.carry_safe = (min(self.v_exec, math.sqrt(2.0 * self.a_exec * margin))
                            if carry and margin > 0.0 else 0.0)
-        self.carry_free = geom.v_max if carry and margin > 0.0 else 0.0
+        self.carry_free = self.v_exec if carry and margin > 0.0 else 0.0
         # 시험용 고정 상한. 비워 두면 위 규칙을 쓴다.
         _cv = os.environ.get("PIBT_CARRY_V", "")
         self.carry_fixed = float(_cv) if _cv else None
