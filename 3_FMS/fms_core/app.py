@@ -75,7 +75,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--node-id", default="fms-core", help="edge_node_id = username = clientId")
     p.add_argument("--planner", default="kernel", help="주행 로직 (fms_core.planner.PLANNERS)")
     p.add_argument("--planner-opt", action="append", metavar="KEY=VALUE",
-                   help="플래너 옵션 (kernel: aisle_block · theta_path · lanes · yield_rule · fixed_homes · horizon_ticks …)")
+                   help="플래너 옵션 (kernel: aisle_block · theta_path · lanes · yield_rule · fixed_homes · horizon_ticks · "
+                        "speed · footprint=exact|legacy · robot_dims=앞,뒤,폭 …)")
     p.add_argument("--tick-s", type=float, default=None,
                    help="틱 최소 길이(벽시계) [s]. 기본 = DES 틱 길이 CELL_M / speed (speed 는 --planner-opt speed=, 없으면 0.9 → 1.11 s)")
     p.add_argument("--ack-timeout-s", type=float, default=30.0, help="노드 하나 도착 상한 [s]")

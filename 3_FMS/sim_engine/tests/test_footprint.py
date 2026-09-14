@@ -133,3 +133,38 @@ def test_configure_does_not_touch_stay_cache():
     before = geo.stay_map_h(free, (R, C, 0))
     geo.configure(front_swing=True)
     assert geo.stay_map_h(free, (R, C, 0)) is before
+
+
+# ---- CLI (-203 커밋 ②): --footprint / --robot-dims ----
+from sim_v2_tasks import parse_args  # noqa: E402
+
+BASE = ["base", "6", "40", "42", "1"]
+
+
+def test_cli_defaults_exact_and_dims():
+    a = parse_args(BASE)
+    assert a.footprint == "exact"
+    assert a.robot_dims == (0.39, 1.11, 0.80)
+    assert a.yield_rule
+
+
+def test_cli_legacy_and_custom_dims():
+    a = parse_args(BASE + ["--footprint=legacy", "--robot-dims=0.40,1.03,0.66"])
+    assert a.footprint == "legacy"
+    assert a.robot_dims == (0.40, 1.03, 0.66)
+
+
+def test_cli_cell_model_is_always_legacy():
+    assert parse_args(BASE + ["--cell"]).footprint == "legacy"
+    assert parse_args(BASE + ["--flow=v1compat"]).footprint == "legacy"
+
+
+def test_cli_front_forces_yield_rule():
+    a = parse_args(BASE + ["--footprint=exact,front", "--no-yield"])
+    assert a.yield_rule
+    assert any("exact,front" in w for w in a.warnings)
+
+
+def test_cli_rejects_bad_footprint():
+    with pytest.raises(AssertionError):
+        parse_args(BASE + ["--footprint=soft"])

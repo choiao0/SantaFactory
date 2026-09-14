@@ -21,6 +21,10 @@
 #                              [--battery] [--chargers=6] [--runtime-h=8] [--charge-h=1.5] [--soc=20,80,95]  (배터리, -145 §2)
 #                              [--orders-file=<json>] [--capacity=<토트 수>] [--tote-units=<상품 수>] [--svc-per-tote=<초>]
 #                              [--speed=<m/s>]   (v3.3, -116: 틱 길이 = CELL_M / speed. 1칸 = 1틱은 그대로, 초 환산만 바뀐다)
+#                              [--footprint=exact|legacy|exact,front] [--robot-dims=0.39,1.11,0.80]   (v3.4, -203 회전 발자국)
+#   --footprint: 회전할 때 차체가 실제로 쓸고 가는 자리. exact(기본) = 0.1 m 지도로 만든 정적 마스크(랙·벽 침범 금지),
+#              legacy = v3.3 과 비트 동일(뒤 3칸만), exact,front = 앞 2칸 축 규칙 + 양보 v2 까지(소싸움 미해결 — 실험용,
+#              양보 규칙 강제 ON). --robot-dims 는 구동축 앞·뒤·폭 [m](기종 카드). SUMMARY footprint·robot_dims·turn_masked.
 #   기본 = 헤딩 모델 (상태 (r,c,h), 자기+뒤 칸 2칸 점유, 90° 회전 = TURN_TICKS 틱, 회전 중 스윙 칸
 #              예약, 라이브니스 장치 5종). docs/이동계층_PIBT.md#라이브니스-장치-5종
 #   --cell:    칸 모델(점로봇) opt-in — 기준선 CSV 재현·A/B 비교축. (--heading 은 호환용, 무시)
@@ -53,8 +57,9 @@ from cli.report import _mean, _p90, report
 from cli.export_isaac import export_isaac
 from cli.plot import plot_heat
 from fms_kernel import FmsKernel, KernelConfig, StallError
-from map_loader import (load_map, make_homes, CELL_M, OFFSET_M, MAP_DIR, load_charge_zone,
-                        make_homes_zone, load_rack_map, load_topology_spec)
+from map_loader import (load_map, make_homes, CELL_M, OFFSET_M, MAP_DIR, ROBOT_DIMS, load_charge_zone,
+                        make_homes_zone, load_rack_map, load_topology_spec, masked_turn_ratio, turn_mask)
+from pibt.geometry import FOOTPRINT_MARGIN_M
 from order_stream import OrderStream
 from pibt_core import DIRS, TURN_TICKS
 
@@ -133,6 +138,17 @@ def _parse_model(a, argv):
     # 차선 비용은 θ(A트랙 계약, 11개) 밖의 운영 규칙이다. 기본 2.0 (2·3·5 A/B: 5 는 평가 시드 102 에서 새 STALL, 3·2 완주).
     a.lane_gain = _opt(argv, "lane-gain", float, 2.0)
     a.pocket_gain = _opt(argv, "pocket-gain", float, 2.0)
+    # 회전 발자국 (-203, 계약 v3.4 결과 변경). 기본 exact = 정적 마스크. 회전이 없는 칸 모델·v1compat 은 legacy 로 둔다.
+    a.footprint = _opt(argv, "footprint", str, "exact")
+    assert a.footprint in ("legacy", "exact", "exact,front"), f"--footprint 는 legacy|exact|exact,front: {a.footprint}"
+    dims = _opt(argv, "robot-dims", str, ",".join(f"{v:g}" for v in ROBOT_DIMS))
+    a.robot_dims = tuple(float(x) for x in dims.split(","))
+    assert len(a.robot_dims) == 3 and all(v > 0 for v in a.robot_dims), f"--robot-dims 는 앞,뒤,폭 양수 셋: {dims}"
+    if not a.heading:
+        a.footprint = "legacy"
+    elif "front" in a.footprint and not a.yield_rule:
+        a.warnings.append("[WARN] --footprint=exact,front 는 양보 규칙이 유일한 정면 해소 장치 — --no-yield 무시")
+        a.yield_rule = True
     assert a.lane_gain >= 1.0 and a.pocket_gain >= 1.0, f"--lane-gain/--pocket-gain 은 1.0 이상: {a.lane_gain}, {a.pocket_gain}"
     # 주문 도착 간격 평균 [틱] (지수분포). 기본 50 = B-0 이후 전 기준선. --order-gap=<틱> 으로 부하 조절
     # (고부하 스윕, docs/θ_경로_기준선.md#고부하-l1l2). v1compat 은 패리티 때문에 항상 50.
@@ -306,16 +322,22 @@ def build(a):
         bat = dict(battery=True, dock_cells=docks, soc_init=soc_init, drain_drive=drain_drive,
                    drain_idle=0.25 * drain_drive, charge_rate=1.0 / (a.charge_h * 3600 / a.dt),
                    soc_low=a.soc[0], soc_go=a.soc[1], soc_leave=a.soc[2], soc_yield=(a.soc[0] + a.soc[1]) / 2)
+    # 회전 발자국 마스크 (-203): 0.1 m 지도 × 기종 치수, 시작 시 1회(< 1 s). legacy 면 없음.
+    mask, turn_masked = None, 0.0
+    if a.footprint != "legacy":
+        mask = turn_mask(map_dir, a.robot_dims, FOOTPRINT_MARGIN_M)
+        turn_masked = masked_turn_ratio(free, mask)
     cfg = KernelConfig(heading=a.heading, zone=a.zone, theta=bool(a.theta_path or a.lanes), check=a.check,
                        dock_prio=a.dock_prio, export=a.export, service_steps=round(SERVICE_TIME_S / a.dt),
                        capacity=a.capacity, svc_per_tote=a.svc_per_tote,
                        yield_rule=a.yield_rule, section_limit=a.section_limit,
-                       turn_ticks=TURN_TICKS, stall_warn_only=a.horizon is not None, **bat)
+                       turn_ticks=TURN_TICKS, stall_warn_only=a.horizon is not None,
+                       footprint=a.footprint, robot_dims=a.robot_dims, **bat)
     kernel = FmsKernel(free, st_cell, edge_cost, wait_cost, homes, a.n_robots, cfg,
                        zone_mask=zone_mask, on_task_completed=stream.on_completed,
-                       lane_dir=None if topo is None else topo.lane_dir, sec_map=sec_map)
+                       lane_dir=None if topo is None else topo.lane_dir, sec_map=sec_map, turn_mask=mask)
     a.warnings += kernel.warnings
-    ctx = SimpleNamespace(free=free, st_cell=st_cell, stations=stations, H=H, W=W)
+    ctx = SimpleNamespace(free=free, st_cell=st_cell, stations=stations, H=H, W=W, turn_masked=turn_masked)
     return kernel, stream, ctx
 
 

@@ -88,7 +88,8 @@ def _build_scene(a, ctx, model, zones):
     return {
         "meta": dict(variant=a.variant, source="sim_v2_tasks.py", model=model,
                      cell_fine_m=0.1, coordinate="crop-relative meters, z-up",
-                     robot_dim_m=[1.50, 0.92, 1.60], speed_mps=a.speed, dt_s=a.dt, turn_ticks=TURN_TICKS,
+                     robot_dim_m=[round(a.robot_dims[0] + a.robot_dims[1], 3), a.robot_dims[2], 1.60],   # 길이·폭(--robot-dims)·높이
+                     footprint=a.footprint, speed_mps=a.speed, dt_s=a.dt, turn_ticks=TURN_TICKS,
                      pose_ref="front-axle cell center (drive axle is 0.39 m behind the front end)"),
         "obstacles": {
             "structure":      dict(height=4.0, rects=_rects_from_mask(grid01 == 1)),

@@ -20,7 +20,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from map_loader import zone_cells
+from map_loader import ROBOT_DIMS, front_swing, zone_cells
+from pibt.geometry import configure as configure_footprint
 from pibt.geometry import front_cells, front_swing_on, turn_ok
 from pibt_core import (DIRS, TURN_TICKS, Replanner, Stagnation, candidates_h,
                        dist_map, dist_map_h, occupied, stay_map_h, step,
@@ -55,6 +56,14 @@ class KernelConfig:
     yield_ticks: int = 20         # 양보 임시 목표 유지 상한
     yield_after: int = 8          # 이 틱 이상 실제로 막힌 정면 조우만 양보 대상 (PIBT 가 스스로 푸는 마주침은 제외)
     turn_ticks: int = TURN_TICKS  # 90° 회전 틱
+    # 회전 발자국 (-203, 계약 v3.4). footprint: "legacy"(v3.3 비트 동일) / "exact"(0.1 m 지도 정적 회전 마스크)
+    # / "exact,front"(+ 앞 2칸 축 규칙·양보 v2 — 소싸움 미해결, 인자로만). 마스크 배열은 FmsKernel(turn_mask=) 로 따로 받는다.
+    footprint: str = "legacy"
+    robot_dims: tuple = ROBOT_DIMS  # 구동축 앞·뒤·폭 [m] — 마스크·앞 스윙 판정·Isaac 내보내기 치수
+    # 회전 발자국 (-203, 계약 v3.4). footprint: "legacy"(v3.3 비트 동일) / "exact"(0.1 m 지도 정적 회전 마스크)
+    # / "exact,front"(+ 앞 2칸 축 규칙·양보 v2 — 소싸움 미해결, 인자로만). 마스크 배열은 FmsKernel(turn_mask=) 로 따로 받는다.
+    footprint: str = "legacy"
+    robot_dims: tuple = ROBOT_DIMS  # 구동축 앞·뒤·폭 [m] — 마스크·앞 스윙 판정·Isaac 내보내기 치수
     section_limit: int = 0        # 접속행 구간별 동시 진입 대수 상한 (0 = 끔, -193)
     dock_clear: int = 3           # 장치 ⑤ 유지 거리 (체비쇼프, 로봇 길이)
     stall_ticks: int = 1500       # 워치독: 이 틱 동안 완료 태스크 수 무변화 → StallError
@@ -75,7 +84,10 @@ class KernelConfig:
 
 class FmsKernel(BatteryMixin, MetricsMixin):
     def __init__(self, free, st_cell, edge_cost, wait_cost, homes, n_robots, cfg,
-                 zone_mask=None, on_task_completed=None, lane_dir=None, sec_map=None):
+                 zone_mask=None, on_task_completed=None, lane_dir=None, sec_map=None, turn_mask=None):
+        # 회전 발자국 설정은 모듈 전역(pibt.geometry) — Replanner/HGraph 를 만들기 전에 넣는다 (-203).
+        configure_footprint(turn_mask if cfg.footprint != "legacy" else None,
+                            "front" in cfg.footprint and front_swing(cfg.robot_dims))
         self.free, self.st_cell = free, st_cell
         self.H, self.W = free.shape
         self.edge_cost, self.wait_cost = edge_cost, wait_cost

@@ -90,10 +90,10 @@ def test_kpi_matches_cli_report():
     cfg = p.kernel.cfg
     a = SimpleNamespace(variant="base", n_robots=2, n_orders=p.stream.n_orders, seed=42, aisle_block=False, flow="main",
                         horizon=T, shifts=("out",), order_gap=50, order_gap_arg=None, inbound_gap_arg=None, battery=False,
-                        speed=1.0 / p.dt, dt=p.dt,
+                        speed=1.0 / p.dt, dt=p.dt, footprint=cfg.footprint, robot_dims=cfg.robot_dims,
                         capacity=cfg.capacity, tote_units=8, lanes=True, yield_rule=cfg.yield_rule,
                         theta_path=None, dirflow=False, export=False)
-    ctx = SimpleNamespace(H=p.kernel.H, W=p.kernel.W)
+    ctx = SimpleNamespace(H=p.kernel.H, W=p.kernel.W, turn_masked=0.0)
     with contextlib.redirect_stdout(io.StringIO()):
         theirs, _, _ = report(a, p.kernel, p.stream, ctx)
     for key in ("tasks_per_h", "orders_per_h", "lead_mean_s", "lead_p90_s", "queue_mean_s", "util_incl_service",

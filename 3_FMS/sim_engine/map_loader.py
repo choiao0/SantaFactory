@@ -114,6 +114,42 @@ def turn_mask_from_grid(grid01, dims=ROBOT_DIMS, margin=0.05):
     return mask
 
 
+def masked_turn_ratio(free, mask):
+    """legacy 가 허용하는 (칸, 회전) 조합(양쪽 상태 valid + 대각 칸 free) 중 마스크가 금지한 비율 — SUMMARY turn_masked."""
+    H, W = free.shape
+    f = np.pad(free, 1, constant_values=False)
+    allowed = masked = 0
+    for h in range(4):
+        for h2 in ((h + 1) % 4, (h - 1) % 4):
+            d1, d2 = _DIRS[h], _DIRS[h2]
+            # 뒤 칸 free(= 상태 valid) 두 개 + 대각 칸 free. f 는 1칸 패딩이라 인덱스 +1.
+            rear1 = f[1 - d1[0]:H + 1 - d1[0], 1 - d1[1]:W + 1 - d1[1]]
+            rear2 = f[1 - d2[0]:H + 1 - d2[0], 1 - d2[1]:W + 1 - d2[1]]
+            diag = f[1 - d1[0] - d2[0]:H + 1 - d1[0] - d2[0], 1 - d1[1] - d2[1]:W + 1 - d1[1] - d2[1]]
+            ok = free & rear1 & rear2 & diag
+            allowed += int(ok.sum())
+            masked += int((ok & ~mask[:, :, h, h2]).sum())
+    return masked / allowed if allowed else 0.0
+
+
+def masked_turn_ratio(free, mask):
+    """legacy 가 허용하는 (칸, 회전) 조합(양쪽 상태 valid + 대각 칸 free) 중 마스크가 금지한 비율 — SUMMARY turn_masked."""
+    H, W = free.shape
+    f = np.pad(free, 1, constant_values=False)
+    allowed = masked = 0
+    for h in range(4):
+        for h2 in ((h + 1) % 4, (h - 1) % 4):
+            d1, d2 = _DIRS[h], _DIRS[h2]
+            # 뒤 칸 free(= 상태 valid) 두 개 + 대각 칸 free. f 는 1칸 패딩이라 인덱스 +1.
+            rear1 = f[1 - d1[0]:H + 1 - d1[0], 1 - d1[1]:W + 1 - d1[1]]
+            rear2 = f[1 - d2[0]:H + 1 - d2[0], 1 - d2[1]:W + 1 - d2[1]]
+            diag = f[1 - d1[0] - d2[0]:H + 1 - d1[0] - d2[0], 1 - d1[1] - d2[1]:W + 1 - d1[1] - d2[1]]
+            ok = free & rear1 & rear2 & diag
+            allowed += int(ok.sum())
+            masked += int((ok & ~mask[:, :, h, h2]).sum())
+    return masked / allowed if allowed else 0.0
+
+
 def turn_mask(base_dir=None, dims=ROBOT_DIMS, margin=0.05):
     """`<base_dir>/occupancy_grid.npy` 로 turn_mask_from_grid. 시작 시 1회(< 1 s)."""
     if base_dir is None:
