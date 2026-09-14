@@ -1,4 +1,4 @@
-# sim.verify 큐 계약 — Isaac 검증 런 (v0.3-draft, 2026-09-10)
+# sim.verify 큐 계약 — Isaac 검증 런 (v0.4-draft, 2026-09-14)
 
 견적 BE ↔ host-orch 가 RabbitMQ 로 주고받는 것. DES 큐 계약([`5_Docs/Web/시뮬엔진연동API명세서.md`](../../5_Docs/Web/시뮬엔진연동API명세서.md) §1)과
 같은 브로커·같은 규칙(durable · JSON snake_case · 결과 발행 뒤 ack · prefetch 1)이고, 큐 이름만 다르다.
@@ -10,6 +10,8 @@
 > `scenario.amr.tote_units`(기본 8). 옛 뜻(상품 수)으로 보내면 거절된다. §3 `verify.fms.warnings` 추가 —
 > null 이 아니면 그 런은 견적과 다른 조건에서 돌았다는 뜻이라 KPI 를 견적과 비교하면 안 된다.
 > 견적과 같은 조건으로 도는지는 `fms_core/tests/test_des_parity.py` 가 견적 워커 코드에서 기준을 읽어 대조한다.
+> v0.4 (2026-09-14, S15P21A106-197 반영): `scenario.orders` 의 원천은 **백엔드가 견적 생성 시 저장한 목록**(`estimates.outbound_orders_json`)이고
+> DES 스윕 `outbound[]` 와 같은 목록이다. §6 ④ 해소. 3_FMS 의 Python 주문 생성기와 워커 자체 생성(-158)은 제거 — 주문 원천은 백엔드 하나.
 
 ## 1. 큐
 
@@ -39,7 +41,7 @@
   "scenario": {                         // 선택. 런 입력 묶음 — 정규형 JSON 512 KB 이하 (MQTT 패킷 1 MB 아래)
     "seed": 42, "map_version": "v6.0",
     "orders": { "meta": {…}, "outbound": [ {"order_id": 1, "ordered_at_s": 23659, "store_id": 1,
-                                            "lines": [{"product_id": 3, "qty": 2, "rack_id": "A3"}]} ] },   // 주문 생성기 산출물 그대로 (DES 워커가 쓴 것)
+                                            "lines": [{"product_id": 3, "qty": 2, "rack_id": "A3"}]} ] },   // 백엔드가 견적 생성 시 저장한 목록 그대로 (estimates.outbound_orders_json = DES 스윕 outbound[] 와 같은 목록, -197)
     "spawn": "103.1,48.5;103.1,50.5",   // 선택. 로봇 초기 위치(m) → Isaac WSIM_SPAWN. DES 와 같은 배치는 `python3 -m fms_core --spawn N` 이 준다
     "window_start_s": 5400,             // 선택. 주문 시각을 이만큼 앞당겨 재생(창 오프셋, §6 ①). 음수가 되는 주문은 버린다
     "amr": {"capacity": 3, "tote_units": 8, "speed_empty": 1.2, …},   // 선택. DES 요청 amr 블록 pass-through: capacity = 왕복당 토트 수 1~6, tote_units = 토트당 상품 수(기본 8). sim-runner 가 이 블록을 에이전트 `profile_overrides` 로 그대로 넘겨 속도·배터리·적재가 로봇 동작에 반영된다 (1_Robot/amr_agent README "파라미터")
@@ -110,4 +112,4 @@ DES 요청의 `horizon_s · shifts · inbound_gap_s · outbound_gap_s · warehou
 
 ① 창 길이 — DES 6 h 대비 Isaac 10~20 분 창, 같은 창의 DES KPI 와 비교하는 정의. 지금은 요청의 `window_s` 로 열어 둔다. 실측(2026-09-09, 명세 예시 조건 seed 42): DES 창의 첫 10 분에는 주문 2건, 10~20 분에 124건(wave) — "첫 W 분" 은 쓸 수 없고 `scenario.window_start_s` 로 안정 구간을 잘라야 한다(제안: 출고 시작 + 90 분, 600 s). 실 로봇 1 칸 ≈ 2.2 s · 90° ≈ 2.5 s 라 커널 틱(1 s)보다 느리다 — `verify.fms.ticks` 가 그 창에서 돈 DES 초이고 KPI 분모다.
 ② 20 분 초과 창과 `consumer_timeout` — 큐 정책(`consumer_timeout`)을 늘릴지, 꺼내자마자 ack 하고 BE 의 TIMEOUT 재시도로 갈지.
-③ `VERIFYING` 상태값. ④ 주문 스크립트 전달 — 워커가 `sim.result` 에 `orders` + `orders_sha256` 을 동봉(ⓐ, 제안) vs seed 재생성(ⓑ). ⑤ `kpi` 산출 주체 — **해소(2026-09-09)**: fms-core 가 DES 와 같은 산식(`fms_core/kpi.py` = `sim_engine/cli/report.py`)으로 계산해 `kpi_summary` 로 내고 host-orch 는 그대로 싣는다.
+③ `VERIFYING` 상태값. ④ 주문 스크립트 전달 — **해소(2026-09-14, -197)**: 백엔드 `OutboundOrderGenerator` 가 견적 생성 시 1회 만들어 저장하고 DES 요청 `outbound[]` 와 여기 `scenario.orders` 에 같은 목록을 싣는다. 워커 자체 생성(-158)·3_FMS `order_gen` 은 제거. 남은 제안: 워커가 `sim.result` 에 `orders_sha256` 에코(저장본 대조). ⑤ `kpi` 산출 주체 — **해소(2026-09-09)**: fms-core 가 DES 와 같은 산식(`fms_core/kpi.py` = `sim_engine/cli/report.py`)으로 계산해 `kpi_summary` 로 내고 host-orch 는 그대로 싣는다.
