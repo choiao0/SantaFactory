@@ -29,22 +29,28 @@ EVENT_TYPES = ("task_assigned", "task_done", "order_shipped", "stall")
 # 값을 바꾸기 전에 fms_core/tests/test_des_parity.py 를 보라 — 워커 코드에서 기준을 읽어 대조한다.
 DES_AISLE_BLOCK = True           # run_once(aisle_block=1) — 랙 내부 통로 칸을 막고 돈다
 DES_SPEED = 0.9                  # 워커 SPEED_DEFAULT (무게 입력 없을 때 물리 계획 속도, -116). 틱 길이 dt = CELL_M / speed
-DEFAULT_THETA = os.path.join(FMS_DIR, "infra", "out", "theta_wallA_r24_g15.json")   # 워커 THETA_PATH 기본값
+DEFAULT_THETA = os.path.join(FMS_DIR, "infra", "out", "theta_wallA_r20_c6_v36.json")  # 워커 THETA_PATH 기본값
 LANE_GAIN = POCKET_GAIN = 2.0    # 차선·주머니 비용 (sim_v2 --lane-gain/--pocket-gain 기본, v3 헤딩 main 기본 ON)
 
 
 def des_dt(options: dict | None = None) -> float:
-    """틱 길이 [초] = CELL_M / speed. speed 는 `--planner-opt speed=`, 없으면 워커 기본 DES_SPEED (-116).
-    커널의 초 환산(서비스·주문 도착·KPI)과 셸의 벽시계 틱(--tick-s 기본)이 같은 값을 보도록 한 곳에 둔다."""
+    """틱 길이 [초]. speed 는 `--planner-opt speed=`, 없으면 워커 기본 DES_SPEED (-116).
+
+    커널의 초 환산(서비스·주문 도착·KPI)과 셸의 벽시계 틱(--tick-s 기본)이 같은 값을 보도록
+    한 곳에 둔다. 공식은 **시뮬과 같은 상수를 읽어** 구한다 — v3.6(-194) 에서 1칸이
+    MOVE_TICKS 틱이 되며 `CELL_M / speed` 가 MOVE_TICKS 배 틀린 값이 됐다. 그 값을 쓰면
+    conductor 가 커널을 그만큼 느리게 돌려 런이 timeout_s 에 걸린다.
+    """
     ensure_sim_engine()
     from map_loader import CELL_M
-    return CELL_M / float((options or {}).get("speed", DES_SPEED))
+    from pibt_core import MOVE_TICKS
+    return CELL_M / (float((options or {}).get("speed", DES_SPEED)) * MOVE_TICKS)
 
 
 def theta_path(options: dict | None = None) -> str | None:
     """쓸 θ 파일 경로. 없으면 None = 중립 θ.
 
-    기본값은 견적 워커와 같다 — 환경변수 `THETA_PATH`, 없으면 `infra/out/theta_wallA_r24_g15.json`("" 이면 중립).
+    기본값은 견적 워커와 같다 — 환경변수 `THETA_PATH`, 없으면 `infra/out/theta_wallA_r20_c6_v36.json`("" 이면 중립).
     한 런만 다르게 하려면 `--planner-opt theta_path=<경로>`(빈 문자열이면 중립).
     """
     if options and "theta_path" in options:

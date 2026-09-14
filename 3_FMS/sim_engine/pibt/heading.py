@@ -2,8 +2,9 @@
 
 import numpy as np
 
-from .geometry import (DIRS, REVERSE_FACTOR, TURN_TICKS, _inb, front_cells, front_swing_on, occupied,
-                       stay_map_h, swing_cells, turn_mask, turn_ok, valid_state)
+from .geometry import (DIRS, MOVE_TICKS, REVERSE_FACTOR, TURN_COST, TURN_TICKS, _inb,
+                       front_cells, front_swing_on, occupied, stay_map_h, swing_cells,
+                       turn_mask, turn_ok, valid_state)
 from .hgraph import dist_map_h
 from .liveness import Replanner, Stagnation, wait_bias
 
@@ -39,7 +40,7 @@ class _PIBTStepH:
     """헤딩 모델 한 틱: 칸 하나 → 칸 집합으로 일반화한 우선순위 상속 + 백트래킹."""
 
     def __init__(self, states, dists, edge_cost, wait_cost, free, turn_cost, extra,
-                 bias, sec_map=None, sec_limit=0, sec_free=(), forbid=None, forbid_axle=None):
+                 bias, sec_map=None, sec_limit=0, sec_free=(), forbid=None, forbid_axle=None, soft_hold=None):
         self.states = states
         self.forbid = forbid or {}             # agent -> 금지 칸 (-79 대치: 지는 쪽은 이기는 쪽의 몸·원하는 자리에 못 들어간다)
         # agent -> 축 금지 칸 (-79): 다음 상태의 축이 여기 있으면 안 됨. 대치의 지는 쪽(이기는 쪽 soft 칸) + soft 밀기로 임시 부여.
@@ -66,7 +67,7 @@ class _PIBTStepH:
         # 로봇이 있으면 그 회전은 안 되고, 반대로 soft 예약된 칸에는 다른 로봇이 축을 들여놓지 못한다. 뒤 칸은 자유.
         self.pos_now = {s[:2]: a for a, s in states.items()}
         self.pos_next = {}      # cell -> 이번 틱 축이 놓일 agent
-        self.soft_next = {}     # cell -> soft 예약 agent
+        self.soft_next = dict(soft_hold or {})   # cell -> soft 예약 agent. 회전 진행 중(-194 다틱) 로봇의 soft 칸은 미리 채워 온다 (-79)
         self.next_soft = {}     # agent -> soft 칸 집합
         # 구간 대수 제한 (S15P21A106-193). sec_map 은 칸 -> 구간번호(-1 = 구간 밖).
         self.sec_map = sec_map
@@ -242,15 +243,15 @@ class _PIBTStepH:
 
 def step_h(states, dists, edge_cost, wait_cost, free, priority_order,
            turn_cost=None, extra=None, bias=None, sec_map=None, sec_limit=0, sec_free=(), forbid=None,
-           forbid_axle=None):
+           forbid_axle=None, soft_hold=None):
     """헤딩 모델 한 틱. states: {a: (r,c,h)}, dists: {a: (H,W,4)},
     extra: {a: 추가 점유 칸(회전 중 스윙)}, bias: {a: 대기 점수 가산(wait_bias)}.
     sec_map/sec_limit: 구간 대수 제한(-193) — sec_limit 0 이면 장치가 통째로 꺼진다.
     반환 (다음 상태 dict, 예약 칸 dict, 정원 때문에 막힌 agent 집합)."""
     if turn_cost is None:
-        turn_cost = float(TURN_TICKS)
+        turn_cost = float(TURN_COST)
     ps = _PIBTStepH(states, dists, edge_cost, wait_cost, free, turn_cost,
-                    extra or {}, bias or {}, sec_map, sec_limit, sec_free, forbid, forbid_axle)
+                    extra or {}, bias or {}, sec_map, sec_limit, sec_free, forbid, forbid_axle, soft_hold)
     for a in priority_order:
         if a not in ps.next_of:
             ps.resolve(a)

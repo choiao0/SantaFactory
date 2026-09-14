@@ -23,7 +23,7 @@ import numpy as np
 from map_loader import ROBOT_DIMS, front_swing, zone_cells
 from pibt.geometry import configure as configure_footprint
 from pibt.geometry import front_cells, front_swing_on, turn_ok
-from pibt_core import (DIRS, TURN_TICKS, Replanner, Stagnation, candidates_h,
+from pibt_core import (DIRS, MOVE_TICKS, TURN_COST, TURN_TICKS, Replanner, Stagnation, candidates_h,
                        dist_map, dist_map_h, occupied, stay_map_h, step,
                        step_h, swing_cells, valid_state, wait_bias)
 
@@ -37,7 +37,8 @@ class StallError(RuntimeError):
 
 
 MAX_TOTES_PER_TRIP = 6        # 선반형 AMR 3단 × 2 토트 (-177). 이 수를 넘는 주문은 여러 왕복으로(2026-09-14, 이전엔 제외)
-SECTION_RELEASE = 8           # 이 틱 넘게 정체한 로봇은 구간 정원에서 면제 (-193). 재계획
+SECTION_RELEASE = 16          # 이 틱 넘게 정체한 로봇은 구간 정원에서 면제 (-193). 재계획
+                              # -194 에서 1칸이 MOVE_TICKS 틱이 되며 틱이 잘아져 8 → 16.
                               # 문턱(REPLAN_AFTER)과 같은 값 — 그 시점이면 이미 우회를 시도했다
 
 
@@ -53,18 +54,19 @@ class KernelConfig:
     capacity: int = 1             # 출고 왕복당 토트 수
     svc_per_tote: int = 0         # 픽업·하역 각각 토트당 추가 틱
     yield_rule: bool = False      # 헤딩 정면 조우 양보
-    yield_ticks: int = 20         # 양보 임시 목표 유지 상한
-    yield_after: int = 8          # 이 틱 이상 실제로 막힌 정면 조우만 양보 대상 (PIBT 가 스스로 푸는 마주침은 제외)
-    hd_after: int = 4             # -79 대치(standoff) 감지: 같은 칸을 다투는 두 로봇이 둘 다 이 틱 이상 무진전 (exact,front 만)
-    hd_timeout: int = 60          # -79 대치 상한(틱): 넘으면 역할 교대 1회, 그래도 넘으면 해제
-    turn_ticks: int = TURN_TICKS  # 90° 회전 틱
+    yield_ticks: int = 40         # 양보 임시 목표 유지 상한 (-194: 틱이 잘아져 20 → 40)
+    yield_after: int = 16         # 이 틱 이상 실제로 막힌 정면 조우만 양보 (-194: 8 → 16)
+    turn_ticks: int = TURN_TICKS  # 90° 회전에 쓰는 틱 (실행)
+    move_ticks: int = MOVE_TICKS  # 전진·후진 1칸에 쓰는 틱 (실행, -194)
+    hd_after: int = 16            # -79 대치(standoff) 감지: 같은 칸을 다투는 두 로봇이 둘 다 이 틱 이상 무진전 (exact,front 만; -194 다틱 후 4 → 16)
+    hd_timeout: int = 240         # -79 대치 상한(틱): 넘으면 역할 교대 1회, 그래도 넘으면 해제 (-194 다틱 후 60 → 240)
     # 회전 발자국 (-203, 계약 v3.4). footprint: "legacy"(v3.3 비트 동일) / "exact"(0.1 m 지도 정적 회전 마스크)
     # / "exact,front"(+ 앞 2칸 축 규칙·양보 v2 — 소싸움 미해결, 인자로만). 마스크 배열은 FmsKernel(turn_mask=) 로 따로 받는다.
     footprint: str = "legacy"
     robot_dims: tuple = ROBOT_DIMS  # 구동축 앞·뒤·폭 [m] — 마스크·앞 스윙 판정·Isaac 내보내기 치수
     section_limit: int = 0        # 접속행 구간별 동시 진입 대수 상한 (0 = 끔, -193)
     dock_clear: int = 3           # 장치 ⑤ 유지 거리 (체비쇼프, 로봇 길이)
-    stall_ticks: int = 1500       # 워치독: 이 틱 동안 완료 태스크 수 무변화 → StallError
+    stall_ticks: int = 3000       # 워치독: 이 틱 동안 완료 무변화 → StallError (-194: 1500 → 3000)
     stall_warn_only: bool = False # 고정 시간 실행: 무진전은 기록하고 계속 (유한 모드는 기존 StallError)
     trace_len: int = 12           # STALL 덤프용 최근 틱 이력 길이
     # 배터리·충전 도크 (-145 §2-1). battery=False 면 아래는 전부 무시.
@@ -104,7 +106,11 @@ class FmsKernel(BatteryMixin, MetricsMixin):
         self.zone_stats = dict(wait=0, retargets=0, degraded=0, occ=[])   # 구현 설계 §4. occ = 틱별 존 안 로봇 수
         self.on_task_completed = on_task_completed
         self.station_cells = frozenset(st_cell.values())
-        self.turn_cost = float(cfg.turn_ticks)
+        # 거리장 가중은 틱 수가 아니라 전진 1칸 대비 배율이다 — edge_cost 기준이 1.0 이라
+        # 틱 수를 그대로 넣으면 회전이 전진의 turn_ticks 배가 된다 (-194, geometry.TURN_COST).
+        assert cfg.move_ticks >= 1 and cfg.turn_ticks >= 1, \
+            f"move_ticks·turn_ticks 는 1 이상: {cfg.move_ticks}, {cfg.turn_ticks}"
+        self.turn_cost = cfg.turn_ticks / cfg.move_ticks
         self.warnings = []                      # 초기화 중 경고 문구 (셸이 출력)
         self._init_battery(free, n_robots)
         # 거리장 캐시 (θ 는 실행 중 고정이라 무효화 불필요)
@@ -154,11 +160,11 @@ class FmsKernel(BatteryMixin, MetricsMixin):
         for rid in range(n_robots):
             self.robots[rid] = dict(pos=homes[rid], home=homes[rid], state=IDLE,
                                     goal=homes[rid], task=None, svc_end=-1, waitc=0,
-                                    drive=0, wait=0, pushed=0, svc=0, turns=0, heading=None,
-                                    h=None, busy=0, swing=set(), rot=0, rev=0, replan=0,
+                                    drive=0, cells=0, wait=0, pushed=0, svc=0, turns=0, heading=None,
+                                    h=None, busy=0, busy_move=0, swing=set(), rot=0, rev=0, replan=0,
                                     turns_idle=0, goal_prev=None, goal_t=0, idle_moves=0, leave_from=None,
                                     yield_peer=None, yield_target=None, yield_until=-1, yield_hold=False,
-                                    hd_peer=None, hd_role=None, hd_until=-1, hd_swapped=False,
+                                    hd_peer=None, hd_role=None, hd_until=-1, hd_swapped=False, swing_soft=set(),
                                     soc=1.0, charge_n=0, chg=0, soc_empty=0)
             if self.battery:
                 self.robots[rid]["soc"] = float(cfg.soc_init[rid])
@@ -438,6 +444,9 @@ class FmsKernel(BatteryMixin, MetricsMixin):
             self._refresh_standoffs(t, states)
         prio = self._priority_h(t)
         extra = {rid: robots[rid]["swing"] for rid in rids if robots[rid]["busy"] > 0}
+        # 회전 진행 중인 로봇의 soft 칸: 다른 로봇이 축을 들이지 못하게 이번 틱 예약으로 넘긴다 (-79, 다틱 회전)
+        soft_hold = {cell: rid for rid in rids if robots[rid]["busy"] > 0
+                     for cell in robots[rid]["swing_soft"]}
         dists = self._dists_h(t, states, extra)
         if standoff:
             if self._detect_standoffs(t, states, prio, dists):
@@ -462,7 +471,7 @@ class FmsKernel(BatteryMixin, MetricsMixin):
                     if cfg.section_limit else ())
         new, cells, denied = step_h(states, dists, self.edge_cost, self.wait_cost, free, prio,
                                     self.turn_cost, extra, bias,
-                                    self.sec_map, cfg.section_limit, sec_free, forbid, forbid_axle)
+                                    self.sec_map, cfg.section_limit, sec_free, forbid, forbid_axle, soft_hold)
         self.section_blocks += len(denied)      # 정원에 막힌 (로봇 × 틱). 0 이면 제한이 논 것
         self.section_releases += len(sec_free)
         if cfg.check:
@@ -814,27 +823,55 @@ class FmsKernel(BatteryMixin, MetricsMixin):
                 assert not (new[a][:2] == states[b][:2] and new[b][:2] == states[a][:2]), f"t={t} 스왑 {a}<->{b}"
 
     def _rotation_bookkeeping(self, rb, s0, s1, moved):
-        """회전 시작(첫 틱)·진행 중 부기 → 이번 틱이 회전 틱인가."""
+        """동작 시작·진행 중 부기 → (이번 틱이 회전 틱인가, 이동 진행 틱인가).
+
+        전진·회전이 여러 틱을 쓴다 (-194: 전진 MOVE_TICKS · 회전 TURN_TICKS). 상태 전이는
+        첫 틱에 일어나고 나머지는 busy 로 제자리에 묶인다 (_dists_h 가 stay_map_h 를 준다).
+        회전 중에는 스윙 칸을, 이동 중에는 몸 2칸(= 새 칸 + 떠난 칸)을 계속 쥐므로
+        쓸고 지나간 영역이 그대로 예약된다.
+        """
         if not moved and s1[2] != s0[2]:                 # 회전 시작 (첫 틱)
             rb["turns"] += 1
             if rb["state"] not in NAV:
                 rb["turns_idle"] += 1
             rb["busy"] = self.cfg.turn_ticks - 1
+            rb["busy_move"] = 0
             rb["swing"] = swing_cells(s0[0], s0[1], s0[2], s1[2])
-            return True
-        if rb["busy"] > 0:                               # 회전 진행 중
+            # -79: 다틱 회전(-194) 동안 soft 칸(축 금지)도 쥔다 — 축 규칙은 회전 시작·끝 시각 모두에 상대 축이 없어야 한다.
+            # hard 스윙은 extra 로 이미 쥐지만 soft 는 결정 틱에만 검사돼 2~5틱째 다른 축이 앞 칸에 들어올 수 있었다.
+            rb["swing_soft"] = front_cells(s0[0], s0[1], s0[2], s1[2])
+            return True, False
+        if moved:                                        # 전진·후진 시작 (첫 틱)
+            rb["busy"] = self.cfg.move_ticks - 1
+            rb["busy_move"] = 1
+            rb["swing"] = set()
+            return False, False
+        if rb["busy"] > 0:                               # 진행 중
             rb["busy"] -= 1
+            was_move = bool(rb["busy_move"])
             if rb["busy"] == 0:
                 rb["swing"] = set()
-            return True
-        return False
+                rb["swing_soft"] = set()
+                rb["busy_move"] = 0
+            return (not was_move), was_move
+        return False, False
 
-    def _count_nav_h(self, rb, s0, s1, moved, rotating, gd):
-        """임무 주행 로봇 카운터: 방문·주행/후진·방향별 흐름·밀림 / 회전 / 대기."""
+    def _count_nav_h(self, rb, s0, s1, moved, rotating, driving, gd):
+        """임무 주행 로봇 카운터: 방문·주행/후진·방향별 흐름·밀림 / 회전 / 대기.
+
+        driving = 이동 진행 틱(칸은 이미 옮겼고 남은 틱을 쓰는 중). 주행 시간이지만
+        칸을 새로 밟지는 않으므로 drive 에만 넣고 visit·dir_flow 는 건드리지 않는다 —
+        안 그러면 한 번 지나간 칸이 MOVE_TICKS 배로 세어져 히트맵이 뻥튀기된다.
+        """
         p0, p1 = s0[:2], s1[:2]
+        if driving:
+            rb["drive"] += 1          # 주행 '시간' 은 늘고 밟은 '칸' 은 안 는다 (-194)
+            rb["waitc"] = 0
+            return
         self.visit_count[p1] += 1
         if moved:
             rb["drive"] += 1
+            rb["cells"] += 1
             rb["waitc"] = 0
             backward = (p1[0] - p0[0], p1[1] - p0[1]) != DIRS[s0[2]]
             if backward:
@@ -858,9 +895,9 @@ class FmsKernel(BatteryMixin, MetricsMixin):
         snap = (s0, rb["busy"], "fwd" if moved and (p1[0] - p0[0], p1[1] - p0[1]) == DIRS[s0[2]]
                 else "rev" if moved else "turn" if s1[2] != s0[2]
                 else "busy" if rb["busy"] else "wait", rb["state"])
-        rotating = self._rotation_bookkeeping(rb, s0, s1, moved)
+        rotating, driving = self._rotation_bookkeeping(rb, s0, s1, moved)
         if rb["state"] in NAV:
-            self._count_nav_h(rb, s0, s1, moved, rotating, gd)
+            self._count_nav_h(rb, s0, s1, moved, rotating, driving, gd)
         elif rb["state"] in SERVICE:
             rb["svc"] += 1
         rb["pos"], rb["h"], rb["heading"] = p1, s1[2], s1[2]
@@ -914,6 +951,7 @@ class FmsKernel(BatteryMixin, MetricsMixin):
         self.visit_count[p1] += 1
         if moved:
             rb["drive"] += 1
+            rb["cells"] += 1
             rb["waitc"] = 0
             if gd[p1] > gd[p0]:
                 rb["pushed"] += 1

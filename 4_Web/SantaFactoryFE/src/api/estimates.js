@@ -67,3 +67,14 @@ export function openVerifyStream(estimateId, { onSnapshot, onDone, onError }) {
 
   return () => source.close()
 }
+
+/** 한 화면에 담을 견적 수. 서버 기본값과 맞춰 둔다. */
+export const ESTIMATE_PAGE_SIZE = 20
+
+/**
+ * 내 견적 목록 (최근순). 서버가 세션 회원 것만 준다 — 남의 견적은 애초에 내려오지 않는다.
+ * 페이지 응답이라 목록은 `content`, 총 건수는 `totalElements` 다.
+ */
+export function getMyEstimates(page = 0, size = ESTIMATE_PAGE_SIZE) {
+  return api.get(`/estimates?page=${page}&size=${size}`)
+}

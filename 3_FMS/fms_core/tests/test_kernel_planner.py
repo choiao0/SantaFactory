@@ -14,6 +14,11 @@ from fms_core.planner import PlannerSpec, build_planner
 
 FMS = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# 틱 예산은 MOVE_TICKS 에 비례한다 — 1칸이 여러 틱이 되면(-194) 같은 일을 하는 데 그만큼
+# 틱이 더 든다. 숫자를 박으면 틱 모델이 바뀔 때마다 "일을 못 끝냈다" 로 실패한다.
+ensure_sim_engine()
+from pibt_core import MOVE_TICKS  # noqa: E402
+
 
 def racks():
     return sorted(json.load(open(os.path.join(FMS, "map", "rack_buffers.json"), encoding="utf-8"))["racks"])
@@ -64,7 +69,7 @@ def test_steps_are_unit_moves_and_track_views():
 def test_events_and_counters_progress():
     p = make(n=2, sc=scenario(4, gap=1))
     seen = []
-    for t in range(600):
+    for t in range(600 * MOVE_TICKS):
         p.step(t)
         seen += p.drain_events()
         if p.counters()["orders_done"] >= 1:
@@ -83,7 +88,7 @@ def test_kpi_matches_cli_report():
     ensure_sim_engine()
     from cli.report import report
     p = make(n=2, sc=scenario(4, gap=1))
-    T = 400
+    T = 400 * MOVE_TICKS
     for t in range(T):
         p.step(t)
     ours = K.summary(p.kernel, p.stream, 2, T, p.dt)
@@ -111,8 +116,13 @@ def test_defaults_are_the_des_estimate_conditions():
     조건 자체가 워커와 같은지는 test_des_parity.py 가 워커 코드에서 읽어 대조한다."""
     p = make()
     cfg = p.kernel.cfg
-    assert cfg.capacity == 1 and cfg.svc_per_tote == 5, "왕복당 토트 수 · 토트당 서비스 틱"
-    assert cfg.yield_rule is True and cfg.theta is True, "v3 정면 조우 양보 · θ/차선 비용"
+    # 서비스 틱은 초 ÷ dt 라 틱 모델에 딸려 움직인다 — 숫자를 박지 않고 유도한다 (-194).
+    from fms_core.kernel_planner import des_dt
+    svc = max(1, int(5.0 / des_dt() + 0.5))
+    assert cfg.capacity == 1, "왕복당 토트 수"
+    assert cfg.svc_per_tote == svc, "토트당 서비스 틱 = 5 초 ÷ dt"
+    assert cfg.yield_rule is True, "v3 정면 조우 양보"
+    assert cfg.theta is True, "θ·차선 비용 사용"
     assert int(p.kernel.free.sum()) == 8640, "통로차단 ON 의 자유 칸 수 (OFF 면 9333)"
     assert p.kernel.lane_dir is not None, "차선 방향이 커널에 들어가야 양보 규칙이 산다"
     assert p.kernel.edge_cost.max() > 1.0, "차선 비용(기본 2.0)이 균일 1.0 이 아니어야 한다"
@@ -151,14 +161,14 @@ def test_service_steps_match_sim_v2():
 
 
 def test_horizon_option_drops_late_orders():
-    p = make(sc=scenario(3, gap=100), horizon_ticks=150)
+    p = make(sc=scenario(3, gap=100), horizon_ticks=150 * MOVE_TICKS)   # 같은 시간 창 (-194)
     assert p.stream.n_orders == 2 and p.stream.orders_skipped == 1
 
 
 def test_inbound_passthrough_generates_inbound():
     sc = scenario(2)
     sc.update(inbound_gap_s=30, shifts="in,out")
-    p = make(sc=sc, horizon_ticks=600)
+    p = make(sc=sc, horizon_ticks=600 * MOVE_TICKS)
     assert p.stream.n_inbound > 0
     assert make(sc=scenario(2)).stream.n_inbound == 0
 

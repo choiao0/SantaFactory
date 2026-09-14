@@ -7,6 +7,14 @@ import pytest
 
 import estimate_worker as w
 
+# 틱 수를 박지 않는다. 초 ÷ dt 로 유도해야 틱 모델이 또 바뀌어도 이 테스트가 산다 (-194).
+DT = w.tick_seconds(0.9, w.SIM_ENGINE_DIR)      # 기본 속도 0.9 의 틱 길이[초]
+
+
+def _ticks(sec, speed=0.9):
+    return sec / w.tick_seconds(speed, w.SIM_ENGINE_DIR)
+
+
 # 백엔드가 생성해 싣는 출고 주문 1건 (-197 이후 outbound[] 는 항상 채워 온다)
 ORDER = {"order_id": 1, "ordered_at_s": 3, "lines": [{"product_id": 7, "rack_id": "A2", "qty": 1}]}
 
@@ -36,16 +44,21 @@ KPI_KEYS = {"orders_total", "orders_completed", "inbound_total", "inbound_comple
 def test_request_to_args():
     kw = w.to_sim_args(REQ)
     assert (kw["tag"], kw["n_robots"], kw["n_orders"], kw["seed"]) == ("est_77_n3", 3, 0, 42)
-    # 무게 입력 없음 → 기본 0.9 m/s → 틱 1.111 s: 초 입력이 전부 ×0.9 틱으로
-    assert set(kw["extra_args"]) == {"--horizon=19440", "--speed=0.9", "--shifts=in,in,out,out,out,out",
-                                     "--order-gap=20.25", "--inbound-gap=43.2"}
+    # 무게 입력 없음 → 기본 0.9 m/s. 초 입력이 전부 초÷dt 로 틱이 된다.
+    assert set(kw["extra_args"]) == {
+        "--horizon=%d" % round(_ticks(21600)), "--speed=0.9", "--shifts=in,in,out,out,out,out",
+        "--order-gap=%g" % _ticks(22.5), "--inbound-gap=%g" % _ticks(48.0)}
+    # 되돌리면 요청한 초가 나와야 한다 — 이게 깨지면 6 h 요청이 다른 시간으로 돈다
+    horizon = next(int(f.split("=")[1]) for f in kw["extra_args"] if f.startswith("--horizon"))
+    assert horizon * DT == pytest.approx(21600, rel=1e-4)
 
 
 def test_defaults_and_tag_sanitizing():
     kw = w.to_sim_args({"run_id": "a/b c", "horizon_s": 3600, "amr": {"count": 1}})
     assert kw["tag"] == "a_b_c"
     assert kw["seed"] == 42
-    assert kw["extra_args"] == ("--horizon=3240", "--speed=0.9", "--shifts=out")     # 교대 없으면 출고 전용 (-191)
+    # 교대 없으면 출고 전용 (-191). 틱 수는 초에서 유도한다 (-194).
+    assert kw["extra_args"] == ("--horizon=%d" % round(_ticks(3600)), "--speed=0.9", "--shifts=out")
 
 
 @pytest.mark.parametrize("bad", [
@@ -76,11 +89,11 @@ def test_kpi_seconds_follow_engine_dt():
 
 
 def test_speed_from_payload_and_anchors():
-    """평균 무게 + 기종 앵커 → speed_for_load. 50/100 kg, 1.2→1.0 이면 1.1 m/s, horizon 21600 s = 23760 틱."""
+    """평균 무게 + 기종 앵커 → speed_for_load. 50/100 kg, 1.2→1.0 이면 1.1 m/s."""
     amr = {"count": 3, "speed_empty": 1.2, "speed_loaded": 1.0, "max_payload_kg": 100, "avg_payload_kg": 50}
     extra = w.to_sim_args({**REQ, "amr": amr})["extra_args"]
     assert "--speed=1.1" in extra
-    assert "--horizon=23760" in extra
+    assert "--horizon=%d" % round(_ticks(21600, speed=1.1)) in extra
     # 앵커가 하나라도 없으면 계산 불가 → 기본 0.9 (run 은 돈다)
     extra = w.to_sim_args({**REQ, "amr": {"count": 3, "speed_empty": 1.2, "avg_payload_kg": 50}})["extra_args"]
     assert "--speed=0.9" in extra
@@ -126,12 +139,13 @@ def test_explicit_orders_and_capacity_flags():
     req = {**REQ, "outbound": [{"order_id": 1, "ordered_at_s": 3, "lines": [{"product_id": 7, "rack_id": "A2", "qty": 1}]}]}
     extra = w.to_sim_args(req, orders_path="/tmp/o.json")["extra_args"]
     assert "--orders-file=/tmp/o.json" in extra
-    assert {"--capacity=6", "--tote-units=8", "--svc-per-tote=5"} <= set(extra)
+    svc = max(1, int(w.SVC_PER_TOTE_S / DT + 0.5))
+    assert {"--capacity=6", "--tote-units=8", "--svc-per-tote=%d" % svc} <= set(extra)
     no_cap = w.to_sim_args({**req, "amr": {"count": 3, "capacity": None}}, orders_path="/tmp/o.json")["extra_args"]
     assert "--orders-file=/tmp/o.json" in no_cap
     assert not any(f.startswith("--capacity") for f in no_cap)
     assert "--tote-units=8" in no_cap
-    assert "--svc-per-tote=5" in no_cap
+    assert "--svc-per-tote=%d" % svc in no_cap
     null_units = w.to_sim_args({**req, "amr": {"count": 3, "capacity": None, "tote_units": None}},
                                orders_path="/tmp/o.json")["extra_args"]     # 백엔드 실제 형식: 키는 있고 값은 null
     assert "--tote-units=8" in null_units
@@ -176,3 +190,80 @@ def test_shifts_default_out_but_explicit_kept():
 
 def test_timeout_default_is_1200():
     assert w.TIMEOUT_S == 1200 or "SIM_TIMEOUT_S" in os.environ
+# ------------------------------------------------------------
+# 리플레이 내보내기 (S15P21A106-205) — 시뮬 없이 산출물만 흉내 낸다
+# ------------------------------------------------------------
+def _write_export(tag, ticks, dt_s=0.5, robots=2, move_from=None):
+    """export_isaac 이 만드는 모양의 디렉터리를 세운다. 경로를 돌려준다.
+
+    move_from 을 주면 그 틱부터만 로봇이 움직인다 — 구간 선택을 시험하는 데 쓴다."""
+    import os
+    d = w._export_dir(tag)
+    os.makedirs(d, exist_ok=True)
+    with open(os.path.join(d, "scene.json"), "w", encoding="utf-8") as f:
+        json.dump({"meta": {"map": "wallA"}, "grid": []}, f)
+
+    def x_at(t):
+        if move_from is None:
+            return 1.0
+        return 1.0 + max(0, t - move_from)
+
+    traj = {"dt_s": dt_s, "model": "heading",
+            "robots": {str(i): [[t * dt_s, x_at(t) + i, 2.0] for t in range(ticks)] for i in range(robots)},
+            "headings": {str(i): [0.0] * ticks for i in range(robots)},
+            # 주문 7 은 토트 2개(틱 4·20)로 나뉘었다 — 마지막이 배달된 20 이 그 주문의 완료다
+            "tasks": [{"kind": "out", "order": 7, "completed": 20},
+                      {"kind": "in", "order": 1, "completed": 10},
+                      {"kind": "out", "order": 7, "completed": 4},
+                      {"kind": "out", "order": 9, "completed": 8},
+                      {"kind": "out", "order": 3},
+                      {"kind": "supply"}]}
+    with open(os.path.join(d, "trajectories.json"), "w", encoding="utf-8") as f:
+        json.dump(traj, f)
+    return d
+
+
+def test_replay_thins_the_whole_run(monkeypatch):
+    """run 전체를 담되 stride 간격으로 솎는다 — 원본은 run 하나가 28대 기준 19 MB 라 큐에 못 싣는다."""
+    import os
+    monkeypatch.setattr(w, "REPLAY_STRIDE", 4)
+    d = _write_export("thin_case", ticks=400, dt_s=0.5)
+    try:
+        r = w._read_replay("thin_case")
+        assert len(r["robots"]["0"]) == 100                  # 400 ÷ 4
+        assert len(r["headings"]["0"]) == 100
+        assert r["stride"] == 4
+        # 샘플 간격이 화면의 dt 다. 원본 dt 를 주면 재생이 4배 느려진다
+        assert r["dt_s"] == 2.0
+        assert r["seconds"] == 200.0                          # 100 샘플 × 2초 = 원본 400틱 × 0.5초
+        assert r["scene"]["meta"]["map"] == "wallA"
+    finally:
+        import shutil
+        shutil.rmtree(d, ignore_errors=True)
+    assert not os.path.exists(d)                              # 읽고 나면 지운다 (상주 워커 디스크 보호)
+
+
+def test_replay_keeps_every_tick_when_stride_is_one(monkeypatch):
+    """솎기를 끄면 원본 그대로 — 간격도 원본 dt 다."""
+    monkeypatch.setattr(w, "REPLAY_STRIDE", 1)
+    _write_export("full_case", ticks=30, dt_s=0.5)
+    r = w._read_replay("full_case")
+    assert len(r["robots"]["0"]) == 30
+    assert r["dt_s"] == 0.5
+
+
+def test_replay_counts_outbound_orders_not_trips(monkeypatch):
+    """주문 단위로 센다.
+
+    주문 하나가 여러 통로에 걸치면 토트가 나뉘어 AMR 왕복이 여러 번이다(실측 500주문 → 630태스크).
+    왕복을 세면 사용자가 입력한 출고 건수와 어긋난다. 주문은 마지막 토트가 배달돼야 끝난다.
+    입고는 담지 않고, 창 안에 못 끝난 주문(completed 없음)도 완료로 세지 않는다."""
+    monkeypatch.setattr(w, "REPLAY_STRIDE", 4)
+    _write_export("tasks_case", ticks=40, dt_s=0.5)
+    done = w._read_replay("tasks_case")["outbound_done"]
+    assert done == [4.0, 10.0]      # 주문 9 = 틱 8, 주문 7 = 틱 20(마지막 토트) → ×0.5초
+
+
+def test_replay_missing_export_is_not_an_error():
+    """내보내기가 꺼졌거나 시뮬이 중간에 죽으면 None. 리플레이 때문에 견적을 실패시키지 않는다."""
+    assert w._read_replay("no_such_run") is None

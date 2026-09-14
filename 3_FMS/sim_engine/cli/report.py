@@ -7,6 +7,8 @@ import numpy as np
 
 from pibt_core import TURN_TICKS
 
+from map_loader import CELL_M
+
 from .common import OUT, SPEED
 from .export_isaac import export_isaac
 
@@ -196,7 +198,9 @@ def report(a, kernel, stream, ctx):
         **(dict(inbound_gap=a.inbound_gap_arg) if a.inbound_gap_arg is not None else {}),
         **lifelong_extra, **bat_extra,
         # 견적 워커용 (계약 v2.4, 키 추가만): 입고 생성 수 · 주행 거리 [m] (1칸 = CELL_M = 1.0 m). docs/견적_워커.md
-        inbound_total=int(stream.n_inbound), distance_m=int(tot["drive"]),
+        inbound_total=int(stream.n_inbound), distance_m=int(tot["cells"] * CELL_M),
+        # 주행거리는 **밟은 칸**이다. drive 는 주행 틱이라 전진이 MOVE_TICKS 틱이 된 뒤로
+        # 칸 수와 다르다 (-194) — 예전엔 1칸 = 1틱이라 같은 값이었다.
         **_tote_section(a, kernel, stream))
     print("[SUMMARY] " + json.dumps(summary))
 

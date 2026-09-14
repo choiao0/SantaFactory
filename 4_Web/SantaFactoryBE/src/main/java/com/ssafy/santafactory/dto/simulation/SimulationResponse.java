@@ -1,5 +1,6 @@
 package com.ssafy.santafactory.dto.simulation;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.PropertyNamingStrategies;
 import com.fasterxml.jackson.databind.annotation.JsonNaming;
 import jakarta.validation.constraints.NotBlank;
@@ -9,7 +10,15 @@ public record SimulationResponse(
         @NotBlank String runId,
         @NotBlank String status,
         String error,
-        Kpi kpi
+        Kpi kpi,
+        /**
+         * 앞 구간 재생 데이터 (명세 §1-2 "리플레이", S15P21A106-205). 요청에 {@code export_replay} 를
+         * 넣었을 때만 온다. null 일 수 있고 그래도 run 은 정상이다 — 리플레이는 곁다리다.
+         *
+         * <p>자바 모델로 풀지 않고 {@link JsonNode} 로 받는다. 안쪽이 "로봇 id → 궤적 배열" 이라
+         * 타입으로 옮겨봐야 그대로 다시 JSON 으로 나갈 뿐이고, 시뮬 쪽이 키를 늘려도 여기가 안 깨진다.
+         */
+        JsonNode replay
 ) {
 
     @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)

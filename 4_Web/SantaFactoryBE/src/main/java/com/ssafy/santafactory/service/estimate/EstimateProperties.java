@@ -28,6 +28,8 @@ import java.time.Duration;
  *                          창고 데이터가 아니라 설정으로 둔다. 하루 전량으로 바꾸려면 24h
  * @param shifts            입고/출고 교대 토큰열. horizon 을 토큰 수로 등분한다
  * @param verifyWindow      물리 검증(Isaac) 창 길이. SIM_VERIFY_CONTRACT.md 기본값(600s)과 같다
+ * @param exportReplay      run 마다 앞 구간 궤적을 함께 받을지 (S15P21A106-205). 워커 시간이 run 당 약
+ *                          35 % 늘고 견적당 약 1 MB 를 저장한다. 끄면 대수별 재생 화면이 비어 보인다
  */
 @ConfigurationProperties(prefix = "estimate")
 public record EstimateProperties(
@@ -41,6 +43,7 @@ public record EstimateProperties(
         @DefaultValue("30m") Duration runTimeout,
         @DefaultValue("6h") Duration horizon,
         @DefaultValue("in,in,out,out,out,out") String shifts,
+        @DefaultValue("true") boolean exportReplay,
         @DefaultValue("10m") Duration verifyWindow
 ) {
 
