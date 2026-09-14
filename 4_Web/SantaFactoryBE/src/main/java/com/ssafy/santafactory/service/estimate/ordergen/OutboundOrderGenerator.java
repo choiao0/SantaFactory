@@ -38,6 +38,8 @@ import java.util.stream.IntStream;
 @RequiredArgsConstructor
 public class OutboundOrderGenerator {
 
+    private static final long SECONDS_PER_DAY = 86_400L;
+
     private final ProductRepository productRepository;
     private final OrderRuleProfileLoader profileLoader;
 
@@ -111,9 +113,25 @@ public class OutboundOrderGenerator {
             outbound.add(new SimulationRequest.Outbound((long) (i + 1), d.orderedAtS(), d.lines()));
         }
 
+        return mapToOutboundWindow(warehouse, outbound, horizonSeconds);
+    }
+
+    /**
+     * 하루 시각 → 창고 출고 시간대 [start, end) 로 재매핑 → 실행 창 [start, start+horizon) 으로 자르기.
+     *
+     * <p>종료 시각이 없거나 시작보다 앞이면(자정을 넘는 교대) 실행 창 자체를 출고 시간대로 본다. 이 경우
+     * 재매핑을 건너뛰면 참조 분포에서 그 시간대에 원래 있던 몫(07시 시작이면 73 %)만 남고 나머지 하루치는
+     * 잘려 나가 처리율·필요 대수가 낙관적으로 나온다 (S15P21A106-214). 자정을 넘는 창은 남은 하루까지만
+     * 쓰므로 그만큼 밀도가 높아진다 — 하루 경계를 넘겨 매핑하는 건 별도 판단.
+     */
+    private List<SimulationRequest.Outbound> mapToOutboundWindow(
+            Warehouse warehouse, List<SimulationRequest.Outbound> outbound, long horizonSeconds) {
         long startS = secondOfDay(warehouse.getOutboundStart());
         long endS = warehouse.getOutboundEnd() != null ? secondOfDay(warehouse.getOutboundEnd()) : 0;
-        return sliceToWindow(startS < endS ? rescale(outbound, startS, endS) : outbound, startS, horizonSeconds);
+        if (endS <= startS) {
+            endS = Math.min(startS + horizonSeconds, SECONDS_PER_DAY);
+        }
+        return sliceToWindow(rescale(outbound, startS, endS), startS, horizonSeconds);
     }
 
     private long secondOfDay(LocalDateTime dateTime) {
@@ -146,7 +164,7 @@ public class OutboundOrderGenerator {
      */
     private List<SimulationRequest.Outbound> sliceToWindow(
             List<SimulationRequest.Outbound> orders, long start, long horizonSeconds) {
-        long end = Math.min(start + horizonSeconds, 86400);
+        long end = Math.min(start + horizonSeconds, SECONDS_PER_DAY);
         List<SimulationRequest.Outbound> kept = new ArrayList<>();
         for (SimulationRequest.Outbound o : orders) {
             if (o.orderedAtS() >= start && o.orderedAtS() < end) {

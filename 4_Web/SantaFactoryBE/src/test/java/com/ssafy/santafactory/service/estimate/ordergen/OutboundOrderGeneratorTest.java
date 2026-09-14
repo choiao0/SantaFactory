@@ -96,6 +96,33 @@ class OutboundOrderGeneratorTest {
         assertThat(orders).allSatisfy(o -> assertThat(o.orderedAtS()).isBetween(0L, HORIZON_S - 1));
     }
 
+    /**
+     * 출고 종료 시각이 없으면 하루치 분포를 실행 창 [start, start+horizon) 으로 눌러 넣는다. 이걸 빼먹으면
+     * 참조 분포에서 그 시간대에 원래 있던 몫(07시 시작이면 73 %)만 남고 나머지는 잘려 나가
+     * 처리율·필요 대수가 그만큼 낙관적으로 나온다 (S15P21A106-214).
+     */
+    @Test
+    void rescales_the_whole_day_into_the_horizon_when_outbound_end_is_missing() {
+        when(warehouse.getOutboundEnd()).thenReturn(null);
+
+        List<SimulationRequest.Outbound> orders = generator.generate(warehouse, HORIZON_S, 30, 101L);
+
+        assertThat(orders).hasSize(30);
+        assertThat(orders).allSatisfy(o -> assertThat(o.orderedAtS()).isBetween(0L, HORIZON_S - 1));
+    }
+
+    /** 자정을 넘는 교대(22~02시)는 종료가 시작보다 앞이라 같은 결함을 탄다 — 남은 하루 [22:00, 24:00) 에 넣는다. */
+    @Test
+    void rescales_an_overnight_window_into_the_remaining_day() {
+        when(warehouse.getOutboundStart()).thenReturn(LocalDateTime.of(2026, 1, 1, 22, 0));
+        when(warehouse.getOutboundEnd()).thenReturn(LocalDateTime.of(2026, 1, 2, 2, 0));
+
+        List<SimulationRequest.Outbound> orders = generator.generate(warehouse, HORIZON_S, 30, 101L);
+
+        assertThat(orders).hasSize(30);
+        assertThat(orders).allSatisfy(o -> assertThat(o.orderedAtS()).isBetween(0L, 2 * 3600L - 1));
+    }
+
     private OrderRuleProfile tinyProfile() {
         int[] minuteWeights = new int[1440];
         Arrays.fill(minuteWeights, 1);
