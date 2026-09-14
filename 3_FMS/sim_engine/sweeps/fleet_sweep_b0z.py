@@ -15,6 +15,10 @@
 # 기존 결과 파일은 건드리지 않는다 (이력 보존).
 # 사용: python sweeps/fleet_sweep_b0z.py     (헤딩 계열이 느려 ~10분)
 #       SWEEP_PLOT_ONLY=1 python sweeps/fleet_sweep_b0z.py   (CSV에서 그래프만)
+#       SWEEP_OUT=b0z_sweep_v4.csv python sweeps/fleet_sweep_b0z.py
+#           — **별도 CSV/PNG** 로 (기본 b0z_sweep.csv 는 동일성 검사 기준이라 덮어쓰지 않는다).
+#             fleet_sweep_load.py 의 SWEEP_OUT 과 같은 규약이다. 계약이 바뀌어 결과가 달라질 때
+#             쓴다 — v3(-177) 은 손으로 복사했고, v4(-194) 부터 이 인자로 뜬다. PNG 는 b0z_*<접미>.png.
 # ============================================================
 import csv
 import json
@@ -61,7 +65,10 @@ def read_csv(path):
     return rows
 
 
-CSV_PATH = os.path.join(RES, "b0z_sweep.csv")
+CSV_NAME = os.environ.get("SWEEP_OUT", "b0z_sweep.csv")
+STEM = os.path.splitext(os.path.basename(CSV_NAME))[0]
+TAG = STEM[len("b0z_sweep"):] if STEM.startswith("b0z_sweep") else "_" + STEM   # b0z_sweep_v4 → "_v4"
+CSV_PATH = os.path.join(RES, os.path.basename(CSV_NAME))
 if os.environ.get("SWEEP_PLOT_ONLY") and os.path.exists(CSV_PATH):
     rows = read_csv(CSV_PATH)
 else:
@@ -126,7 +133,7 @@ for ax, (key, label) in zip(axes, [("tasks_per_h", "throughput [tasks/h]"),
 fig.suptitle("B0″ — 동기화 맵(벽있음 ∪ v5.8) + 충전 존 기본, 칸 vs 헤딩, main 흐름 (40 orders, aisle-block ON, "
              "uniform cost, mean of 2 seeds). 점선 = B0′(8/31 맵, 고정 홈 12칸, 회전 2틱)", fontsize=10)
 plt.tight_layout()
-plt.savefig(os.path.join(RES, "b0z_cell_vs_heading.png"), dpi=115)
+plt.savefig(os.path.join(RES, f"b0z_cell_vs_heading{TAG}.png"), dpi=115)
 
 fig, axes = plt.subplots(1, 4, figsize=(18, 4.4))
 for ax, (key, label) in zip(axes, [("zone_wait_steps", "존 안 복귀 대기 [틱]"),
@@ -145,5 +152,5 @@ for ax, (key, label) in zip(axes, [("zone_wait_steps", "존 안 복귀 대기 [�
     ax.legend(fontsize=7)
 fig.suptitle("B0″ 충전 존 지표 (구현 설계 §4, mean of 2 seeds)", fontsize=11)
 plt.tight_layout()
-plt.savefig(os.path.join(RES, "b0z_zone_metrics.png"), dpi=115)
-print("저장: results/b0z_sweep.csv, b0z_cell_vs_heading.png, b0z_zone_metrics.png")
+plt.savefig(os.path.join(RES, f"b0z_zone_metrics{TAG}.png"), dpi=115)
+print(f"저장: results/{STEM}.csv, b0z_cell_vs_heading{TAG}.png, b0z_zone_metrics{TAG}.png")
