@@ -146,7 +146,7 @@ new EstimateCreateRequest(warehouseId, null, null, null, null, null, null), ADMI
             }
         }
         estimateService.applyResult(new SimulationResponse(
-                "est_%d_n12".formatted(created.estimateId()), "failed", "시뮬 정체 감지", null));
+                "est_%d_n12".formatted(created.estimateId()), "failed", "시뮬 정체 감지", null, null));
 
         EstimateDetailResponse detail = estimateService.detail(created.estimateId(), ADMIN);
         assertThat(detail.status()).isEqualTo(EstimateStatus.PARTIAL);
@@ -165,7 +165,7 @@ new EstimateCreateRequest(warehouseId, null, null, null, null, null, null), ADMI
         estimateService.applyResult(done(created.estimateId(), 3));
         estimateService.applyResult(new SimulationResponse(runId, "done", null,
                 new SimulationResponse.Kpi(100, 1, null, null, null, null, null, null,
-                        null, null, 0.01, null, null, null)));
+                        null, null, 0.01, null, null, null), null));
 
         SimScenario run = scenarioRepository.findByRunId(runId).orElseThrow();
         assertThat(run.getThroughput()).isEqualTo(24.0);   // 3대 첫 결과가 유지된다
@@ -200,6 +200,6 @@ new EstimateCreateRequest(warehouseId, null, null, null, null, null, null), ADMI
                 null, null, null, null,
                 null, null,
                 (100 - amrCount * 1.5) / 100.0, null, null, null);
-        return new SimulationResponse("est_%d_n%d".formatted(estimateId, amrCount), "done", null, kpi);
+        return new SimulationResponse("est_%d_n%d".formatted(estimateId, amrCount), "done", null, kpi, null);
     }
 }

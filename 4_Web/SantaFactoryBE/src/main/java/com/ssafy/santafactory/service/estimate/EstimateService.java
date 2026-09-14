@@ -25,7 +25,9 @@ import com.ssafy.santafactory.repository.WarehouseRepository;
 import com.ssafy.santafactory.service.SimulationService;
 import com.ssafy.santafactory.service.estimate.ordergen.OutboundOrderGenerator;
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
@@ -59,6 +61,9 @@ public class EstimateService {
 
     /** 시뮬 평가 시드 */
     private static final long FIXED_SEED = 101L;
+
+    /** 리플레이에서 맵을 담는 키. 저장할 때 떼어내고 조회할 때 다시 붙이므로 양쪽이 같아야 한다. */
+    private static final String REPLAY_SCENE = "scene";
 
     /** 아직 결과를 기다리는 상태 — TIMEOUT 스윕 대상. */
     private static final List<RunStatus> PENDING = List.of(RunStatus.QUEUED, RunStatus.RUNNING);
@@ -171,7 +176,11 @@ public class EstimateService {
                 properties.shifts(),
                 gapSeconds(warehouse.getInboundAvg(), warehouse.getInboundStart(), warehouse.getInboundEnd()),
                 gapSeconds(warehouse.getOutboundAvg(), warehouse.getOutboundStart(), warehouse.getOutboundEnd()),
-                conditions, amr, List.of(), outboundOrders);
+                conditions, amr, List.of(), outboundOrders,
+                // 화면에서 대수별 주행을 재생하려면 run 마다 궤적이 있어야 한다 (S15P21A106-205).
+                // 나중에 다시 돌려서 얻을 수 없다 — 그러려면 견적과 같은 6시간을 또 돌려야 하고,
+                // 짧게 돌리면 --shifts 가 horizon 을 등분하므로 다른 시나리오가 된다
+                properties.exportReplay());
     }
 
     /** 생성할 출고 주문 건수 — 창고의 하루 출고 물량, 없으면 파이썬 쪽과 같은 기본값(500). */
@@ -225,6 +234,37 @@ public class EstimateService {
                 .orElseThrow(() -> new GlobalException(ErrorCode.ESTIMATE_NOT_FOUND));
         ownershipGuard.checkEstimate(estimate, me);
         return EstimateDetailResponse.of(estimate, scenarioRepository.findByEstimateIdOrderByAmrCountAsc(estimateId));
+    }
+
+    /**
+     * 대수 하나의 앞 구간 재생 데이터 (S15P21A106-205).
+     *
+     * <p>저장할 때 맵과 궤적을 나눠 넣었으므로({@link #applyReplay}) 여기서 다시 합쳐 내보낸다.
+     * 화면은 둘을 같이 받아야 그림을 그릴 수 있고, 나뉘어 있다는 건 저장 쪽 사정이다.
+     *
+     * <p>견적이 아직 안 끝났거나 그 대수 run 이 실패했으면 데이터가 없다 — 404 로 준다.
+     * 진행 중인 것과 영원히 없는 것을 구분하지 않는 이유는, 프론트가 어느 쪽이든 "아직 못 본다"로
+     * 같게 처리하기 때문이다.
+     */
+    @Transactional(readOnly = true)
+    public JsonNode replay(Long estimateId, int amrCount, AuthenticatedMember me) {
+        Estimate estimate = estimateRepository.findById(estimateId)
+                .orElseThrow(() -> new GlobalException(ErrorCode.ESTIMATE_NOT_FOUND));
+        ownershipGuard.checkEstimate(estimate, me);
+
+        SimScenario run = scenarioRepository.findByEstimateIdAndAmrCount(estimateId, amrCount)
+                .orElseThrow(() -> new GlobalException(ErrorCode.ENTITY_NOT_FOUND));
+        if (run.getReplayJson() == null || estimate.getReplaySceneJson() == null) {
+            throw new GlobalException(ErrorCode.ENTITY_NOT_FOUND);
+        }
+        try {
+            ObjectNode replay = (ObjectNode) objectMapper.readTree(run.getReplayJson());
+            replay.set(REPLAY_SCENE, objectMapper.readTree(estimate.getReplaySceneJson()));
+            return replay;
+        } catch (JsonProcessingException | ClassCastException e) {
+            log.error("리플레이 JSON 이 깨졌습니다: estimateId={}, amrCount={}", estimateId, amrCount, e);
+            throw new GlobalException(ErrorCode.ENTITY_NOT_FOUND);
+        }
     }
 
     /**
@@ -327,6 +367,7 @@ public class EstimateService {
             run.markFailed(response.error());
         } else {
             applyKpi(run, response.kpi());
+            applyReplay(run, response.replay());
         }
         eventPublisher.publishEvent(new RunUpdated(run.getEstimate().getId(), EstimateDetailResponse.Run.from(run)));
 
@@ -405,6 +446,30 @@ public class EstimateService {
         run.markDone(throughputPercent(kpi), utilizationPercent(kpi), dailyOutbound(run, kpi));
         log.info("run 완료: runId={}, 처리율={}%, 가동률={}%",
                 run.getRunId(), run.getThroughput(), run.getUtilization());
+    }
+
+    /**
+     * 앞 구간 재생 데이터를 저장한다 (S15P21A106-205). 맵은 견적에, 궤적은 run 에 나눠 넣는다 —
+     * 맵은 대수와 무관하게 같아서 run 마다 두면 같은 143 KB 가 대수만큼 중복된다.
+     *
+     * <p>실패해도 삼킨다. 리플레이는 곁다리라 이것 때문에 KPI 가 들어간 run 을 되돌릴 이유가 없다.
+     */
+    private void applyReplay(SimScenario run, JsonNode replay) {
+        if (replay == null || replay.isNull()) {
+            return;
+        }
+        try {
+            JsonNode scene = replay.get(REPLAY_SCENE);
+            if (scene != null && !scene.isNull()) {
+                run.getEstimate().applyReplayScene(objectMapper.writeValueAsString(scene));
+            }
+            // 맵을 뺀 나머지(dt_s·model·seconds·robots·headings)가 run 별로 다른 부분이다
+            ObjectNode trajectory = ((ObjectNode) replay).deepCopy();
+            trajectory.remove(REPLAY_SCENE);
+            run.applyReplay(objectMapper.writeValueAsString(trajectory));
+        } catch (JsonProcessingException | ClassCastException e) {
+            log.warn("리플레이 저장 실패 — run 은 그대로 둔다: runId={}, {}", run.getRunId(), e.toString());
+        }
     }
 
     /**

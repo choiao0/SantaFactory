@@ -32,7 +32,7 @@ class SimulationClientTest {
             "est_77_n3", 42L, 21600L, "in,in,out,out,out,out", 48.0, 22.5,
             new SimulationRequest.Warehouse(4, "01:00", "09:00", "13:00", "18:00", 480, 500),
             new SimulationRequest.Amr(3, 1.2, 1.0, 0.02, 100.0, 3600, 0.2, 8),
-            List.of(), List.of());
+            List.of(), List.of(), null);
 
     @Test
     void publish_sends_request_to_request_queue() {

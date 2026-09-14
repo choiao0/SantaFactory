@@ -22,6 +22,7 @@
 import json
 import os
 import re
+import shutil
 import sys
 import tempfile
 import time
@@ -47,6 +48,11 @@ RESULT_QUEUE = os.environ.get("SIM_RESULT_QUEUE", "sim.result")
 MAX_ROBOTS = 28            # 충전 존 초기 배치 상한 (SIM_RUN_CONTRACT §1 — 견적 제약)
 SPEED_DEFAULT = 0.9        # 무게 입력이 없을 때의 고정 속도 [m/s] = 물리 시뮬 계획 속도 (물리 팀 답신 2026-09-13 §2-4). 세 팀 합의 시 여기만
 SVC_PER_TOTE_S = 5.0       # 픽업·하역 각각 토트당 서비스 [초] (-177 승인값)
+# 리플레이 궤적을 몇 틱마다 하나씩 남길지 (S15P21A106-205). run 전체를 담되 솎아낸다 —
+# 원본 그대로면 run 하나가 2.7 MB(4대)·19 MB(28대)라 큐와 DB 에 담을 것이 못 된다.
+# 4 로 두면 run 당 0.67 MB(4대) 이고 샘플 간격이 4.4 초인데, 화면이 ×32 로 재생하므로
+# 한 프레임이 시뮬 0.5 초다 — 원본(1.1 초)도 이미 프레임보다 성기고, 사이는 보간이 메운다.
+REPLAY_STRIDE = max(1, int(os.environ.get("REPLAY_STRIDE", "4")))
 
 
 WORKER_ID = os.environ.get("HOSTNAME", "")[:12]     # 컨테이너 id 앞 12자 — 병렬 5개(-182) 로그 구분용. 로컬은 빈 문자열
@@ -184,26 +190,111 @@ def _orders_file(req):
     return path, len(orders)
 
 
+# ------------------------------------------------------------
+# 리플레이 내보내기 (S15P21A106-205)
+# ------------------------------------------------------------
+def _export_dir(tag):
+    return os.path.join(SIM_ENGINE_DIR, f"isaac_export_{tag}")
+
+
+def _thin(series, stride):
+    """틱 배열을 stride 간격으로 솎는다. 로봇별 dict 도 그대로 받는다."""
+    if isinstance(series, dict):
+        return {k: v[::stride] for k, v in series.items() if isinstance(v, list)}
+    return series[::stride] if isinstance(series, list) else series
+
+
+def _outbound_done_seconds(traj, dt_s):
+    """출고 <b>주문</b>이 완료된 시각(초) 목록. 화면이 "지금까지 몇 건 나갔나"를 세는 데 쓴다.
+
+    태스크가 아니라 주문을 센다. 주문 하나가 여러 통로에 걸치면 토트가 나뉘어 AMR 왕복이
+    여러 번이라(실측 500주문 → 630태스크), 태스크를 세면 사용자가 입력한 출고 건수와 어긋난다.
+    주문은 <b>마지막 토트가 배달돼야</b> 끝나므로 order 별 최대 완료 시각을 쓴다.
+
+    입고는 빼고 출고(kind == "out")만 담는다 — 견적 판정도 출고 처리율만 본다.
+    좌표와 달리 솎지 않는다. 숫자 하나씩이라 수천 건이어도 수십 KB 다.
+    """
+    last = {}
+    for i, task in enumerate(traj.get("tasks") or []):
+        if not isinstance(task, dict) or task.get("kind") != "out":
+            continue
+        at = task.get("completed")
+        if not isinstance(at, (int, float)):
+            continue                       # 창 안에 못 끝난 주문 — 완료로 세지 않는다
+        # order 가 없는 옛 내보내기면 태스크마다 따로 센다(주문 단위를 알 수 없으므로)
+        key = task.get("order", f"task:{i}")
+        last[key] = max(last.get(key, at), at)
+    return sorted(round(at * dt_s, 1) for at in last.values())
+
+
+def _read_replay(tag):
+    """export_isaac 산출물 → 앞 REPLAY_SECONDS 구간만 남긴 재생 데이터. 읽고 나면 디렉터리를 지운다.
+
+    상주 프로세스라 run 마다 20 MB 를 남기면 디스크가 찬다. 파일이 없거나 깨졌으면 None 을 준다 —
+    리플레이는 곁다리라 이것 때문에 견적을 실패로 만들지 않는다.
+    """
+    exp_dir = _export_dir(tag)
+    scene_path, traj_path = os.path.join(exp_dir, "scene.json"), os.path.join(exp_dir, "trajectories.json")
+    try:
+        if not (os.path.exists(scene_path) and os.path.exists(traj_path)):
+            log(f"{tag}: 리플레이 산출물이 없습니다 (내보내기가 꺼졌거나 시뮬이 중간에 끝남)")
+            return None
+        with open(scene_path, encoding="utf-8") as f:
+            scene = json.load(f)
+        with open(traj_path, encoding="utf-8") as f:
+            traj = json.load(f)
+        dt_s = float(traj.get("dt_s") or 0) or 1.0
+        robots = _thin(traj.get("robots") or {}, REPLAY_STRIDE)
+        # 솎은 뒤의 샘플 간격이 화면이 쓸 dt 다. 원본 dt 를 그대로 주면 재생이 stride 배 느려진다
+        sample_dt = dt_s * REPLAY_STRIDE
+        covered = max((len(v) for v in robots.values()), default=0) * sample_dt
+        return {"dt_s": sample_dt, "model": traj.get("model"), "seconds": round(covered, 1),
+                "stride": REPLAY_STRIDE,
+                "robots": robots, "headings": _thin(traj.get("headings") or {}, REPLAY_STRIDE),
+                "outbound_done": _outbound_done_seconds(traj, dt_s),
+                "scene": scene}
+    except (OSError, ValueError) as e:
+        log(f"{tag}: 리플레이 산출물을 읽지 못했습니다 — {e}")
+        return None
+    finally:
+        shutil.rmtree(exp_dir, ignore_errors=True)
+
+
 def handle(body):
     """요청 바이트/문자열 → 결과 dict. 어떤 경우에도 예외 대신 failed 결과를 돌려준다 (명세 §1-3: 실패도 발행)."""
-    run_id, orders_path, n_orders = "?", None, 0
+    run_id, orders_path, n_orders, tag = "?", None, 0, None
     try:
         req = json.loads(body)
         run_id = req.get("run_id", "?") if isinstance(req, dict) else "?"
         if isinstance(req, dict):
             orders_path, n_orders = _orders_file(req)
         kw = to_sim_args(req, orders_path)
+        tag = kw["tag"]
+        # 요청에 없으면 안 만든다 (계약 §1-3 "모르는 필드 무시" 와 짝 — 옛 백엔드는 이 키를 안 보낸다).
+        # run_once 가 os.environ 을 그대로 자식에게 넘기므로 여기서 켜고 끝나면 되돌린다. prefetch 1 이라 겹치지 않는다
+        want_replay = bool(req.get("export_replay")) if isinstance(req, dict) else False
+        if want_replay:
+            os.environ["SIM_EXPORT_ISAAC"] = "1"
         t0 = time.perf_counter()
-        summary = run_once(SIM_ENGINE_DIR, timeout_s=TIMEOUT_S, **kw)
+        try:
+            summary = run_once(SIM_ENGINE_DIR, timeout_s=TIMEOUT_S, **kw)
+        finally:
+            os.environ.pop("SIM_EXPORT_ISAAC", None)
+        result = dict(run_id=run_id, status="done", error=None, kpi=to_kpi(summary))
+        if want_replay:
+            result["replay"] = _read_replay(tag)
         log(f"{run_id}: n={kw['n_robots']} 완료 {time.perf_counter() - t0:.1f}s"
-            + (f" (명시 주문 {n_orders}건, 제외 {summary.get('orders_skipped', 0)})" if orders_path else ""))
-        return dict(run_id=run_id, status="done", error=None, kpi=to_kpi(summary))
+            + (f" (명시 주문 {n_orders}건, 제외 {summary.get('orders_skipped', 0)})" if orders_path else "")
+            + (f", 리플레이 {result['replay']['seconds']:.0f}s" if want_replay and result.get("replay") else ""))
+        return result
     except (ValueError, KeyError, SimFailed, json.JSONDecodeError) as e:
         log(f"{run_id}: 실패 — {e}")
         return dict(run_id=run_id, status="failed", error=str(e)[:2000], kpi=None)
     finally:
         if orders_path and os.path.exists(orders_path):
             os.remove(orders_path)
+        if tag:                       # 실패로 빠져나온 경우에도 내보내기 찌꺼기를 남기지 않는다
+            shutil.rmtree(_export_dir(tag), ignore_errors=True)
 
 
 # ------------------------------------------------------------

@@ -31,8 +31,20 @@ public record SimulationRequest(
         @NotNull @Valid Warehouse warehouse,
         @NotNull @Valid Amr amr,
         @NotNull @Valid List<Inbound> inbound,
-        @NotNull @Valid List<Outbound> outbound
+        @NotNull @Valid List<Outbound> outbound,
+        Boolean exportReplay
 ) {
+
+    /**
+     * 대수만 바꿔 run 하나를 만든다. 나머지 조건은 견적 전체가 공유한다.
+     *
+     * <p>필드를 하나하나 옮겨 적지 않는 이유 — 요청에 필드가 늘 때마다 여기서 빠뜨리면
+     * 그 조건이 조용히 사라진 채 run 이 돈다. 컴파일러가 안 잡아주는 종류의 실수다.
+     */
+    public SimulationRequest forRun(String runId, Amr runAmr) {
+        return new SimulationRequest(runId, seed, horizonS, shifts, inboundGapS, outboundGapS,
+                warehouse, runAmr, inbound, outbound, exportReplay);
+    }
 
     @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     public record Warehouse(
