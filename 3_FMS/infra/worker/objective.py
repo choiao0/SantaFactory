@@ -36,6 +36,23 @@ class SimFailed(RuntimeError):
     """시뮬이 비정상 종료했거나 시간을 넘겼다."""
 
 
+def tick_seconds(speed, sim_engine_dir):
+    """이 속도에서 헤딩 모델의 틱 하나가 몇 초인가 (계약 v4 = CELL_M / (speed x MOVE_TICKS)).
+
+    **시뮬과 같은 상수를 읽는다.** 여기 숫자를 또 적으면 틱 모델이 바뀔 때 워커만 옛 값을
+    쓰게 되고, 그러면 워커가 의도한 초가 시뮬에서 다른 초가 된다 — v3.3 의 CELL_M / speed
+    를 v4 에 그대로 쓰면 --horizon 이 4배 짧아진다(6h 요청이 1.5h 로 돈다).
+    계약 §5-1 이 "틱 단위 인자는 호출자가 환산" 이라고 그 책임을 이쪽에 둔 지점이다.
+
+    θ 탐색 워커(run_study)와 견적 워커(estimate_worker)가 같이 쓴다.
+    """
+    if sim_engine_dir not in sys.path:
+        sys.path.insert(0, sim_engine_dir)
+    from map_loader import CELL_M
+    from pibt_core import MOVE_TICKS
+    return CELL_M / (speed * MOVE_TICKS)
+
+
 def run_once(sim_engine_dir, theta_path, n_robots, n_orders, seed,
              aisle_block=1, flow="main", tag="bo", timeout_s=DEFAULT_TIMEOUT_S,
              cell=False, order_gap=None, extra_args=()):
