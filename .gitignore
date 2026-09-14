@@ -15,6 +15,8 @@ server-setup/
 
 # sim_v2 Isaac 리플레이 내보내기 산출물 (SIM_EXPORT_ISAAC=1) — 재생성 가능, 커밋하지 않음
 3_FMS/sim_engine/isaac_export_*/
+# 테스트용 파이썬 주문 생성기 — -212 로 삭제된 원본의 로컬 복원, 저장소 원천은 백엔드 (-191)
+3_FMS/order_gen/local_gen/
 
 # FMS 날짜 기록은 로컬 보관. 견적 엔진 입력 3개·A트랙 원문 3개·API 스키마 html 은 계속 추적
 3_FMS/docs/20*

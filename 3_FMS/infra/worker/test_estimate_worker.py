@@ -45,7 +45,7 @@ def test_defaults_and_tag_sanitizing():
     kw = w.to_sim_args({"run_id": "a/b c", "horizon_s": 3600, "amr": {"count": 1}})
     assert kw["tag"] == "a_b_c"
     assert kw["seed"] == 42
-    assert kw["extra_args"] == ("--horizon=3240", "--speed=0.9")
+    assert kw["extra_args"] == ("--horizon=3240", "--speed=0.9", "--shifts=out")     # 교대 없으면 출고 전용 (-191)
 
 
 @pytest.mark.parametrize("bad", [
@@ -163,3 +163,16 @@ def test_backend_orders_written_as_is():
     finally:
         os.remove(path)
     assert not hasattr(w, "_generate_orders") and not hasattr(w, "GEN_ORDERS")
+
+
+# ---- -191 워커 기본값 ----
+def test_shifts_default_out_but_explicit_kept():
+    """요청에 shifts 가 없거나 빈 문자열이면 --shifts=out(출고 전용), 있으면 그대로."""
+    without = {k: v for k, v in REQ.items() if k != "shifts"}
+    assert "--shifts=out" in w.to_sim_args(without)["extra_args"]
+    assert "--shifts=out" in w.to_sim_args({**REQ, "shifts": ""})["extra_args"]
+    assert "--shifts=in,in,out,out,out,out" in w.to_sim_args(REQ)["extra_args"]
+
+
+def test_timeout_default_is_1200():
+    assert w.TIMEOUT_S == 1200 or "SIM_TIMEOUT_S" in os.environ

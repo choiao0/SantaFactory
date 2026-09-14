@@ -10,7 +10,7 @@
 #
 # 환경: SIM_ENGINE_DIR(기본 /work/sim_engine, 없으면 이 파일 기준 ../../sim_engine)
 #       THETA_PATH(기본 <3_FMS>/infra/out/theta_wallA_r24_g15.json, "" 이면 중립)
-#       SIM_TIMEOUT_S(기본 600)  SIM_REQUEST_QUEUE/SIM_RESULT_QUEUE(기본 sim.request/sim.result)
+#       SIM_TIMEOUT_S(기본 1200)  SIM_REQUEST_QUEUE/SIM_RESULT_QUEUE(기본 sim.request/sim.result)
 # 주문: 요청의 outbound[] 가 **필수** — 백엔드 OutboundOrderGenerator 가 견적 생성 시 1회 만들어 저장한 목록(-197)이고,
 #       같은 목록이 검증 런(scenario.orders)에도 간다. 비어 있으면 failed (워커 자체 생성 -158 은 2026-09-14 제거).
 # 속도 (-116, 계약 v3.3): amr.avg_payload_kg(사용자 평균 적재 무게)가 있으면 contracts/speed_model.speed_for_load 로
@@ -35,7 +35,7 @@ THETA_PATH = os.environ.get("THETA_PATH", os.path.join(FMS_DIR, "infra", "out", 
 if FMS_DIR not in sys.path:                                                # contracts/ (이미지 안 /app/contracts, 로컬 3_FMS/contracts)
     sys.path.insert(0, FMS_DIR)
 from contracts.speed_model import speed_for_load  # noqa: E402
-TIMEOUT_S = int(os.environ.get("SIM_TIMEOUT_S", "600"))
+TIMEOUT_S = int(os.environ.get("SIM_TIMEOUT_S", "1200"))   # 6,000건·28대: 이 PC 190 s, EC2 2~3배 (-191)
 REQUEST_QUEUE = os.environ.get("SIM_REQUEST_QUEUE", "sim.request")
 RESULT_QUEUE = os.environ.get("SIM_RESULT_QUEUE", "sim.result")
 MAX_ROBOTS = 28            # 충전 존 초기 배치 상한 (SIM_RUN_CONTRACT §1 — 견적 제약)
@@ -132,8 +132,9 @@ def to_sim_args(req, orders_path=None):
     speed = _speed(amr, run_id)
     dt = CELL_M / speed
     extra = [f"--horizon={int(round(horizon_s / dt))}", f"--speed={speed:g}"]
-    if req.get("shifts"):
-        extra.append(f"--shifts={req['shifts']}")
+    # 교대: 요청이 주면 그대로, 없으면 출고 전용(-191). 팀 결정(2026-09-11) 견적 부하 = 6,000건/6h 출고만.
+    # 엔진 기본 in,out,out 은 입고를 켜서 고밀도 교착(입고 × 차선·양보)까지 부른다. 결과 inbound_* 는 0 으로 남는다.
+    extra.append(f"--shifts={req.get('shifts') or 'out'}")
     extra += _gap_flags(req, dt)
     _log_ignored(req, amr, run_id)
     extra += _orders_flags(amr, orders_path, dt)
