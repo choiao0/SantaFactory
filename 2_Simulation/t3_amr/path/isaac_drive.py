@@ -643,6 +643,18 @@ class Action:
     #   스위치가 꺼져 있으면 항상 빈 집합이고, 그러면 `hard == cells` 라
     #   간선이 오늘과 비트 단위로 같다 (§7 항목 1, tools/adg_fingerprint.py).
     soft: frozenset[Cell] = frozenset()
+    # [patch_axle] `front_cells()` 가 돌려준 **교집합 이전** 집합.
+    #   `soft` 와 갈라 두는 이유: 규칙이 내놓는 칸 중 일부는 **실제 스윕
+    #   바깥**이다. pitch 1.0 에서 섞임 대각 mA·mB 가 그렇다 (0/8 — 0.80
+    #   에서야 7/8 로 들어온다). `soft = guard & cells` 로만 두면 4칸 규칙이
+    #   ADG 안에서 조용히 **2칸으로 퇴화**한다.
+    #
+    #     guard   규칙 ② 조회용. 계획기가 보는 집합과 **같다.**
+    #     soft    `hard = cells - soft` 계산용. 실제 스윕 안쪽만.
+    #
+    #   교집합을 soft 에 두는 건 맞다 — 스윕 밖 칸은 애초에 hard 가 아니라
+    #   빼낼 것이 없다. 잘못된 건 그걸 **간선 조회에도** 썼던 것이다.
+    guard: frozenset[Cell] = frozenset()
 
     @property
     def hard(self) -> frozenset[Cell]:
@@ -710,10 +722,10 @@ def extract_actions(history: list[dict[int, State]], geom: RobotGeom,
             # [patch_axle] 코만 스치는 앞 칸은 회전에만 있다. 전진·후진은 코가
             #   목표 칸을 안 벗어난다 (앞길이 0.390 < 반칸). 스위치가 꺼져 있으면
             #   `front_cells()` 가 빈 집합이라 여기도 빈 집합이다.
-            soft = geom.front_cells(s0, s1) & cells if kind == TURN else frozenset()
+            guard = geom.front_cells(s0, s1) if kind == TURN else frozenset()
             act = Action(
                 agent=a, idx=len(chains[i]), kind=kind, tick=t, frm=s0, to=s1,
-                cells=cells, soft=soft, uid=uid)
+                cells=cells, soft=guard & cells, guard=guard, uid=uid)
             _check_soft(act)
             chains[i].append(act)
             uid += 1
@@ -738,14 +750,35 @@ def _check_soft(a: Action) -> None:
       다룬다. `SystemExit` 은 `BaseException` 이라 `except Exception` 을 뚫고
       나가 **Isaac 안에서는 Kit 이 통째로 내려간다.**
     """
-    if not a.soft:
+    if not a.guard:
         return                                   # 스위치 꺼짐 — 볼 것이 없다
-    if a.axle & a.soft:
-        raise RuntimeError(f"★ 축 칸이 soft 에 들어갔다: {a} "
-                         f"축 {sorted(a.axle)} soft {sorted(a.soft)}")
-    if not a.soft <= a.cells:
-        raise RuntimeError(f"★ soft 가 스윕 밖이다: {a} "
-                         f"밖 {sorted(a.soft - a.cells)}")
+
+    # (1) 자기 축이 자기 앞 칸에 들어가면 자기 바퀴 칸을 안 잡는다.
+    #     `soft` 가 아니라 `guard` 로 본다 — 규칙이 내놓은 것 자체를 봐야 한다.
+    if a.axle & a.guard:
+        raise RuntimeError(f"★ 축 칸이 앞 칸 규칙에 들어갔다: {a} "
+                         f"축 {sorted(a.axle)} guard {sorted(a.guard)}")
+
+    # (2) ★ 몸이 지나가는 칸이 guard 에 있으면 규칙이 틀린 것이다.
+    #
+    #   `soft` 는 "상대 **몸**은 와도 되고 **축**만 못 오는 칸" 이다. 우리
+    #   몸이 쓸고 가는 칸을 거기 넣으면 `hard = cells - soft` 가 그 칸을
+    #   몸 금지에서 **빼 버린다.** 2026-09-14 에 우리가 FMS 에 제안한 6칸
+    #   (앞2+대각4)의 「뒤 대각」이 정확히 이 경우였다 — 8개 회전 전부에서
+    #   모델 스윕 안이고, 그대로 켰으면 pitch 1.0 에서 접촉 96건이 났다.
+    #
+    #   (1) 은 이걸 못 잡는다. 자기 **축**((5,5))과 뒤 대각((4,4))은 다른
+    #   칸이라 `axle & guard` 를 통과한다. 검사가 따로 필요하다.
+    body = (set(occupied(a.frm)) | set(occupied(a.to))
+            | set(swing_cells(a.frm[0], a.frm[1], a.frm[2], a.to[2])))
+    stolen = a.guard & body
+    if stolen:
+        raise RuntimeError(
+            f"""★ 앞 칸 규칙에 **몸 칸**이 들어왔다: {a}
+  겹친 칸 {sorted(stolen)}  guard {sorted(a.guard)}
+  soft 는 코만 스치는 칸이어야 한다. 몸이 지나는 칸을 넣으면
+  hard 에서 빠져 상대 몸이 들어온다 — front_cells() 규칙 확인.""")
+
     if a.frm[:2] not in a.hard:
         raise RuntimeError(f"★ 출발 칸이 hard 에 없다: {a} "
                          f"출발 {a.frm[:2]} hard {sorted(a.hard)}")
@@ -844,7 +877,7 @@ def _check_front_swing(actions: list[Action], geom: "RobotGeom") -> None:
 
     if (geom.front_swing                                     # (2)
             and geom.pitch < geom.nose_clears_cell_pitch
-            and not any(a.soft for a in actions)):
+            and not any(a.guard for a in actions)):
         raise RuntimeError(
             f"★ pitch {geom.pitch:.2f} 는 코가 칸을 벗어나는 격자인데"
             f"(한계 {geom.nose_clears_cell_pitch:.4f}) soft 가 전부 비었다 — "
@@ -867,7 +900,6 @@ def build_adg(chains: list[list[Action]], geom: "RobotGeom | None" = None) -> AD
     if geom is not None:
         _check_front_swing(actions, geom)
 
-    preds: dict[int, set[int]] = {a.uid: set() for a in actions}
     preds: dict[int, set[int]] = {a.uid: set() for a in actions}
     succs: dict[int, set[int]] = {a.uid: set() for a in actions}
     t1 = t2 = 0
@@ -909,9 +941,14 @@ def build_adg(chains: list[list[Action]], geom: "RobotGeom | None" = None) -> AD
     # type 2 ②  상대의 **축**이 내 앞 칸(soft)에 있을 때만.
     #   `soft(p) & hard(q)` 는 간선을 만들지 않는다 — q 의 뒤 칸이 p 의 앞 칸에
     #   걸치는 배치(열 대기 줄)이고, 172 배치 전부 접촉 0 이었다.
-    #   스위치가 꺼져 있으면 `soft` 가 전부 비어 이 루프가 **한 번도 안 돈다.**
+    #   스위치가 꺼져 있으면 `guard` 가 전부 비어 이 루프가 **한 번도 안 돈다.**
+    #
+    #   ★ `soft` 가 아니라 `guard` 를 본다. `soft = guard & cells` 는 실제
+    #     스윕 밖 칸을 떨어뜨리는데 pitch 1.0 에서 섞임 대각이 거기 해당해
+    #     규칙이 4칸 -> 2칸으로 퇴화한다. 간선은 계획기가 보는 집합 그대로
+    #     걸어야 계획기와 ADG 가 같은 규칙을 집행한다.
     for p in actions:
-        for s in p.soft:
+        for s in p.guard:
             for q in by_axle.get(s, ()):
                 lo, hi = sorted((p, q), key=lambda a: _key(a, s))
                 t2 += _link(lo, hi)
@@ -1957,9 +1994,19 @@ def selftest(geom: RobotGeom, n_agents: int = 12, max_steps: int = 120,
         #   가 아니라 **`front_cells()` 와 `swept_cells()` 가 같은 기하를 보는가**
         #   를 직접 묻는 것이라 항목 2 보다 강하다.
         turn = geom.swept_cells((5, 5, 1), (5, 5, 0))
-        check(frozenset(a["turn_extra"]) == geom.front_cells((5, 5, 1), (5, 5, 0)),
-              "모델 초과분이 정확히 front_cells 와 같음 "
-              f"(초과 {sorted(a['turn_extra'])})")
+        guard = geom.front_cells((5, 5, 1), (5, 5, 0))
+        # ★ 비교 대상은 `guard` 전체가 아니라 `guard & turn` 이다.
+        #   규칙이 내놓는 칸 중 일부는 **실제 스윕 밖**이다 — pitch 1.0 에서
+        #   섞임 대각 mA/mB 가 0/8 로 스윕 밖이고, 0.80 에서야 7/8 로 들어온다.
+        #   `guard == turn_extra` 를 물으면 4칸 규칙에서 반드시 실패한다.
+        check(frozenset(a["turn_extra"]) == (guard & turn),
+              "모델 초과분이 정확히 front_cells & 실제스윕 과 같음 "
+              f"(초과 {sorted(a['turn_extra'])}  guard {sorted(guard)})")
+        # 스윕 밖 칸은 hard 에서 뺄 것이 없으니 안전엔 무해하지만, 규칙 ② 는
+        # 그 칸도 집행해야 한다. 그래서 `guard - turn` 이 비어도 안 비어도 통과다.
+        check(not (guard & (set(occupied((5, 5, 1))) | set(occupied((5, 5, 0)))
+                            | set(swing_cells(5, 5, 1, 0)))),
+              "front_cells 에 몸 칸이 없음 (뒤 대각이 들어오면 여기서 걸린다)")
         check(a["rest_matches"], "축 규칙에서도 정지 점유는 2칸이어야 한다")
 
     free = demo_map()
