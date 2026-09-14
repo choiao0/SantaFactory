@@ -9,7 +9,7 @@ from map_loader import (CELL_M, MAP_DIR, OFFSET_M, load_charge_zone,
                         load_map)
 from pibt_core import DIRS, TURN_TICKS
 
-from .common import DT, OUT, SPEED
+from .common import OUT
 
 
 def _grow_rect(m, r, c):
@@ -88,7 +88,8 @@ def _build_scene(a, ctx, model, zones):
     return {
         "meta": dict(variant=a.variant, source="sim_v2_tasks.py", model=model,
                      cell_fine_m=0.1, coordinate="crop-relative meters, z-up",
-                     robot_dim_m=[1.50, 0.92, 1.60], speed_mps=SPEED, dt_s=DT, turn_ticks=TURN_TICKS,
+                     robot_dim_m=[round(a.robot_dims[0] + a.robot_dims[1], 3), a.robot_dims[2], 1.65],   # 길이·폭(--robot-dims)·높이(선반 에셋 TOP_Z, 물리 팀 2026-09-14)
+                     footprint=a.footprint, speed_mps=a.speed, dt_s=a.dt, turn_ticks=TURN_TICKS,
                      pose_ref="front-axle cell center (drive axle is 0.39 m behind the front end)"),
         "obstacles": {
             "structure":      dict(height=4.0, rects=_rects_from_mask(grid01 == 1)),
@@ -104,13 +105,13 @@ def _build_scene(a, ctx, model, zones):
     }
 
 
-def _build_trajectories(kernel, model):
+def _build_trajectories(kernel, model, dt):
     trajs, heads, acts = {}, {}, {}
     for rid, log in kernel.export_log.items():
-        trajs[str(rid)] = [[round(tt * DT, 3), *_xy(r, c)] for tt, r, c, h, act in log]
-        heads[str(rid)] = [[round(tt * DT, 3), _yaw(h)] for tt, r, c, h, act in log]
-        acts[str(rid)] = [[round(tt * DT, 3), act] for tt, r, c, h, act in log if act != "move"]
-    return dict(dt_s=DT, model=model, robots=trajs, headings=heads, actions=acts,
+        trajs[str(rid)] = [[round(tt * dt, 3), *_xy(r, c)] for tt, r, c, h, act in log]
+        heads[str(rid)] = [[round(tt * dt, 3), _yaw(h)] for tt, r, c, h, act in log]
+        acts[str(rid)] = [[round(tt * dt, 3), act] for tt, r, c, h, act in log if act != "move"]
+    return dict(dt_s=dt, model=model, robots=trajs, headings=heads, actions=acts,
                 tasks=[{k: v for k, v in tk.items()} for tk in kernel.tasks_done])
 
 
@@ -126,7 +127,7 @@ def export_isaac(a, kernel, ctx):
     scene = _build_scene(a, ctx, model, zones)
     with open(os.path.join(exp_dir, "scene.json"), "w", encoding="utf-8") as f:
         json.dump(scene, f, indent=1)
-    traj = _build_trajectories(kernel, model)
+    traj = _build_trajectories(kernel, model, a.dt)
     with open(os.path.join(exp_dir, "trajectories.json"), "w", encoding="utf-8") as f:
         json.dump(traj, f, indent=1)
     n_rect = sum(len(v["rects"]) for v in scene["obstacles"].values())

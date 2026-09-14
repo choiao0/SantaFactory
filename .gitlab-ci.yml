@@ -57,6 +57,29 @@ commit-lint:
         exit 1
       fi
 
+# Flyway 버전 중복 검사 (S15P21A106-213). 브랜치 둘이 각자 V3 를 만들면 파일 이름이 서로 달라
+# git 충돌이 나지 않는다 — 그래서 둘 다 머지되고, 그제서야 백엔드가
+# "Found more than one migration with version 3" 으로 기동을 거부한다. 리뷰어는 자기 MR 의 파일만
+# 보므로 눈으로 잡히지 않는 종류다.
+flyway-lint:
+  extends: .convention-lint
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - 4_Web/SantaFactoryBE/src/main/resources/db/migration/**/*
+  script:
+    - |
+      dir=4_Web/SantaFactoryBE/src/main/resources/db/migration
+      dup=$(ls "$dir" | sed -n 's/^V\([0-9][0-9]*\)__.*\.sql$/\1/p' | sort -n | uniq -d)
+      if [ -n "$dup" ]; then
+        echo "Flyway 버전이 중복됩니다: V$(echo "$dup" | tr '\n' ' ')"
+        ls "$dir"
+        echo "나중에 머지되는 쪽이 번호를 올리세요. 이미 적용된 DB 가 있는 버전은 바꾸면 안 됩니다 —"
+        echo "그 DB 들이 'applied migration not resolved locally' 로 기동하지 못합니다."
+        exit 1
+      fi
+      echo "Flyway 버전 중복 없음"
+
 branch-lint:
   extends: .convention-lint
   script:
@@ -104,6 +127,27 @@ fms-python-test:
     - cd 3_FMS
     # fms_core/tests/test_des_parity.py 가 견적 워커·sim_v2 와 커널 조건을 직접 대조한다 — sim_engine 이 바뀌면 여기서 빨개진다.
     - python -m pytest fms_core/tests host_orch/tests sim_engine/tests -q
+
+robot-python-test:
+  stage: test
+  image: python:3.11.9-slim
+  tags:
+    - sonar-ec2
+  variables:
+    PIP_CACHE_DIR: "${CI_PROJECT_DIR}/.cache/pip"
+  cache:
+    key: robot-pip-cache
+    paths:
+      - .cache/pip
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - 1_Robot/**/*
+  script:
+    - pip install --no-cache-dir pytest==8.3.4 pyyaml==6.0.2
+    - cd 1_Robot/amr_agent
+    # 에이전트 순수부만 (ROS 불필요): profile(BE 파라미터 병합) · battery · state · order book · primitives
+    - python -m pytest -q
 
 sonarqube-analysis:
   stage: sonar

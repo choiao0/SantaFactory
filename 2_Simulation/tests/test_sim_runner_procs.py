@@ -59,6 +59,30 @@ def test_agent_cmd_real_uses_sim_time_and_odom():
     script = P.agent_cmd(P.RobotSpec("amr01"), 0, ENV, fake=False)[2]
 
     assert "pose_source:=odom" in script and "use_sim_time:=true" in script and "fake_robot" not in script
+    assert "profile_overrides" not in script
+
+
+def test_agent_cmd_passes_scenario_amr_as_profile_overrides():
+    amr = {"speed_empty": 1.2, "capacity": 6, "tote_units": 8}
+
+    script = P.agent_cmd(P.RobotSpec("amr01"), 0, ENV, fake=True, profile_overrides=amr)[2]
+
+    # shlex 로 감싼 한 인자: 에이전트 launch 가 JSON 그대로 받는다
+    assert """'profile_overrides:={"speed_empty":1.2,"capacity":6,"tote_units":8}'""" in script
+
+
+def test_agent_profile_overrides_reads_scenario_amr_only():
+    assert P.agent_profile_overrides({"amr": {"speed_empty": 1.0}, "orders": []}) == {"speed_empty": 1.0}
+    assert P.agent_profile_overrides({"amr": {}}) is None
+    assert P.agent_profile_overrides(None) is None
+
+
+def test_scenario_amr_must_be_an_object():
+    d = json.loads(start_json())
+    d["scenario"] = {"amr": "6"}
+
+    with pytest.raises(ValueError, match="scenario.amr must be an object"):
+        P.RunSpec.from_json(json.dumps(d))
 
 
 def test_run_env_sets_domain_and_wsim_n():

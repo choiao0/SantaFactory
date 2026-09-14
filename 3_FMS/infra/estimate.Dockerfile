@@ -45,8 +45,6 @@ COPY sim_engine/ /app/sim_engine/
 COPY map/        /app/map/
 COPY contracts/  /app/contracts/
 COPY infra/out/  /app/infra/out/
-# 주문 자체 생성(-158): 워커가 ORDER_GEN_DIR(기본 <3_FMS>/order_gen = /app/order_gen)에서 생성기·프로파일·마스터를 읽는다.
-COPY order_gen/  /app/order_gen/
 
 COPY infra/worker/ /opt/worker/
 

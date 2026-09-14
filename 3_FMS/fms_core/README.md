@@ -5,7 +5,7 @@ EC2 에 상시로 떠서 host-orch 의 NCMD Start 를 받으면 (1) GPU 박스�
 (3) 전 로봇이 그 노드에 도착하면(틱 배리어) 다음 틱을 계산한다. Stop 이 오면 `cancelOrder` 를 보내고 DES 와 같은 산식의 KPI 를
 `biz/v1/event` kpi_summary 로 낸다 — host-orch 가 `sim.verify.result.kpi` 에 싣는다.
 규칙의 원본: [`../contracts/MQTT_CONTRACT.md`](../contracts/MQTT_CONTRACT.md) §4 (VDA 마스터) · §5 (Edge fms-core), [`../contracts/SIM_VERIFY_CONTRACT.md`](../contracts/SIM_VERIFY_CONTRACT.md) §3.
-짝: [`../host_orch/`](../host_orch/) (Host), [`2_Simulation/sim_runner/`](../../2_Simulation/sim_runner/) (로봇 쪽 Edge), [`2_Simulation/t4_agent/`](../../2_Simulation/t4_agent/) (order 수용자).
+짝: [`../host_orch/`](../host_orch/) (Host), [`2_Simulation/sim_runner/`](../../2_Simulation/sim_runner/) (로봇 쪽 Edge), [`1_Robot/amr_agent/`](../../1_Robot/amr_agent/) (order 수용자).
 
 | 파일 | 역할 |
 |---|---|
@@ -18,7 +18,7 @@ EC2 에 상시로 떠서 host-orch 의 NCMD Start 를 받으면 (1) GPU 박스�
 | `kpi.py` | `cli/report.py` 고정 시간 산식 그대로 → 견적 워커 `to_kpi` 의 14개 키 (`test_kernel_planner` 가 report() 와 대조) |
 | `edge.py` · `app.py` | paho 연결부(유언 NDEATH · NBIRTH · ACL 과 1:1 구독) · CLI |
 | `spb.py` · `sparkplug_b_pb2.py` | `2_Simulation/sim_runner/` 와 **바이트 동일 복사본** (`tests/test_spb_copy.py`) |
-| `tests/` | 브로커 없는 단위 테스트 123개 (t4_agent 의 `OrderBook` 을 오라클로 쓴다). `test_des_parity.py` 는 견적 워커·sim_v2 와 직접 대조한다 |
+| `tests/` | 브로커 없는 단위 테스트 123개 (1_Robot/amr_agent 의 `OrderBook` 을 오라클로 쓴다). `test_des_parity.py` 는 견적 워커·sim_v2 와 직접 대조한다 |
 
 ## 견적과 같은 조건으로 돈다 (S15P21A106-185)
 
@@ -55,7 +55,7 @@ python3 -m fms_core --spawn 3                                            # DES �
 python3 -m pytest fms_core/tests host_orch/tests sim_engine/tests -q   # MR CI(.gitlab-ci.yml fms-python-test)가 도는 것과 같은 묶음
 ```
 
-옵션: `--planner kernel` · `--tick-s 1.0`(틱 최소 길이 = DES DT) · `--ack-timeout-s 30`(노드 하나 도착 상한) · `--ready-timeout-s 420` ·
+옵션: `--planner kernel` · `--tick-s`(틱 최소 길이, 기본 = DES 틱 길이 1 m ÷ 속도, 속도 0.9 → 1.11 s; `--planner-opt speed=` 로 속도 지정) · `--ack-timeout-s 30`(노드 하나 도착 상한) · `--ready-timeout-s 420` ·
 `--heartbeat-s 5` · `--host-offline-s 15` · `--state-dir`(bdseq) · `--node-id fms-core` · `--group santa`.
 
 EC2 배포(compose, k3s 전까지): `infra/fms_core.Dockerfile` + `infra/compose.fms-core.yml` (EMQX 네트워크 backbone_default 만).

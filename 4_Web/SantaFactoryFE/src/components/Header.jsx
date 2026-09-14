@@ -9,7 +9,11 @@ const LINKS = [
   ['#quote', 'QUOTE'],
 ]
 
-export default function Header() {
+/**
+ * @param sections 견적 화면의 섹션 앵커(WAREHOUSE·FLEET…)를 보일지. 그 앵커가 없는 화면에서는
+ *                 눌러도 아무 일이 없으므로 끈다.
+ */
+export default function Header({ sections = true }) {
   const navigate = useNavigate()
   const { member, isAdmin, logout } = useAuth()
 
@@ -26,14 +30,17 @@ export default function Header() {
         <span className="brand-text">SANTA FACTORY</span>
         <small>AMR FLEET QUOTE</small>
       </a>
-      <nav className="header-links">
-        {LINKS.map(([href, label]) => (
-          <a key={href} href={href}>{label}</a>
-        ))}
-      </nav>
+      {sections && (
+        <nav className="header-links">
+          {LINKS.map(([href, label]) => (
+            <a key={href} href={href}>{label}</a>
+          ))}
+        </nav>
+      )}
       <div className="header-account">
         {/* 창고·견적이 회원별로 갈리므로 지금 누구로 보고 있는지가 화면에 있어야 한다 */}
         {member && <span className="mono dim">{member.company} · {member.name}</span>}
+        <button type="button" className="ghost sm" onClick={() => navigate('/estimates')}>내 견적</button>
         {isAdmin && (
           // 역할이 아니라 갈 곳을 쓴다 — 바로 왼쪽이 회원 이름이라 "관리자"면 두 번 겹치고,
           // 도착하는 화면이 무엇인지도 알려주지 못한다

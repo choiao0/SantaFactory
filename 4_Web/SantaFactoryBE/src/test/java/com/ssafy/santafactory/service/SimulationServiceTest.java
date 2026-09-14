@@ -33,7 +33,8 @@ class SimulationServiceTest {
             List.of(new SimulationRequest.Inbound(5001L, 3L,
                     List.of(new SimulationRequest.Line(7L, "A2", 20)))),
             List.of(new SimulationRequest.Outbound(1001L, 0L,
-                    List.of(new SimulationRequest.Line(7L, "A2", 1)))));
+                    List.of(new SimulationRequest.Line(7L, "A2", 1)))),
+            null);
 
     @Test
     void publishRuns_publishes_one_message_per_amr_count() {
@@ -60,8 +61,8 @@ class SimulationServiceTest {
     void applyResult_handles_done_and_failed() {
         SimulationResponse done = new SimulationResponse("est_77_n3", "done", null,
                 new SimulationResponse.Kpi(50, 50, 48, 48, 1740L, 210.5, 402.0, 87.3,
-                        96.4, 182.0, 0.63, 0.004, 12480L, 0L));
-        SimulationResponse failed = new SimulationResponse("est_77_n5", "failed", "stall", null);
+                        96.4, 182.0, 0.63, 0.004, 12480L, 0L), null);
+        SimulationResponse failed = new SimulationResponse("est_77_n5", "failed", "stall", null, null);
 
         assertThatCode(() -> {
             simulationService.applyResult(done);

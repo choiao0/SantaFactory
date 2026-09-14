@@ -75,3 +75,17 @@ def test_build_wires_conductor(tmp_path, monkeypatch):
     assert (host, port) == ("b", 1999)
     assert edge.conductor.pub is edge and edge.conductor.cfg.tick_s == 2.0
     assert edge.conductor.cfg.planner_options == {"aisle_block": True}
+
+
+def test_build_tick_defaults_to_des_dt(tmp_path, monkeypatch):
+    """--tick-s 를 안 주면 벽시계 틱 = DES 틱 길이 des_dt() (워커 기본 0.9, speed 옵션이면 그 값) (-116·-194).
+
+    값을 박지 않고 des_dt 에서 유도한다 — 틱 모델이 바뀌면(v3.6 에서 1칸 = MOVE_TICKS 틱)
+    같은 speed 라도 틱 길이가 달라지는데, 두 값이 **같이** 움직이는지가 이 테스트의 요지다.
+    """
+    from fms_core.kernel_planner import des_dt
+    monkeypatch.setenv("MQTT_PW_FMS_CORE", "pw")
+    edge, _, _ = A.build(A.build_parser().parse_args(["--state-dir", str(tmp_path)]))
+    assert edge.conductor.cfg.tick_s == pytest.approx(des_dt())
+    edge, _, _ = A.build(A.build_parser().parse_args(["--state-dir", str(tmp_path), "--planner-opt", "speed=1.0"]))
+    assert edge.conductor.cfg.tick_s == pytest.approx(des_dt({"speed": 1.0}))

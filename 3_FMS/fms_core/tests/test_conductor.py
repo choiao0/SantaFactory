@@ -9,7 +9,8 @@ from fms_core import world as W
 from fms_core.kernel_planner import des_homes
 from fms_core.planner import Command, RobotView
 from fms_core.tests.fakes import FakePublisher, PerfectRobots, ncmd, start_payload, vda_connection, vda_state
-from fms_core.tests.test_kernel_planner import scenario
+from fms_core.kernel_planner import des_dt
+from fms_core.tests.test_kernel_planner import MOVE_TICKS, scenario
 
 SERIALS = ["amr01", "amr02"]
 POSES = [(36.0, 40.8, 0.0), (39.0, 40.8, 0.0)]          # Isaac 기본 spawn → 칸 (40,36) · (40,39)
@@ -380,7 +381,10 @@ def test_kernel_planner_end_to_end_with_perfect_robots(tmp_path):
     """DES 홈에서 출발한 2대가 완벽한 로봇이면 커널 배차·이동이 order 로 나가고 KPI 가 나온다."""
     homes = des_homes(2)
     poses = [W.cell_center(c) + (0.0,) for c in homes]
-    h = Harness(tmp_path, factory=None, tick_s=1.0)
+    # 벽시계 틱을 DES 틱에 맞춘다 — 운영(app.py)이 tick_s = des_dt() 로 채우는 그 값이다.
+    # 1.0 을 박아 두면 1칸이 여러 틱인 모델(-194)에서 커널이 MOVE_TICKS 배 느리게 돌아
+    # 런이 timeout_s 에 걸린다.
+    h = Harness(tmp_path, factory=None, tick_s=des_dt())
     h.c.planner_factory = __import__("fms_core.planner", fromlist=["build_planner"]).build_planner
     h.robots = PerfectRobots(h.c, h.pub, SERIALS, poses)
     h.start(1.0, scenario=scenario(4, gap=1))
@@ -392,10 +396,13 @@ def test_kernel_planner_end_to_end_with_perfect_robots(tmp_path):
     h.robots.deliver(now + 0.5)
     h.c.tick(now + 0.6)
     assert h.c.state == C.RUNNING
-    for i in range(500):
-        now += 1.1
+    # 벽시계 한 걸음 = 틱 길이. 1.1 을 박아 두면 틱이 잘아졌을 때(v3.6) 시계만 빨리 흘러
+    # 로봇 침묵 워치독(30 s)에 걸린다 — 실제로 걸렸다 (-194).
+    step_s = des_dt() * 0.99
+    for i in range(500 * MOVE_TICKS):
+        now += step_s
         h.c.tick(now)
-        h.robots.deliver(now + 0.5)
+        h.robots.deliver(now + 0.5, idle=True)      # 명령 없는 틱에도 실 로봇은 state 를 낸다
         if h.c.values[C.DONE_TASKS] >= 1:
             break
     assert h.c.values[C.DONE_TASKS] >= 1 and h.c.t > 50

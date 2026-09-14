@@ -23,6 +23,13 @@ import com.ssafy.santafactory.repository.EstimateRepository;
 import com.ssafy.santafactory.repository.SimScenarioRepository;
 import com.ssafy.santafactory.repository.WarehouseRepository;
 import com.ssafy.santafactory.service.SimulationService;
+import com.ssafy.santafactory.service.estimate.ordergen.OutboundOrderGenerator;
+import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.JsonToken;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
@@ -32,6 +39,7 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.io.IOException;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
@@ -57,6 +65,9 @@ public class EstimateService {
     /** 시뮬 평가 시드 */
     private static final long FIXED_SEED = 101L;
 
+    /** 리플레이에서 맵을 담는 키. 저장할 때 떼어내고 조회할 때 다시 붙이므로 양쪽이 같아야 한다. */
+    private static final String REPLAY_SCENE = "scene";
+
     /** 아직 결과를 기다리는 상태 — TIMEOUT 스윕 대상. */
     private static final List<RunStatus> PENDING = List.of(RunStatus.QUEUED, RunStatus.RUNNING);
 
@@ -69,6 +80,8 @@ public class EstimateService {
     private final EstimateProperties properties;
     private final OwnershipGuard ownershipGuard;
     private final ApplicationEventPublisher eventPublisher;
+    private final OutboundOrderGenerator outboundOrderGenerator;
+    private final ObjectMapper objectMapper;
 
     // ── 생성 ─────────────────────────────────────────────────────────────────
 
@@ -96,11 +109,16 @@ public class EstimateService {
         int maxAmrCount = amrCounts.get(amrCounts.size() - 1);
         String baseRunId = "est_" + estimate.getId();
 
+        List<SimulationRequest.Outbound> outboundOrders = outboundOrderGenerator.generate(
+                warehouse, properties.horizon().toSeconds(), outboundOrderCount(warehouse), FIXED_SEED);
+        estimate.applyOutboundOrders(toJson(outboundOrders));
+
         for (int amrCount : amrCounts) {
             scenarioRepository.save(SimScenario.queued(
                     estimate, SimulationService.runId(baseRunId, amrCount), amrCount, costCalculator.cost(amrCount)));
         }
-        List<String> runIds = simulationService.publishRuns(baseRequest(baseRunId, warehouse), amrCounts);
+        List<String> runIds =
+                simulationService.publishRuns(baseRequest(baseRunId, warehouse, outboundOrders), amrCounts);
 
         log.info("견적 생성: estimateId={}, 최대 {}대, 목표 처리율 {}%, 가동률 {}%, 예산 {}원",
                 estimate.getId(), maxAmrCount, targetThroughput, targetUtilization, budgetLimit);
@@ -138,9 +156,12 @@ public class EstimateService {
      * <p>도착 간격은 창고의 <b>작업 시간 기준</b>으로 계산한다 — 하루 물량을 실제 작업창으로 나눈
      * 도착률이다(입고 600건 / 8시간 → 48초). 시간만 줄이고 간격은 유지하므로 부하 밀도가 보존된다.
      *
-     * <p>AMR 사양(속도·배터리·소모량)과 주문 목록은 비워 둔다 — 시뮬이 자체 기본값과 주문 스트림을 쓴다.
+     * <p>AMR 사양(속도·배터리·소모량)은 비워 둔다 — 시뮬이 자체 기본값을 쓴다. 출고 주문은 이제 백엔드가
+     * 생성한 목록을 그대로 싣는다({@code outboundOrderGenerator}) — 대수마다 다시 생성하지 않고 호출자가
+     * 넘긴 같은 리스트를 재사용해야 대수별 비교가 의미 있다. 입고는 여전히 간격(gap) 기반이다.
      */
-    private SimulationRequest baseRequest(String baseRunId, Warehouse warehouse) {
+    private SimulationRequest baseRequest(
+            String baseRunId, Warehouse warehouse, List<SimulationRequest.Outbound> outboundOrders) {
         SimulationRequest.Warehouse conditions = new SimulationRequest.Warehouse(
                 warehouse.getWorkerCount(),
                 format(warehouse.getInboundStart()),
@@ -158,7 +179,25 @@ public class EstimateService {
                 properties.shifts(),
                 gapSeconds(warehouse.getInboundAvg(), warehouse.getInboundStart(), warehouse.getInboundEnd()),
                 gapSeconds(warehouse.getOutboundAvg(), warehouse.getOutboundStart(), warehouse.getOutboundEnd()),
-                conditions, amr, List.of(), List.of());
+                conditions, amr, List.of(), outboundOrders,
+                // 화면에서 대수별 주행을 재생하려면 run 마다 궤적이 있어야 한다 (S15P21A106-205).
+                // 나중에 다시 돌려서 얻을 수 없다 — 그러려면 견적과 같은 6시간을 또 돌려야 하고,
+                // 짧게 돌리면 --shifts 가 horizon 을 등분하므로 다른 시나리오가 된다
+                properties.exportReplay());
+    }
+
+    /** 생성할 출고 주문 건수 — 창고의 하루 출고 물량, 없으면 파이썬 쪽과 같은 기본값(500). */
+    private int outboundOrderCount(Warehouse warehouse) {
+        Long outboundAvg = warehouse.getOutboundAvg();
+        return outboundAvg != null && outboundAvg > 0 ? outboundAvg.intValue() : 500;
+    }
+
+    private String toJson(Object value) {
+        try {
+            return objectMapper.writeValueAsString(value);
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("출고 주문 목록 직렬화 실패", e);
+        }
     }
 
     /**
@@ -198,6 +237,37 @@ public class EstimateService {
                 .orElseThrow(() -> new GlobalException(ErrorCode.ESTIMATE_NOT_FOUND));
         ownershipGuard.checkEstimate(estimate, me);
         return EstimateDetailResponse.of(estimate, scenarioRepository.findByEstimateIdOrderByAmrCountAsc(estimateId));
+    }
+
+    /**
+     * 대수 하나의 앞 구간 재생 데이터 (S15P21A106-205).
+     *
+     * <p>저장할 때 맵과 궤적을 나눠 넣었으므로({@link #applyReplay}) 여기서 다시 합쳐 내보낸다.
+     * 화면은 둘을 같이 받아야 그림을 그릴 수 있고, 나뉘어 있다는 건 저장 쪽 사정이다.
+     *
+     * <p>견적이 아직 안 끝났거나 그 대수 run 이 실패했으면 데이터가 없다 — 404 로 준다.
+     * 진행 중인 것과 영원히 없는 것을 구분하지 않는 이유는, 프론트가 어느 쪽이든 "아직 못 본다"로
+     * 같게 처리하기 때문이다.
+     */
+    @Transactional(readOnly = true)
+    public JsonNode replay(Long estimateId, int amrCount, AuthenticatedMember me) {
+        Estimate estimate = estimateRepository.findById(estimateId)
+                .orElseThrow(() -> new GlobalException(ErrorCode.ESTIMATE_NOT_FOUND));
+        ownershipGuard.checkEstimate(estimate, me);
+
+        SimScenario run = scenarioRepository.findByEstimateIdAndAmrCount(estimateId, amrCount)
+                .orElseThrow(() -> new GlobalException(ErrorCode.ENTITY_NOT_FOUND));
+        if (run.getReplayJson() == null || estimate.getReplaySceneJson() == null) {
+            throw new GlobalException(ErrorCode.ENTITY_NOT_FOUND);
+        }
+        try {
+            ObjectNode replay = (ObjectNode) objectMapper.readTree(run.getReplayJson());
+            replay.set(REPLAY_SCENE, objectMapper.readTree(estimate.getReplaySceneJson()));
+            return replay;
+        } catch (JsonProcessingException | ClassCastException e) {
+            log.error("리플레이 JSON 이 깨졌습니다: estimateId={}, amrCount={}", estimateId, amrCount, e);
+            throw new GlobalException(ErrorCode.ENTITY_NOT_FOUND);
+        }
     }
 
     /**
@@ -256,7 +326,49 @@ public class EstimateService {
 
         simulationService.publishVerify(new VerifyRequest(
                 "verify_" + estimateId, recommendedCount, properties.verifyWindow().toSeconds(),
-                run.getRunId(), estimateId, FIXED_SEED));
+                run.getRunId(), estimateId, FIXED_SEED, verifyScenario(estimate)));
+    }
+
+    /**
+     * 견적이 DES 스윕에 실제로 쓴 출고 주문 전체를 검증 시나리오로 싣는다. 1단계 이전에 만들어진(주문
+     * 저장 전) 견적은 {@code outboundOrdersJson} 이 없으므로 시나리오 없이 발행한다(하위 호환).
+     */
+    private VerifyRequest.Scenario verifyScenario(Estimate estimate) {
+        String json = estimate.getOutboundOrdersJson();
+        if (json == null) {
+            return null;
+        }
+        List<SimulationRequest.Outbound> orders = readOutboundOrders(json);
+        return orders.isEmpty() ? null : new VerifyRequest.Scenario(FIXED_SEED, new VerifyRequest.Orders(null, orders));
+    }
+
+    /**
+     * 저장된 출고 주문 목록의 건수. 결과가 올 때마다(대수당 1회, 견적당 최대 28회) 부르므로 700 KB 안팎의
+     * JSON 을 객체로 풀지 않고 최상위 배열 원소만 스트리밍으로 센다.
+     */
+    private int countOutboundOrders(String json) {
+        try (JsonParser parser = objectMapper.getFactory().createParser(json)) {
+            if (parser.nextToken() != JsonToken.START_ARRAY) {
+                return 0;
+            }
+            int count = 0;
+            while (parser.nextToken() == JsonToken.START_OBJECT) {
+                parser.skipChildren();
+                count++;
+            }
+            return count;
+        } catch (IOException e) {
+            throw new IllegalStateException("출고 주문 목록 역직렬화 실패", e);
+        }
+    }
+
+    private List<SimulationRequest.Outbound> readOutboundOrders(String json) {
+        try {
+            return objectMapper.readValue(json,
+                    objectMapper.getTypeFactory().constructCollectionType(List.class, SimulationRequest.Outbound.class));
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("출고 주문 목록 역직렬화 실패", e);
+        }
     }
 
     // ── 결과 반영 ────────────────────────────────────────────────────────────
@@ -278,6 +390,7 @@ public class EstimateService {
             run.markFailed(response.error());
         } else {
             applyKpi(run, response.kpi());
+            applyReplay(run, response.replay());
         }
         eventPublisher.publishEvent(new RunUpdated(run.getEstimate().getId(), EstimateDetailResponse.Run.from(run)));
 
@@ -359,6 +472,30 @@ public class EstimateService {
     }
 
     /**
+     * 앞 구간 재생 데이터를 저장한다 (S15P21A106-205). 맵은 견적에, 궤적은 run 에 나눠 넣는다 —
+     * 맵은 대수와 무관하게 같아서 run 마다 두면 같은 143 KB 가 대수만큼 중복된다.
+     *
+     * <p>실패해도 삼킨다. 리플레이는 곁다리라 이것 때문에 KPI 가 들어간 run 을 되돌릴 이유가 없다.
+     */
+    private void applyReplay(SimScenario run, JsonNode replay) {
+        if (replay == null || replay.isNull()) {
+            return;
+        }
+        try {
+            JsonNode scene = replay.get(REPLAY_SCENE);
+            if (scene != null && !scene.isNull()) {
+                run.getEstimate().applyReplayScene(objectMapper.writeValueAsString(scene));
+            }
+            // 맵을 뺀 나머지(dt_s·model·seconds·robots·headings)가 run 별로 다른 부분이다
+            ObjectNode trajectory = ((ObjectNode) replay).deepCopy();
+            trajectory.remove(REPLAY_SCENE);
+            run.applyReplay(objectMapper.writeValueAsString(trajectory));
+        } catch (JsonProcessingException | ClassCastException e) {
+            log.warn("리플레이 저장 실패 — run 은 그대로 둔다: runId={}, {}", run.getRunId(), e.toString());
+        }
+    }
+
+    /**
      * 출고 처리율 % — 접수 주문 중 완료 비율.
      *
      * <p>단위 변환이 일어나는 유일한 지점이다. 유한 주문 모드로 돌리면 이 값이 항상 100 % 가 되므로
@@ -381,25 +518,26 @@ public class EstimateService {
     /**
      * 출고 처리 건수를 <b>건/일</b>로 환산한다 ({@code SimScenarios.outbound} 단위).
      *
-     * <p>시뮬은 horizon 중 출고 구간(기본 4시간)만 출고를 받는데, 도착 간격은 실제 도착률을 그대로
-     * 쓰므로 실측 건수 × (실제 출고창 ÷ 시뮬 출고창) 이 하루 물량이 된다. 기본 설정이면 배율 1.25다
-     * (실제 5시간 ÷ 시뮬 4시간). 하루 전량 실행(horizon 24h)으로 바꾸면 배율이 1에 가까워진다.
+     * <p>시뮬은 백엔드가 생성한 하루치 주문 목록({@code outboundOrdersJson})을 그대로 받는다(-197). 그 목록이
+     * 하루 전량이면 완료 건수가 곧 건/일이고, 실제 출고창이 horizon 보다 길어 앞부분만 잘려 갔으면
+     * 하루 물량 ÷ 보낸 건수 배율로 되돌린다 (S15P21A106-214). 이전의 (실제 출고창 ÷ 시뮬 출고창) 배율은
+     * 워커가 도착 간격으로 주문을 만들던 시절(-82)의 식이라 5시간 창고에서 ×1.25 로 부풀리고 있었다.
      *
-     * <p>창고 출고창을 알 수 없으면 환산 근거가 없으므로 실측값을 그대로 남긴다.
+     * <p>주문 목록이 없는 옛 견적(1단계 이전)은 환산 근거가 없으므로 실측값을 그대로 남긴다.
      */
     private Long dailyOutbound(SimScenario run, SimulationResponse.Kpi kpi) {
         Integer completed = kpi.ordersCompleted();
         if (completed == null) {
             return null;
         }
-        Warehouse warehouse = run.getEstimate().getWarehouse();
-        LocalDateTime start = warehouse.getOutboundStart();
-        LocalDateTime end = warehouse.getOutboundEnd();
-        long simulated = properties.simulatedOutboundSeconds();
-        if (start == null || end == null || !end.isAfter(start) || simulated <= 0) {
+        Estimate estimate = run.getEstimate();
+        String json = estimate.getOutboundOrdersJson();
+        int sent = json == null ? 0 : countOutboundOrders(json);
+        if (sent <= 0) {
             return completed.longValue();
         }
-        return Math.round(completed * (double) Duration.between(start, end).toSeconds() / simulated);
+        long daily = outboundOrderCount(estimate.getWarehouse());
+        return Math.round(completed * (double) daily / sent);
     }
 
     /**

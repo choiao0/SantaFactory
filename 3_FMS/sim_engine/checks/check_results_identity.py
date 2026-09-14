@@ -31,16 +31,35 @@ META = {"engine", "load"}                             # 스윕 스크립트가 �
 B0Z_CSV = "b0z_sweep.csv"                             # 40주문 기준선 (fleet_sweep_b0z.py)
 LOAD_CSV = "load_sweep.csv"                           # 고부하 L1·L2 (fleet_sweep_load.py)
 DEFAULT_CSVS = [os.path.join("results", B0Z_CSV), os.path.join("results", LOAD_CSV)]
-# --quick 대표 8행: (CSV, engine, n_robots, seed) — 칸·헤딩 × 소·대 × 두 CSV
-QUICK = {(B0Z_CSV, "cell", 6, 42), (B0Z_CSV, "cell", 16, 7),
-         (B0Z_CSV, "heading", 6, 42), (B0Z_CSV, "heading", 16, 7),
-         (LOAD_CSV, "cell", 28, 42), (LOAD_CSV, "heading", 12, 42),
-         (LOAD_CSV, "heading", 20, 7), (LOAD_CSV, "heading", 28, 42)}
+# --quick 대표 8행: (계열, engine, n_robots, seed) — 칸·헤딩 × 소·대 × 두 계열.
+# 계열은 파일명 **접두사**로 본다. 계약이 바뀌면 기준선을 b0z_sweep_v4.csv 처럼 접미를 붙여
+# 새로 뜨는데(-177 의 _v3, -194 의 _v4), 파일명을 그대로 박으면 --quick 이 0행을 고른다.
+QUICK = {("b0z_sweep", "cell", 6, 42), ("b0z_sweep", "cell", 16, 7),
+         ("b0z_sweep", "heading", 6, 42), ("b0z_sweep", "heading", 16, 7),
+         ("load_sweep", "cell", 28, 42), ("load_sweep", "heading", 12, 42),
+         ("load_sweep", "heading", 20, 7), ("load_sweep", "heading", 28, 42)}
+
+
+def _family(src):
+    """b0z_sweep_v4.csv -> b0z_sweep. 접미(_v3·_v4·_eval)를 떼고 계열만 남긴다."""
+    stem = os.path.splitext(os.path.basename(src))[0]
+    for fam in ("b0z_sweep", "load_sweep"):
+        if stem.startswith(fam):
+            return fam
+    return stem
 
 
 def run_row(row):
     args = [PY, os.path.join(OUT, "sim_v2_tasks.py"), row["variant"], row["n_robots"], row["n_orders"],
-            row["seed"], row["aisle_block"], f"--flow={row['flow']}", "--no-lanes", "--no-yield"]
+            row["seed"], row["aisle_block"], f"--flow={row['flow']}"]
+    # 차선·양보·회전 발자국은 **CSV 가 적어 둔 값**을 따른다. 기능이 생기기 전 CSV 에는
+    # 그 열이 아예 없어서 "꺼짐"으로 본다 — 기존 b0z_sweep.csv·load_sweep.csv 가 그렇다.
+    # 여기에 값을 박아 두면 나중 계약으로 뜬 기준선(_v34·_v35·_v4 …)이 재현되지 않는다.
+    if row.get("lanes", "") in ("", None, "0"):
+        args.append("--no-lanes")
+    if row.get("yield_rule", "") in ("", None, "0"):
+        args.append("--no-yield")
+    args.append(f"--footprint={row.get('footprint') or 'legacy'}")
     # 계약 v2: 기본 = 헤딩. CSV 의 heading 열이 비어 있으면 칸 모델 행 → --cell 로 재현.
     if row.get("heading") not in ("", None):
         args.append("--heading")
@@ -80,7 +99,8 @@ def load_rows(csvs):
 def select_rows(rows, quick, engine, max_per_csv):
     """--quick / --engine / --max 필터. --max 는 CSV(_src)별 앞에서 N행."""
     if quick:
-        rows = [r for r in rows if (r["_src"], r["engine"], int(r["n_robots"]), int(r["seed"])) in QUICK]
+        rows = [r for r in rows
+                if (_family(r["_src"]), r["engine"], int(r["n_robots"]), int(r["seed"])) in QUICK]
     if engine:
         rows = [r for r in rows if r["engine"] == engine]
     if max_per_csv:

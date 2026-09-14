@@ -49,6 +49,7 @@ class MetricsMixin:
         """로봇 카운터 합계 (지표 계산용)."""
         rb_all = self.robots.values()
         return dict(drive=sum(rb["drive"] for rb in rb_all), wait=sum(rb["wait"] for rb in rb_all),
+                    cells=sum(rb["cells"] for rb in rb_all),   # 밟은 칸 = 주행거리 (drive 는 틱)
                     svc=sum(rb["svc"] for rb in rb_all), pushed=sum(rb["pushed"] for rb in rb_all),
                     turns=sum(rb["turns"] for rb in rb_all), rot=sum(rb["rot"] for rb in rb_all),
                     rev=sum(rb["rev"] for rb in rb_all), replan=sum(rb["replan"] for rb in rb_all),

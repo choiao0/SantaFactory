@@ -28,14 +28,29 @@ EVENT_TYPES = ("task_assigned", "task_done", "order_shipped", "stall")
 # (infra/worker/estimate_worker.py + objective.run_once)와 어긋나면 그 비교가 무의미해진다.
 # 값을 바꾸기 전에 fms_core/tests/test_des_parity.py 를 보라 — 워커 코드에서 기준을 읽어 대조한다.
 DES_AISLE_BLOCK = True           # run_once(aisle_block=1) — 랙 내부 통로 칸을 막고 돈다
-DEFAULT_THETA = os.path.join(FMS_DIR, "infra", "out", "theta_wallA_r24_g15.json")   # 워커 THETA_PATH 기본값
+DES_SPEED = 0.9                  # 워커 SPEED_DEFAULT (무게 입력 없을 때 물리 계획 속도, -116). 틱 길이 dt = CELL_M / speed
+DEFAULT_THETA = os.path.join(FMS_DIR, "infra", "out", "theta_wallA_r20_c6_v36.json")  # 워커 THETA_PATH 기본값
 LANE_GAIN = POCKET_GAIN = 2.0    # 차선·주머니 비용 (sim_v2 --lane-gain/--pocket-gain 기본, v3 헤딩 main 기본 ON)
+
+
+def des_dt(options: dict | None = None) -> float:
+    """틱 길이 [초]. speed 는 `--planner-opt speed=`, 없으면 워커 기본 DES_SPEED (-116).
+
+    커널의 초 환산(서비스·주문 도착·KPI)과 셸의 벽시계 틱(--tick-s 기본)이 같은 값을 보도록
+    한 곳에 둔다. 공식은 **시뮬과 같은 상수를 읽어** 구한다 — v3.6(-194) 에서 1칸이
+    MOVE_TICKS 틱이 되며 `CELL_M / speed` 가 MOVE_TICKS 배 틀린 값이 됐다. 그 값을 쓰면
+    conductor 가 커널을 그만큼 느리게 돌려 런이 timeout_s 에 걸린다.
+    """
+    ensure_sim_engine()
+    from map_loader import CELL_M
+    from pibt_core import MOVE_TICKS
+    return CELL_M / (float((options or {}).get("speed", DES_SPEED)) * MOVE_TICKS)
 
 
 def theta_path(options: dict | None = None) -> str | None:
     """쓸 θ 파일 경로. 없으면 None = 중립 θ.
 
-    기본값은 견적 워커와 같다 — 환경변수 `THETA_PATH`, 없으면 `infra/out/theta_wallA_r24_g15.json`("" 이면 중립).
+    기본값은 견적 워커와 같다 — 환경변수 `THETA_PATH`, 없으면 `infra/out/theta_wallA_r20_c6_v36.json`("" 이면 중립).
     한 런만 다르게 하려면 `--planner-opt theta_path=<경로>`(빈 문자열이면 중립).
     """
     if options and "theta_path" in options:
@@ -67,13 +82,15 @@ class KernelPlanner:
 
     def __init__(self, spec: PlannerSpec):
         ensure_sim_engine()
-        from cli.common import DT
         from fms_kernel import FmsKernel, KernelConfig
-        from map_loader import load_charge_zone, load_map, load_rack_map
+        from map_loader import ROBOT_DIMS, load_charge_zone, load_map, load_rack_map, turn_mask
+        from pibt.geometry import FOOTPRINT_MARGIN_M
         from order_stream import OrderStream
         from pibt_core import TURN_TICKS
 
         opts = spec.options
+        # 속도 → 틱 길이 (-116, 계약 v3.3): 커널은 1칸 = 1틱 그대로, 초 단위 값(서비스·토트 서비스·KPI)만 dt 로 환산.
+        self.dt = des_dt(opts)
         free, st_cell, stations = load_map(aisle_block=bool(opts.get("aisle_block", DES_AISLE_BLOCK)))
         _validate_homes(free, spec.homes, spec.n_robots)
         zone_mask = load_charge_zone(free)
@@ -92,12 +109,19 @@ class KernelPlanner:
         # 계약 v2.6: tote_units 는 주문 라인 qty 를 토트로 나누는 단위(스트림), capacity 는 왕복당 토트 수(커널).
         self.stream = OrderStream(np.random.default_rng(so["seed"]), "main", 0, float(opts.get("order_gap", so["order_gap"])),
                                   st_cell, stations, inbound_gap=so["inbound_gap"], horizon=horizon, shifts=so["shifts"],
-                                  orders=orders, rack_map=rack_map, tote_units=so["tote_units"])
-        cfg = KernelConfig(heading=True, zone=zone, theta=bool(theta_file or lanes), service_steps=round(SERVICE_TIME_S / DT),
-                           capacity=so["capacity"], svc_per_tote=so["svc_per_tote"], yield_rule=yield_rule,
-                           turn_ticks=TURN_TICKS, stall_warn_only=True)
+                                  orders=orders, rack_map=rack_map, tote_units=so["tote_units"], dt=self.dt)   # 도착 틱 = ordered_at_s / dt
+        # 회전 발자국 (-203, 계약 v3.4): 견적(sim_v2 기본 exact)과 같은 마스크·치수. --planner-opt footprint= / robot_dims=앞,뒤,폭
+        footprint = str(opts.get("footprint", "exact"))
+        dims = opts.get("robot_dims", ROBOT_DIMS)
+        robot_dims = tuple(float(x) for x in (dims.split(",") if isinstance(dims, str) else dims))
+        mask = turn_mask(None, robot_dims, FOOTPRINT_MARGIN_M) if footprint != "legacy" else None
+        cfg = KernelConfig(heading=True, zone=zone, theta=bool(theta_file or lanes), service_steps=round(SERVICE_TIME_S / self.dt),
+                           capacity=so["capacity"], svc_per_tote=max(1, int(so["svc_per_tote_s"] / self.dt + 0.5)),   # 워커 _orders_flags 와 같은 반올림
+                           yield_rule=yield_rule,
+                           turn_ticks=TURN_TICKS, stall_warn_only=True, footprint=footprint, robot_dims=robot_dims)
         self.kernel = FmsKernel(free, st_cell, edge_cost, wait_cost, list(spec.homes), spec.n_robots, cfg,
-                                zone_mask=zone_mask, on_task_completed=self.stream.on_completed, lane_dir=lane_dir)
+                                zone_mask=zone_mask, on_task_completed=self.stream.on_completed, lane_dir=lane_dir,
+                                turn_mask=mask)
         self.n_robots = spec.n_robots
         self.warnings = warnings + list(self.kernel.warnings)
         self._events: list = []
@@ -143,7 +167,7 @@ class KernelPlanner:
                 "orders_total": int(s.n_orders)}
 
     def kpi(self, t_end: int) -> dict:
-        return K.des_block(K.summary(self.kernel, self.stream, self.n_robots, t_end))
+        return K.des_block(K.summary(self.kernel, self.stream, self.n_robots, t_end, self.dt), self.dt)
 
     # ---- 이벤트 ------------------------------------------------------------------
     def _collect_events(self, t: int) -> None:

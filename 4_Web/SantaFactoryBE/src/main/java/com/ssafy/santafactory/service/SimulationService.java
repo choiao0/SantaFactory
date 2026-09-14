@@ -31,18 +31,9 @@ public class SimulationService {
         for (int amrCount : amrCounts) {
             String runId = runId(base.runId(), amrCount);
             SimulationRequest.Amr amr = base.amr();
-            simulationClient.publish(new SimulationRequest(
-                    runId,
-                    base.seed(),
-                    base.horizonS(),
-                    base.shifts(),
-                    base.inboundGapS(),
-                    base.outboundGapS(),
-                    base.warehouse(),
+            simulationClient.publish(base.forRun(runId,
                     new SimulationRequest.Amr(amrCount, amr.speedEmpty(), amr.speedLoaded(), amr.consumption(),
-                            amr.battery(), amr.chargeTime(), amr.chargeThreshold(), amr.capacity()),
-                    base.inbound(),
-                    base.outbound()));
+                            amr.battery(), amr.chargeTime(), amr.chargeThreshold(), amr.capacity())));
             runIds.add(runId);
         }
         log.info("시뮬레이션 요청 발행: base={}, runs={}", base.runId(), runIds);

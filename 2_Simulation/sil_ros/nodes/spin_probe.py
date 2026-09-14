@@ -7,7 +7,7 @@ Humble python3로 실행(Isaac 아님). warehouse_sim이 ready 상태일 때:
   source /opt/ros/humble/setup.bash && python3 spin_probe.py --label run1     # 2_Simulation/calibration/turn_probe/ 셔ム
   python3 -m sil_ros.nodes.spin_probe --label run1                             # 2_Simulation/ 에서 직접
 출력: 2_Simulation/calibration/turn_probe/out/spin_<label>.csv (t x y yaw wz cmd_w phase) · spin_<label>.json (요약)
-T4 의 amr_agent.control.primitives(TurnController · Limits) 는 2_Simulation/t4_agent/src 를 sys.path 에 넣어 그대로 쓴다.
+에이전트의 amr_agent.control.primitives(TurnController · Limits) 는 1_Robot/amr_agent/src 를 sys.path 에 넣어 그대로 쓴다.
 """
 import argparse
 import csv
@@ -27,7 +27,7 @@ from rclpy.node import Node
 from sil_ros import SIL_ROOT
 from sil_ros.geometry import stamp_to_sec, wrap, yaw_of
 
-AMR_AGENT_SRC = os.path.join(SIL_ROOT, "t4_agent", "src", "amr_agent")
+AMR_AGENT_SRC = os.path.join(os.path.dirname(SIL_ROOT), "1_Robot", "amr_agent", "src", "amr_agent")
 sys.path.insert(0, AMR_AGENT_SRC)
 from amr_agent.control.primitives import Limits, TurnController  # noqa: E402
 

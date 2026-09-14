@@ -19,6 +19,9 @@ import com.ssafy.santafactory.repository.EstimateRepository;
 import com.ssafy.santafactory.repository.SimScenarioRepository;
 import com.ssafy.santafactory.repository.WarehouseRepository;
 import com.ssafy.santafactory.service.SimulationService;
+import com.ssafy.santafactory.service.estimate.ordergen.OutboundOrderGenerator;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -40,6 +43,8 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.within;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -51,7 +56,7 @@ import static org.mockito.Mockito.when;
 class EstimateServiceTest {
 
     private static final EstimateProperties PROPS =
-            new EstimateProperties(15_000_000L, 5_000_000L, 500_000L, 28, 6, 4, 1, Duration.ofMinutes(30), Duration.ofHours(6), "in,in,out,out,out,out", Duration.ofMinutes(10));
+            new EstimateProperties(15_000_000L, 5_000_000L, 500_000L, 28, 6, 4, 1, Duration.ofMinutes(30), Duration.ofHours(6), "out", false, Duration.ofMinutes(10));
 
     @Mock
     EstimateRepository estimateRepository;
@@ -64,18 +69,31 @@ class EstimateServiceTest {
 
     @Mock
     ApplicationEventPublisher eventPublisher;
+    @Mock
+    OutboundOrderGenerator outboundOrderGenerator;
 
     private final CostCalculator costCalculator = new CostCalculator(PROPS);
+    private final ObjectMapper objectMapper = new ObjectMapper();
     private EstimateService service;
 
-    private EstimateService service() {
-        if (service == null) {
-            service = new EstimateService(estimateRepository, scenarioRepository, warehouseRepository,
-                    simulationService, costCalculator, new EstimateEvaluator(), PROPS,
-                    new OwnershipGuard(), eventPublisher);
-        }
-        return service;
+ private EstimateService service() {
+    if (service == null) {
+        service = new EstimateService(
+                estimateRepository,
+                scenarioRepository,
+                warehouseRepository,
+                simulationService,
+                costCalculator,
+                new EstimateEvaluator(),
+                PROPS,
+                new OwnershipGuard(),
+                eventPublisher,
+                outboundOrderGenerator,
+                objectMapper
+        );
     }
+    return service;
+}
 
     // ── 생성 ─────────────────────────────────────────────────────────────────
 
@@ -98,6 +116,32 @@ class EstimateServiceTest {
         verify(simulationService).publishRuns(base.capture(), counts.capture());
         assertThat(counts.getValue()).containsExactlyElementsOf(IntStream.rangeClosed(1, 20).boxed().toList());
         assertThat(base.getValue().runId()).isEqualTo("est_77");
+    }
+
+    @Test
+    void generates_and_persists_the_same_outbound_orders_used_by_the_sweep() throws Exception {
+        givenWarehouse(1L);
+        givenSavedEstimateId(77L);
+        List<SimulationRequest.Outbound> orders = List.of(
+                new SimulationRequest.Outbound(1L, 120L, List.of(new SimulationRequest.Line(5L, "A1", 2))));
+        when(outboundOrderGenerator.generate(any(), anyLong(), anyInt(), anyLong())).thenReturn(orders);
+        when(simulationService.publishRuns(any(), any())).thenReturn(List.of("est_77_n1"));
+
+        service().create(new EstimateCreateRequest(1L, null, null, null, null, null, null), ADMIN);
+
+        // 대수별로 다시 생성하지 않고, 스윕 전체가 같은 리스트를 그대로 싣는다
+        ArgumentCaptor<SimulationRequest> base = ArgumentCaptor.captor();
+        verify(simulationService).publishRuns(base.capture(), any());
+        assertThat(base.getValue().outbound()).isEqualTo(orders);
+
+        // 그 리스트가 estimates.outbound_orders_json 에도 그대로 저장된다
+        ArgumentCaptor<Estimate> saved = ArgumentCaptor.captor();
+        verify(estimateRepository).save(saved.capture());
+        String json = saved.getValue().getOutboundOrdersJson();
+        assertThat(json).isNotNull();
+        List<SimulationRequest.Outbound> roundTripped = objectMapper.readValue(json,
+                objectMapper.getTypeFactory().constructCollectionType(List.class, SimulationRequest.Outbound.class));
+        assertThat(roundTripped).isEqualTo(orders);
     }
 
     @Test
@@ -176,7 +220,7 @@ class EstimateServiceTest {
         // 실행 시간을 명시하지 않으면 시뮬이 유한 주문 모드로 돌아 처리율이 전 대수 100 % 가 된다
         assertThat(sent.seed()).isEqualTo(101L);                          // 평가 시드, API 로 받지 않는다
         assertThat(sent.horizonS()).isEqualTo(21600L);                    // 6시간
-        assertThat(sent.shifts()).isEqualTo("in,in,out,out,out,out", Duration.ofMinutes(10));     // 입고 2h + 출고 4h
+        assertThat(sent.shifts()).isEqualTo("out");                        // 출고 전용 — 팀 결정(2026-09-11) 견적 부하 = 출고만 (S15P21A106-214)
         assertThat(sent.inboundGapS()).isEqualTo(48.0);                   // 600건 / 8시간
         assertThat(sent.outboundGapS()).isEqualTo(22.5);                  // 800건 / 5시간
     }
@@ -343,7 +387,7 @@ class EstimateServiceTest {
         when(scenarioRepository.findByRunId(run.getRunId())).thenReturn(Optional.of(run));
         when(scenarioRepository.findByEstimateIdOrderByAmrCountAsc(any())).thenReturn(List.of(run));
 
-        service().applyResult(new SimulationResponse(run.getRunId(), "done", null, null));
+        service().applyResult(new SimulationResponse(run.getRunId(), "done", null, null, null));
 
         assertThat(run.getStatus()).isEqualTo(RunStatus.FAILED);
         assertThat(run.getError()).isEqualTo("결과에 kpi 가 없음");
@@ -375,6 +419,50 @@ class EstimateServiceTest {
 
         assertThat(run.getThroughput()).isNull();                 // 처리율을 계산할 수 없다
         assertThat(estimate.getReasonCode()).isEqualTo(ReasonCode.ALL_FAILED);
+    }
+
+    // ── 건/일 환산 (S15P21A106-214) ───────────────────────────────────────────
+
+    /**
+     * 시뮬은 백엔드가 생성한 하루치 주문 목록을 그대로 받는다(-197). 목록이 하루 전량이면 완료 건수가 곧
+     * 건/일이다 — 옛 배율(실제 출고창 ÷ 시뮬 출고창)은 간격 모드 잔재라 5시간 창고에서 ×1.25 로 부풀렸다.
+     */
+    @Test
+    void reports_completed_orders_as_daily_volume_when_the_whole_day_was_sent() throws Exception {
+        Estimate estimate = estimateWithOrders(4, 4);   // 하루 4건, 4건 전부 전송
+        SimScenario run = run(estimate, 4);
+        when(scenarioRepository.findByRunId(run.getRunId())).thenReturn(Optional.of(run));
+        when(scenarioRepository.findByEstimateIdOrderByAmrCountAsc(any())).thenReturn(List.of(run));
+
+        service().applyResult(done(run.getRunId(), 4, 4, 0.9));
+
+        assertThat(run.getOutbound()).isEqualTo(4L);
+    }
+
+    /** 실제 출고창이 horizon 보다 길어 목록 앞부분만 잘려 갔으면 하루 물량 ÷ 보낸 건수로 되돌린다. */
+    @Test
+    void scales_completed_orders_by_the_share_of_the_day_that_was_sent() throws Exception {
+        Estimate estimate = estimateWithOrders(6, 4);   // 하루 6건 중 4건 전송
+        SimScenario run = run(estimate, 4);
+        when(scenarioRepository.findByRunId(run.getRunId())).thenReturn(Optional.of(run));
+        when(scenarioRepository.findByEstimateIdOrderByAmrCountAsc(any())).thenReturn(List.of(run));
+
+        service().applyResult(done(run.getRunId(), 4, 2, 0.9));
+
+        assertThat(run.getOutbound()).isEqualTo(3L);   // 2 × 6/4
+    }
+
+    /** 주문 목록이 없는 옛 견적(1단계 이전)은 환산 근거가 없으니 실측값을 그대로 둔다. */
+    @Test
+    void keeps_the_completed_count_for_an_estimate_without_a_stored_order_list() {
+        Estimate estimate = estimate(85.0, 90.0, 1_000_000_000L);
+        SimScenario run = run(estimate, 4);
+        when(scenarioRepository.findByRunId(run.getRunId())).thenReturn(Optional.of(run));
+        when(scenarioRepository.findByEstimateIdOrderByAmrCountAsc(any())).thenReturn(List.of(run));
+
+        service().applyResult(done(run.getRunId(), 100, 90, 0.9));
+
+        assertThat(run.getOutbound()).isEqualTo(90L);
     }
 
     // ── 물리 검증 결과 반영 ──────────────────────────────────────────────────
@@ -466,6 +554,26 @@ class EstimateServiceTest {
         assertThat(request.getValue().sourceRunId()).isEqualTo(recommendedRun.getRunId());
         assertThat(request.getValue().estimateId()).isEqualTo(77L);
         assertThat(request.getValue().seed()).isEqualTo(101L);
+        assertThat(request.getValue().scenario()).isNull();   // outbound_orders_json 없는(1단계 이전) 견적 — 하위 호환
+    }
+
+    @Test
+    void ships_the_full_outbound_order_list_as_the_verify_scenario() throws Exception {
+        Estimate estimate = withId(estimate(85.0, 90.0, 1_000_000_000L), 77L);
+        estimate.complete(4, 6, null, false);
+        List<SimulationRequest.Outbound> orders = List.of(
+                new SimulationRequest.Outbound(1L, 120L, List.of(new SimulationRequest.Line(5L, "A1", 2))));
+        estimate.applyOutboundOrders(objectMapper.writeValueAsString(orders));
+        SimScenario recommendedRun = run(estimate, 4);
+        when(estimateRepository.findById(77L)).thenReturn(Optional.of(estimate));
+        when(scenarioRepository.findByEstimateIdAndAmrCount(77L, 4)).thenReturn(Optional.of(recommendedRun));
+
+        service().requestVerification(77L, ADMIN);
+
+        ArgumentCaptor<VerifyRequest> request = ArgumentCaptor.captor();
+        verify(simulationService).publishVerify(request.capture());
+        assertThat(request.getValue().scenario().seed()).isEqualTo(101L);
+        assertThat(request.getValue().scenario().orders().outbound()).isEqualTo(orders);
     }
 
     // ── TIMEOUT 스윕 ─────────────────────────────────────────────────────────
@@ -544,6 +652,7 @@ class EstimateServiceTest {
         lenient().when(warehouse.getInboundAvg()).thenReturn(600L);
         lenient().when(warehouse.getOutboundAvg()).thenReturn(800L);
         when(warehouseRepository.findById(warehouseId)).thenReturn(Optional.of(warehouse));
+        lenient().when(outboundOrderGenerator.generate(any(), anyLong(), anyInt(), anyLong())).thenReturn(List.of());
     }
 
     /** save() 가 PK 를 채워 돌려주는 것을 흉내낸다 — run_id 접두사가 견적 번호로 만들어진다. */
@@ -560,6 +669,20 @@ class EstimateServiceTest {
         return Estimate.open(mock(Warehouse.class), "iw.hub", targetThroughput, targetUtilization, budgetLimit);
     }
 
+    /** 하루 출고 {@code dailyOutbound} 건인 창고(품고 시간대 13~18시)의 견적에 {@code sentOrders} 건의 주문 목록을 붙인다. */
+    private Estimate estimateWithOrders(long dailyOutbound, int sentOrders) throws Exception {
+        Warehouse warehouse = mock(Warehouse.class);
+        lenient().when(warehouse.getOutboundAvg()).thenReturn(dailyOutbound);
+        lenient().when(warehouse.getOutboundStart()).thenReturn(LocalDateTime.of(2026, 1, 1, 13, 0));
+        lenient().when(warehouse.getOutboundEnd()).thenReturn(LocalDateTime.of(2026, 1, 1, 18, 0));
+        Estimate estimate = Estimate.open(warehouse, "iw.hub", 85.0, 90.0, 1_000_000_000L);
+        List<SimulationRequest.Outbound> orders = IntStream.rangeClosed(1, sentOrders)
+                .mapToObj(i -> new SimulationRequest.Outbound((long) i, 60L * i, List.of(new SimulationRequest.Line(5L, "A1", 1))))
+                .toList();
+        estimate.applyOutboundOrders(objectMapper.writeValueAsString(orders));
+        return estimate;
+    }
+
     private SimScenario run(Estimate estimate, int amrCount) {
         return SimScenario.queued(estimate, "est_1_n" + amrCount, amrCount, costCalculator.cost(amrCount));
     }
@@ -570,11 +693,75 @@ class EstimateServiceTest {
                 null, null, null, null,
                 null, null,
                 amrUtilization, null, null, null);
-        return new SimulationResponse(runId, "done", null, kpi);
+        return new SimulationResponse(runId, "done", null, kpi, null);
     }
 
     private SimulationResponse failed(String runId, String error) {
-        return new SimulationResponse(runId, "failed", error, null);
+        return new SimulationResponse(runId, "failed", error, null, null);
+    }
+
+    /** 리플레이 한 벌 — scene(맵)과 궤적이 함께 온다. 실제 워커 응답과 같은 모양이다. */
+    private SimulationResponse doneWithReplay(String runId, String sceneMark) throws Exception {
+        SimulationResponse plain = done(runId, 10, 10, 0.5);
+        String replay = """
+                {"dt_s":0.5,"model":"heading","seconds":600.0,
+                 "robots":{"0":[[0.0,1.0,2.0]]},"headings":{"0":[0.0]},
+                 "scene":{"meta":{"map":"%s"}}}
+                """.formatted(sceneMark);
+        return new SimulationResponse(runId, plain.status(), null, plain.kpi(),
+                new ObjectMapper().readTree(replay));
+    }
+
+    // ── 리플레이 (S15P21A106-205) ────────────────────────────────────────────
+
+    @Test
+    void replay_is_split_so_the_map_is_stored_once_per_estimate() throws Exception {
+        Estimate estimate = withId(estimate(90.0, 80.0, 300_000_000L), 1L);
+        SimScenario three = run(estimate, 3);
+        SimScenario five = run(estimate, 5);
+        when(scenarioRepository.findByRunId("est_1_n3")).thenReturn(Optional.of(three));
+        when(scenarioRepository.findByRunId("est_1_n5")).thenReturn(Optional.of(five));
+        when(scenarioRepository.findByEstimateIdOrderByAmrCountAsc(1L)).thenReturn(List.of(three, five));
+
+        service().applyResult(doneWithReplay("est_1_n3", "wallA"));
+        service().applyResult(doneWithReplay("est_1_n5", "다른맵"));
+
+        // 궤적은 run 마다, 맵은 견적에 한 벌 — 그래야 143 KB 짜리가 대수만큼 중복되지 않는다
+        assertThat(three.getReplayJson()).contains("robots").doesNotContain("scene");
+        assertThat(five.getReplayJson()).contains("robots").doesNotContain("scene");
+        // 먼저 온 것만 남는다. 어차피 같은 맵이라 덮어쓰면 같은 값을 다시 쓰는 UPDATE 가 된다
+        assertThat(estimate.getReplaySceneJson()).contains("wallA").doesNotContain("다른맵");
+    }
+
+    @Test
+    void replay_recombines_the_map_and_the_trajectory() throws Exception {
+        Estimate estimate = withId(estimate(90.0, 80.0, 300_000_000L), 1L);
+        SimScenario three = run(estimate, 3);
+        when(scenarioRepository.findByRunId("est_1_n3")).thenReturn(Optional.of(three));
+        when(scenarioRepository.findByEstimateIdOrderByAmrCountAsc(1L)).thenReturn(List.of(three));
+        service().applyResult(doneWithReplay("est_1_n3", "wallA"));
+
+        when(estimateRepository.findById(1L)).thenReturn(Optional.of(estimate));
+        when(scenarioRepository.findByEstimateIdAndAmrCount(1L, 3)).thenReturn(Optional.of(three));
+
+        JsonNode replay = service().replay(1L, 3, ADMIN);
+
+        // 나눠 저장한 것은 저장 쪽 사정이다 — 화면은 둘을 같이 받아야 그림을 그린다
+        assertThat(replay.get("scene").get("meta").get("map").asText()).isEqualTo("wallA");
+        assertThat(replay.get("robots").has("0")).isTrue();
+        assertThat(replay.get("seconds").asDouble()).isEqualTo(600.0);
+    }
+
+    @Test
+    void replay_is_404_when_the_run_has_none() {
+        Estimate estimate = withId(estimate(90.0, 80.0, 300_000_000L), 1L);
+        SimScenario three = run(estimate, 3);
+        when(estimateRepository.findById(1L)).thenReturn(Optional.of(estimate));
+        when(scenarioRepository.findByEstimateIdAndAmrCount(1L, 3)).thenReturn(Optional.of(three));
+
+        // 아직 결과가 없는 것과 영원히 없는 것을 구분하지 않는다 — 프론트는 어느 쪽이든 같게 다룬다
+        assertThatThrownBy(() -> service().replay(1L, 3, ADMIN))
+                .isInstanceOf(GlobalException.class);
     }
 
     private VerifyResultResponse verifyDone(String runId, Long estimateId, String videoUrl) {
