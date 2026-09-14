@@ -451,6 +451,28 @@ class RobotGeom:
 
     # ---- 동작 스윕 ---------------------------------------------------------
 
+    # [patch_axle] 앞 칸 (soft) — 규칙은 FMS 가 단일 소스다 ------------------
+    def front_cells(self, s0: State, s1: State) -> frozenset[Cell]:
+        """회전 중 **코만 스치는** 앞 칸. 몸은 안 들어간다.
+
+        규칙(몇 칸인지, 대각을 넣는지)은 `3_FMS/sim_engine/pibt/geometry.py`
+        가 정한다. 우리는 **실제 스윕과의 교집합**만 얹는다 — 그게 pitch
+        게이팅이다. pitch 1.2 에서는 코 반경 0.559 가 반칸 0.600 안이라
+        스윕이 앞 칸에 안 닿고, 교집합이 자동으로 빈 집합이 된다.
+
+        ★ 여기서 규칙을 다시 구현하지 말 것. 정의가 두 벌이 되는 순간
+          "계획기 6칸 / ADG 2칸" 같은 어긋남이 **검사로 안 잡힌다**
+          (설계서 §0-1).
+
+        ★ `_sweep_stencil` 캐시를 쓰지 말 것. 키가 `(h0, h1, dr, dc, samples)`
+          라서 "코만 스윕" 을 같은 캐시로 구하면 **몸통 스윕 결과**를 받는다.
+
+        **본체는 아직 없다.** FMS 가 앞 2칸/6칸 중 무엇으로 갈지 답한 뒤에
+        위임을 연결한다 (설계서 §9 2번). 그때까지는 빈 집합 — 스위치가 꺼진
+        것과 같고, 거동이 오늘과 비트 단위로 같다.
+        """
+        return frozenset()
+
     def swept_cells(self, s0: State, s1: State, samples: int = 48) -> frozenset[Cell]:
         """s0 -> s1 동작 **전체**에서 차체가 지나는 칸.
 
@@ -569,6 +591,25 @@ class Action:
     to: State
     cells: frozenset[Cell]        # 동작 내내 잡고 있는 칸 (실제 스윕)
     uid: int = -1
+    # [patch_axle] 코만 스치고 몸은 안 들어가는 칸 — 회전에만, pitch 의존.
+    #   `cells` 는 **건드리지 않는다.** 이 필드는 `build_adg` 의 간선 조건
+    #   하나에만 쓰인다. `can_start`(장애물)·`released`(완료 판정)·`_check`
+    #   (겹침 감시)는 지금도 `cells` 전체를 본다 — 그게 이 변경의 안전 논거
+    #   절반이다. 설계서 `docs/2026-09-14_ADG_축규칙_구조변경_설계.md` §1-3.
+    #
+    #   스위치가 꺼져 있으면 항상 빈 집합이고, 그러면 `hard == cells` 라
+    #   간선이 오늘과 비트 단위로 같다 (§7 항목 1, tools/adg_fingerprint.py).
+    soft: frozenset[Cell] = frozenset()
+
+    @property
+    def hard(self) -> frozenset[Cell]:
+        """몸이 실제로 차지하는 칸 — 상대 **몸**이 못 들어온다."""
+        return self.cells - self.soft
+
+    @property
+    def axle(self) -> frozenset[Cell]:
+        """구동축이 지나는 칸. 전진은 두 칸, 제자리 회전은 한 칸."""
+        return frozenset({self.frm[:2], self.to[:2]})
 
     @property
     def rest(self) -> frozenset[Cell]:
@@ -622,11 +663,44 @@ def extract_actions(history: list[dict[int, State]], geom: RobotGeom,
             if kind == WAIT:
                 continue
             i = index[a]
-            chains[i].append(Action(
+            cells = geom.swept_cells(s0, s1)
+            # [patch_axle] 코만 스치는 앞 칸은 회전에만 있다. 전진·후진은 코가
+            #   목표 칸을 안 벗어난다 (앞길이 0.390 < 반칸). 스위치가 꺼져 있으면
+            #   `front_cells()` 가 빈 집합이라 여기도 빈 집합이다.
+            soft = geom.front_cells(s0, s1) & cells if kind == TURN else frozenset()
+            act = Action(
                 agent=a, idx=len(chains[i]), kind=kind, tick=t, frm=s0, to=s1,
-                cells=geom.swept_cells(s0, s1), uid=uid))
+                cells=cells, soft=soft, uid=uid)
+            _check_soft(act)
+            chains[i].append(act)
             uid += 1
     return chains, agents, stats
+
+
+def _check_soft(a: Action) -> None:
+    """`soft` 분리가 몸 칸을 훔쳐 가지 않았는지 — **실패할 수 있는** 검사.
+
+    ★ `hard | soft == cells` 를 검사하면 안 된다. `hard = cells - soft` 로
+      정의했으니 **항진명제**라 절대 실패하지 않는다 (설계서 §2-4).
+
+    무엇을 막는가: `front_cells()` 가 자기 칸을 안 빼면 그 칸이 `soft` 로 가고
+    `hard` 에서 빠진다. 그러면 **로봇이 자기 바퀴가 있는 칸을 예약하지 않는다.**
+    오류도 경고도 없이 간선이 사라지고 다른 로봇이 들어온다.
+
+    `assert` 가 아니라 실제 검사인 이유: `python -O` 로 조용히 사라지면
+    안 되는 종류다. 계획당 한 번, 액션 수천 개라 비용은 무시할 수준이다.
+    """
+    if not a.soft:
+        return                                   # 스위치 꺼짐 — 볼 것이 없다
+    if a.axle & a.soft:
+        raise SystemExit(f"★ 축 칸이 soft 에 들어갔다: {a} "
+                         f"축 {sorted(a.axle)} soft {sorted(a.soft)}")
+    if not a.soft <= a.cells:
+        raise SystemExit(f"★ soft 가 스윕 밖이다: {a} "
+                         f"밖 {sorted(a.soft - a.cells)}")
+    if a.frm[:2] not in a.hard:
+        raise SystemExit(f"★ 출발 칸이 hard 에 없다: {a} "
+                         f"출발 {a.frm[:2]} hard {sorted(a.hard)}")
 
 
 # ===========================================================================
@@ -694,18 +768,43 @@ def build_adg(chains: list[list[Action]]) -> ADG:
             succs[p.uid].add(n.uid)
             t1 += 1
 
-    by_cell: dict[Cell, list[Action]] = {}             # type 2
+    # [patch_axle] `_key` 가 칸마다 전순서이려면 같은 tick 에 같은 로봇의
+    #   액션이 둘 있으면 안 된다. `extract_actions` 구조상 참이지만, 비순환
+    #   논거(설계서 §2-3-1)가 여기 걸려 있으므로 못 박아 둔다.
+    if len({(a.agent, a.tick) for a in actions}) != len(actions):
+        raise SystemExit("★ 같은 tick 에 같은 로봇의 액션이 둘 이상이다 — "
+                         "_key 가 전순서가 아니게 되어 비순환 보장이 깨진다")
+
+    def _link(p: Action, n: Action) -> bool:
+        if p.agent == n.agent or n.uid in succs[p.uid]:
+            return False
+        preds[n.uid].add(p.uid)
+        succs[p.uid].add(n.uid)
+        return True
+
+    # type 2 ①  몸끼리 — 지금과 같다. 스위치가 꺼져 있으면 hard == cells 라
+    #            `by_hard` 가 옛 `by_cell` 과 완전히 같다.
+    by_hard: dict[Cell, list[Action]] = {}
+    by_axle: dict[Cell, list[Action]] = {}
     for a in actions:
-        for c in a.cells:
-            by_cell.setdefault(c, []).append(a)
-    for cell, users in by_cell.items():
+        for c in a.hard:
+            by_hard.setdefault(c, []).append(a)
+        for c in a.axle:
+            by_axle.setdefault(c, []).append(a)
+    for cell, users in by_hard.items():
         users.sort(key=lambda a: _key(a, cell))
         for p, n in zip(users, users[1:]):
-            if p.agent == n.agent or n.uid in succs[p.uid]:
-                continue
-            preds[n.uid].add(p.uid)
-            succs[p.uid].add(n.uid)
-            t2 += 1
+            t2 += _link(p, n)
+
+    # type 2 ②  상대의 **축**이 내 앞 칸(soft)에 있을 때만.
+    #   `soft(p) & hard(q)` 는 간선을 만들지 않는다 — q 의 뒤 칸이 p 의 앞 칸에
+    #   걸치는 배치(열 대기 줄)이고, 172 배치 전부 접촉 0 이었다.
+    #   스위치가 꺼져 있으면 `soft` 가 전부 비어 이 루프가 **한 번도 안 돈다.**
+    for p in actions:
+        for s in p.soft:
+            for q in by_axle.get(s, ()):
+                lo, hi = sorted((p, q), key=lambda a: _key(a, s))
+                t2 += _link(lo, hi)
 
     return ADG(chains=chains, actions=actions, preds=preds, succs=succs,
                type1=t1, type2=t2)
