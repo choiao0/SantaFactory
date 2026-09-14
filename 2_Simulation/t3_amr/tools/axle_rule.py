@@ -49,8 +49,18 @@ def hard(r, c, h0, h1):
 
 
 def soft(r, c, h0, h1):
-    """축만 못 들어오는 칸 — FMS 제안."""
+    """축만 못 들어오는 칸 — FMS 제안 (앞 2칸)."""
     return {front(r, c, h0), front(r, c, h1)}
+
+
+def soft3(r, c, h0, h1):
+    """앞 2칸 + 그 사이 대각 — FMS 답신3 §2 대안.
+
+    코는 옛 헤딩 앞에서 새 헤딩 앞으로 **사분면을 가로질러** 지나간다.
+    그 사분면 쪽 대각 칸이 실제로 코가 스치는 자리다.
+    """
+    d1, d2 = DIRS[h0], DIRS[h1]
+    return soft(r, c, h0, h1) | {(r + d1[0] + d2[0], c + d1[1] + d2[1])}
 
 
 def body(r, c, h0, h1):
@@ -75,8 +85,9 @@ def legal(kind, A, B):
     if kind == "5칸 hard":
         return not ((body(*B) | {(B[0], B[1])}) & soft(*A)
                     or (body(*A) | {(A[0], A[1])}) & soft(*B))
+    sf = soft3 if kind == "축+대각" else soft
     # 축 규칙 — 상대의 **축**만 본다
-    return not ((B[0], B[1]) in soft(*A) or (A[0], A[1]) in soft(*B))
+    return not ((B[0], B[1]) in sf(*A) or (A[0], A[1]) in sf(*B))
 
 
 def main():
@@ -93,13 +104,17 @@ def main():
             gaps[B] = min(g.body_gap(u, v) for u in pa for v in poses(g, *B))
 
         print(f"── pitch {p:.2f} " + "─" * 54)
-        print(f"   A = 축({R0},{C0})  h 1->0   soft(A) = {sorted(soft(*A))}")
-        for kind in ("현행", "5칸 hard", "축 규칙"):
+        print(f"   A = 축({R0},{C0})  h 1->0   "
+              f"soft {sorted(soft(*A))}   soft3 {sorted(soft3(*A))}")
+        for kind in ("현행", "5칸 hard", "축 규칙", "축+대각"):
             ok = [B for B in cand if legal(kind, A, B)]
             hit = [B for B in ok if gaps[B] <= 0.0]
-            best = min((gaps[B] for B in ok), default=float("nan"))
+            worst = min(ok, key=lambda B: gaps[B]) if ok else None
+            best = gaps[worst] if worst else float("nan")
+            at = (f"  최악 B=축({worst[0]},{worst[1]}) h {worst[2]}->{worst[3]}"
+                  if worst else "")
             print(f"   {kind:<10} 합법쌍 {len(ok):4d}   접촉 {len(hit):3d}   "
-                  f"최소 차체거리 {best*1000:+8.1f} mm")
+                  f"최소 차체거리 {best*1000:+8.1f} mm{at}")
             if kind == "현행" and hit:
                 print(f"      ↓ 확인 1 — 닿은 {len(hit)}쌍의 축이 soft(A) 안에 있나")
                 inside = 0
