@@ -114,7 +114,7 @@ def _tote_section(a, kernel, stream):
                  totes=int(stream.totes_total), trips=int(kernel.trips),
                  orders_oversize=int(stream.orders_oversize))
     if stream.explicit_orders is not None:
-        extra.update(orders_file=1, orders_skipped=int(stream.orders_skipped))
+        extra.update(orders_file=1, orders_skipped=int(stream.orders_skipped), max_order_totes=int(a.max_order_totes))
     return extra
 
 
@@ -162,6 +162,8 @@ def report(a, kernel, stream, ctx):
         aisle_block=int(a.aisle_block), flow=a.flow, lanes=int(a.lanes),
         yield_rule=int(a.yield_rule), yield_events=len(kernel.yield_events), makespan_steps=int(T_END),
         speed=a.speed, dt_s=round(dt, 6),                  # v3.3 (-116): 초 단위 키의 환산 근거
+        # v3.4 (-203): 회전 발자국. turn_masked = legacy 가 허용하던 (칸,회전) 중 마스크가 금지한 비율 (legacy 는 0)
+        footprint=a.footprint, robot_dims=list(a.robot_dims), turn_masked=round(float(ctx.turn_masked), 4),
         tasks_per_h=round(n_tasks / sim_hours, 1),
         orders_per_h=round(orders_ph, 1),
         lead_mean_s=round(_mean(lat_total), 1),

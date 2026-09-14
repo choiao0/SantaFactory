@@ -20,7 +20,9 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from map_loader import zone_cells
+from map_loader import ROBOT_DIMS, front_swing, zone_cells
+from pibt.geometry import configure as configure_footprint
+from pibt.geometry import front_cells, front_swing_on, turn_ok
 from pibt_core import (DIRS, TURN_TICKS, Replanner, Stagnation, candidates_h,
                        dist_map, dist_map_h, occupied, stay_map_h, step,
                        step_h, swing_cells, valid_state, wait_bias)
@@ -34,7 +36,7 @@ class StallError(RuntimeError):
     """워치독(stall_ticks 무진전). str(e) = 진단 덤프 텍스트 ([STALL] 줄 + 로봇 상태 + 후보 덤프 + 최근 이력)."""
 
 
-MAX_TOTES_PER_TRIP = 6        # 선반형 AMR 3단 × 2 토트 (-177). 주문도 이 수를 넘으면 시뮬 밖(팔레트 흐름)
+MAX_TOTES_PER_TRIP = 6        # 선반형 AMR 3단 × 2 토트 (-177). 이 수를 넘는 주문은 여러 왕복으로(2026-09-14, 이전엔 제외)
 SECTION_RELEASE = 8           # 이 틱 넘게 정체한 로봇은 구간 정원에서 면제 (-193). 재계획
                               # 문턱(REPLAN_AFTER)과 같은 값 — 그 시점이면 이미 우회를 시도했다
 
@@ -54,6 +56,10 @@ class KernelConfig:
     yield_ticks: int = 20         # 양보 임시 목표 유지 상한
     yield_after: int = 8          # 이 틱 이상 실제로 막힌 정면 조우만 양보 대상 (PIBT 가 스스로 푸는 마주침은 제외)
     turn_ticks: int = TURN_TICKS  # 90° 회전 틱
+    # 회전 발자국 (-203, 계약 v3.4). footprint: "legacy"(v3.3 비트 동일) / "exact"(0.1 m 지도 정적 회전 마스크)
+    # / "exact,front"(+ 앞 2칸 축 규칙·양보 v2 — 소싸움 미해결, 인자로만). 마스크 배열은 FmsKernel(turn_mask=) 로 따로 받는다.
+    footprint: str = "legacy"
+    robot_dims: tuple = ROBOT_DIMS  # 구동축 앞·뒤·폭 [m] — 마스크·앞 스윙 판정·Isaac 내보내기 치수
     section_limit: int = 0        # 접속행 구간별 동시 진입 대수 상한 (0 = 끔, -193)
     dock_clear: int = 3           # 장치 ⑤ 유지 거리 (체비쇼프, 로봇 길이)
     stall_ticks: int = 1500       # 워치독: 이 틱 동안 완료 태스크 수 무변화 → StallError
@@ -74,7 +80,10 @@ class KernelConfig:
 
 class FmsKernel(BatteryMixin, MetricsMixin):
     def __init__(self, free, st_cell, edge_cost, wait_cost, homes, n_robots, cfg,
-                 zone_mask=None, on_task_completed=None, lane_dir=None, sec_map=None):
+                 zone_mask=None, on_task_completed=None, lane_dir=None, sec_map=None, turn_mask=None):
+        # 회전 발자국 설정은 모듈 전역(pibt.geometry) — Replanner/HGraph 를 만들기 전에 넣는다 (-203).
+        configure_footprint(turn_mask if cfg.footprint != "legacy" else None,
+                            "front" in cfg.footprint and front_swing(cfg.robot_dims))
         self.free, self.st_cell = free, st_cell
         self.H, self.W = free.shape
         self.edge_cost, self.wait_cost = edge_cost, wait_cost
@@ -425,7 +434,15 @@ class FmsKernel(BatteryMixin, MetricsMixin):
         if cfg.yield_rule and self._detect_headons(t, states, prio, dists):
             prio = self._priority_h(t)
             dists = self._dists_h(t, states, extra)
-        bias = {rid: 0.0 if robots[rid]["yield_peer"] is not None else wait_bias(self._stag.get(rid)) for rid in rids}
+        # 비켜 주는 로봇의 대기 상승: legacy 는 없음. exact 에선 유지 — 대피 경로의 첫 수(회전)가 상대 축에 막히면
+        # 대기(d+1)가 후진(d+3)보다 싸서 영영 기다린다 (-203 실측, exp 22 마감 2대 교착).
+        if front_swing_on():
+            # exact: 비켜 주는 쪽은 대기 상승을 **유지**(대피 첫 수가 막히면 대기 d+1 이 후진 d+3 보다 싸서 영영 기다린다),
+            # 이기는 쪽은 상승 **없음**(상승이 붙으면 앞뒤로 흔들려 비켜 주는 쪽의 앞 칸에 축을 들락거린다) (-203 실측).
+            calm = {robots[rid]["yield_peer"] for rid in rids if robots[rid]["yield_peer"] is not None}
+        else:
+            calm = {rid for rid in rids if robots[rid]["yield_peer"] is not None}        # legacy: 비켜 주는 쪽만 상승 없음
+        bias = {rid: 0.0 if rid in calm else wait_bias(self._stag.get(rid)) for rid in rids}
         # 정체가 SECTION_RELEASE 틱을 넘은 로봇은 정원에서 푼다. 전면 분할처럼 우회로가
         # 구간 밖에 없을 때 순환 대기를 깨는 마지막 안전판이다 (-193).
         sec_free = ({rid for rid in rids if self._stag.get(rid) > SECTION_RELEASE}
@@ -478,7 +495,7 @@ class FmsKernel(BatteryMixin, MetricsMixin):
         """정적 거리장의 최저비용 액션을 따라 다음 이동 칸 n개를 뽑는다(대기는 제외)."""
         out, cur = [], state
         for _ in range(n * 4):
-            choices = [st for st, _ in candidates_h(cur, dist, self.edge_cost, self.wait_cost,
+            choices = [st for st, _, _ in candidates_h(cur, dist, self.edge_cost, self.wait_cost,
                                                       self.free, self.turn_cost, bias=1.0) if st != cur]
             if not choices:
                 break
@@ -517,7 +534,15 @@ class FmsKernel(BatteryMixin, MetricsMixin):
             return False
         return any(valid_state(self.free, (target[0], target[1], hh)) for hh in range(4))
 
-    def _side_targets(self, s, forbidden, occupied_now):
+    def _turn_clear(self, r, c, h, d, occupied_now, axles_now):
+        """(r,c)에서 h→d 회전이 지금 가능한가: 정적 turn_ok + 스윙 뒤 3칸에 몸 없음 + 앞 2칸에 축 없음 (-203)."""
+        if not turn_ok(self.free, r, c, h, d):
+            return False
+        if occupied_now & swing_cells(r, c, h, d):
+            return False
+        return not (axles_now & front_cells(r, c, h, d))
+
+    def _side_targets(self, s, forbidden, occupied_now, axles_now):
         """옆 칸 후보 [(반대 차선 여부, 좌우 순서, 칸)]. 4틱 안에 닿는 칸만. min() 이 반대 차선 아닌 쪽·왼쪽을 먼저 고른다."""
         r, c, h = s
         sides = []
@@ -525,6 +550,8 @@ class FmsKernel(BatteryMixin, MetricsMixin):
             dr, dc = DIRS[d]
             target = (r + dr, c + dc)
             if not self._escape_cell_ok(target, forbidden, occupied_now):
+                continue
+            if front_swing_on() and not self._turn_clear(r, c, h, d, occupied_now, axles_now):   # 그쪽으로 지금 못 돈다 (-203)
                 continue
             escape = float(self.dmap_h(target)[s])
             if escape < 0 or escape > 4:
@@ -538,15 +565,39 @@ class FmsKernel(BatteryMixin, MetricsMixin):
         s, other = states[loser], states[winner]
         forbidden = set(occupied(other)) | set(winner_path)
         occupied_now = {cell for rid, state in states.items() if rid != loser for cell in occupied(state)}
-        sides = self._side_targets(s, forbidden, occupied_now)
+        axles_now = {state[:2] for rid, state in states.items() if rid != loser}
+        sides = self._side_targets(s, forbidden, occupied_now, axles_now)
         if sides:
-            return min(sides)[2], False
+            return min(sides)[2], False, True
+        if front_swing_on():
+            back, escaped = self._back_target(s, forbidden, occupied_now, axles_now)
+        else:                                       # legacy(v3.3): 뒤 한 칸만
+            r, c, h = s
+            back = (r - DIRS[h][0], c - DIRS[h][1])
+            if not self._escape_cell_ok(back, forbidden, occupied_now):
+                back = None
+            escaped = False
+        if back is not None:
+            return back, False, escaped
+        return self.robots[loser]["pos"], True, False
+
+    def _back_target(self, s, forbidden, occupied_now, axles_now, max_back=8):
+        """뒤로 물러나 옆으로 빠질 대피 칸: 뒤 칸을 따라가며 처음으로 옆으로 돌 수 있는 칸에서 **그 옆 칸**을 목표로 준다.
+        뒤 칸 자체를 목표로 주면 한 칸 물러난 순간 위험 밖으로 판정돼 양보가 풀리고 2틱 뒤 다시 정면(실측 759건 중 549건이
+        2틱 간격 반복). 뒤 칸은 상대 경로 위여도 된다 — 폭 1 통로에선 피할 수 없다. 옆 칸이 없으면 갈 수 있는 가장 먼 뒤 칸."""
         r, c, h = s
         dr, dc = DIRS[h]
-        back = (r - dr, c - dc)
-        if self._escape_cell_ok(back, forbidden, occupied_now):
-            return back, False
-        return self.robots[loser]["pos"], True
+        last = None
+        for i in range(1, max_back + 1):
+            cell = (r - i * dr, c - i * dc)
+            if not self._escape_cell_ok(cell, (), occupied_now):
+                break
+            last = cell
+            for d in ((h - 1) % 4, (h + 1) % 4):
+                side = (cell[0] + DIRS[d][0], cell[1] + DIRS[d][1])
+                if self._turn_clear(cell[0], cell[1], h, d, occupied_now, axles_now)                         and self._escape_cell_ok(side, forbidden, occupied_now):
+                    return side, True
+        return last, False
 
     def _headon_peer(self, rid, states, body_owner):
         """rid 바로 앞 칸에 반대 방향으로 선 이동 중 로봇 id. yield_after 틱 이상 실제로 막힌 경우만, 없으면 None."""
@@ -559,12 +610,20 @@ class FmsKernel(BatteryMixin, MetricsMixin):
         other = self.robots[peer]
         if other["state"] not in NAV or other["busy"] or states[peer][2] != (s[2] + 2) % 4:
             return None
-        if max(rb["waitc"], other["waitc"]) < self.cfg.yield_after:   # PIBT 가 스스로 푸는 일회성 마주침은 제외
+        if front_swing_on() and other["yield_peer"] is not None:
+            return None        # 상대가 이미 비켜 주는 중이면 나까지 비키지 않는다 — 둘이 서로 물러나면 다시 정면 (-203 실측)
+        if front_swing_on():
+            # 앞 칸에 축이 있으면 어느 쪽도 못 돌아 밀어내기가 매 틱 앞뒤로 흔들린다(소싸움) — 이동은 있어도 진전이 없으니
+            # 대기 틱(waitc)이 아니라 무진전 틱(stag)으로 본다 (-203). legacy 는 예전 판정 그대로(비트 동일).
+            stuck = max(self._stag.get(rid), self._stag.get(peer))
+        else:
+            stuck = max(rb["waitc"], other["waitc"])
+        if stuck < self.cfg.yield_after:                               # PIBT 가 스스로 푸는 일회성 마주침은 제외
             return None
         return peer
 
     def _start_yield(self, t, loser, winner, states, winner_path):
-        target, hold = self._yield_target(loser, winner, states, winner_path)
+        target, hold, _ = self._yield_target(loser, winner, states, winner_path)
         yb = self.robots[loser]
         yb["yield_peer"], yb["yield_target"] = winner, target
         yb["yield_until"], yb["yield_hold"] = t + self.cfg.yield_ticks, hold
@@ -580,12 +639,26 @@ class FmsKernel(BatteryMixin, MetricsMixin):
             peer = self._headon_peer(rid, states, body_owner)
             if peer is None or frozenset((rid, peer)) in seen:
                 continue
-            peer_path = self._planned_cells(states[peer], dists[peer])
-            own_path = self._planned_cells(states[rid], dists[rid])
-            if self.robots[rid]["pos"] not in peer_path or self.robots[peer]["pos"] not in own_path:
-                continue
+            if front_swing_on():
+                # 기본 거리장으로 본다 — 재계획 거리장은 "옆으로 돌아 비켜라"라 상대 칸이 경로에서 사라지는데,
+                # 그 회전이 앞 칸 축에 막히면 정면 대치가 감지되지 않아 라이브락 (-203 실측 yield 0건).
+                peer_path = self._planned_cells(states[peer], self.dmap_h(self.robots[peer]["goal"]))
+                own_path = self._planned_cells(states[rid], self.dmap_h(self.robots[rid]["goal"]))
+            else:
+                peer_path = self._planned_cells(states[peer], dists[peer])
+                own_path = self._planned_cells(states[rid], dists[rid])
+            if not front_swing_on() and (self.robots[rid]["pos"] not in peer_path or self.robots[peer]["pos"] not in own_path):
+                continue          # legacy: 서로의 경로가 상대 칸을 지나는 정면만. exact: 코를 맞대고 stag 넘게 진전 없으면
+                                  # 전부 — 한쪽이 "옆으로 돌아 나가려는데 상대 축이 앞 칸을 막는" 경우도 같은 매듭이다 (-203)
             seen.add(frozenset((rid, peer)))
             winner, loser = (rid, peer) if order[rid] < order[peer] else (peer, rid)
+            if front_swing_on():
+                # 폭 1 통로에서 계급 높은 쪽이 이기면 낮은 쪽이 더 깊이 물러나기만 한다(출구는 상대 뒤). 옆으로 빠질 수 있는 쪽이
+                # 비킨다 — 둘 다/둘 다 아니면 계급대로 (-203 실측: 랙 통로 입구 정면, 도크 이탈 우선권 로봇이 이겨 마감 2대 교착).
+                esc_rid = self._yield_target(rid, peer, states, peer_path)[2]
+                esc_peer = self._yield_target(peer, rid, states, own_path)[2]
+                if esc_rid != esc_peer:
+                    loser, winner = (rid, peer) if esc_rid else (peer, rid)
             if self.robots[loser]["yield_peer"] is not None:
                 continue
             self._start_yield(t, loser, winner, states, own_path if winner == rid else peer_path)
@@ -599,6 +672,8 @@ class FmsKernel(BatteryMixin, MetricsMixin):
             rb = robots[r]
             if rb["busy"] or rb["leave_from"] is not None or rb["yield_hold"]:
                 return 0
+            if front_swing_on() and rb["yield_peer"] is not None:
+                return 0        # 비켜 주는 쪽이 먼저 예약한다 — 뒤따라오는 상대가 앞 칸에 축을 들이면 영영 못 돈다 (-203)
             return RANK[rb["state"]]
         return sorted(self.rids, key=lambda r: (_rank(r), -(t - robots[r]["goal_t"]), r))
 

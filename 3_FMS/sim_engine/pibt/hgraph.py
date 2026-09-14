@@ -3,7 +3,7 @@ from heapq import heappop, heappush
 
 import numpy as np
 
-from .geometry import (DIRS, REVERSE_FACTOR, TURN_TICKS, turn_ok,
+from .geometry import (DIRS, REVERSE_FACTOR, TURN_TICKS, turn_mask, turn_ok,
                        valid_state)
 
 
@@ -69,8 +69,9 @@ def _valid_states(cell_free, H, W):
     return valid
 
 
-def _state_edges(r, c, h, base, ec, tc, H, W):
-    """상태 i=(r,c,h) 의 역방향 완화 대상(preds)과 나가는 간선(succs): (상대 인덱스, 비용, 스윙 대각 칸 인덱스|-1)."""
+def _state_edges(r, c, h, base, ec, tc, H, W, mask=None):
+    """상태 i=(r,c,h) 의 역방향 완화 대상(preds)과 나가는 간선(succs): (상대 인덱스, 비용, 스윙 대각 칸 인덱스|-1).
+    mask(회전 발자국, -203)가 False 인 회전은 간선을 만들지 않는다 — 정적 장애물이라 재계획과 무관."""
     i = base + h
     pl, sl = [], []
     dr, dc = DIRS[h]
@@ -87,13 +88,15 @@ def _state_edges(r, c, h, base, ec, tc, H, W):
     for h1 in ((h + 1) % 4, (h - 1) % 4):         # 회전 (r,c,h1)↔(r,c,h): 스윙 대각 칸 free 필요
         d1, d2 = DIRS[h1], DIRS[h]
         gr, gc = r - d1[0] - d2[0], c - d1[1] - d2[1]
+        if mask is not None and not (mask[r, c, h1, h] and mask[r, c, h, h1]):
+            continue
         if 0 <= gr < H and 0 <= gc < W:
             pl.append((base + h1, tc, gr * W + gc))
             sl.append((base + h1, tc, gr * W + gc))
     return pl, sl
 
 
-def _build_edges(ec, tc, H, W):
+def _build_edges(ec, tc, H, W, mask=None):
     n = H * W * 4
     preds = [()] * n
     succs = [()] * n
@@ -101,7 +104,7 @@ def _build_edges(ec, tc, H, W):
         for c in range(W):
             base = (r * W + c) * 4
             for h in range(4):
-                pl, sl = _state_edges(r, c, h, base, ec, tc, H, W)
+                pl, sl = _state_edges(r, c, h, base, ec, tc, H, W, mask)
                 preds[base + h] = tuple(pl)
                 succs[base + h] = tuple(sl)
     return preds, succs
@@ -150,7 +153,7 @@ class HGraph:
         ec = np.asarray(edge_cost, dtype=np.float64).ravel().tolist()      # 인덱스 = 상태 인덱스
         self.cell_free = cell_free
         self.valid = _valid_states(cell_free, H, W)
-        self.preds, self.succs = _build_edges(ec, tc, H, W)
+        self.preds, self.succs = _build_edges(ec, tc, H, W, turn_mask())    # 회전 발자국 마스크(-203, geometry.configure)
         self._base = {}          # goal -> (dm float64[n] (-1 unreachable), dm list, sdiag int32[n], children dict)
 
     # ---- 기본(막힘 없음) 풀이: 후속 상태 기록 ----
@@ -301,9 +304,11 @@ _hgraph_cache = {}
 
 def hgraph_for(free, edge_cost=None, turn_cost=None, limit=4):
     """(free, edge_cost, turn_cost) → HGraph 캐시. 키는 내용 해시(id 재사용 오염 방지)."""
+    mask = turn_mask()
     key = (free.shape, hash(free.tobytes()),
            None if edge_cost is None else hash(np.ascontiguousarray(edge_cost, dtype=np.float64).tobytes()),
-           float(TURN_TICKS if turn_cost is None else turn_cost))
+           float(TURN_TICKS if turn_cost is None else turn_cost),
+           None if mask is None else hash(mask.tobytes()))
     g = _hgraph_cache.get(key)
     if g is None:
         if len(_hgraph_cache) >= limit:

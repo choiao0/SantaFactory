@@ -57,11 +57,22 @@ def test_different_buffers_split_and_tote_units_adds_totes():
     assert cap.orders[0]["remaining"] == 3
 
 
-def test_order_over_six_totes_is_excluded():
-    s = stream([order(10, ("A1", 49)), order(20, ("B1", 8), oid=2)],
+def test_order_over_six_totes_becomes_multiple_trips_but_pallet_orders_are_excluded():
+    """49개 = 7토트 주문은 태스크 7개(왕복 여러 번)로 들어오고, 200개 = 25토트 주문은 경계 24 초과 → 팔레트 흐름으로 제외 (2026-09-14)."""
+    s = stream([order(10, ("A1", 49)), order(20, ("B1", 8), oid=2), order(30, ("A1", 200), oid=3)],
                horizon=100, tote_units=8)
-    assert s.orders_oversize == 1 and s.n_orders == 1
-    assert len(drain(s, 100)) == 1
+    assert s.orders_oversize == 1
+    assert s.n_orders == 2
+    tasks = drain(s, 100)
+    assert len(tasks) == 8
+    assert s.orders[0]["remaining"] == 7
+
+
+def test_max_order_totes_zero_means_no_limit():
+    s = stream([order(10, ("A1", 200))], horizon=100, tote_units=8, max_order_totes=0)
+    assert s.orders_oversize == 0
+    assert s.n_orders == 1
+    assert len(drain(s, 100)) == 25
 
 
 def test_unknown_rack_fails_fast():

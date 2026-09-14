@@ -90,10 +90,10 @@ def test_kpi_matches_cli_report():
     cfg = p.kernel.cfg
     a = SimpleNamespace(variant="base", n_robots=2, n_orders=p.stream.n_orders, seed=42, aisle_block=False, flow="main",
                         horizon=T, shifts=("out",), order_gap=50, order_gap_arg=None, inbound_gap_arg=None, battery=False,
-                        speed=1.0 / p.dt, dt=p.dt,
-                        capacity=cfg.capacity, tote_units=8, lanes=True, yield_rule=cfg.yield_rule,
+                        speed=1.0 / p.dt, dt=p.dt, footprint=cfg.footprint, robot_dims=cfg.robot_dims,
+                        capacity=cfg.capacity, tote_units=8, max_order_totes=24, lanes=True, yield_rule=cfg.yield_rule,
                         theta_path=None, dirflow=False, export=False)
-    ctx = SimpleNamespace(H=p.kernel.H, W=p.kernel.W)
+    ctx = SimpleNamespace(H=p.kernel.H, W=p.kernel.W, turn_masked=0.0)
     with contextlib.redirect_stdout(io.StringIO()):
         theirs, _, _ = report(a, p.kernel, p.stream, ctx)
     for key in ("tasks_per_h", "orders_per_h", "lead_mean_s", "lead_p90_s", "queue_mean_s", "util_incl_service",
@@ -129,14 +129,16 @@ def test_capacity_is_totes_and_tote_units_group_lines():
     assert p.stream.totes_total == 3, "ceil(17 / 8)"
 
 
-def test_oversize_order_is_dropped():
-    """한 대에 실을 수 없는 주문(6토트 초과)은 팔레트 흐름으로 보고 시뮬 밖 — 개수만 센다 (-177)."""
+def test_big_order_is_multiple_trips_and_pallet_order_is_dropped():
+    """7토트 주문은 여러 왕복으로 들어오고, 경계 24토트를 넘는 주문(25토트)만 팔레트 흐름으로 시뮬 밖 — 개수만 센다 (v3.5, 2026-09-14)."""
     rk = racks()
     sc = {"seed": 42, "amr": {"tote_units": 1},
           "orders": {"outbound": [{"order_id": 1, "ordered_at_s": 0, "lines": [{"rack_id": rk[0], "qty": 7}]},
-                                  {"order_id": 2, "ordered_at_s": 1, "lines": [{"rack_id": rk[1], "qty": 6}]}]}}
+                                  {"order_id": 2, "ordered_at_s": 1, "lines": [{"rack_id": rk[1], "qty": 6}]},
+                                  {"order_id": 3, "ordered_at_s": 2, "lines": [{"rack_id": rk[2], "qty": 25}]}]}}
     p = make(sc=sc)
-    assert p.stream.orders_oversize == 1 and p.stream.n_orders == 1
+    assert p.stream.orders_oversize == 1
+    assert p.stream.n_orders == 2
 
 
 def test_service_steps_match_sim_v2():
