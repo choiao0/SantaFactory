@@ -20,6 +20,11 @@ import numpy as np
 
 from kernel.core import MAX_TOTES_PER_TRIP
 
+# 주문 단위 경계 (2026-09-14 결정): 토트 합계가 이 수를 넘는 주문은 팔레트 출고(업자 주문)로 보고 시뮬 밖 — 개인 소비자 대상 창고.
+# 그 아래 큰 주문(7~24토트)은 토트마다 태스크 하나라 여러 왕복으로 소화된다. 0 = 제한 없음.
+# 참조 데이터 6,000건: 6토트 초과 1 % 가 물량 11 % (한 줄 1,277개 같은 줄이 원인), 24토트 초과는 3~6건·물량 3.5~5 %.
+MAX_ORDER_TOTES = 24
+
 
 def shift_windows(horizon, shifts):
     """교대 토큰열 → [(kind, start, end)] (틱, [start, end)). T 를 len(shifts) 등분하고 연속된 같은 토큰은 한 창으로 합친다.
@@ -42,7 +47,7 @@ class OrderStream:
     def __init__(self, rng, flow, n_orders, order_gap, st_cell, stations,
                  n_inbound=None, inbound_gap=None, k_line_p=(0.5, 0.3, 0.2),
                  horizon=None, shifts=("in", "out", "out"), dt=1.0,
-                 orders=None, rack_map=None, tote_units=None):
+                 orders=None, rack_map=None, tote_units=None, max_order_totes=MAX_ORDER_TOTES):
         assert flow in ("main", "v1compat"), f"알 수 없는 flow: {flow}"
         self.rng, self.flow, self.st_cell = rng, flow, st_cell
         self.k_line_p = list(k_line_p)
@@ -56,7 +61,7 @@ class OrderStream:
         self.totes_total = 0
         gap_in = order_gap if inbound_gap is None else inbound_gap
         if orders is not None:
-            self._init_explicit(flow, orders, rack_map, tote_units, n_inbound, horizon, shifts, gap_in, dt)
+            self._init_explicit(flow, orders, rack_map, tote_units, n_inbound, horizon, shifts, gap_in, dt, max_order_totes)
         elif horizon is None:
             self._init_finite(flow, n_orders, n_inbound, order_gap, gap_in)
         else:
@@ -86,10 +91,13 @@ class OrderStream:
         else:
             self.inbound_times = np.array([], dtype=int)
 
-    def _init_explicit(self, flow, orders, rack_map, tote_units, n_inbound, horizon, shifts, gap_in, dt=1.0):
+    def _init_explicit(self, flow, orders, rack_map, tote_units, n_inbound, horizon, shifts, gap_in, dt=1.0,
+                       max_order_totes=MAX_ORDER_TOTES):
         """명시 주문 모드 (-156, docs/커널_시뮬_구조.md#명시-주문-모드): 큐 명세 §1-1 `outbound[]` 를 그대로 흘린다.
         도착 틱 = ordered_at_s / dt (dt = 틱 길이[초], 기본 1.0 = 1틱 1초; -116). 라인 rack_id → rack_map → 버퍼, 같은 버퍼는 qty 를 합쳐 토트로 묶고
-        토트 수 = ceil(qty 합 / tote_units) (없으면 버퍼당 1). 주문 합계가 6토트를 넘으면 제외한다.
+        토트 수 = ceil(qty 합 / tote_units) (없으면 버퍼당 1). 토트는 하나가 태스크 하나라 큰 주문은 여러 왕복으로 소화된다
+        (같은 버퍼 토트는 capacity 만큼 동승, 커널 dispatch). 합계가 max_order_totes(기본 24)를 넘는 주문만 팔레트 흐름으로 제외하고
+        orders_oversize 에 센다 (2026-09-14; v2.6~v3.4 는 6토트 초과 제외).
         출고 교대 창은 쓰지 않는다(파일 시각이 진실).
         horizon 밖(t ≥ T) 주문은 버리고 orders_skipped 에 센다. 입고는 기존 규칙(간격·in 창) 그대로."""
         assert flow == "main", "명시 주문 모드는 main 흐름만"
@@ -111,9 +119,11 @@ class OrderStream:
             kept = [p for p in parsed if p[0] < horizon]
             self.orders_skipped = len(parsed) - len(kept)
             parsed = kept
-        # 로봇 한 대 적재(MAX_TOTES_PER_TRIP)를 넘는 주문은 팔레트 흐름으로 보고 시뮬 밖으로 뺀다(-177 결정). 개수만 기록.
-        self.orders_oversize = sum(sum(n for _, n in p[1]) > MAX_TOTES_PER_TRIP for p in parsed)
-        parsed = [p for p in parsed if sum(n for _, n in p[1]) <= MAX_TOTES_PER_TRIP]
+        # 로봇 한 대 적재(MAX_TOTES_PER_TRIP=6)를 넘는 주문은 토트마다 태스크 하나라 커널이 여러 왕복으로 나눠 나른다(-177 은 제외했음).
+        # 다만 토트 합계가 max_order_totes 를 넘는 주문은 팔레트 출고로 보고 시뮬 밖 — 개인 소비자 창고에 업자 주문은 없다 (2026-09-14).
+        if max_order_totes:
+            self.orders_oversize = sum(sum(n for _, n in p[1]) > max_order_totes for p in parsed)
+            parsed = [p for p in parsed if sum(n for _, n in p[1]) <= max_order_totes]
         parsed.sort(key=lambda p: p[0])                              # 안정 정렬: 같은 틱은 파일 순서
         self.explicit_orders = parsed
         self.n_orders = len(parsed)

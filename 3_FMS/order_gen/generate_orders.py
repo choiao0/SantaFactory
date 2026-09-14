@@ -206,13 +206,31 @@ def _prepare(profile, master, rng):
     }
 
 
-def generate(profile, master, orders, seed=42, release="wave"):
+# 주문 크기 상한 (2026-09-14 결정): 개인 소비자 창고라 팔레트 단위 업자 주문은 만들지 않는다. 참조 데이터 수량 히스토그램의 꼬리
+# (한 줄 1,000·1,277·2,400개)가 6,000건에 몇 줄 섞여 들어와 1 % 주문이 물량 11 % 를 차지했다. 토트(tote_units 개들이) 합계가
+# MAX_ORDER_TOTES 를 넘는 주문은 수량을 다시 뽑는다 — 시뮬 `--max-order-totes`(같은 기본값 24)는 안전핀으로만 남는다.
+TOTE_UNITS = 8
+MAX_ORDER_TOTES = 24
+
+
+def _order_totes(lines, tote_units):
+    """시뮬과 같은 셈: 같은 랙(버퍼) 수량을 합쳐 ceil(합 / tote_units) 을 랙별로 더한다."""
+    by_rack = defaultdict(int)
+    for line in lines:
+        by_rack[line["rack_id"]] += line["qty"]
+    return sum(-(-q // tote_units) for q in by_rack.values())
+
+
+def generate(profile, master, orders, seed=42, release="wave", tote_units=TOTE_UNITS, max_order_totes=MAX_ORDER_TOTES):
     """profile + master + N + seed → 출력 JSON dict. 진단이 필요하면 generate_with_context() 뒤 diagnostics()."""
-    return generate_with_context(profile, master, orders, seed, release)[0]
+    return generate_with_context(profile, master, orders, seed, release, tote_units, max_order_totes)[0]
 
 
-def generate_with_context(profile, master, orders, seed=42, release="wave"):
-    """(결과 dict, 준비 컨텍스트). 컨텍스트는 diagnostics() 입력이다."""
+def generate_with_context(profile, master, orders, seed=42, release="wave", tote_units=TOTE_UNITS,
+                          max_order_totes=MAX_ORDER_TOTES):
+    """(결과 dict, 준비 컨텍스트). 컨텍스트는 diagnostics() 입력이다. max_order_totes 0 = 상한 없음."""
+    if tote_units < 1 or max_order_totes < 0:
+        raise ValueError("tote_units 는 1 이상, max_order_totes 는 0 이상이어야 함")
     if isinstance(orders, bool) or not isinstance(orders, int) or orders < 0:
         raise ValueError("orders는 0 이상의 정수여야 함")
     if isinstance(seed, bool) or not isinstance(seed, int):
@@ -227,7 +245,7 @@ def generate_with_context(profile, master, orders, seed=42, release="wave"):
     global_weights = [context["global_weights"][product_id] for product_id in product_ids]
     hour_weights = [sum(context["minute_weights"][hour * 60:(hour + 1) * 60]) for hour in range(24)]
     generated = []
-    clipped_orders = dropped_lines = 0
+    clipped_orders = dropped_lines = capped_orders = 0
 
     for sequence in range(orders):
         original_k = _weighted_choice(content_rng, context["line_values"], context["line_weights"])
@@ -245,11 +263,18 @@ def generate_with_context(profile, master, orders, seed=42, release="wave"):
             choice = _weighted_choice(content_rng, remaining, weights)
             selected.append(choice)
             remaining.remove(choice)
-        lines = []
-        for product in sorted(selected, key=lambda item: item["product_id"]):
-            quantity = _weighted_choice(content_rng, context["qty_values"], context["qty_weights"])
-            rack = context["racks"][product["rack_id"]]
-            lines.append({"product_id": product["product_id"], "rack_id": rack["field"], "qty": quantity})
+        products = sorted(selected, key=lambda item: item["product_id"])
+        for attempt in range(1000):
+            lines = []
+            for product in products:
+                quantity = _weighted_choice(content_rng, context["qty_values"], context["qty_weights"])
+                rack = context["racks"][product["rack_id"]]
+                lines.append({"product_id": product["product_id"], "rack_id": rack["field"], "qty": quantity})
+            if not max_order_totes or _order_totes(lines, tote_units) <= max_order_totes:
+                break
+            capped_orders += 1                                 # 업자 크기 → 수량 다시 뽑기 (상품·줄 수는 그대로)
+        else:
+            raise ValueError(f"주문 {sequence}: {len(lines)}줄이 {max_order_totes}토트 안에 안 들어감 (tote_units {tote_units})")
 
         if release == "wave":
             minute = _weighted_choice(release_rng, range(1440), context["minute_weights"])
@@ -272,8 +297,11 @@ def generate_with_context(profile, master, orders, seed=42, release="wave"):
     result = {
         "meta": {
             "abc": context["abc"],
+            "capped_orders": capped_orders,
             "clipped_orders": clipped_orders,
             "dropped_lines": dropped_lines,
+            "max_order_totes": max_order_totes,
+            "tote_units": tote_units,
             "lines": lines_total,
             "orders": orders,
             "profile": profile.get("profile", "unknown"),
@@ -365,12 +393,16 @@ def main(argv=None):
     parser.add_argument("--orders", required=True, type=int)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--release", choices=("wave", "smooth"), default="wave")
+    parser.add_argument("--tote-units", type=int, default=TOTE_UNITS, help="토트당 상품 수 (시뮬 --tote-units 와 같은 값)")
+    parser.add_argument("--max-order-totes", type=int, default=MAX_ORDER_TOTES,
+                        help="주문 토트 합계 상한 — 넘으면 수량 다시 뽑기 (팔레트 업자 주문 배제). 0 = 상한 없음")
     parser.add_argument("--check", action="store_true")
     parser.add_argument("--output", "-o", type=Path, help="저장할 주문 JSON (기본: stdout)")
     args = parser.parse_args(argv)
     try:
         result, context = generate_with_context(load_json(args.profile), load_json(args.master), args.orders,
-                                                seed=args.seed, release=args.release)
+                                                seed=args.seed, release=args.release,
+                                                tote_units=args.tote_units, max_order_totes=args.max_order_totes)
         if args.check:
             write_json(diagnostics(result, context), sys.stderr)
         if args.output:

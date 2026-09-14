@@ -77,6 +77,21 @@ class OrderGeneratorTest(unittest.TestCase):
             self.assertEqual(len({line["product_id"] for line in order["lines"]}), 6)
             self.assertTrue(all(line["rack_id"] == f"A{line['product_id']}" for line in order["lines"]))
 
+    def test_order_tote_cap_redraws_quantities(self):
+        """토트 합계 상한(기본 24, 8개들이): 한 줄 200개 = 25토트는 다시 뽑는다. 0 이면 상한 없음, 못 들어가면 ValueError (2026-09-14)."""
+        source = profile((1,), (1,))
+        source["quantity"] = {"values": [1, 200], "weights": [1, 1]}
+        capped = generate_orders.generate(source, master(), 40, seed=42)
+        self.assertGreater(capped["meta"]["capped_orders"], 0)
+        self.assertEqual(capped["meta"]["max_order_totes"], 24)
+        self.assertTrue(all(sum(-(-line["qty"] // 8) for line in order["lines"]) <= 24 for order in capped["outbound"]))
+        free = generate_orders.generate(source, master(), 40, seed=42, max_order_totes=0)
+        self.assertEqual(free["meta"]["capped_orders"], 0)
+        self.assertTrue(any(line["qty"] == 200 for order in free["outbound"] for line in order["lines"]))
+        source["quantity"] = {"values": [200], "weights": [1]}
+        with self.assertRaises(ValueError):
+            generate_orders.generate(source, master(), 1, seed=42)
+
     def test_release_changes_only_times_and_order_ids(self):
         source = profile((1, 2), (1, 1))
         wave = generate_orders.generate(source, master(), 50, seed=7, release="wave")

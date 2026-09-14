@@ -20,6 +20,7 @@
 #                              [--horizon=<틱>] [--shifts=in,out,out]                     (고정 시간·교대, -145 §1)
 #                              [--battery] [--chargers=6] [--runtime-h=8] [--charge-h=1.5] [--soc=20,80,95]  (배터리, -145 §2)
 #                              [--orders-file=<json>] [--capacity=<토트 수>] [--tote-units=<상품 수>] [--svc-per-tote=<초>]
+#                              [--max-order-totes=24]  (v3.5: 토트 합계 초과 주문 = 팔레트 흐름 제외, 그 아래 큰 주문은 여러 왕복. 0 = 제한 없음)
 #                              [--speed=<m/s>]   (v3.3, -116: 틱 길이 = CELL_M / speed. 1칸 = 1틱은 그대로, 초 환산만 바뀐다)
 #                              [--footprint=exact|legacy|exact,front] [--robot-dims=0.39,1.11,0.80]   (v3.4, -203 회전 발자국)
 #   --footprint: 회전할 때 차체가 실제로 쓸고 가는 자리. exact(기본) = 0.1 m 지도로 만든 정적 마스크(랙·벽 침범 금지),
@@ -60,7 +61,7 @@ from fms_kernel import FmsKernel, KernelConfig, StallError
 from map_loader import (load_map, make_homes, CELL_M, OFFSET_M, MAP_DIR, ROBOT_DIMS, load_charge_zone,
                         make_homes_zone, load_rack_map, load_topology_spec, masked_turn_ratio, turn_mask)
 from pibt.geometry import FOOTPRINT_MARGIN_M
-from order_stream import OrderStream
+from order_stream import MAX_ORDER_TOTES, OrderStream
 from pibt_core import DIRS, TURN_TICKS
 
 SERVICE_TIME_S = 40 / 11            # v1과 동일 (docs/θ_경로_기준선.md#기준선-계보)
@@ -214,6 +215,9 @@ def _parse_orders(a, argv):
     a.capacity = _opt(argv, "capacity", int, 1)
     a.tote_units = _opt(argv, "tote-units", int)
     a.svc_per_tote = _opt(argv, "svc-per-tote", int, 0)
+    # 주문 단위 경계 (v3.5, 2026-09-14): 토트 합계 초과 주문 = 팔레트 흐름 제외. 그 아래 큰 주문은 여러 왕복. 0 = 제한 없음.
+    a.max_order_totes = _opt(argv, "max-order-totes", int, MAX_ORDER_TOTES)
+    assert a.max_order_totes >= 0, f"--max-order-totes 는 0 이상 (0 = 제한 없음): {a.max_order_totes}"
     if a.orders_file is not None:
         assert a.flow == "main", "--orders-file 은 main 흐름만"
     assert 1 <= a.capacity <= 6, f"--capacity 는 1~6 토트: {a.capacity}"
@@ -304,7 +308,8 @@ def build(a):
         rack_map = load_rack_map(map_dir)
         assert rack_map, f"{map_dir}/rack_buffers.json 없음 — map/build_rack_map.py 로 생성 " \
                          "(합성 창고는 WMS 마스터가 없어 명시 주문 모드를 못 쓴다 — -139)"
-        explicit = dict(orders=load_orders_file(a.orders_file), rack_map=rack_map, tote_units=a.tote_units, dt=a.dt)
+        explicit = dict(orders=load_orders_file(a.orders_file), rack_map=rack_map, tote_units=a.tote_units, dt=a.dt,
+                        max_order_totes=a.max_order_totes)
     stream = OrderStream(rng, a.flow, a.n_orders, a.order_gap, st_cell, stations, inbound_gap=a.inbound_gap_arg,
                          k_line_p=K_LINE_P, horizon=a.horizon, shifts=a.shifts, **explicit)
     if a.horizon is not None or explicit:

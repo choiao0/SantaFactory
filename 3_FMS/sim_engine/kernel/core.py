@@ -36,7 +36,7 @@ class StallError(RuntimeError):
     """워치독(stall_ticks 무진전). str(e) = 진단 덤프 텍스트 ([STALL] 줄 + 로봇 상태 + 후보 덤프 + 최근 이력)."""
 
 
-MAX_TOTES_PER_TRIP = 6        # 선반형 AMR 3단 × 2 토트 (-177). 주문도 이 수를 넘으면 시뮬 밖(팔레트 흐름)
+MAX_TOTES_PER_TRIP = 6        # 선반형 AMR 3단 × 2 토트 (-177). 이 수를 넘는 주문은 여러 왕복으로(2026-09-14, 이전엔 제외)
 SECTION_RELEASE = 8           # 이 틱 넘게 정체한 로봇은 구간 정원에서 면제 (-193). 재계획
                               # 문턱(REPLAN_AFTER)과 같은 값 — 그 시점이면 이미 우회를 시도했다
 

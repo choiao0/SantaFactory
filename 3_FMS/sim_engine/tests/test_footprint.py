@@ -168,3 +168,37 @@ def test_cli_front_forces_yield_rule():
 def test_cli_rejects_bad_footprint():
     with pytest.raises(AssertionError):
         parse_args(BASE + ["--footprint=soft"])
+
+
+# ---- 밀기 실패 되돌림 (v3.5, exact 모드) ----
+from pibt.hgraph import dist_map_h  # noqa: E402
+from pibt.heading import step_h  # noqa: E402
+
+
+def _push_scene():
+    """A(4,1) 가 +row 를 보고 앞은 격자 밖, 양옆 (4,0)·(4,2) 는 벽이라 회전 불가 → 후진만 가능(존 구석에서 코가 랙을 향한 상황).
+    후진하면 A 의 뒤 칸이 K(2,1) 의 pos. K 는 -col 을 보고 앞 칸 (2,0) 이 목표. K 의 모든 후보가 자기 pos (2,1) 을 포함해
+    A 의 예약과 겹친다 → 밀기 실패 → K 강제 제자리."""
+    free = np.ones((5, 3), dtype=bool)
+    free[4, 0] = free[4, 2] = False
+    states = {"A": (4, 1, 0), "K": (2, 1, 3)}
+    dists = {"A": dist_map_h(free, (0, 1)), "K": dist_map_h(free, (2, 0))}
+    return free, states, dists
+
+
+def test_failed_push_release_lets_the_pushed_robot_move_in_exact_mode():
+    free, states, dists = _push_scene()
+    geo.configure(turn_mask=np.ones(free.shape + (4, 4), dtype=bool))   # exact 모드(마스크 있음) — 회전은 벽이 막는다
+    ones = np.ones(free.shape + (4,)), np.ones(free.shape)
+    new, _, _ = step_h(states, dists, ones[0], ones[1], free, ["A", "K"])
+    assert new["A"] == (4, 1, 0)                          # A 는 이 틱엔 못 물러난다 (K 의 옛 pos 가 K 의 뒤 칸)
+    assert new["K"] == (2, 0, 3)                          # K 는 앞이 비어 있으니 간다 → 다음 틱에 A 가 물러날 수 있다
+
+
+def test_failed_push_keeps_forced_stay_in_legacy_mode():
+    free, states, dists = _push_scene()
+    geo.reset()
+    ones = np.ones(free.shape + (4,)), np.ones(free.shape)
+    new, _, _ = step_h(states, dists, ones[0], ones[1], free, ["A", "K"])
+    assert new["A"] == (4, 1, 0)
+    assert new["K"] == (2, 1, 3)                          # legacy: 밀기 실패의 강제 제자리가 남는다 (v3.3 비트 동일 유지)

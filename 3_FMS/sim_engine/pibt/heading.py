@@ -2,8 +2,8 @@
 
 import numpy as np
 
-from .geometry import (DIRS, REVERSE_FACTOR, TURN_TICKS, _inb, front_cells, occupied,
-                       stay_map_h, swing_cells, turn_ok, valid_state)
+from .geometry import (DIRS, REVERSE_FACTOR, TURN_TICKS, _inb, front_cells, front_swing_on, occupied,
+                       stay_map_h, swing_cells, turn_mask, turn_ok, valid_state)
 from .hgraph import dist_map_h
 from .liveness import Replanner, Stagnation, wait_bias
 
@@ -58,6 +58,7 @@ class _PIBTStepH:
         self.next_of = {}       # agent -> 다음 상태
         self.next_cells = {}    # agent -> 예약 칸 집합
         self.occ_next = {}      # cell -> 예약 agent
+        self.release_failed_push = turn_mask() is not None or front_swing_on()   # 회전 발자국 모드(exact)에서만 (-203)
         # soft 칸 (-203): 회전하는 로봇의 앞 2칸. 축(pos)만 막는다 — 지금 축이 있거나(pos_now) 이번 틱 축이 들어오는(pos_next)
         # 로봇이 있으면 그 회전은 안 되고, 반대로 soft 예약된 칸에는 다른 로봇이 축을 들여놓지 못한다. 뒤 칸은 자유.
         self.pos_now = {s[:2]: a for a, s in states.items()}
@@ -155,6 +156,13 @@ class _PIBTStepH:
             k = self.occ_now.get(cell)
             if k is not None and k != a and k not in self.next_of:
                 if not self.resolve(k, a):              # 점유자 밀어내기 실패
+                    if self.release_failed_push:
+                        # 실패한 점유자의 '제자리' 예약을 되돌린다 — 그 예약은 내(a) 예약과 겹쳐서 생긴 것인데 나는 이제 이 후보를
+                        # 버린다. 남겨 두면 k 는 이 틱에 다시 결정되지 않아(next_of 에 있음) 앞이 비어 있어도 못 움직인다.
+                        # 2칸 차체에선 "내 뒤 칸이 될 자리를 비워 달라"는 밀기가 한 틱에 성립하지 않아(k 가 전진해도 옛 pos 가
+                        # k 의 뒤 칸) 매 틱 같은 실패가 되풀이되고, 회전 마스크로 k·a 둘 다 돌 수 없는 자리(존 구석·랙 옆)면
+                        # 영구 정지가 된다 (-203 실측: 28대 존 구석 4대 6시간 정지). legacy(v3.3 비트 동일)에는 적용하지 않는다.
+                        self._release(k)
                     return False
         return True
 

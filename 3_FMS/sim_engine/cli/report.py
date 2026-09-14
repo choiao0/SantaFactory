@@ -114,7 +114,7 @@ def _tote_section(a, kernel, stream):
                  totes=int(stream.totes_total), trips=int(kernel.trips),
                  orders_oversize=int(stream.orders_oversize))
     if stream.explicit_orders is not None:
-        extra.update(orders_file=1, orders_skipped=int(stream.orders_skipped))
+        extra.update(orders_file=1, orders_skipped=int(stream.orders_skipped), max_order_totes=int(a.max_order_totes))
     return extra
 
 
