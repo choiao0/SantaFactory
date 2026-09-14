@@ -83,15 +83,30 @@ def _goal_exempt(s, dist, edge_cost, wait_cost, free, turn_cost, bias=0.0):
 #   `pibt_scene.setup` 도 맵·인자 문제를 같은 방식으로 낸다.
 #
 # 이 도구는 시드 20개를 훑어 **어느 것이 막히는지 표로 내는 것**이 목적이라
-# 그 신호를 잡아야 한다. 다만 아무 SystemExit 이나 삼키면 진짜 종료 요청
-# (`sys.exit()`)까지 먹어 버린다. 그래서 **계획기 신호인지 확인하고**,
-# 아니면 그대로 다시 올린다.
-_PLANNER_SIGNS = ("정체", "미도달", "도달 불가", "invalid", "맵 파일")
+# 그 신호를 잡아야 한다. 다만 아무 SystemExit 이나 삼키면 안 된다 —
+# `SystemExit` 를 내는 곳이 성격이 둘로 갈리기 때문이다.
+#
+#   [잡는다] 계획기 신호 — 이 시드만 못 푼다. 다음 시드는 의미가 있다
+#     heading.py:350   "PIBT(헤딩) 정체: N스텝 내 미도달 {...}"     <- 이것 하나뿐
+#
+#   [안 잡는다] 설정 오류 — 전 시드가 똑같이 죽는다. 한 번 죽고 끝내야 한다
+#     pibt_scene   맵 파일을 찾을 수 없습니다
+#                  pitch 는 0.1 m 의 배수여야 합니다
+#                  어느 성분에도 스테이션이 없습니다
+#                  충전존에 N대를 놓을 자리가 없습니다
+#                  CHARGE_STEP_X 가 pitch 의 2배 미만
+#
+# 설정 오류를 잡으면 "시나리오 실패: 맵 파일을 찾을 수..." 가 20번 찍힌다.
+# 한 번 죽고 이유를 명확히 알려 주는 것보다 훨씬 나쁘다.
+#
+#   ★ `run_h` 의 "시작 상태 invalid" · "목표 도달 불가" 는 `assert` 라
+#     **AssertionError** 다. SystemExit 로는 안 온다 — 여기 넣으면 죽은 항목이 된다.
+_PLANNER_STALL = ("정체", "미도달")
 
 
-def _planner_said(e: SystemExit) -> bool:
-    """계획기가 낸 '이 시나리오는 못 푼다' 신호인가."""
-    return any(k in str(e) for k in _PLANNER_SIGNS)
+def _planner_stalled(e: SystemExit) -> bool:
+    """계획기가 낸 '이 시드는 못 푼다' 신호인가. 아니면 설정 오류다."""
+    return any(k in str(e) for k in _PLANNER_STALL)
 
 
 def _quiet(fn, *a, **kw):
@@ -123,20 +138,18 @@ def _one_seed(seed, on, diag):
     """시드 하나 — (비순환 여부, 출력줄) 을 돌려준다. 비순환이 None 이면 실패."""
     import dataclasses
 
-    try:
-        geom, free, starts, goals = _quiet(
-            pibt_scene.setup, MAP, N, PITCH, seed, "cross")
-    except SystemExit as e:
-        if not _planner_said(e):
-            raise                       # 진짜 종료 요청 — 삼키지 않는다
-        return None, f"시나리오 실패: {str(e)[:30]}"
+    # ★ `setup` 은 **안 잡는다.** 거기서 나오는 SystemExit 은 전부 설정 오류
+    #   (맵 없음·pitch 배수·스테이션 없음·충전존 부족)라 시드별로 다를 수가
+    #   없다. 잡으면 같은 메시지가 20번 찍힐 뿐이고, 한 번 죽는 편이 낫다.
+    geom, free, starts, goals = _quiet(
+        pibt_scene.setup, MAP, N, PITCH, seed, "cross")
 
     geom = dataclasses.replace(geom, front_swing=on, front_diag=diag)
     try:
         hist, _ = _quiet(HD.run_h, free, starts, goals, max_steps=STEPS)
     except SystemExit as e:
-        if not _planner_said(e):
-            raise                       # 진짜 종료 요청 — 삼키지 않는다
+        if not _planner_stalled(e):
+            raise           # 계획기 정체가 아니면 설정 오류다 — 삼키지 않는다
         m = str(e)
         who = m.split("미도달")[-1].strip() if "미도달" in m else m[:24]
         return None, f"계획 정체 {who}"
