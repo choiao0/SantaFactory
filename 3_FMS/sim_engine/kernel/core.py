@@ -83,7 +83,8 @@ class FmsKernel(BatteryMixin, MetricsMixin):
                  zone_mask=None, on_task_completed=None, lane_dir=None, sec_map=None, turn_mask=None):
         # 회전 발자국 설정은 모듈 전역(pibt.geometry) — Replanner/HGraph 를 만들기 전에 넣는다 (-203).
         configure_footprint(turn_mask if cfg.footprint != "legacy" else None,
-                            "front" in cfg.footprint and front_swing(cfg.robot_dims))
+                            "front" in cfg.footprint and front_swing(cfg.robot_dims),
+                            front_diag=cfg.footprint == "exact,front")          # front = 6칸, front_2cell = 2칸 (-79)
         self.free, self.st_cell = free, st_cell
         self.H, self.W = free.shape
         self.edge_cost, self.wait_cost = edge_cost, wait_cost

@@ -203,3 +203,14 @@ def test_failed_push_keeps_forced_stay_in_legacy_mode():
     new, _, _ = step_h(states, dists, ones[0], ones[1], free, ["A", "K"])
     assert new["A"] == (4, 1, 0)
     assert new["K"] == (2, 1, 3)                          # legacy: 밀기 실패의 강제 제자리가 남는다 (v3.3 비트 동일 유지)
+
+
+def test_front_cells_6_with_diag():
+    """-79: front_diag 면 앞 2 + 대각 4 = 6칸(soft). front_swing 없으면 diag 도 무시."""
+    geo.configure(front_swing=True, front_diag=True)
+    cells = front_cells(R, C, 0, 1)
+    assert cells == {(3, 2), (2, 3), (3, 3), (3, 1), (1, 3), (1, 1)}
+    assert swing_cells(R, C, 0, 1) == {(1, 2), (2, 1), (1, 1)}       # hard 는 그대로 (대각 (1,1) 은 hard 이자 soft)
+    geo.configure(front_swing=False, front_diag=True)
+    assert front_cells(R, C, 0, 1) == set()
+    assert not geo.front_diag_on()

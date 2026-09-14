@@ -40,14 +40,17 @@ FOOTPRINT_MARGIN_M = 0.05  # 회전 마스크 여유 = Isaac 정지 허용 오�
 # ponytail: 모듈 전역 설정 — 프로세스당 커널 1개 전제(워커·A트랙은 서브프로세스). 한 프로세스에
 # 치수가 다른 커널 2개가 필요해지면 turn_ok/swing_cells 인자로 승격.
 _TURN_MASK = None     # bool[H, W, 4, 4] — [r, c, h, h2] = 회전 스윕이 장애물과 안 겹침. None = 마스크 없음
-_FRONT_SWING = False  # 회전 시 앞 2칸(front(h), front(h2))을 soft 칸으로 검사
+_FRONT_SWING = False  # 회전 시 앞 칸(front(h), front(h2))을 soft 칸으로 검사
+_FRONT_DIAG = False   # soft 에 대각 4칸도 포함 (-79: 물리 팀 6칸 안. 금지 반경 = 코 0.559 + 상대 뒤 1.180 = 1.739 m > 대각 1.414)
 
 
-def configure(turn_mask=None, front_swing=False):
-    """회전 발자국 설정. FmsKernel.__init__ 가 Replanner/HGraph 를 만들기 **전에** 부른다."""
-    global _TURN_MASK, _FRONT_SWING
+def configure(turn_mask=None, front_swing=False, front_diag=False):
+    """회전 발자국 설정. FmsKernel.__init__ 가 Replanner/HGraph 를 만들기 **전에** 부른다.
+    front_swing: 앞 2칸 soft. front_diag: 대각 4칸도 soft(6칸, `--footprint=exact,front`; 2칸은 `exact,front_2cell`)."""
+    global _TURN_MASK, _FRONT_SWING, _FRONT_DIAG
     _TURN_MASK = None if turn_mask is None else np.asarray(turn_mask, dtype=bool)
     _FRONT_SWING = bool(front_swing)
+    _FRONT_DIAG = bool(front_swing and front_diag)
 
 
 def reset():
@@ -61,6 +64,10 @@ def turn_mask():
 
 def front_swing_on():
     return _FRONT_SWING
+
+
+def front_diag_on():
+    return _FRONT_DIAG
 REVERSE_FACTOR = 3.0  # 후진 1칸 비용 배율 — 느리고 시야 없는 동작이라 마지막 수단 (3점 회전용)
 
 def rear_cell(r, c, h):
@@ -90,11 +97,16 @@ def swing_cells(r, c, h, h2):
 
 
 def front_cells(r, c, h, h2):
-    """h→h2 회전 중 코가 스치는 앞 2칸(옛·새 헤딩 앞) — soft 칸. front_swing 설정이 아니면 빈 집합."""
+    """h→h2 회전 중 코가 스치는 앞 2칸(옛·새 헤딩 앞) — soft 칸(축만 금지). front_swing 설정이 아니면 빈 집합.
+    front_diag 면 대각 4칸도 (6칸): 상대 축이 대각(1.414 m)에 있어도 내 코 반경 + 상대 뒤 반경(1.739 m) 안이라 닿을 수 있다.
+    뒤쪽 직교 2칸은 hard(rear/swing)가 이미 덮으므로 6칸이 상한 (물리 팀 2026-09-14, 합법쌍 322→300, 여유 41→200 mm)."""
     if not _FRONT_SWING:
         return set()
     d1, d2 = DIRS[h], DIRS[h2]
-    return {(r + d1[0], c + d1[1]), (r + d2[0], c + d2[1])}
+    cells = {(r + d1[0], c + d1[1]), (r + d2[0], c + d2[1])}
+    if _FRONT_DIAG:
+        cells |= {(r + 1, c + 1), (r + 1, c - 1), (r - 1, c + 1), (r - 1, c - 1)}
+    return cells
 
 
 def turn_ok(free, r, c, h, h2):
