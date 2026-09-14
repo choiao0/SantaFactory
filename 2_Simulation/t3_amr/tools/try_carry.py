@@ -58,9 +58,9 @@ def main():
             margin = 0.5 * geom.pitch - geom.front_len
             print(f"기하: 칸 반폭 {0.5*geom.pitch:.3f} − 앞길이 {geom.front_len:.3f} "
                   f"= 여유 {margin:.3f} m")
-            print(f"      이어달리기 종단속도 상한 "
-                  f"min({geom.v_max:.2f}, sqrt(2·{geom.a_lin}·{margin:.3f})) = "
-                  f"{min(geom.v_max, (2*geom.a_lin*margin) ** 0.5):.3f} m/s\n")
+            print(f"      종단속도  장애물 없음 {geom.v_max:.3f} (순항 그대로)"
+                  f"  /  있음 {min(geom.v_max, (2*geom.a_lin*margin) ** 0.5):.3f} m/s"
+                  f"   — PIBT_CARRY_V 로 고정 가능\n")
         for carry in (False, True):
             f = one(geom, free, starts, goals, seed, carry)
             if f is None:

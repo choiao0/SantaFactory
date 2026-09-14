@@ -162,6 +162,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import os
 import random
 from dataclasses import dataclass, field
 from typing import Callable, Iterable, Protocol, Sequence
@@ -1220,12 +1221,33 @@ class FleetController:
         #     **0.210 m** 지나야 몸이 다음 칸에 들어간다. 그 거리 안에 설 수
         #     있는 속도까지만 싣는다 — 다음 칸을 못 잡아도 칸 밖에서 멈춘다.
         #
-        #   `can_start` 의 세 조건 중 선행/릴리스는 단조지만 `blocked_cells` 는
-        #   아니다(장애물이 새로 생길 수 있다). 그래서 "한 번 참이면 계속 참"
-        #   에 기대지 않고 이 거리 여유로 막는다.
+        #   `can_start` 의 세 조건 중 선행 완료·릴리스 시각은 **단조**다
+        #   (done 은 줄지 않고 clock 은 는다). 단조가 아닌 것은 `blocked_cells`
+        #   하나뿐이다 — 장애물이 새로 생길 수 있다.
+        #
+        #   그래서 상한을 **두 개** 둔다 (2026-09-14 수정).
+        #
+        #     장애물이 있을 때  sqrt(2 * a_lin * margin) = 0.580 m/s
+        #        `can_follow` 가 참이었다가 뒤집힐 수 있으므로, 다음 칸을 못
+        #        잡아도 **칸 밖에서** 설 수 있는 속도까지만 싣는다.
+        #
+        #     장애물이 없을 때  v_max = 0.900 m/s
+        #        세 조건이 모두 단조 -> 한 번 참이면 계속 참 -> 감속할 이유가
+        #        없다. 목표 칸을 **순항 속도 그대로** 통과한다.
+        #
+        #   ★ 왜 나누나: 0.580 으로 묶으면 칸 경계마다 0.9 -> 0.58 -> 0.9 로
+        #     오르내린다. 멈추지는 않지만 순항이 아니다 — 영상에서 바로 보인다.
+        #     그리고 `blocked_cells` 를 채우는 코드가 지금 아무 데도 없다
+        #     (`block()` 을 부르는 곳이 없고, [adg-why] 의 장애물 열도 전 판
+        #     0.0% 였다). 즉 0.580 상한은 **일어나지 않는 경우**를 막고 있었다.
+        #     장애물 보고가 들어오면 자동으로 안전한 쪽으로 내려간다.
         margin = 0.5 * geom.pitch - geom.front_len
-        self.carry_v = (min(geom.v_max, math.sqrt(2.0 * geom.a_lin * margin))
-                        if carry and margin > 0.0 else 0.0)
+        self.carry_safe = (min(geom.v_max, math.sqrt(2.0 * geom.a_lin * margin))
+                           if carry and margin > 0.0 else 0.0)
+        self.carry_free = geom.v_max if carry and margin > 0.0 else 0.0
+        # 시험용 고정 상한. 비워 두면 위 규칙을 쓴다.
+        _cv = os.environ.get("PIBT_CARRY_V", "")
+        self.carry_fixed = float(_cv) if _cv else None
         if starts is not None:
             self.verify_start()
 
@@ -1299,7 +1321,7 @@ class FleetController:
         **같은 방향 직진이 곧바로 이어질 때만** 속도를 싣는다. 회전이 오면
         반드시 0 이다 — 제자리 선회에 선속도를 들고 들어가면 칸을 벗어난다.
         """
-        if self.carry_v <= 0.0 or act.kind != MOVE:
+        if self.carry_free <= 0.0 or act.kind != MOVE:
             return 0.0
         nxt = self.rt.after(self.slot[a])
         if nxt is None or nxt.kind != MOVE:
@@ -1312,7 +1334,11 @@ class FleetController:
             return 0.0
         if not self.rt.can_follow(act, nxt):             # 아직 못 들어간다
             return 0.0
-        return self.carry_v
+        if self.carry_fixed is not None:
+            return self.carry_fixed
+        # 장애물 보고가 있으면 `can_follow` 가 뒤집힐 수 있다 -> 안전한 상한.
+        # 없으면 세 조건이 모두 단조라 뒤집히지 않는다 -> 순항 속도 그대로.
+        return self.carry_safe if self.rt.blocked_cells else self.carry_free
 
     def step(self, dt: float) -> None:
         self.stats.steps += 1
