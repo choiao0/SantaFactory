@@ -127,10 +127,109 @@ def report(path, rows, e, v):
     print("  ".join(f"agent{a} {np.percentile(ee, 95):.1f}" for a, ee, _ in top))
 
 
+# ===========================================================================
+# 진단 — 차선 격자를 **데이터에서 찾는다**
+# ===========================================================================
+def diagnose(path):
+    """pitch·origin·어느 pose 인지를 추측하지 않고 **고른다.**
+
+    로봇이 차선을 따라 달렸다면 올바른 `(pitch, origin)` 에서는 주행 방향에
+    수직인 좌표의 `mod pitch` 가 **한 점에 몰린다.** 틀린 격자에서는 균일하게
+    퍼지고, 그때 "가장 가까운 차선까지" 는 항상 `pitch/2` 근처가 된다.
+
+    ★ 2026-09-14 첫 측정이 정확히 그 함정이었다. 모든 녹화에서 최대가
+      500.0 mm = pitch/2 로 딱 떨어졌는데, 그건 이탈이 큰 것이 아니라
+      **격자를 못 찾은 것**이다. 그래서 추측을 그만두고 이 함수를 넣었다.
+    """
+    z = np.load(path, allow_pickle=True)
+    keys = list(z.keys())
+    t = np.asarray(z["t"], dtype=np.float64)
+    print()
+    print("=" * 66)
+    print(os.path.basename(path))
+    print("=" * 66)
+    print(f"  키 {keys}   프레임 {len(t):,}   {t[0]:.1f} ~ {t[-1]:.1f} s")
+    if "stage" in keys:
+        print(f"  stage: {z['stage']}")
+
+    dt = np.diff(t)
+    dt[dt <= 0] = np.nan
+
+    for nm in ("pose", "pose_alt"):
+        if nm not in keys:
+            continue
+        p3 = np.asarray(z[nm], dtype=np.float64)
+        print()
+        print(f"  -- {nm}  shape {p3.shape}")
+        if p3.ndim != 3 or p3.shape[2] < 3:
+            print("     모양이 (프레임, 로봇, 3) 이 아니다 — 건너뛴다")
+            continue
+        x, y = p3[:, :, 0], p3[:, :, 1]
+        print(f"     x {x.min():8.3f} ~ {x.max():8.3f}     "
+              f"y {y.min():8.3f} ~ {y.max():8.3f}")
+
+        vx = np.diff(x, axis=0) / dt[:, None]
+        vy = np.diff(y, axis=0) / dt[:, None]
+        spd = np.hypot(vx, vy)
+        deg = np.degrees(p3[:-1, :, 2]) % 90.0
+        off = np.minimum(deg, 90.0 - deg)
+        mv = (spd > VMIN) & np.isfinite(spd) & (off < YAW_TOL)
+        if not mv.any():
+            print("     직진 프레임 없음 — VMIN/YAW_TOL 확인")
+            continue
+        horiz = np.abs(vx) >= np.abs(vy)
+        # 주행 방향에 **수직**인 좌표 = 차선 이탈의 원천
+        perp = np.where(horiz, y[:-1], x[:-1])[mv]
+        print(f"     직진 프레임 {mv.sum():,}"
+              f"   (가로 {horiz[mv].mean() * 100:.0f}% / 세로 "
+              f"{(~horiz[mv]).mean() * 100:.0f}%)")
+
+        print(f"     {'pitch':>7}{'origin':>9}{'중앙mm':>9}{'p95mm':>9}"
+              f"{'50mm내':>9}{'20mm내':>9}")
+        scores = []
+        for pit in (0.80, 0.90, 1.00, 1.10, 1.20, 1.40, 1.60):
+            for oname, org in (("0", 0.0), ("pitch/2", pit / 2.0)):
+                e = np.abs(perp - (org + np.round((perp - org) / pit) * pit))
+                e = e * 1000.0
+                c50 = float((e < 50).mean()) * 100.0
+                c20 = float((e < 20).mean()) * 100.0
+                print(f"     {pit:>7.2f}{oname:>9}{np.median(e):>9.1f}"
+                      f"{np.percentile(e, 95):>9.1f}{c50:>8.1f}%{c20:>8.1f}%")
+                scores.append((c20, c50, pit, oname))
+        scores.sort(reverse=True)
+        best, second = scores[0], scores[1]
+        print(f"     -> 1등 pitch {best[2]:.2f} origin {best[3]}"
+              f"  (20mm 내 {best[0]:.1f}% · 50mm 내 {best[1]:.1f}%)")
+        print(f"        2등 pitch {second[2]:.2f} origin {second[3]}"
+              f"  (20mm 내 {second[0]:.1f}%)")
+
+        # ★ 판정 기준은 **절대 집중도가 아니라 2등과의 격차**다.
+        #   이탈이 커도(합성 검증에서 최대 110mm) 격자만 맞으면 1등이 확연히
+        #   앞선다. 반대로 좌표계가 틀리면 전부 비슷하게 낮다.
+        if best[0] < 2.0 * max(second[0], 1.0):
+            print("     ★ 1등과 2등이 비슷하다 — 격자를 못 고른 것이다.")
+            print("        이 pose 가 구동축이 아닐 수 있다 (prim 원점일 가능성),")
+            print("        또는 후보 pitch 목록 밖이거나 origin 이 둘 다 아니다.")
+        elif best[1] < 50.0:
+            print("     ※ 격자는 골랐지만 50mm 안이 절반 미만이다 — "
+                  "이탈 자체가 크다는 뜻이다. 본 측정에서 확인할 것.")
+
+
 def main():
     paths = [p for p in sys.argv[1:] if not p.startswith("-")]
     if not paths:
         raise SystemExit(__doc__)
+
+    # --diag 는 격자를 **고르기 위한** 모드다. 본 측정 전에 한 번 돌린다.
+    if "--diag" in sys.argv:
+        for p in paths:
+            if os.path.exists(p):
+                diagnose(p)
+            else:
+                print(f"\n★ 없음: {p}")
+        print("\n★ 어느 (pitch, origin) 이 맞는지 정한 뒤에 본 측정을 한다.")
+        return 0
+
     print(f"횡방향 이탈 — pitch {PITCH}  lateral_gap "
           f"{(PITCH - WIDTH) * 1000:.0f} mm  기각선 {REJECT:.0f} mm (그 절반)")
     for p in paths:
