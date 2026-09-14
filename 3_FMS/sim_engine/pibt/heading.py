@@ -18,7 +18,11 @@ def candidates_h(s, dist, edge_cost, wait_cost, free, turn_cost, bias=0.0):
     none = frozenset()
     scored = []
     if dist[r, c, h] >= 0:
-        scored.append((wait_cost[r, c] + bias + dist[r, c, h], 0, s, frozenset(occupied(s)), none))
+        # 목표 상태(dist 0)에는 대기 상승을 붙이지 않는다 (-204 물리 팀 보고 2026-09-14): bias 를 안고 도착하면 "나가기(1+d) < 대기(1+bias)"
+        # 로 첫 틱에 목표를 떠나고, 뒤쪽 1칸은 후진 배율 3 으로 d=3 이라 "돌아오기(3) < 대기(1+bias+3)" 도 성립해 왕복이 굳는다.
+        # Stagnation 은 2틱 연속 머물러야 리셋되므로(seed 11) 스스로 못 풀린다. kernel 은 도착 즉시 상태 전이라 무관(비트 동일).
+        b = 0.0 if dist[r, c, h] == 0 else bias
+        scored.append((wait_cost[r, c] + b + dist[r, c, h], 0, s, frozenset(occupied(s)), none))
     dr, dc = DIRS[h]
     rr, cc = r + dr, c + dc
     if _inb(free, (rr, cc)) and dist[rr, cc, h] >= 0:
