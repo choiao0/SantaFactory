@@ -233,6 +233,16 @@ class RobotGeom:
     origin: tuple[float, float] = (0.0, 0.0)
     axle_in_prim: tuple[float, float] = (0.0, 0.0)
 
+    # [patch_axle] 앞 칸 규칙 스위치. **계획기와 반드시 같아야 한다.**
+    #   계획기 쪽은 `pibt.geometry.configure(front_swing=…)` 로 켜고, 이 값은
+    #   `build_adg` 진입에서 `geo.front_swing_on()` 과 대조한다. 한쪽만 켜지면
+    #   계획에 위험한 배치가 남는데 ADG 가 그걸 못 잡는다 — 주차한 로봇은
+    #   간선의 대상이 아니기 때문이다 (설계서 §0-1).
+    #
+    #   ★ 스위치가 **둘**이다. `pibt_scene` 이 `configure()` 와 이 필드에
+    #     각각 넘긴다. 값이 갈릴 수 있는 지점이 이미 있으므로 검사가 필요하다.
+    front_swing: bool = False
+
     # ★ pibt_core의 h를 물리 헤딩으로 옮길 때 더하는 값 (0 또는 2).
     #
     # pibt_core는 `occupied(s) = {pos, pos - DIRS[h]}` — 차체가 h의 **뒤쪽**
@@ -468,10 +478,27 @@ class RobotGeom:
           라서 "코만 스윕" 을 같은 캐시로 구하면 **몸통 스윕 결과**를 받는다.
 
         **본체는 아직 없다.** FMS 가 앞 2칸/6칸 중 무엇으로 갈지 답한 뒤에
-        위임을 연결한다 (설계서 §9 2번). 그때까지는 빈 집합 — 스위치가 꺼진
-        것과 같고, 거동이 오늘과 비트 단위로 같다.
+        위임을 연결한다 (설계서 §9 2번).
+
+        ★ 그동안 `front_swing=True` 가 들어오면 **죽는다.** 조용히 빈 집합을
+          돌려주면 §0-1 이 막으려던 상태 — 계획기는 켜졌는데 ADG 는 사실상
+          꺼진 — 를 우리 손으로 만드는 것이다.
         """
-        return frozenset()
+        if not self.front_swing:
+            return frozenset()
+        raise RuntimeError(
+            "★ front_swing=True 인데 front_cells() 본체가 아직 없다.\n"
+            "  FMS 가 앞 2칸/6칸을 확정한 뒤 위임을 연결한다 (설계서 §9 2번).\n"
+            "  그 전까지 이 스위치는 켤 수 없다.")
+
+    @property
+    def nose_clears_cell_pitch(self) -> float:
+        """이 값보다 pitch 가 작으면 회전 중 코가 자기 칸을 벗어난다.
+
+        `2 * hypot(front_len, width/2)` — 앞 모서리 반경의 두 배다.
+        치수 0.390 · 0.800 에서 1.1173 m.
+        """
+        return 2.0 * math.hypot(self.front_len, 0.5 * self.width)
 
     def swept_cells(self, s0: State, s1: State, samples: int = 48) -> frozenset[Cell]:
         """s0 -> s1 동작 **전체**에서 차체가 지나는 칸.
@@ -689,17 +716,22 @@ def _check_soft(a: Action) -> None:
 
     `assert` 가 아니라 실제 검사인 이유: `python -O` 로 조용히 사라지면
     안 되는 종류다. 계획당 한 번, 액션 수천 개라 비용은 무시할 수준이다.
+
+    ★ `SystemExit` 이 아니라 `RuntimeError` 다. 같은 시점/같은 성격의 실패인
+      순환 검사가 `RuntimeError` 를 쓰고, 호출자(`plan_and_build*`)가 하나로
+      다룬다. `SystemExit` 은 `BaseException` 이라 `except Exception` 을 뚫고
+      나가 **Isaac 안에서는 Kit 이 통째로 내려간다.**
     """
     if not a.soft:
         return                                   # 스위치 꺼짐 — 볼 것이 없다
     if a.axle & a.soft:
-        raise SystemExit(f"★ 축 칸이 soft 에 들어갔다: {a} "
+        raise RuntimeError(f"★ 축 칸이 soft 에 들어갔다: {a} "
                          f"축 {sorted(a.axle)} soft {sorted(a.soft)}")
     if not a.soft <= a.cells:
-        raise SystemExit(f"★ soft 가 스윕 밖이다: {a} "
+        raise RuntimeError(f"★ soft 가 스윕 밖이다: {a} "
                          f"밖 {sorted(a.soft - a.cells)}")
     if a.frm[:2] not in a.hard:
-        raise SystemExit(f"★ 출발 칸이 hard 에 없다: {a} "
+        raise RuntimeError(f"★ 출발 칸이 hard 에 없다: {a} "
                          f"출발 {a.frm[:2]} hard {sorted(a.hard)}")
 
 
@@ -756,8 +788,67 @@ def _key(action: Action, cell: Cell) -> tuple[int, int, int]:
     return (action.tick, 0 if cell in occupied(action.frm) else 1, action.agent)
 
 
-def build_adg(chains: list[list[Action]]) -> ADG:
+def _check_front_swing(actions: list[Action], geom: "RobotGeom") -> None:
+    """앞 칸 규칙이 계획기와 ADG **양쪽에서** 같은 상태인지 (설계서 §0-1).
+
+    두 검사를 한다.
+
+      (1) 설정 일치 — 스위치가 양쪽에서 같은가.
+          위임 설계라 ADG 쪽에 규칙 정의가 없으므로, 비교할 것은 **스위치
+          상태 하나**다. 이게 임시형이 아니라 최종형이다.
+
+      (2) 결과 정합 — 켰고 코가 칸을 벗어나는 pitch 인데 `soft` 가 전부
+          비었으면 `front_cells()` 기하나 벤더 폴백이 고장난 것이다.
+          **pitch 조건이 있어야** 1.2 에서 안 걸리고 1.0 에서만 걸린다
+          (1.2 는 코가 칸을 안 벗어나 `soft` 가 비는 것이 정상이다).
+    """
+    try:
+        import pibt.geometry as geo
+        planner_on = bool(geo.front_swing_on())
+    except (ImportError, AttributeError) as e:
+        # 벤더 폴백에는 앞 칸 개념이 없다. 끈 상태로 도는 것은 정상이므로
+        # 켜려 할 때만 막는다.
+        if geom.front_swing:
+            raise RuntimeError(
+                f"★ 계획기에서 앞 칸 규칙을 확인할 수 없다 ({e!r}) — "
+                f"벤더 폴백일 가능성이 높다.\n"
+                f"  그 상태로 front_swing=True 를 켜면 계획기는 앞 칸을 모르는 "
+                f"채로 ADG 만 켜진다.") from e
+        return
+
+    if planner_on != geom.front_swing:                      # (1)
+        raise RuntimeError(
+            f"★ 앞 칸 스위치가 어긋났다 — 계획기 {planner_on} / "
+            f"ADG {geom.front_swing}.\n"
+            f"  한쪽만 켜지면 계획에 위험한 배치가 남고 ADG 는 그걸 못 잡는다 "
+            f"(주차한 로봇은 간선의 대상이 아니다).")
+
+    if (geom.front_swing                                     # (2)
+            and geom.pitch < geom.nose_clears_cell_pitch
+            and not any(a.soft for a in actions)):
+        raise RuntimeError(
+            f"★ pitch {geom.pitch:.2f} 는 코가 칸을 벗어나는 격자인데"
+            f"(한계 {geom.nose_clears_cell_pitch:.4f}) soft 가 전부 비었다 — "
+            f"front_cells() 기하 또는 벤더 폴백을 확인하라.")
+
+
+def build_adg(chains: list[list[Action]], geom: "RobotGeom | None" = None) -> ADG:
     actions = [a for ch in chains for a in ch]
+
+    # [patch_axle] 앞 칸 규칙이 **한쪽만 켜진 상태**로 못 돌게 한다 (설계서 §0-1).
+    #
+    #   왜 위험한가: 계획기가 앞 칸을 모르면 계획 안에 "A 가 도는 동안 B 가
+    #   A 의 앞 칸에 주차해 있는" 배치가 남는다. 그런데 ADG 간선은 **액션 사이의
+    #   순서**만 강제하므로, 주차해서 아무 액션도 안 하는 로봇은 간선의 대상이
+    #   아니다. 지금 pitch 1.0 의 ADG 순환이 그걸 알려 주는 **유일한 방어선**
+    #   인데, 축 규칙을 켜면 그 순환이 풀린다. 안전망이 먼저 사라진다.
+    #
+    #   ★ 비교 대상은 **스위치 상태 하나**다. 규칙 자체(몇 칸인지)는
+    #     `front_cells()` 가 FMS 로 위임하므로 ADG 쪽에 별도 정의가 없다.
+    if geom is not None:
+        _check_front_swing(actions, geom)
+
+    preds: dict[int, set[int]] = {a.uid: set() for a in actions}
     preds: dict[int, set[int]] = {a.uid: set() for a in actions}
     succs: dict[int, set[int]] = {a.uid: set() for a in actions}
     t1 = t2 = 0
@@ -772,7 +863,7 @@ def build_adg(chains: list[list[Action]]) -> ADG:
     #   액션이 둘 있으면 안 된다. `extract_actions` 구조상 참이지만, 비순환
     #   논거(설계서 §2-3-1)가 여기 걸려 있으므로 못 박아 둔다.
     if len({(a.agent, a.tick) for a in actions}) != len(actions):
-        raise SystemExit("★ 같은 tick 에 같은 로봇의 액션이 둘 이상이다 — "
+        raise RuntimeError("★ 같은 tick 에 같은 로봇의 액션이 둘 이상이다 — "
                          "_key 가 전순서가 아니게 되어 비순환 보장이 깨진다")
 
     def _link(p: Action, n: Action) -> bool:
@@ -1377,6 +1468,15 @@ class FleetController:
         #     0.0% 였다). 즉 0.580 상한은 **일어나지 않는 경우**를 막고 있었다.
         #     장애물 보고가 들어오면 자동으로 안전한 쪽으로 내려간다.
         margin = 0.5 * geom.pitch - geom.front_len
+        # ★ `margin <= 0` 이면 이어달리기가 **통째로 꺼지는데 로그에 표시가
+        #   없었다.** 처리량이 40% 떨어지고 원인을 알 수 없다. pitch 1.0 에서는
+        #   0.110 이라 아직 켜지지만 **pitch 0.78 이하에서 0 이 된다**
+        #   (0.5 * pitch = front_len 0.390). 조용히 꺼지면 안 된다.
+        if carry and margin <= 0.0:
+            print(f"★ 이어달리기가 꺼졌다 — 칸 반폭 {0.5 * geom.pitch:.3f} 이 "
+                  f"앞길이 {geom.front_len:.3f} 이하다 (여유 {margin:+.3f} m).\n"
+                  f"  pitch 를 {2.0 * geom.front_len:.3f} m 보다 크게 하거나 "
+                  f"차체 앞길이를 줄여야 한다. 지금은 매 칸 정지로 돈다.")
         self.carry_safe = (min(self.v_exec, math.sqrt(2.0 * self.a_exec * margin))
                            if carry and margin > 0.0 else 0.0)
         self.carry_free = self.v_exec if carry and margin > 0.0 else 0.0
