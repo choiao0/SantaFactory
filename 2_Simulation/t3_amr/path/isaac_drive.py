@@ -1351,30 +1351,62 @@ class FleetController:
     # ---- 루프 --------------------------------------------------------------
 
     # [patch_carry]
+    @staticmethod
+    def _same_dir(p: Action, q: Action) -> bool:
+        """q 가 p 에 이어지는 **같은 방향 직진**인가."""
+        if q.kind != MOVE or p.kind != MOVE:
+            return False
+        if q.frm[2] != p.to[2]:                          # 헤딩이 바뀐다
+            return False
+        return ((p.to[0] - p.frm[0], p.to[1] - p.frm[1])
+                == (q.to[0] - q.frm[0], q.to[1] - q.frm[1]))
+
+    def _straight_run(self, a: int, act: Action) -> int:
+        """`act` **다음**으로 이어지는 같은 방향 직진이 몇 칸인가.
+
+        ★ 왜 필요한가 (2026-09-14). 예전에는 **다음 한 칸만** 봤다. 그러면
+          회전 직전 칸에서 exit_v 가 0 이 되는데, 그 시점 속도에서 1.2 m 안에
+          못 서면 오버슈트한다. 정지 거리 v^2/(2a) 는
+
+              v 0.9 -> 0.51 m    v 1.2 -> 0.90 m    (칸 1.2 m 안, OK)
+              v 1.6 -> 1.60 m    v 2.2 -> 3.03 m    (칸의 1.3~2.5배, 불가)
+
+          이라, v_exec 를 1.6 이상으로 올리면 회전 앞에서 못 서고 되돌아오기를
+          반복한다. 실측: v=2.2 에서 완주 0/2, 칸공유 400,262건,
+          차체 최소거리 0.014 m. 도착 판정 경고로는 이걸 못 잡는다 —
+          문제는 판정이 아니라 **제동 거리**다.
+        """
+        chain = self.rt.adg.chains[self.slot[a]]
+        k, n = act.idx + 1, 0
+        prev = act
+        while k < len(chain) and self._same_dir(prev, chain[k]):
+            n += 1
+            prev = chain[k]
+            k += 1
+        return n
+
     def _carry(self, a: int, act: Action) -> float:
         """이 액션의 종단속도. 0 이면 목표 칸에서 완전히 선다.
 
-        **같은 방향 직진이 곧바로 이어질 때만** 속도를 싣는다. 회전이 오면
-        반드시 0 이다 — 제자리 선회에 선속도를 들고 들어가면 칸을 벗어난다.
+        같은 방향 직진이 곧바로 이어질 때만 속도를 싣고, **다음 회전까지
+        남은 거리 안에 설 수 있는 속도**로 제한한다. 회전 앞에서는 반드시
+        0 이다 — 제자리 선회에 선속도를 들고 들어가면 칸을 벗어난다.
         """
         if self.carry_free <= 0.0 or act.kind != MOVE:
             return 0.0
         nxt = self.rt.after(self.slot[a])
-        if nxt is None or nxt.kind != MOVE:
-            return 0.0
-        if nxt.frm[2] != act.to[2]:                      # 헤딩이 바뀐다
-            return 0.0
-        d0 = (act.to[0] - act.frm[0], act.to[1] - act.frm[1])
-        d1 = (nxt.to[0] - nxt.frm[0], nxt.to[1] - nxt.frm[1])
-        if d0 != d1:                                     # 방향이 바뀐다
+        if nxt is None or not self._same_dir(act, nxt):
             return 0.0
         if not self.rt.can_follow(act, nxt):             # 아직 못 들어간다
             return 0.0
         if self.carry_fixed is not None:
             return self.carry_fixed
         # 장애물 보고가 있으면 `can_follow` 가 뒤집힐 수 있다 -> 안전한 상한.
-        # 없으면 세 조건이 모두 단조라 뒤집히지 않는다 -> 순항 속도 그대로.
-        return self.carry_safe if self.rt.blocked_cells else self.carry_free
+        # 없으면 세 조건이 모두 단조라 뒤집히지 않는다 -> 순항 속도.
+        cap = self.carry_safe if self.rt.blocked_cells else self.carry_free
+        # 다음 회전까지 남은 직진 거리 안에 설 수 있어야 한다.
+        run = self._straight_run(a, act) * self.g.pitch
+        return min(cap, math.sqrt(2.0 * self.a_exec * run)) if run > 0.0 else 0.0
 
     def step(self, dt: float) -> None:
         self.stats.steps += 1
