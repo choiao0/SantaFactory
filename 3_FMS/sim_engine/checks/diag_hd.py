@@ -75,7 +75,7 @@ def _reasons(kernel, rid, s, cand, forbid, forbid_axle, occ_now, axle_now, soft_
     return why
 
 
-def diag(kernel, t, n_events):
+def diag(kernel, t, n_events, robots_only=()):
     robots, rids = kernel.robots, kernel.rids
     states = {rid: (robots[rid]["pos"][0], robots[rid]["pos"][1], robots[rid]["h"]) for rid in rids}
     extra = {rid: robots[rid]["swing"] for rid in rids if robots[rid]["busy"] > 0}
@@ -87,6 +87,20 @@ def diag(kernel, t, n_events):
 
     print(f"\n[DIAG t={t}] hd_after={kernel.cfg.hd_after} hd_timeout={kernel.cfg.hd_timeout} "
           f"standoffs={kernel.standoffs} swaps={kernel.standoff_swaps}")
+    if robots_only:
+        patient = kernel._patient(states, dists, extra, soft_hold)
+        print("  --- 지정 로봇 후보 (점수 = 액션비용 + dist, 대기엔 bias 가산) ---")
+        for rid in robots_only:
+            rb, s = robots[rid], states[rid]
+            b = 0.0 if rid in patient else wait_bias(kernel._stag.get(rid))
+            print(f"  robot{rid} {s} {rb['state']} goal={rb['goal']} stag={kernel._stag.get(rid)} busy={rb['busy']} "
+                  f"hd={rb['hd_role']}/{rb['hd_peer']} bias={b:.0f}{' (인내)' if rid in patient else ''} "
+                  f"swing={sorted(rb['swing'])} soft={sorted(rb['swing_soft'])}")
+            for cand in candidates_h(s, dists[rid], kernel.edge_cost, kernel.wait_cost, kernel.free, kernel.turn_cost, b):
+                why = _reasons(kernel, rid, s, cand, forbid, forbid_axle, occ_now, axle_now, soft_hold)
+                d = dists[rid][cand[0]]
+                kind = _action_kind(s, cand[0])
+                print(f"       {kind:4s} -> {cand[0]} dist={d:.1f} {'OK' if not why else '✗ ' + '; '.join(why)}")
     print("  --- 로봇 (미도달 또는 대치 중) ---")
     for rid in rids:
         rb = robots[rid]
@@ -136,7 +150,8 @@ def diag(kernel, t, n_events):
 def main(argv):
     at = next((int(f.split("=", 1)[1]) for f in argv if f.startswith("--at=")), None)
     n_events = next((int(f.split("=", 1)[1]) for f in argv if f.startswith("--events=")), 20)
-    argv = [f for f in argv if not f.startswith(("--at=", "--events="))]
+    robots_only = next((tuple(int(x) for x in f.split("=", 1)[1].split(",")) for f in argv if f.startswith("--robots=")), ())
+    argv = [f for f in argv if not f.startswith(("--at=", "--events=", "--robots="))]
     a = parse_args(argv)
     kernel, stream, ctx = build(a)
     for w in a.warnings:
@@ -152,7 +167,7 @@ def main(argv):
         for e in ev[-n_events:]:
             print(f"   t={e['t']:>6} {e['action']:<8} L=robot{e['yielder']} W=robot{e['peer']}")
         return
-    diag(kernel, t, n_events)
+    diag(kernel, t, n_events, robots_only)
 
 
 if __name__ == "__main__":
