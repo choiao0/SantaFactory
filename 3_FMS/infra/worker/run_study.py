@@ -17,7 +17,7 @@
 # 조건을 매번 손으로 적다가 빠뜨리면 기준선과 비교가 안 된다.
 #
 # **부하는 초로 받는다** (--arrival-s, S15P21A106-194). 시뮬의 --order-gap 은 틱이고
-# 틱 길이는 속도·틱 모델이 정한다. 계약 v4 에서 1칸이 4틱이 되며 같은 "15" 가 15초에서
+# 틱 길이는 속도·틱 모델이 정한다. 계약 v3.6 에서 1칸이 4틱이 되며 같은 "15" 가 15초에서
 # 3.75초로 바뀌었다 — 틱으로 받으면 이런 변경 때마다 의도한 부하가 조용히 어긋난다.
 # 계약 §5-1 도 "틱 단위 인자는 환산하지 않는다, 초를 가진 호출자가 초/dt 로 넘길 것"
 # 이라고 그 책임을 호출자(= 이 워커)에 둔다.
@@ -62,6 +62,8 @@ FLOW = "main"
 # 합성 창고는 존 크기가 창고마다 달라(24~42대) 이 상수를 못 쓴다 — --map-dir 이 있으면
 # 그 맵의 존에서 직접 센다 (charge_zone_capacity, S15P21A106-183).
 MAX_ROBOTS = 28
+
+DEFAULT_SPEED = 1.0            # --speed 를 안 줬을 때 meta 에 적을 값 (시뮬 기본과 같다)
 
 
 def _relative_to(path, root):
@@ -240,7 +242,7 @@ def parse_args(argv=None):
                                         "aisle_period,aisle_phase",
                    help="탐색에서 빼고 중립값으로 고정할 θ 이름(쉼표). 빈 문자열이면 전부 탐색")
     # 부하는 **초**로 받는다. 시뮬의 --order-gap 은 틱이고 틱 길이는 속도·틱 모델에 따라
-    # 달라지므로(계약 v4 에서 1칸이 4틱이 되며 같은 "15" 가 15초 → 3.75초로 바뀌었다),
+    # 달라지므로(계약 v3.6 에서 1칸이 4틱이 되며 같은 "15" 가 15초 → 3.75초로 바뀌었다),
     # 틱으로 받으면 조건을 바꿀 때마다 의도한 부하가 조용히 어긋난다.
     p.add_argument("--arrival-s", type=float, default=15.0, dest="arrival_s",
                    help="주문 도착 간격 평균[초, 실시간]. 기본 15(= 240건/h). "
@@ -251,8 +253,10 @@ def parse_args(argv=None):
                         "쓰면 --arrival-s 가 무시된다")
     # 속도 (계약 v3.3·v4). 견적 워커가 쓰는 값과 맞춰야 같은 세계에서 θ 를 찾는다.
     # v4 부터 이 값은 **가감속을 포함한 실효 속도**다 — 물리 실측 기준 0.518 m/s.
-    p.add_argument("--speed", type=float, default=1.0,
-                   help="로봇 실효 속도[m/s]. 운영과 같게 줄 것 (물리 실측 0.518)")
+    # 기본값을 None 으로 두는 것은 **인자를 줬는지**를 값 비교 없이 알기 위해서다.
+    # 1.0 과 float 로 비교하면 미세 오차로 분기가 뒤집힐 수 있다.
+    p.add_argument("--speed", type=float, default=None,
+                   help=f"로봇 속도[m/s]. 운영과 같게 줄 것. 생략하면 {DEFAULT_SPEED:g}")
     p.add_argument("--timeout", type=int, default=300, help="시뮬 1회 상한(초)")
     p.add_argument("--noise-warn-ratio", type=float, default=0.05,
                    dest="noise_warn_ratio",
@@ -284,8 +288,11 @@ def parse_args(argv=None):
         p.error("--seeds 가 비었다. 시뮬은 확률적이라 시드 3개 이상을 권장한다")
     if not 1 <= args.capacity <= 6:
         p.error(f"--capacity {args.capacity} — 계약 v2.6 은 1~6 만 받는다")
+    speed_given = args.speed is not None
+    if not speed_given:
+        args.speed = DEFAULT_SPEED
     if not 0.1 <= args.speed <= 5.0:
-        p.error(f"--speed {args.speed} — 계약 v3.3 은 0.1~5.0 m/s 만 받는다")
+        p.error(f"--speed {args.speed} — 계약은 0.1~5.0 m/s 만 받는다")
     if args.arrival_s <= 0:
         p.error(f"--arrival-s 는 양수: {args.arrival_s}")
     # 초 → 틱. 틱 길이는 시뮬과 같은 상수로 구한다 (tick_seconds).
@@ -312,7 +319,7 @@ def parse_args(argv=None):
         cap, where = charge_zone_capacity(args.map_dir, args.sim_engine), os.path.basename(args.map_dir)
     if args.capacity != 1:
         extra.append(f"--capacity={args.capacity}")
-    if args.speed != 1.0:
+    if speed_given:                      # 안 주면 인자를 안 붙인다 = 시뮬 기본과 글자 단위로 같다
         extra.append(f"--speed={args.speed:g}")
     args.extra_args = tuple(extra)
     if args.robots > cap:

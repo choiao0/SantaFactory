@@ -16,7 +16,7 @@
 # 속도 (-116, 계약 v3.3): amr.avg_payload_kg(사용자 평균 적재 무게)가 있으면 contracts/speed_model.speed_for_load 로
 #       amr.speed_empty·speed_loaded·max_payload_kg 앵커에서 속도를 정하고, 없으면 SPEED_DEFAULT(물리 계획 속도 0.9).
 #       run 내내 고정. 초 단위 입력(horizon_s·gap·서비스 5 s)은 objective.tick_seconds 로 틱이 되고,
-#       KPI 초는 엔진 SUMMARY 의 dt_s 로 되돌린다. **틱 길이 공식을 여기 적지 않는다** — v4(-194)에서
+#       KPI 초는 엔진 SUMMARY 의 dt_s 로 되돌린다. **틱 길이 공식을 여기 적지 않는다** — v3.6(-194)에서
 #       1칸이 4틱이 되며 CELL_M / speed 가 4배 틀린 값이 됐다(6h 요청이 1.5h 로 돌았다).
 # ============================================================
 import json

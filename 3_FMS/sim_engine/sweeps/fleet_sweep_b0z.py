@@ -18,7 +18,7 @@
 #       SWEEP_OUT=b0z_sweep_v4.csv python sweeps/fleet_sweep_b0z.py
 #           — **별도 CSV/PNG** 로 (기본 b0z_sweep.csv 는 동일성 검사 기준이라 덮어쓰지 않는다).
 #             fleet_sweep_load.py 의 SWEEP_OUT 과 같은 규약이다. 계약이 바뀌어 결과가 달라질 때
-#             쓴다 — v3(-177) 은 손으로 복사했고, v4(-194) 부터 이 인자로 뜬다. PNG 는 b0z_*<접미>.png.
+#             쓴다 — v3(-177) 은 손으로 복사했고, v3.6(-194) 부터 이 인자로 뜬다. PNG 는 b0z_*<접미>.png.
 # ============================================================
 import csv
 import json

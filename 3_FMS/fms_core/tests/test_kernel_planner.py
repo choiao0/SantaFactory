@@ -119,8 +119,10 @@ def test_defaults_are_the_des_estimate_conditions():
     # 서비스 틱은 초 ÷ dt 라 틱 모델에 딸려 움직인다 — 숫자를 박지 않고 유도한다 (-194).
     from fms_core.kernel_planner import des_dt
     svc = max(1, int(5.0 / des_dt() + 0.5))
-    assert cfg.capacity == 1 and cfg.svc_per_tote == svc, "왕복당 토트 수 · 토트당 서비스 틱"
-    assert cfg.yield_rule is True and cfg.theta is True, "v3 정면 조우 양보 · θ/차선 비용"
+    assert cfg.capacity == 1, "왕복당 토트 수"
+    assert cfg.svc_per_tote == svc, "토트당 서비스 틱 = 5 초 ÷ dt"
+    assert cfg.yield_rule is True, "v3 정면 조우 양보"
+    assert cfg.theta is True, "θ·차선 비용 사용"
     assert int(p.kernel.free.sum()) == 8640, "통로차단 ON 의 자유 칸 수 (OFF 면 9333)"
     assert p.kernel.lane_dir is not None, "차선 방향이 커널에 들어가야 양보 규칙이 산다"
     assert p.kernel.edge_cost.max() > 1.0, "차선 비용(기본 2.0)이 균일 1.0 이 아니어야 한다"

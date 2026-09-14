@@ -37,7 +37,7 @@ class SimFailed(RuntimeError):
 
 
 def tick_seconds(speed, sim_engine_dir):
-    """이 속도에서 헤딩 모델의 틱 하나가 몇 초인가 (계약 v4 = CELL_M / (speed x MOVE_TICKS)).
+    """이 속도에서 헤딩 모델의 틱 하나가 몇 초인가 (계약 v3.6 = CELL_M / (speed x MOVE_TICKS)).
 
     **시뮬과 같은 상수를 읽는다.** 여기 숫자를 또 적으면 틱 모델이 바뀔 때 워커만 옛 값을
     쓰게 되고, 그러면 워커가 의도한 초가 시뮬에서 다른 초가 된다 — v3.3 의 CELL_M / speed
