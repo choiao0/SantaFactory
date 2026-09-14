@@ -243,6 +243,18 @@ class RobotGeom:
     #     각각 넘긴다. 값이 갈릴 수 있는 지점이 이미 있으므로 검사가 필요하다.
     front_swing: bool = False
 
+    # [patch_axle] 섞임 대각 2칸(mA, mB)까지 쓰는가 = 4칸 규칙.
+    #   -79 부터 계획기 상태가 **둘**이라 `front_swing` 하나로는 구별이 안 된다.
+    #
+    #       front_swing=True, front_diag=False   -> 2칸 {f0, f1}
+    #       front_swing=True, front_diag=True    -> 4칸 {f0, f1, mA, mB}
+    #
+    #   ★ 이 값은 **규칙 계산에 안 쓴다.** 칸 집합은 `front_cells()` 가 계획기
+    #     함수를 그대로 부르므로 자동으로 따라간다. 여기 두는 이유는 두 가지다 —
+    #     `geo.front_diag_on()` 과 대조해 반쪽 설정을 잡고, 지문·셀프테스트의
+    #     기대값이 어느 상태에서 나온 것인지 기록으로 남기려는 것이다.
+    front_diag: bool = False
+
     # ★ pibt_core의 h를 물리 헤딩으로 옮길 때 더하는 값 (0 또는 2).
     #
     # pibt_core는 `occupied(s) = {pos, pos - DIRS[h]}` — 차체가 h의 **뒤쪽**
@@ -466,30 +478,38 @@ class RobotGeom:
         """회전 중 **코만 스치는** 앞 칸. 몸은 안 들어간다.
 
         규칙(몇 칸인지, 대각을 넣는지)은 `3_FMS/sim_engine/pibt/geometry.py`
-        가 정한다. 우리는 **실제 스윕과의 교집합**만 얹는다 — 그게 pitch
-        게이팅이다. pitch 1.2 에서는 코 반경 0.559 가 반칸 0.600 안이라
-        스윕이 앞 칸에 안 닿고, 교집합이 자동으로 빈 집합이 된다.
+        가 **단일 소스**다. 여기서는 그 함수를 그대로 부른다.
 
         ★ 여기서 규칙을 다시 구현하지 말 것. 정의가 두 벌이 되는 순간
-          "계획기 6칸 / ADG 2칸" 같은 어긋남이 **검사로 안 잡힌다**
-          (설계서 §0-1).
+          "계획기 4칸 / ADG 2칸" 같은 어긋남이 **검사로 안 잡힌다**
+          (설계서 §0-1). 2026-09-14 에 실제로 그 버그가 났다 — 교집합을
+          간선 조회에도 써서 4칸이 조용히 2칸으로 퇴화했다.
+
+        ★ **교집합을 여기서 하지 말 것.** 돌려주는 것은 규칙이 준 칸 그대로
+          (`guard`) 이고, 실제 스윕과의 교집합(`soft`)은 `extract_actions`
+          가 따로 만든다. 규칙이 내놓는 칸 중 일부는 스윕 **밖**이다 —
+          pitch 1.0 에서 섞임 대각 mA·mB 가 0/8 로 그렇다. 여기서 깎으면
+          그 칸들이 간선에서 사라진다.
+
+        ★ pitch 게이팅도 여기서 하지 말 것. `configure(robot_dims, pitch)`
+          가 `front_needed()` 로 계획기 안에서 판정한다 (FMS 답신 4 §1).
+          우리가 밖에서 한 번 더 걸면 두 층의 기준이 갈라진다.
 
         ★ `_sweep_stencil` 캐시를 쓰지 말 것. 키가 `(h0, h1, dr, dc, samples)`
           라서 "코만 스윕" 을 같은 캐시로 구하면 **몸통 스윕 결과**를 받는다.
 
-        **본체는 아직 없다.** FMS 가 앞 2칸/6칸 중 무엇으로 갈지 답한 뒤에
-        위임을 연결한다 (설계서 §9 2번).
-
-        ★ 그동안 `front_swing=True` 가 들어오면 **죽는다.** 조용히 빈 집합을
-          돌려주면 §0-1 이 막으려던 상태 — 계획기는 켜졌는데 ADG 는 사실상
-          꺼진 — 를 우리 손으로 만드는 것이다.
+        헤딩은 pibt 규약 그대로 넘긴다 — `geo.front_cells` 도 같은 `DIRS` 를
+        쓰므로 `phys_heading` 변환을 끼우면 안 된다.
         """
         if not self.front_swing:
             return frozenset()
-        raise RuntimeError(
-            "★ front_swing=True 인데 front_cells() 본체가 아직 없다.\n"
-            "  FMS 가 앞 2칸/6칸을 확정한 뒤 위임을 연결한다 (설계서 §9 2번).\n"
-            "  그 전까지 이 스위치는 켤 수 없다.")
+        try:
+            import pibt.geometry as geo
+        except ImportError as e:                       # pragma: no cover
+            raise RuntimeError(
+                "★ front_swing=True 인데 계획기 기하를 못 불러온다.\n"
+                "  pibt_core_v2 가 sys.path 에 sim_engine 을 넣었는지 본다.") from e
+        return frozenset(geo.front_cells(s0[0], s0[1], s0[2], s1[2]))
 
     @property
     def lateral_gap(self) -> float:
@@ -840,16 +860,32 @@ def _key(action: Action, cell: Cell) -> tuple[int, int, int]:
 def _check_front_swing(actions: list[Action], geom: "RobotGeom") -> None:
     """앞 칸 규칙이 계획기와 ADG **양쪽에서** 같은 상태인지 (설계서 §0-1).
 
-    두 검사를 한다.
+    네 검사를 한다.
 
       (1) 설정 일치 — 스위치가 양쪽에서 같은가.
           위임 설계라 ADG 쪽에 규칙 정의가 없으므로, 비교할 것은 **스위치
-          상태 하나**다. 이게 임시형이 아니라 최종형이다.
+          상태**다. 이게 임시형이 아니라 최종형이다.
 
-      (2) 결과 정합 — 켰고 코가 칸을 벗어나는 pitch 인데 `soft` 가 전부
+      (1b) 대각 스위치 일치 — `front_diag` 까지 본다.
+          -79 부터 계획기 상태가 **둘**이다. `front_swing=True` 하나만으로는
+          2칸인지 4칸인지 구별되지 않는다.
+
+              front_swing=True, front_diag=False   -> 2칸
+              front_swing=True, front_diag=True    -> 4칸
+
+          규칙 집합 자체는 위임이라 자동으로 따라가지만, 지문·셀프테스트의
+          기대값이 달라지므로 어느 상태인지는 기록으로 알아야 한다.
+
+      (2) **pitch 게이팅이 실제로 작동하는가.**
+          `configure(front_swing=True)` 를 `robot_dims` 없이 부르면 계획기가
+          게이팅을 **통째로 건너뛴다** (-79 의 `configure` 본문:
+          `if front_swing and robot_dims is not None:`). 그러면 1.2 에서도
+          규칙이 켜진다. 여기서 직접 물어 잡는다 — 코가 칸을 안 벗어나는
+          pitch 인데 규칙이 칸을 내놓으면 게이팅이 안 걸린 것이다.
+
+      (3) 결과 정합 — 켰고 코가 칸을 벗어나는 pitch 인데 `guard` 가 전부
           비었으면 `front_cells()` 기하나 벤더 폴백이 고장난 것이다.
-          **pitch 조건이 있어야** 1.2 에서 안 걸리고 1.0 에서만 걸린다
-          (1.2 는 코가 칸을 안 벗어나 `soft` 가 비는 것이 정상이다).
+          **pitch 조건이 있어야** 1.2 에서 안 걸리고 1.0 에서만 걸린다.
     """
     try:
         import pibt.geometry as geo
@@ -875,12 +911,34 @@ def _check_front_swing(actions: list[Action], geom: "RobotGeom") -> None:
             f"  한쪽만 켜지면 계획에 위험한 배치가 남고 ADG 는 그걸 못 잡는다 "
             f"(주차한 로봇은 간선의 대상이 아니다).")
 
-    if (geom.front_swing                                     # (2)
+    # (1b) 대각 스위치. 계획기에 없으면(-79 이전) ADG 쪽도 꺼져 있어야 한다.
+    planner_diag = bool(getattr(geo, "front_diag_on", lambda: False)())
+    if planner_diag != geom.front_diag:
+        raise RuntimeError(
+            f"★ 대각 스위치가 어긋났다 — 계획기 {planner_diag} / "
+            f"ADG {geom.front_diag}.\n"
+            f"  규칙 집합은 위임이라 따라가지만, 지문과 셀프테스트의 기대값이 "
+            f"달라진다. 어느 상태로 돌렸는지 기록에 남아야 한다.")
+
+    # (2) pitch 게이팅이 정말 걸려 있나 — `robot_dims` 를 안 준 경우를 잡는다.
+    if geom.front_swing and geom.pitch >= geom.nose_clears_cell_pitch:
+        probe = geo.front_cells(5, 5, 1, 0)
+        if probe:
+            raise RuntimeError(
+                f"★ pitch {geom.pitch:.2f} 는 코가 칸을 안 벗어나는 격자인데"
+                f"(한계 {geom.nose_clears_cell_pitch:.4f}) 계획기가 앞 칸을 "
+                f"{sorted(probe)} 로 내놓는다.\n"
+                f"  configure(front_swing=True) 를 **robot_dims 없이** 불렀을 "
+                f"때 생긴다 — 그러면 계획기가 게이팅을 통째로 건너뛴다.\n"
+                f"  configure(..., robot_dims=(front_len, rear_len, width), "
+                f"pitch=...) 로 부를 것.")
+
+    if (geom.front_swing                                     # (3)
             and geom.pitch < geom.nose_clears_cell_pitch
             and not any(a.guard for a in actions)):
         raise RuntimeError(
             f"★ pitch {geom.pitch:.2f} 는 코가 칸을 벗어나는 격자인데"
-            f"(한계 {geom.nose_clears_cell_pitch:.4f}) soft 가 전부 비었다 — "
+            f"(한계 {geom.nose_clears_cell_pitch:.4f}) guard 가 전부 비었다 — "
             f"front_cells() 기하 또는 벤더 폴백을 확인하라.")
 
 
