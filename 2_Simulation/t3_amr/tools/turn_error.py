@@ -64,6 +64,27 @@ def off_center(x, y, pitch):
     return np.hypot(dx, dy)
 
 
+def decompose(x, y, yaw, pitch):
+    """칸 중심 오차를 **진행축 기준**으로 나눈다 -> (세로, 가로) m.
+
+    왜 나누나: 옆 칸 두 대 사이 여유 `lateral_gap` 을 먹는 것은 **가로**
+    성분이다. 세로(앞뒤) 오차는 제동 거리가 틀린 것이고, 나란히 선 두 대의
+    옆 간격을 직접 줄이지 않는다.
+
+    2026-09-14 에 회전 중 축 이탈 41.8 mm 를 통째로 예산에서 뺐는데,
+    회전 구간 **안**에서 축이 움직인 양은 3.7 mm RMS 뿐이었다. 42 mm 는
+    회전이 만든 것이 아니라 **멈춘 자리가 틀린 것**이다. 그렇다면 방향을
+    봐야 한다.
+    """
+    o = pitch / 2.0
+    ex = x - (o + np.round((x - o) / pitch) * pitch)
+    ey = y - (o + np.round((y - o) / pitch) * pitch)
+    c, s = np.cos(yaw), np.sin(yaw)
+    lon = ex * c + ey * s          # 진행 방향
+    lat = -ex * s + ey * c         # 그 왼쪽
+    return lon, lat
+
+
 def turns_of(t, x, y, yaw):
     """회전 구간을 찾아 (종료오차, 구간최대, 회전각, 지속) 목록을 낸다."""
     yaw = np.unwrap(yaw)
@@ -92,6 +113,56 @@ def turns_of(t, x, y, yaw):
             out.append((err[k], err[i:j + 1].max(), deg, t[j] - t[i]))
         i = j + 1
     return out
+
+
+def split_report(path):
+    """회전 **시작 시점** 오차를 세로/가로로 나눠 찍는다."""
+    z = np.load(path, allow_pickle=True)
+    t = np.asarray(z["t"], dtype=np.float64)
+    pose = np.asarray(z["pose"], dtype=np.float64)
+    yaw_all = np.unwrap(pose[:, :, 2], axis=0)
+    dt = np.diff(t)
+    dt[dt <= 0] = np.nan
+
+    lons, lats, wander = [], [], []
+    for a in range(pose.shape[1]):
+        x, y, yw = pose[:, a, 0], pose[:, a, 1], yaw_all[:, a]
+        spin = np.nan_to_num(np.abs(np.diff(yw) / dt)) > W_MIN
+        i, n = 0, len(spin)
+        while i < n:
+            if not spin[i]:
+                i += 1
+                continue
+            j = i
+            while j < n and spin[j]:
+                j += 1
+            if abs(np.degrees(yw[j] - yw[i])) >= MIN_DEG:
+                lo, la = decompose(x[i], y[i], yw[i], PITCH)
+                lons.append(lo * 1000.0)
+                lats.append(la * 1000.0)
+                # 구간 안에서 축이 실제로 움직인 양 (평균 둘레 RMS)
+                sx, sy = x[i:j + 1], y[i:j + 1]
+                wander.append(float(np.sqrt(np.mean(
+                    (sx - sx.mean()) ** 2 + (sy - sy.mean()) ** 2))) * 1000.0)
+            i = j + 1
+    if not lons:
+        return
+    lon = np.abs(np.array(lons))
+    lat = np.abs(np.array(lats))
+    wd = np.array(wander)
+    print()
+    print("   회전 **시작 시점** 오차를 진행축 기준으로 나눔")
+    print(f"   {'':<20}{'중앙':>8}{'p95':>8}{'최대':>8}   mm")
+    print(f"   {'세로 (앞뒤)':<20}{np.median(lon):>8.1f}"
+          f"{np.percentile(lon, 95):>8.1f}{lon.max():>8.1f}")
+    print(f"   {'가로 (옆)':<20}{np.median(lat):>8.1f}"
+          f"{np.percentile(lat, 95):>8.1f}{lat.max():>8.1f}")
+    print(f"   {'회전 중 축 이동량':<20}{np.median(wd):>8.1f}"
+          f"{np.percentile(wd, 95):>8.1f}{wd.max():>8.1f}   <- 구간 안 RMS")
+    print()
+    print("   ★ 옆 칸 여유(lateral_gap)를 먹는 것은 **가로** 성분이다.")
+    print(f"     세로가 크고 가로가 작으면 제동 거리 문제이고, 예산 소모는")
+    print(f"     생각보다 작다. 지금 가로 최대 {lat.max():.1f} mm.")
 
 
 def analyse(path):
@@ -161,6 +232,7 @@ def main():
             continue
         t, rows = analyse(p)
         report(p, t, rows)
+        split_report(p)
     print()
     print("* 지금까지 쓰던 51 mm 는 한 번의 관측이다. 이 표가 그걸 대체한다.")
     return 0
