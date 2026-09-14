@@ -147,11 +147,12 @@ def split_report(path):
             i = j + 1
     if not lons:
         return
-    lon = np.abs(np.array(lons))
-    lat = np.abs(np.array(lats))
+    slon = np.array(lons)          # 부호 있음: + 는 진행 방향으로 지나침
+    slat = np.array(lats)          # 부호 있음: + 는 진행 방향 기준 왼쪽
+    lon, lat = np.abs(slon), np.abs(slat)
     wd = np.array(wander)
     print()
-    print("   회전 **시작 시점** 오차를 진행축 기준으로 나눔")
+    print("   회전 **시작 시점** 오차를 진행축 기준으로 나눔 (크기)")
     print(f"   {'':<20}{'중앙':>8}{'p95':>8}{'최대':>8}   mm")
     print(f"   {'세로 (앞뒤)':<20}{np.median(lon):>8.1f}"
           f"{np.percentile(lon, 95):>8.1f}{lon.max():>8.1f}")
@@ -159,10 +160,33 @@ def split_report(path):
           f"{np.percentile(lat, 95):>8.1f}{lat.max():>8.1f}")
     print(f"   {'회전 중 축 이동량':<20}{np.median(wd):>8.1f}"
           f"{np.percentile(wd, 95):>8.1f}{wd.max():>8.1f}   <- 구간 안 RMS")
+
+    # ── 계통인가 무작위인가 ────────────────────────────────────────────
+    #   무작위면 부호 있는 중앙값이 0 근처여야 한다. 한쪽으로 치우쳐 있으면
+    #   목표점이 틀린 것이고 **고칠 수 있다.**
     print()
-    print("   ★ 옆 칸 여유(lateral_gap)를 먹는 것은 **가로** 성분이다.")
-    print(f"     세로가 크고 가로가 작으면 제동 거리 문제이고, 예산 소모는")
-    print(f"     생각보다 작다. 지금 가로 최대 {lat.max():.1f} mm.")
+    print("   부호 있는 값 — 계통 오차인가")
+    for nm, v in (("세로", slon), ("가로", slat)):
+        pos = float((v > 0).mean()) * 100.0
+        print(f"     {nm}  중앙 {np.median(v):+8.1f}  평균 {v.mean():+8.1f}"
+              f"   양수 비율 {pos:5.1f}%")
+    print("     (세로 +는 진행 방향으로 지나침 · 가로 +는 왼쪽)")
+
+    # ── 가로 분포 모양 ────────────────────────────────────────────────
+    #   중앙은 0 인데 p95 가 크면 분포가 둘로 갈린 것이다. 접촉은 꼬리
+    #   사건이라 예산에 쓰는 것은 꼬리다 — 중앙값으로 안심하면 안 된다.
+    print()
+    print("   가로 오차 분포 — 꼬리가 얼마나 두꺼운가")
+    edges = [0, 5, 10, 20, 40, 60, 1e9]
+    names = ["0-5", "5-10", "10-20", "20-40", "40-60", "60+"]
+    for lo, hi, nm in zip(edges, edges[1:], names):
+        k = int(((lat >= lo) & (lat < hi)).sum())
+        bar = "#" * int(round(50.0 * k / len(lat)))
+        print(f"     {nm:>6} mm  {k:>4}회 ({100.0 * k / len(lat):4.1f}%)  {bar}")
+    print()
+    print(f"   ★ 예산에 쓰는 것은 꼬리다. 가로 p95 {np.percentile(lat, 95):.1f} ·"
+          f" 최대 {lat.max():.1f} mm.")
+    print("     중앙값이 작다고 안심하면 안 된다 — 접촉은 꼬리에서 난다.")
 
 
 def analyse(path):
