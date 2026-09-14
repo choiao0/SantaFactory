@@ -2,8 +2,9 @@
 
 import numpy as np
 
-from .geometry import (DIRS, REVERSE_FACTOR, TURN_TICKS, _inb, front_cells, front_swing_on, occupied,
-                       stay_map_h, swing_cells, turn_mask, turn_ok, valid_state)
+from .geometry import (DIRS, MOVE_TICKS, REVERSE_FACTOR, TURN_COST, TURN_TICKS, _inb,
+                       front_cells, front_swing_on, occupied, stay_map_h, swing_cells,
+                       turn_mask, turn_ok, valid_state)
 from .hgraph import dist_map_h
 from .liveness import Replanner, Stagnation, wait_bias
 
@@ -196,7 +197,7 @@ def step_h(states, dists, edge_cost, wait_cost, free, priority_order,
     sec_map/sec_limit: 구간 대수 제한(-193) — sec_limit 0 이면 장치가 통째로 꺼진다.
     반환 (다음 상태 dict, 예약 칸 dict, 정원 때문에 막힌 agent 집합)."""
     if turn_cost is None:
-        turn_cost = float(TURN_TICKS)
+        turn_cost = float(TURN_COST)
     ps = _PIBTStepH(states, dists, edge_cost, wait_cost, free, turn_cost,
                     extra or {}, bias or {}, sec_map, sec_limit, sec_free)
     for a in priority_order:

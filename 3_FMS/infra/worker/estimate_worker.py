@@ -9,13 +9,15 @@
 #   python estimate_worker.py --once <요청.json>   큐 없이 1건 실행, 결과 JSON 을 stdout 에
 #
 # 환경: SIM_ENGINE_DIR(기본 /work/sim_engine, 없으면 이 파일 기준 ../../sim_engine)
-#       THETA_PATH(기본 <3_FMS>/infra/out/theta_wallA_r24_g15.json, "" 이면 중립)
+#       THETA_PATH(기본 <3_FMS>/infra/out/theta_wallA_r20_c6_v36.json, "" 이면 중립)
 #       SIM_TIMEOUT_S(기본 1200)  SIM_REQUEST_QUEUE/SIM_RESULT_QUEUE(기본 sim.request/sim.result)
 # 주문: 요청의 outbound[] 가 **필수** — 백엔드 OutboundOrderGenerator 가 견적 생성 시 1회 만들어 저장한 목록(-197)이고,
 #       같은 목록이 검증 런(scenario.orders)에도 간다. 비어 있으면 failed (워커 자체 생성 -158 은 2026-09-14 제거).
 # 속도 (-116, 계약 v3.3): amr.avg_payload_kg(사용자 평균 적재 무게)가 있으면 contracts/speed_model.speed_for_load 로
 #       amr.speed_empty·speed_loaded·max_payload_kg 앵커에서 속도를 정하고, 없으면 SPEED_DEFAULT(물리 계획 속도 0.9).
-#       run 내내 고정. 초 단위 입력(horizon_s·gap·서비스 5 s)은 dt = CELL_M / speed 로 틱이 되고, KPI 초는 엔진 dt_s 로 되돌린다.
+#       run 내내 고정. 초 단위 입력(horizon_s·gap·서비스 5 s)은 objective.tick_seconds 로 틱이 되고,
+#       KPI 초는 엔진 SUMMARY 의 dt_s 로 되돌린다. **틱 길이 공식을 여기 적지 않는다** — v3.6(-194)에서
+#       1칸이 4틱이 되며 CELL_M / speed 가 4배 틀린 값이 됐다(6h 요청이 1.5h 로 돌았다).
 # ============================================================
 import json
 import os
@@ -24,14 +26,18 @@ import sys
 import tempfile
 import time
 
-from objective import SimFailed, run_once
+from objective import SimFailed, run_once, tick_seconds
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 _LOCAL_FMS = os.path.dirname(os.path.dirname(HERE))                       # infra/worker → 3_FMS
 SIM_ENGINE_DIR = os.environ.get("SIM_ENGINE_DIR") or (
     "/work/sim_engine" if os.path.isdir("/work/sim_engine") else os.path.join(_LOCAL_FMS, "sim_engine"))
 FMS_DIR = os.path.dirname(SIM_ENGINE_DIR)
-THETA_PATH = os.environ.get("THETA_PATH", os.path.join(FMS_DIR, "infra", "out", "theta_wallA_r24_g15.json"))
+# 계약 v3.6(-194) 조건에서 뽑은 θ — 회전 마스크(v3.4) 위에서 재탐색한 값이다.
+# 이전 기본값 theta_wallA_r24_g15.json 은 구 조건(24대 · gap 15 · 1토트 · 속도 1.0 ·
+# 1칸=1틱 · 마스크 없음)이라 지금 시뮬과 다른 세계의 값이다.
+THETA_PATH = os.environ.get("THETA_PATH",
+                            os.path.join(FMS_DIR, "infra", "out", "theta_wallA_r20_c6_v36.json"))
 if FMS_DIR not in sys.path:                                                # contracts/ (이미지 안 /app/contracts, 로컬 3_FMS/contracts)
     sys.path.insert(0, FMS_DIR)
 from contracts.speed_model import speed_for_load  # noqa: E402
@@ -39,7 +45,6 @@ TIMEOUT_S = int(os.environ.get("SIM_TIMEOUT_S", "1200"))   # 6,000건·28대: �
 REQUEST_QUEUE = os.environ.get("SIM_REQUEST_QUEUE", "sim.request")
 RESULT_QUEUE = os.environ.get("SIM_RESULT_QUEUE", "sim.result")
 MAX_ROBOTS = 28            # 충전 존 초기 배치 상한 (SIM_RUN_CONTRACT §1 — 견적 제약)
-CELL_M = 1.0               # 계획 격자 1칸 [m] (map_loader.CELL_M 와 같은 값). 틱 길이 = CELL_M / speed
 SPEED_DEFAULT = 0.9        # 무게 입력이 없을 때의 고정 속도 [m/s] = 물리 시뮬 계획 속도 (물리 팀 답신 2026-09-13 §2-4). 세 팀 합의 시 여기만
 SVC_PER_TOTE_S = 5.0       # 픽업·하역 각각 토트당 서비스 [초] (-177 승인값)
 
@@ -130,7 +135,7 @@ def to_sim_args(req, orders_path=None):
     orders_path: 출고 주문을 써 둔 파일 (handle 이 만든다 — 요청 outbound[] 또는 자체 생성) → --orders-file (-156/-158)."""
     run_id, amr, n, horizon_s = _require_core(req)
     speed = _speed(amr, run_id)
-    dt = CELL_M / speed
+    dt = tick_seconds(speed, SIM_ENGINE_DIR)      # 시뮬과 같은 상수로 (-194)
     extra = [f"--horizon={int(round(horizon_s / dt))}", f"--speed={speed:g}"]
     # 교대: 요청이 주면 그대로, 없으면 출고 전용(-191). 팀 결정(2026-09-11) 견적 부하 = 6,000건/6h 출고만.
     # 엔진 기본 in,out,out 은 입고를 켜서 고밀도 교착(입고 × 차선·양보)까지 부른다. 결과 inbound_* 는 0 으로 남는다.

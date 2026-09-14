@@ -7,6 +7,14 @@ import pytest
 
 import estimate_worker as w
 
+# 틱 수를 박지 않는다. 초 ÷ dt 로 유도해야 틱 모델이 또 바뀌어도 이 테스트가 산다 (-194).
+DT = w.tick_seconds(0.9, w.SIM_ENGINE_DIR)      # 기본 속도 0.9 의 틱 길이[초]
+
+
+def _ticks(sec, speed=0.9):
+    return sec / w.tick_seconds(speed, w.SIM_ENGINE_DIR)
+
+
 # 백엔드가 생성해 싣는 출고 주문 1건 (-197 이후 outbound[] 는 항상 채워 온다)
 ORDER = {"order_id": 1, "ordered_at_s": 3, "lines": [{"product_id": 7, "rack_id": "A2", "qty": 1}]}
 
@@ -36,16 +44,21 @@ KPI_KEYS = {"orders_total", "orders_completed", "inbound_total", "inbound_comple
 def test_request_to_args():
     kw = w.to_sim_args(REQ)
     assert (kw["tag"], kw["n_robots"], kw["n_orders"], kw["seed"]) == ("est_77_n3", 3, 0, 42)
-    # 무게 입력 없음 → 기본 0.9 m/s → 틱 1.111 s: 초 입력이 전부 ×0.9 틱으로
-    assert set(kw["extra_args"]) == {"--horizon=19440", "--speed=0.9", "--shifts=in,in,out,out,out,out",
-                                     "--order-gap=20.25", "--inbound-gap=43.2"}
+    # 무게 입력 없음 → 기본 0.9 m/s. 초 입력이 전부 초÷dt 로 틱이 된다.
+    assert set(kw["extra_args"]) == {
+        "--horizon=%d" % round(_ticks(21600)), "--speed=0.9", "--shifts=in,in,out,out,out,out",
+        "--order-gap=%g" % _ticks(22.5), "--inbound-gap=%g" % _ticks(48.0)}
+    # 되돌리면 요청한 초가 나와야 한다 — 이게 깨지면 6 h 요청이 다른 시간으로 돈다
+    horizon = next(int(f.split("=")[1]) for f in kw["extra_args"] if f.startswith("--horizon"))
+    assert horizon * DT == pytest.approx(21600, rel=1e-4)
 
 
 def test_defaults_and_tag_sanitizing():
     kw = w.to_sim_args({"run_id": "a/b c", "horizon_s": 3600, "amr": {"count": 1}})
     assert kw["tag"] == "a_b_c"
     assert kw["seed"] == 42
-    assert kw["extra_args"] == ("--horizon=3240", "--speed=0.9", "--shifts=out")     # 교대 없으면 출고 전용 (-191)
+    # 교대 없으면 출고 전용 (-191). 틱 수는 초에서 유도한다 (-194).
+    assert kw["extra_args"] == ("--horizon=%d" % round(_ticks(3600)), "--speed=0.9", "--shifts=out")
 
 
 @pytest.mark.parametrize("bad", [
@@ -76,11 +89,11 @@ def test_kpi_seconds_follow_engine_dt():
 
 
 def test_speed_from_payload_and_anchors():
-    """평균 무게 + 기종 앵커 → speed_for_load. 50/100 kg, 1.2→1.0 이면 1.1 m/s, horizon 21600 s = 23760 틱."""
+    """평균 무게 + 기종 앵커 → speed_for_load. 50/100 kg, 1.2→1.0 이면 1.1 m/s."""
     amr = {"count": 3, "speed_empty": 1.2, "speed_loaded": 1.0, "max_payload_kg": 100, "avg_payload_kg": 50}
     extra = w.to_sim_args({**REQ, "amr": amr})["extra_args"]
     assert "--speed=1.1" in extra
-    assert "--horizon=23760" in extra
+    assert "--horizon=%d" % round(_ticks(21600, speed=1.1)) in extra
     # 앵커가 하나라도 없으면 계산 불가 → 기본 0.9 (run 은 돈다)
     extra = w.to_sim_args({**REQ, "amr": {"count": 3, "speed_empty": 1.2, "avg_payload_kg": 50}})["extra_args"]
     assert "--speed=0.9" in extra
@@ -126,12 +139,13 @@ def test_explicit_orders_and_capacity_flags():
     req = {**REQ, "outbound": [{"order_id": 1, "ordered_at_s": 3, "lines": [{"product_id": 7, "rack_id": "A2", "qty": 1}]}]}
     extra = w.to_sim_args(req, orders_path="/tmp/o.json")["extra_args"]
     assert "--orders-file=/tmp/o.json" in extra
-    assert {"--capacity=6", "--tote-units=8", "--svc-per-tote=5"} <= set(extra)
+    svc = max(1, int(w.SVC_PER_TOTE_S / DT + 0.5))
+    assert {"--capacity=6", "--tote-units=8", "--svc-per-tote=%d" % svc} <= set(extra)
     no_cap = w.to_sim_args({**req, "amr": {"count": 3, "capacity": None}}, orders_path="/tmp/o.json")["extra_args"]
     assert "--orders-file=/tmp/o.json" in no_cap
     assert not any(f.startswith("--capacity") for f in no_cap)
     assert "--tote-units=8" in no_cap
-    assert "--svc-per-tote=5" in no_cap
+    assert "--svc-per-tote=%d" % svc in no_cap
     null_units = w.to_sim_args({**req, "amr": {"count": 3, "capacity": None, "tote_units": None}},
                                orders_path="/tmp/o.json")["extra_args"]     # 백엔드 실제 형식: 키는 있고 값은 null
     assert "--tote-units=8" in null_units

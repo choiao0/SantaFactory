@@ -62,7 +62,7 @@ from map_loader import (load_map, make_homes, CELL_M, OFFSET_M, MAP_DIR, ROBOT_D
                         make_homes_zone, load_rack_map, load_topology_spec, masked_turn_ratio, turn_mask)
 from pibt.geometry import FOOTPRINT_MARGIN_M
 from order_stream import MAX_ORDER_TOTES, OrderStream
-from pibt_core import DIRS, TURN_TICKS
+from pibt_core import DIRS, MOVE_TICKS, TURN_TICKS
 
 SERVICE_TIME_S = 40 / 11            # v1과 동일 (docs/θ_경로_기준선.md#기준선-계보)
 SERVICE_STEPS = round(SERVICE_TIME_S / DT)
@@ -99,7 +99,8 @@ def _parse_positional(argv):
     # 입구(창·서비스·주문 도착 초 → 틱)와 출구(틱 → 초) 환산만 바뀌고, 1.0 이면 비트 동일.
     a.speed = _opt(argv, "speed", float, SPEED)
     assert 0.1 <= a.speed <= 5.0, f"--speed 는 0.1~5.0 m/s: {a.speed}"
-    a.dt = CELL_M / a.speed
+    # 틱 길이는 나중에 모델이 정해진 뒤 _parse_model 에서 잡는다 (-194) — 헤딩은 1칸이
+    # MOVE_TICKS 틱이고 칸 모델은 1칸 = 1틱이라 같은 speed 라도 틱 길이가 다르다.
     if a.map_dir is not None:
         assert os.path.isdir(a.map_dir), f"--map-dir 폴더가 없다: {a.map_dir}"
     return a, pos
@@ -114,6 +115,13 @@ def _parse_model(a, argv):
         if "--heading" in argv:
             a.warnings.append("[WARN] --heading 은 v1compat 에서 무시 (패리티: 항상 칸 모델)")
         a.heading = False
+    # 틱 길이 (-116 의 dt 를 -194 가 모델별로 나눈다). speed 는 가감속을 포함한 **실효**
+    # 속도고, 1칸에 걸리는 시간이 CELL_M / speed 가 되도록 잡는다.
+    #   헤딩   1칸 = MOVE_TICKS 틱  →  dt = CELL_M / (speed × MOVE_TICKS)
+    #   칸 모델 1칸 = 1틱            →  dt = CELL_M / speed        (v3.3 과 같은 식)
+    # 칸 모델·v1compat 은 A/B 비교축이라 건드리지 않는다 — 여기서 MOVE_TICKS 로 나누면
+    # 서비스 틱이 4 → 15 가 되어 기준값 2317/186.4 · 2970/127.3 이 깨진다.
+    a.dt = CELL_M / (a.speed * (MOVE_TICKS if a.heading else 1))
     # 충전 존 복귀 = main 흐름 기본값 (2026-09-03 결정). 기존 고정 홈 12칸은 --fixed-homes opt-in.
     # v1compat 은 패리티 때문에 항상 고정 홈. (--zone 은 호환용 무시)
     a.zone = "--fixed-homes" not in argv and a.flow != "v1compat"
@@ -336,7 +344,8 @@ def build(a):
                        dock_prio=a.dock_prio, export=a.export, service_steps=round(SERVICE_TIME_S / a.dt),
                        capacity=a.capacity, svc_per_tote=a.svc_per_tote,
                        yield_rule=a.yield_rule, section_limit=a.section_limit,
-                       turn_ticks=TURN_TICKS, stall_warn_only=a.horizon is not None,
+                       turn_ticks=TURN_TICKS, move_ticks=MOVE_TICKS,
+                       stall_warn_only=a.horizon is not None,
                        footprint=a.footprint, robot_dims=a.robot_dims, **bat)
     kernel = FmsKernel(free, st_cell, edge_cost, wait_cost, homes, a.n_robots, cfg,
                        zone_mask=zone_mask, on_task_completed=stream.on_completed,

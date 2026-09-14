@@ -3,7 +3,7 @@ from heapq import heappop, heappush
 
 import numpy as np
 
-from .geometry import (DIRS, REVERSE_FACTOR, TURN_TICKS, turn_mask, turn_ok,
+from .geometry import (DIRS, REVERSE_FACTOR, TURN_COST, turn_mask, turn_ok,
                        valid_state)
 
 
@@ -38,7 +38,7 @@ def _dist_map_h_ref(free, goal, edge_cost=None, turn_cost=None):
     if edge_cost is None:
         edge_cost = np.ones((H, W, 4), dtype=np.float64)
     if turn_cost is None:
-        turn_cost = float(TURN_TICKS)
+        turn_cost = float(TURN_COST)
     dm = np.full((H, W, 4), -1.0, dtype=np.float64)
     done = np.zeros((H, W, 4), dtype=bool)
     pq = []
@@ -146,7 +146,7 @@ class HGraph:
         self.H, self.W = H, W
         if edge_cost is None:
             edge_cost = np.ones((H, W, 4), dtype=np.float64)
-        tc = float(TURN_TICKS if turn_cost is None else turn_cost)
+        tc = float(TURN_COST if turn_cost is None else turn_cost)
         self.turn_cost = tc
         self.n = H * W * 4
         cell_free = free.ravel().tolist()
@@ -307,7 +307,7 @@ def hgraph_for(free, edge_cost=None, turn_cost=None, limit=4):
     mask = turn_mask()
     key = (free.shape, hash(free.tobytes()),
            None if edge_cost is None else hash(np.ascontiguousarray(edge_cost, dtype=np.float64).tobytes()),
-           float(TURN_TICKS if turn_cost is None else turn_cost),
+           float(TURN_COST if turn_cost is None else turn_cost),
            None if mask is None else hash(mask.tobytes()))
     g = _hgraph_cache.get(key)
     if g is None:
