@@ -78,6 +78,15 @@ export STREAM_PORT=${STREAM_PORT:-47998}   # UDP 미디어
 #
 #   ★ `cut -d, -f1` 로 **index 만** 떼야 한다. `tr -dc '0-9'` 만 쓰면
 #     "2, 100" 이 `2100` 이 된다 (2026-09-13 실측으로 걸렀다).
+#   ★ **다시 source 해도 새로 고른다** (2026-09-14). `paths.sh` 는 `GPU` 를
+#     export 하므로, 한 번 source 한 셸에는 값이 남는다. 그러면 다음 source
+#     때 `[ -z "$GPU" ]` 가 거짓이라 **선택 로직이 통째로 건너뛰어진다** —
+#     이 파일을 고쳐도 그 셸에서는 옛 값이 계속 쓰였다 (실제로 겪었다).
+#     앞선 source 가 넣은 값은 "사용자가 준 값" 이 아니므로 지우고 다시 고른다.
+#     사용자가 직접 준 값(`GPU=1 bash ...`)은 이 표시가 없어 그대로 살아남는다.
+if [ -n "${GPU:-}" ] && [ "${GPU}" = "${_PATHS_GPU_AUTO:-}" ]; then
+    unset GPU
+fi
 if [ -z "${GPU:-}" ]; then
     _pg="${PREFER_GPU:-3}"
     if nvidia-smi --query-gpu=index --format=csv,noheader,nounits 2>/dev/null \
@@ -89,8 +98,11 @@ if [ -z "${GPU:-}" ]; then
                | sort -t, -k2 -n | head -1 | cut -d, -f1 | tr -dc '0-9')"
     fi
     unset _pg
+    export GPU=${GPU:-0}              # nvidia-smi 가 없거나 비었을 때
+    export _PATHS_GPU_AUTO="$GPU"     # 자동 선택 표시 — 다음 source 때 다시 고른다
+else
+    unset _PATHS_GPU_AUTO             # 사용자가 준 값이다. 건드리지 않는다
 fi
-export GPU=${GPU:-0}          # nvidia-smi 가 없거나 비었을 때
 
 # [patch_gpu_isolate] GPU 격리 — 이 한 줄이 run.sh·run_record.sh·build_scene 전부에 적용된다
 #   `--/renderer/activeGpu=$GPU` 는 **렌더러(Vulkan)만** 묶는다. PhysX/warp 쪽
