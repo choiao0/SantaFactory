@@ -11,7 +11,8 @@
 # 환경: SIM_ENGINE_DIR(기본 /work/sim_engine, 없으면 이 파일 기준 ../../sim_engine)
 #       THETA_PATH(기본 <3_FMS>/infra/out/theta_wallA_r24_g15.json, "" 이면 중립)
 #       SIM_TIMEOUT_S(기본 600)  SIM_REQUEST_QUEUE/SIM_RESULT_QUEUE(기본 sim.request/sim.result)
-#       ORDER_GEN_DIR(기본 <3_FMS>/order_gen)  WORKER_GEN_ORDERS(기본 1, 0 이면 주문 자체 생성 끄고 간격 모드 — -158)
+# 주문: 요청의 outbound[] 가 **필수** — 백엔드 OutboundOrderGenerator 가 견적 생성 시 1회 만들어 저장한 목록(-197)이고,
+#       같은 목록이 검증 런(scenario.orders)에도 간다. 비어 있으면 failed (워커 자체 생성 -158 은 2026-09-14 제거).
 # 속도 (-116, 계약 v3.3): amr.avg_payload_kg(사용자 평균 적재 무게)가 있으면 contracts/speed_model.speed_for_load 로
 #       amr.speed_empty·speed_loaded·max_payload_kg 앵커에서 속도를 정하고, 없으면 SPEED_DEFAULT(물리 계획 속도 0.9).
 #       run 내내 고정. 초 단위 입력(horizon_s·gap·서비스 5 s)은 dt = CELL_M / speed 로 틱이 되고, KPI 초는 엔진 dt_s 로 되돌린다.
@@ -35,8 +36,6 @@ if FMS_DIR not in sys.path:                                                # con
     sys.path.insert(0, FMS_DIR)
 from contracts.speed_model import speed_for_load  # noqa: E402
 TIMEOUT_S = int(os.environ.get("SIM_TIMEOUT_S", "600"))
-ORDER_GEN_DIR = os.environ.get("ORDER_GEN_DIR", os.path.join(FMS_DIR, "order_gen"))
-GEN_ORDERS = os.environ.get("WORKER_GEN_ORDERS", "1") != "0"
 REQUEST_QUEUE = os.environ.get("SIM_REQUEST_QUEUE", "sim.request")
 RESULT_QUEUE = os.environ.get("SIM_RESULT_QUEUE", "sim.result")
 MAX_ROBOTS = 28            # 충전 존 초기 배치 상한 (SIM_RUN_CONTRACT §1 — 견적 제약)
@@ -164,40 +163,15 @@ def to_kpi(s):
 
 
 # ------------------------------------------------------------
-# 출고 주문 자체 생성 (-158, docs/견적_워커.md "주문 자체 생성")
-# 백엔드는 outbound[] 를 비워 보내므로 창고 정보(outbound_avg·출고 시간대·seed)로 워커가 만든다.
+# 출고 주문 — 백엔드가 만든 목록만 쓴다 (-197). 주문의 단일 원천은 백엔드 OutboundOrderGenerator 이고
+# estimates.outbound_orders_json 에 저장된 그 목록이 DES 스윕(outbound[])과 검증 런(scenario.orders)에 똑같이 간다.
+# 워커 자체 생성(-158, order_gen)은 2026-09-14 제거 — 두 생성기가 seed 가 같아도 다른 주문을 내서 원천을 하나로 뒀다.
 # ------------------------------------------------------------
-def _generate_orders(req):
-    """하루치 생성 → 출고 창 [outbound_start, outbound_end) 로 비례 매핑 → [start, start+horizon) 자르기. slice 출력 dict."""
-    if ORDER_GEN_DIR not in sys.path:
-        sys.path.insert(0, ORDER_GEN_DIR)
-    import generate_orders                                                 # 이미지 안 /app/order_gen (estimate.Dockerfile)
-    import slice_orders
-    _, _, _, horizon_s = _require_core(req)
-    wh = req.get("warehouse") or {}
-    n_day = int(wh.get("outbound_avg") or 500)                             # 500 = 프로파일 원본 규모
-    seed = int(req.get("seed", 42))
-    day = generate_orders.generate(
-        generate_orders.load_json(os.path.join(ORDER_GEN_DIR, "profiles", "order_rules.json")),
-        generate_orders.load_json(os.path.join(ORDER_GEN_DIR, "master", "santafactory_sample.json")),
-        n_day, seed=seed)
-    start = slice_orders.to_seconds(wh["outbound_start"]) if wh.get("outbound_start") else 7 * 3600   # 07:00 = 프로파일 피크
-    end = slice_orders.to_seconds(wh["outbound_end"]) if wh.get("outbound_end") else 0
-    if start < end:                                                        # 야간 교대(end <= start)는 매핑 없이 start 부터
-        day = slice_orders.rescale_orders(day, start, end)
-    return slice_orders.slice_orders(day, start, min(start + int(round(horizon_s)), 86400))
-
-
 def _orders_file(req):
-    """(임시 파일 경로, 건수). 요청 outbound[] 우선, 없으면 자체 생성(GEN_ORDERS). 주문이 없으면 (None, 0) = 간격 모드."""
+    """(임시 파일 경로, 건수). outbound[] 가 비어 있으면 ValueError → handle 이 failed 로 발행한다."""
     orders = req.get("outbound")
-    if not orders and GEN_ORDERS:
-        gen = _generate_orders(req)
-        orders = gen["outbound"]
-        log(f"{req.get('run_id')}: 주문 자체 생성 {len(orders)}/{gen['meta']['orders_total']}건 "
-            f"(창 {gen['meta']['window_start_s']}~{gen['meta']['window_end_s']} s, seed {gen['meta']['seed']})")
-    if not orders:
-        return None, 0
+    if not isinstance(orders, list) or not orders:
+        raise ValueError("outbound[] 가 비어 있음 — 주문은 백엔드가 생성해 요청에 싣는다 (S15P21A106-197)")
     fd, path = tempfile.mkstemp(prefix="orders_", suffix=".json")
     with os.fdopen(fd, "w", encoding="utf-8") as f:
         json.dump({"outbound": orders}, f)
