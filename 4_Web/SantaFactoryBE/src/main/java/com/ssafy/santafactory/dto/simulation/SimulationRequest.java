@@ -16,7 +16,8 @@ import java.util.List;
  * 같은 틀린 답을 낸다. 실행 시간을 요청에 명시해 그 가정을 계약에 남긴다.
  *
  * @param horizonS     고정 시간 실행 길이(초). 없으면 시뮬이 유한 주문 모드로 돈다
- * @param shifts       입고/출고 교대 토큰열. 전체 시간을 토큰 수로 등분한다 (예: in,in,out,out,out,out)
+ * @param shifts       입고/출고 교대 토큰열. 전체 시간을 토큰 수로 등분해 입고(in)를 켤 구간을 정한다 — 출고는
+ *                     {@code outbound} 목록의 시각을 따른다. 기본 {@code out}(출고 전용, S15P21A106-214)
  * @param inboundGapS  입고 도착 간격(초) 평균
  * @param outboundGapS 출고 도착 간격(초) 평균
  */
