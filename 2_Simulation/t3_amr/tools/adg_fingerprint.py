@@ -22,9 +22,8 @@ import sys
 
 sys.path.insert(0, os.path.join(os.environ["W"], "path"))
 import pibt_core_v2                      # noqa: F401
-from pibt_core import run_h              # noqa: E402
+from pibt_core import TURN_TICKS, run_h  # noqa: E402
 import isaac_drive as D                  # noqa: E402
-from isaac_drive import TICKS_PER_CELL   # noqa: E402
 import pibt_scene                        # noqa: E402
 
 MAP = os.environ["MAP"]
@@ -32,11 +31,12 @@ N = int(os.environ.get("N", "12"))
 PITCH = float(os.environ.get("PIBT_PITCH", "1.2"))
 SEEDS = [int(x) for x in os.environ.get("SEEDS", "1,2,4").split(",")]
 MODE = os.environ.get("MODE", "lifelong")        # lifelong | oneshot
-# [patch_ticks] 틱 단위는 계획기가 정한다. 옛 판(1틱 = 1칸) 기준 값에
-#   TICKS_PER_CELL 을 곱해 쓴다 — 2026-09-14 에 계획기가 4틱/칸으로
-#   바뀌면서 315틱이 79칸이 되어 "처리량 하락" 으로 오진했다.
-HORIZON = int(os.environ.get("HORIZON", str(315 * TICKS_PER_CELL)))
-GAP = int(os.environ.get("GAP", str(15 * TICKS_PER_CELL)))
+# [patch_ticks] 우리 경로(step_h)에서 전진은 1틱, 회전만 TURN_TICKS(5)틱이다.
+#   -194 이후 같은 일에 드는 틱이 1.3~1.6배 늘었다(회전 빈도에 따라).
+#   지평은 그대로 두고 기준 지문을 다시 떴다 — 이 값은 비교 기준일 뿐이라
+#   절대량이 중요하지 않다.
+HORIZON = int(os.environ.get("HORIZON", "315"))
+GAP = int(os.environ.get("GAP", "15"))
 OUT = os.path.join(os.environ["W"], "tools", "adg_fingerprint.json")
 
 
@@ -60,8 +60,7 @@ def build(seed):
             order_end=None, docks=pibt_scene.charge_docks(free, geom))
         return adg
     geom, free, starts, goals = pibt_scene.setup(MAP, N, PITCH, seed, "cross")
-    history, _ = run_h(free, starts, goals,
-                       max_steps=150 * TICKS_PER_CELL)
+    history, _ = run_h(free, starts, goals, max_steps=300)
     chains, order, _ = D.extract_actions(history, geom)
     return D.build_adg(chains)
 
@@ -87,8 +86,7 @@ def main():
     save = "--save" in sys.argv
     cur = {}
     print(f"모드 {MODE}  대수 {N}  pitch {PITCH}  시드 {SEEDS}")
-    print(f"지평 {HORIZON}틱 · 주기 {GAP}틱   (1칸 = {TICKS_PER_CELL}틱 "
-          f"-> {HORIZON // TICKS_PER_CELL}칸 · {GAP // TICKS_PER_CELL}칸)\n")
+    print(f"지평 {HORIZON}틱 · 주기 {GAP}틱   (전진 1틱 · 회전 {TURN_TICKS}틱)\n")
     print(f"{'시드':>5}{'액션':>8}{'type1':>8}{'type2':>8}{'비순환':>8}"
           f"{'actions_sig':>18}{'edges_sig':>18}")
     for s in SEEDS:

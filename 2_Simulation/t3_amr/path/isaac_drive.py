@@ -180,26 +180,26 @@ from pibt_core import (
     swing_cells,
 )
 
-# [patch_ticks] 계획 틱의 **단위**는 계획기가 정한다. 여기서 박아 두면 안 된다.
+# [patch_ticks] 계획 틱이 무엇인지 — 두 경로가 다르다. 헷갈리면 안 된다.
 #
-#   2026-09-14 에 계획기가 `TURN_TICKS = 1` (1틱 = 1칸 이동) 에서
-#   `MOVE_TICKS = 4, TURN_TICKS = 5` 로 바뀌었다. 목적은 "회전이 전진보다
-#   1.25배 비싸다" 를 정수 틱으로 표현하는 것이다 — 전진이 1틱이면 회전은
-#   1 아니면 2뿐이라 비율을 못 쓴다.
+#   2026-09-14(-194)에 계획기에 `MOVE_TICKS = 4, TURN_TICKS = 5` 가 생겼다.
+#   그런데 **`MOVE_TICKS` 는 `kernel/core.py`(FmsKernel 실행 경로)에만
+#   적용된다.**
 #
-#   그 순간 우리 쪽 틱 상수가 전부 4배씩 틀어졌다. 지평 315틱은 예전엔
-#   315칸이었는데 이제 79칸이고, 그래서 "처리량이 20% 떨어졌다" 로 보였다.
-#   실제로는 측정 구간이 1/4 로 줄어든 것이었다 (단위를 맞추니 완료 10 -> 23).
+#       FmsKernel     전진 MOVE_TICKS(4) 틱 · 회전 TURN_TICKS(5) 틱
+#       step_h/run_h  전진 **1틱** · 회전 TURN_TICKS(5) 틱     <- 우리가 쓰는 쪽
 #
-#   ★ 그러니 틱 단위 값을 숫자로 쓰지 말고 **전부 여기서 파생시킨다.**
-#     계획기가 단위를 또 조정해도 따라간다.
-try:
-    from pibt_core import MOVE_TICKS
-except ImportError:                                  # 벤더 폴백 (옛 단위)
-    MOVE_TICKS = 1
-
-#: 1칸 이동에 해당하는 계획 틱 수. 옛 판(1틱 = 1칸)과의 환산 배수이기도 하다.
-TICKS_PER_CELL = max(1, int(MOVE_TICKS))
+#   `run_h` 도 `lifelong` 도 `step_h` 를 직접 부르므로 우리 경로에서 전진은
+#   여전히 1틱이다. 바뀐 것은 **회전이 1틱에서 5틱이 된 것**뿐이다.
+#
+#   그래서 같은 일에 드는 틱이 회전 빈도만큼 늘었다 — 실측 1.3~1.6배
+#   (같은 시드·같은 맵에서 계획기만 바꿔 잼). FMS 주석의 "2.07배" 가 그
+#   부류의 실측값이다.
+#
+#   ★ 한때 이 자리에 `TICKS_PER_CELL = MOVE_TICKS` 를 두고 지평·max_steps·
+#     tick_s 를 전부 4배로 환산했는데 **틀렸다.** 우리 경로에 MOVE_TICKS 가
+#     안 걸리므로 4배는 과하고, `tick_s` 는 원래 맞던 값을 틀리게 만들었다.
+#     상수를 그대로 두고, 틱이 무엇인지만 여기 적어 둔다.
 
 Cell = tuple[int, int]
 State = tuple[int, int, int]          # (r, c, h)
@@ -1534,14 +1534,16 @@ class FleetController:
         self.g = geom
         # release=True 면 계획의 출발 시각을 지킨다 (lifelong 에서 필수).
         # one-shot 은 도착 시각이라는 개념이 없으니 기본값 False 로 둔다.
-        # [patch_ticks] 계획 틱 -> 초. **1틱이 1칸이 아니다.**
-        #   계획기가 `MOVE_TICKS` 틱에 한 칸을 간다 (2026-09-14 기준 4틱).
-        #   이걸 안 나누면 릴리스 하한이 그 배수만큼 늦게 잡혀, 로봇이
-        #   필요 없이 기다린다. 측정 시나리오가 아니라 **실행층**이다.
-        self.rt = AdgRuntime(
-            adg,
-            tick_s=(geom.pitch / geom.v_max / TICKS_PER_CELL) if release
-            else None)
+        # [patch_ticks] 계획 틱 -> 초. 우리 경로(step_h)에서 **전진은 1틱**
+        #   이므로 `pitch / v_max` 가 맞다. `MOVE_TICKS` 로 나누면 안 된다 —
+        #   그건 FmsKernel 경로의 상수다 (위 주석).
+        #
+        #   ☹ 다만 회전은 TURN_TICKS(5) 틱을 쓰는데 물리적으로는 ~0.9초다.
+        #     그래서 회전이 많은 계획에서는 릴리스 하한이 늦게 잡힌다. 틱이
+        #     더는 균일한 시간 단위가 아니라 상수 하나로는 못 맞춘다.
+        #     `release` 는 lifelong 에서만 켜므로 지금은 감수한다.
+        self.rt = AdgRuntime(adg, tick_s=(geom.pitch / geom.v_max) if release
+                             else None)
         self.drivers = drivers
         # chains의 인덱스 = extract_actions가 쓴 agent 순서. 명시적으로 받는다.
         self.order = list(order) if order is not None else sorted(drivers)
@@ -2041,8 +2043,7 @@ def sweep_audit(geom: RobotGeom, history, cells_hist) -> dict:
     return {"total": total, "short": short, "by_kind": missing, "examples": examples}
 
 
-def selftest(geom: RobotGeom, n_agents: int = 12,
-             max_steps: int = 120 * TICKS_PER_CELL,
+def selftest(geom: RobotGeom, n_agents: int = 12, max_steps: int = 240,
              dt: float = 1.0 / 60.0, seeds: int = 4, verbose: bool = True) -> bool:
     say = print if verbose else (lambda *a, **k: None)
     ok = True
@@ -2254,8 +2255,7 @@ def selftest(geom: RobotGeom, n_agents: int = 12,
 
 
 def plan_and_build(free: np.ndarray, starts: dict[int, State], goals: dict[int, Cell],
-                   geom: RobotGeom,
-                   max_steps: int = 200 * TICKS_PER_CELL, **run_kw
+                   geom: RobotGeom, max_steps: int = 400, **run_kw
                    ) -> tuple[ADG, list[int], list[dict[int, State]], dict]:
     """pibt_core로 계획하고 ADG까지 만든다. Isaac Sim 쪽에서 부를 함수.
 
@@ -2316,8 +2316,8 @@ while simulation_app.is_running():
 '''
 def plan_and_build_lifelong(free: np.ndarray, starts: dict[int, State],
                             cells_by_cat: dict, geom: RobotGeom,
-                            horizon: int = 315 * TICKS_PER_CELL, seed: int = 0,
-                            order_gap: int = 15 * TICKS_PER_CELL,
+                            horizon: int = 315, seed: int = 0,
+                            order_gap: int = 15,
                             shifts=("in", "out", "out"),
                             battery: bool = False, docks=(),
                             battery_kw: dict | None = None,
