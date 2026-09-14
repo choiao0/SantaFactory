@@ -492,6 +492,20 @@ class RobotGeom:
             "  그 전까지 이 스위치는 켤 수 없다.")
 
     @property
+    def lateral_gap(self) -> float:
+        """옆 칸에 나란히 선 두 대의 차체 간격 — `pitch - width`.
+
+        **격자 기하가 정하는 값이라 ADG 규칙과 무관하다.** 대각 케이스를 전부
+        막아도 이 배치는 남으므로, 어떤 예약 규칙으로도 이보다 넓힐 수 없다.
+        네 pitch(1.0/1.1/1.2/1.4)에서 실측과 소수점까지 일치함을 확인했다.
+
+        `CONTACT_NEAR` 를 읽을 때 같이 보라 — 지금 0.10 은 pitch 1.0 의
+        `lateral_gap` 0.200 의 **절반**이다. 채택안(앞 6칸)의 설계 여유가
+        200.0 mm 이므로 그대로 맞는 값이고, 41.4 mm 문제는 앞 2칸에만 있었다.
+        """
+        return self.pitch - self.width
+
+    @property
     def nose_clears_cell_pitch(self) -> float:
         """이 값보다 pitch 가 작으면 회전 중 코가 자기 칸을 벗어난다.
 
@@ -575,6 +589,8 @@ class RobotGeom:
             f"차체             : 뒤 {self.rear_len:.2f} + 앞 {self.front_len:.2f} "
             f"= {self.rear_len + self.front_len:.2f} m, 폭 {self.width:.2f} m",
             f"속도             : v_max {self.v_max:.2f} m/s, w_max {self.w_max:.2f} rad/s",
+            f"옆 칸 간격       : {self.lateral_gap:.3f} m (= pitch - 폭, 규칙과 무관한 바닥)"
+            f"   근접 경고선 {CONTACT_NEAR:.2f} m",
             f"정지 점유        : 실제 {a['rest_real']}  모델 {a['rest_model']}"
             f"   {'일치' if a['rest_matches'] else '★불일치'}",
             f"회전 스윙        : {'모델이 덮음' if a['turn_covered'] else '★모델 밖 ' + str(a['turn_extra'])}",
@@ -810,8 +826,11 @@ def _check_front_swing(actions: list[Action], geom: "RobotGeom") -> None:
         # 켜려 할 때만 막는다.
         if geom.front_swing:
             raise RuntimeError(
-                f"★ 계획기에서 앞 칸 규칙을 확인할 수 없다 ({e!r}) — "
-                f"벤더 폴백일 가능성이 높다.\n"
+                f"★ 계획기에서 앞 칸 규칙을 확인할 수 없다 ({e!r}).\n"
+                f"  원인 둘 중 하나다 — 증상이 같으니 둘 다 본다:\n"
+                f"    (a) 브랜치의 3_FMS 가 -203 이전이다. geometry.py 에\n"
+                f"        configure / front_cells / front_swing_on 이 아직 없다\n"
+                f"    (b) pibt_core_v2 가 벤더 사본으로 떨어졌다 — 저장소 경로\n"
                 f"  그 상태로 front_swing=True 를 켜면 계획기는 앞 칸을 모르는 "
                 f"채로 ADG 만 켜진다.") from e
         return
@@ -1921,10 +1940,27 @@ def selftest(geom: RobotGeom, n_agents: int = 12, max_steps: int = 120,
     check(a["rest_matches"],
           "정지 점유가 pibt_core의 occupied(s)와 일치 "
           "(불일치면 heading_offset을 0/2로 바꿀 것 — 플랜이 무효해진다)")
-    check(a["short_stays_home"], "짧은 쪽이 자기 칸에 머묾 (swing 3칸 모델의 전제)")
-    check(a["in_window"],
-          f"pitch가 유효 구간 안 ({a['pitch_lo']:.2f} < {geom.pitch:.2f} < {a['pitch_hi']:.2f})")
-    check(a["turn_covered"], "회전 스윕이 pibt_core의 swing 모델 안에 들어감")
+    # [patch_axle] 아래 셋은 **swing 3칸 모델이 성립하는가**를 묻는다. 축 규칙은
+    #   그 모델을 의도적으로 확장하므로 켠 상태에서는 전부 실패한다 (pitch 1.0
+    #   에서 0.559 > 0.500, 1.1173 > 1.00, turn_extra 비어 있지 않음).
+    #   그래서 스위치로 분기한다. 끈 쪽이 **오늘 경로**이고 §7 항목 1 이 이걸
+    #   지킨다 — 한 줄도 바꾸지 않는다.
+    if not geom.front_swing:
+        check(a["short_stays_home"], "짧은 쪽이 자기 칸에 머묾 (swing 3칸 모델의 전제)")
+        check(a["in_window"],
+              f"pitch가 유효 구간 안 ({a['pitch_lo']:.2f} < {geom.pitch:.2f} < {a['pitch_hi']:.2f})")
+        check(a["turn_covered"], "회전 스윕이 pibt_core의 swing 모델 안에 들어감")
+    else:
+        # ★ **휴면 상태다.** `front_cells()` 본체가 없어 껍데기가 raise 하므로
+        #   이 분기는 지금 못 탄다 (켜면 build_adg 진입에서 먼저 죽는다).
+        #   본체가 들어오면 여기가 §7 항목 2 의 관문이 된다 — "soft 가 비었나"
+        #   가 아니라 **`front_cells()` 와 `swept_cells()` 가 같은 기하를 보는가**
+        #   를 직접 묻는 것이라 항목 2 보다 강하다.
+        turn = geom.swept_cells((5, 5, 1), (5, 5, 0))
+        check(frozenset(a["turn_extra"]) == geom.front_cells((5, 5, 1), (5, 5, 0)),
+              "모델 초과분이 정확히 front_cells 와 같음 "
+              f"(초과 {sorted(a['turn_extra'])})")
+        check(a["rest_matches"], "축 규칙에서도 정지 점유는 2칸이어야 한다")
 
     free = demo_map()
     say("\n[2] 플랜 + ADG")
@@ -1999,7 +2035,24 @@ def selftest(geom: RobotGeom, n_agents: int = 12, max_steps: int = 120,
     check(ctrl.complete(target, frozenset(act.rest)),
           "놓아줄 칸에서 빠져나오면 완료")
 
-    # 이 조건이 실제로 구속력을 갖는 pitch 구간 — 기하에 따라 다르다.
+    # [patch_axle] pitch 별 **표**. 검사가 아니라 기록이다.
+    #
+    #   축 규칙의 하한은 수식으로 안 닫힌다. "차체가 3×3 을 안 벗어나는" 조건
+    #   (2*hypot(rear, W/2) < 3*pitch) 과 "모델이 성립하는" 조건은 다른 양이다 —
+    #   `swing_cells` 는 3×3 이 아니라 **3칸**만 예약한다. 그래서 계산하지 말고
+    #   **재서** 구간을 얻는다.
+    #
+    #   ★ `in_window` 가 False 여도 `continue` 하지 않는다. 건너뛰면 pitch 1.0
+    #     행이 아예 안 나오는데, 그 행의 `turn_extra` 가 본체 도입 후
+    #     `front_cells` 와 대조할 **기준값**이다.
+    say("    pitch 별 모델 초과 칸 (turn_extra) — 축 규칙 하한의 측정 기준:")
+    for p in (0.80, 0.90, 1.00, 1.10, 1.20, 1.60, 2.00):
+        g2 = RobotGeom(pitch=p, rear_len=geom.rear_len, front_len=geom.front_len,
+                       width=geom.width, heading_offset=geom.heading_offset)
+        a2d = g2.audit()
+        say(f"      pitch {p:.2f} m : 구간안 {str(a2d['in_window']):<5} "
+            f"초과 {sorted(a2d['turn_extra'])}")
+
     say("    '꼬리 남음'이 전진에서 실제로 구속력을 갖는가:")
     for p in (0.90, 1.20, 1.60, 2.00):
         g2 = RobotGeom(pitch=p, rear_len=geom.rear_len, front_len=geom.front_len,
