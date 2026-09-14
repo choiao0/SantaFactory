@@ -82,6 +82,13 @@ def fingerprint(adg) -> dict:
     }
 
 
+# 종료 코드 — CI 가 이걸로 판단한다.
+#   0  통과 (지문 동일, 또는 --save 성공)
+#   1  **지문이 다르다** — 규칙이 꺼진 상태에서는 나면 안 되는 값이다
+#   2  쓰기 오류 (기준 없음 · 설정 불일치)
+EXIT_OK, EXIT_DIFF, EXIT_USAGE = 0, 1, 2
+
+
 def main():
     save = "--save" in sys.argv
     cur = {}
@@ -103,17 +110,19 @@ def main():
             json.dump(meta, f, ensure_ascii=False, indent=1, sort_keys=True)
         print(f"\n기준 저장: {OUT}")
         print("★ 이 파일은 **코드를 고치기 전** 상태다. 커밋해 둘 것.")
-        return 0
+        return EXIT_OK
 
     if not os.path.exists(OUT):
-        raise SystemExit(f"★ 기준이 없습니다. 먼저 --save 로 떠 두세요: {OUT}")
+        print(f"★ 기준이 없습니다. 먼저 --save 로 떠 두세요: {OUT}")
+        return EXIT_USAGE
     with open(OUT, encoding="utf-8") as f:
         base = json.load(f)
 
     for k in ("mode", "n", "pitch", "horizon", "gap", "seeds"):
         if base.get(k) != meta[k]:
-            raise SystemExit(f"★ 설정이 기준과 다릅니다: {k} "
-                             f"{base.get(k)} != {meta[k]}")
+            print(f"★ 설정이 기준과 다릅니다: {k} "
+                  f"{base.get(k)} != {meta[k]}")
+            return EXIT_USAGE
 
     bad = 0
     print()
@@ -130,10 +139,11 @@ def main():
         else:
             print(f"  seed {s}   동일")
     if bad:
-        raise SystemExit(f"\n★ {bad}개 시드가 기준과 다릅니다 — "
-                         f"스위치가 꺼진 상태에서는 완전히 같아야 합니다.")
+        print(f"\n★ {bad}개 시드가 기준과 다릅니다 — "
+              f"스위치가 꺼진 상태에서는 완전히 같아야 합니다.")
+        return EXIT_DIFF
     print("\n전부 동일 — §7 항목 1 통과.")
-    return 0
+    return EXIT_OK
 
 
 if __name__ == "__main__":

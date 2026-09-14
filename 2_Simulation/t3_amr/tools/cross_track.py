@@ -95,7 +95,8 @@ def analyse(path):
     return rows, all_e, allv
 
 
-def report(path, rows, e, v):
+def report(path, rows, e, v) -> bool:
+    """찍고 **기각선을 넘었는지**를 돌려준다. main 이 종료 코드에 쓴다."""
     name = os.path.basename(path)
     print(f"\n── {name} " + "─" * max(4, 56 - len(name)))
     print(f"   직진 프레임 {len(e):,}  ·  pitch {PITCH}  ·  VMIN {VMIN} m/s")
@@ -125,6 +126,8 @@ def report(path, rows, e, v):
     print(f"\n   로봇별 p95 상위: ", end="")
     top = sorted(rows, key=lambda r: -np.percentile(r[1], 95))[:3]
     print("  ".join(f"agent{a} {np.percentile(ee, 95):.1f}" for a, ee, _ in top))
+    # ★ 판정은 **최대값**으로 한다. 접촉은 꼬리 사건이라 p95 로는 못 잡는다.
+    return bool(e.max() > REJECT)
 
 
 # ===========================================================================
@@ -215,10 +218,18 @@ def diagnose(path):
                   "이탈 자체가 크다는 뜻이다. 본 측정에서 확인할 것.")
 
 
+# 종료 코드 — CI 가 이걸로 판단한다.
+#   0  전부 기각선 이내
+#   1  **기각선 초과** — 그 격자·속도 조합을 못 쓴다
+#   2  쓰기 오류 (인자 없음 · 파일 없음)
+EXIT_OK, EXIT_OVER, EXIT_USAGE = 0, 1, 2
+
+
 def main():
     paths = [p for p in sys.argv[1:] if not p.startswith("-")]
     if not paths:
-        raise SystemExit(__doc__)
+        print(__doc__)
+        return EXIT_USAGE
 
     # --diag 는 격자를 **고르기 위한** 모드다. 본 측정 전에 한 번 돌린다.
     if "--diag" in sys.argv:
@@ -228,19 +239,22 @@ def main():
             else:
                 print(f"\n★ 없음: {p}")
         print("\n★ 어느 (pitch, origin) 이 맞는지 정한 뒤에 본 측정을 한다.")
-        return 0
+        return EXIT_OK
 
     print(f"횡방향 이탈 — pitch {PITCH}  lateral_gap "
           f"{(PITCH - WIDTH) * 1000:.0f} mm  기각선 {REJECT:.0f} mm (그 절반)")
+    missing = over = 0
     for p in paths:
         if not os.path.exists(p):
             print(f"\n★ 없음: {p}")
+            missing += 1
             continue
         rows, e, v = analyse(p)
-        report(p, rows, e, v)
-    print("\n★ 2.2 m/s 로 녹화한 판에서 p95 가 기각선을 넘으면 "
-          "pitch 1.0 과 2.2 m/s 를 동시에 못 쓴다.")
-    return 0
+        over += report(p, rows, e, v)
+    print("\n★ 기각선을 넘으면 그 격자와 그 속도를 동시에 못 쓴다.")
+    if missing:
+        return EXIT_USAGE
+    return EXIT_OVER if over else EXIT_OK
 
 
 if __name__ == "__main__":

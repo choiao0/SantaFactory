@@ -87,71 +87,62 @@ def _quiet(fn, *a, **kw):
         sys.stdout = old
 
 
-def main():
-    import dataclasses
+def _rule_on(pitch):
+    """계획기에 규칙을 켜고 (켜짐, 대각, 이름) 을 돌려준다.
 
+    `RULE=off` 면 대조군. `robot_dims` 를 반드시 넘긴다 — 빼면 계획기가 pitch
+    게이팅을 통째로 건너뛴다 (우리 `_check_front_swing` (2) 가 그걸 잡는다).
+    """
     dims = (pibt_scene.GEOM_KW["front_len"], pibt_scene.GEOM_KW["rear_len"],
             pibt_scene.GEOM_KW["width"])
-    # RULE=off 면 규칙을 끈 대조군. "4칸이 만든 것" 과 "원래 있던 것" 을 가른다.
-    want = os.environ.get("RULE", "4") .lower()
+    want = os.environ.get("RULE", "4").lower()
     geo.configure(front_swing=(want != "off"), front_diag=(want == "4"),
-                  robot_dims=dims, pitch=PITCH)
+                  robot_dims=dims, pitch=pitch)
     on, diag = geo.front_swing_on(), geo.front_diag_on()
-    rule = "4칸" if diag else ("앞2" if on else "규칙 꺼짐 (대조군)")
+    name = "4칸" if diag else ("앞2" if on else "규칙 꺼짐 (대조군)")
+    return on, diag, name, dims
 
-    if FIXLIVE:
-        HD.candidates_h = _goal_exempt
 
-    print(f"ADG 비순환 검사 — pitch {PITCH} · {N}대 · cross · 시드 {len(SEEDS)}개")
-    print(f"  규칙 {rule}   (front_swing={on}, front_diag={diag}, "
-          f"robot_dims={dims})")
-    print(f"  라이브락 수정안 {'적용' if FIXLIVE else '없음'}"
-          f"{'   <- 결과에 명시할 것' if FIXLIVE else ''}")
-    probe = geo.front_cells(5, 5, 1, 0)
-    print(f"  front_cells((5,5,1)->(5,5,0)) = {sorted(probe)}")
+def _one_seed(seed, on, diag):
+    """시드 하나 — (비순환 여부, 출력줄) 을 돌려준다. 비순환이 None 이면 실패."""
+    import dataclasses
+
+    try:
+        geom, free, starts, goals = _quiet(
+            pibt_scene.setup, MAP, N, PITCH, seed, "cross")
+    except SystemExit as e:
+        return None, f"시나리오 실패: {str(e)[:30]}"
+
+    geom = dataclasses.replace(geom, front_swing=on, front_diag=diag)
+    try:
+        hist, _ = _quiet(HD.run_h, free, starts, goals, max_steps=STEPS)
+    except SystemExit as e:
+        m = str(e)
+        who = m.split("미도달")[-1].strip() if "미도달" in m else m[:24]
+        return None, f"계획 정체 {who}"
+
+    try:
+        chains, _order, _ = D.extract_actions(hist, geom)
+        adg = D.build_adg(chains, geom)
+    except RuntimeError as e:
+        return None, f"★ {str(e).splitlines()[0][:46]}"
+
+    acyc = adg.topological_order() is not None
+    # 규칙 ② 가 실제로 간선을 만들었나 — guard 를 가진 액션 수로 가늠
+    nsoft = sum(1 for a in adg.actions if a.guard)
+    row = (f"{len(adg.actions):>8}{adg.type1:>8}{adg.type2:>8}"
+           f"{nsoft:>9}{str(acyc):>8}")
+    return acyc, row
+
+
+def _verdict(ok, cyc, fail, total):
+    """★ 두 질문을 섞지 않는다.
+
+    순환 여부는 **계획이 나온 시드**로 답한다. 계획 실패는 계획기 쪽 별개
+    항목이고, 그것 때문에 순환 결론을 못 낸다고 하면 과하다.
+    """
     print()
-    print(f"  {'시드':>5}{'액션':>8}{'type1':>8}{'type2':>8}{'soft간선':>9}"
-          f"{'비순환':>8}   비고")
-
-    ok = cyc = fail = 0
-    for seed in SEEDS:
-        try:
-            geom, free, starts, goals = _quiet(
-                pibt_scene.setup, MAP, N, PITCH, seed, "cross")
-        except SystemExit as e:
-            print(f"  {seed:>5}{'':>33}   시나리오 실패: {str(e)[:30]}")
-            fail += 1
-            continue
-        geom = dataclasses.replace(geom, front_swing=on, front_diag=diag)
-        try:
-            hist, _ = _quiet(HD.run_h, free, starts, goals, max_steps=STEPS)
-        except SystemExit as e:
-            m = str(e)
-            who = m.split("미도달")[-1].strip() if "미도달" in m else m[:24]
-            print(f"  {seed:>5}{'':>33}   계획 정체 {who}")
-            fail += 1
-            continue
-        try:
-            chains, _order, _ = D.extract_actions(hist, geom)
-            adg = D.build_adg(chains, geom)
-        except RuntimeError as e:
-            print(f"  {seed:>5}{'':>33}   ★ {str(e).splitlines()[0][:46]}")
-            fail += 1
-            continue
-        acyc = adg.topological_order() is not None
-        # 규칙 ② 가 실제로 간선을 만들었나 — soft 칸을 가진 액션 수로 가늠
-        nsoft = sum(1 for a in adg.actions if a.guard)
-        print(f"  {seed:>5}{len(adg.actions):>8}{adg.type1:>8}{adg.type2:>8}"
-              f"{nsoft:>9}{str(acyc):>8}")
-        ok += acyc
-        cyc += (not acyc)
-
-    HD.candidates_h = _ORIG
-    print()
-    print(f"  비순환 {ok} · 순환 {cyc} · 계획 실패 {fail}   (시드 {len(SEEDS)}개)")
-    # ★ 두 질문을 섞지 않는다.
-    #   순환 여부는 **계획이 나온 시드**로 답한다. 계획 실패는 계획기 쪽
-    #   별개 항목이고, 그것 때문에 순환 결론을 못 낸다고 하면 과하다.
+    print(f"  비순환 {ok} · 순환 {cyc} · 계획 실패 {fail}   (시드 {total}개)")
     if cyc:
         print("  ★ 순환이 있다. 1.0 에서는 단조 증명이 안 쓰이므로 이 결과가")
         print("    유일한 근거다 — 규칙을 줄이거나 다른 대책이 필요하다.")
@@ -163,7 +154,46 @@ def main():
     if fail:
         print(f"  계획 실패 {fail}건은 **별개**다 — 계획기 쪽 항목이고, 위")
         print("  순환 결론에는 영향이 없다. 다만 그 시드는 안 세었다.")
-    return 1 if cyc else 0
+
+
+def _header(rule, on, diag, dims):
+    print(f"ADG 비순환 검사 — pitch {PITCH} · {N}대 · cross · 시드 {len(SEEDS)}개")
+    print(f"  규칙 {rule}   (front_swing={on}, front_diag={diag}, "
+          f"robot_dims={dims})")
+    print(f"  라이브락 수정안 {'적용' if FIXLIVE else '없음'}"
+          f"{'   <- 결과에 명시할 것' if FIXLIVE else ''}")
+    print(f"  front_cells((5,5,1)->(5,5,0)) = {sorted(geo.front_cells(5, 5, 1, 0))}")
+    print()
+    print(f"  {'시드':>5}{'액션':>8}{'type1':>8}{'type2':>8}{'soft간선':>9}"
+          f"{'비순환':>8}   비고")
+
+
+# 종료 코드 — CI 가 이걸로 판단한다.
+#   0  순환 없음
+#   1  **순환 있음** — 그 규칙은 그 pitch 에서 못 쓴다
+EXIT_OK, EXIT_CYCLE = 0, 1
+
+
+def main():
+    on, diag, rule, dims = _rule_on(PITCH)
+    if FIXLIVE:
+        HD.candidates_h = _goal_exempt
+    _header(rule, on, diag, dims)
+
+    ok = cyc = fail = 0
+    for seed in SEEDS:
+        acyc, row = _one_seed(seed, on, diag)
+        if acyc is None:
+            print(f"  {seed:>5}{'':>33}   {row}")
+            fail += 1
+        else:
+            print(f"  {seed:>5}{row}")
+            ok += acyc
+            cyc += (not acyc)
+
+    HD.candidates_h = _ORIG
+    _verdict(ok, cyc, fail, len(SEEDS))
+    return EXIT_CYCLE if cyc else EXIT_OK
 
 
 if __name__ == "__main__":
