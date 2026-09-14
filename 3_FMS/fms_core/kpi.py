@@ -7,7 +7,8 @@ from __future__ import annotations
 
 import numpy as np
 
-DT = 1.0                     # 기본 틱 길이 [초] (cli/common.DT). 실행 값은 KernelPlanner.dt = CELL_M / speed (-116)
+DT = 1.0                     # 기본 틱 길이 [초] (cli/common.DT). 실행 값은 KernelPlanner.dt (-116·-194)
+CELL_M = 1.0                 # 격자 1칸 [m] — map_loader.CELL_M 과 같은 값 (주행거리 환산용)
 
 
 def _mean(x) -> float:
@@ -40,7 +41,9 @@ def summary(kernel, stream, n_robots: int, t_end: int, dt: float = DT) -> dict:
                 lead_mean_s=round(_mean(lat_total), 1), lead_p90_s=round(_p90(lat_total), 1),
                 queue_mean_s=round(_mean(lat_queue), 1),
                 util_incl_service=round(float(util_incl), 3), conflict_wait=round(float(conflict_wait), 4),
-                distance_m=int(tot["drive"]), charging_steps=int(charging))
+                # 주행거리는 **밟은 칸**이다. drive 는 주행 틱이라 전진이 여러 틱이 된 뒤로
+                # 칸 수와 다르다 (-194) — 예전엔 1칸 = 1틱이라 같은 값이었다. cli/report.py 와 같은 산식.
+                distance_m=int(tot["cells"] * CELL_M), charging_steps=int(charging))
 
 
 def des_block(s: dict, dt: float = DT) -> dict:
