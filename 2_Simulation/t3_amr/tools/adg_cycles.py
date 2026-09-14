@@ -78,6 +78,22 @@ def _goal_exempt(s, dist, edge_cost, wait_cost, free, turn_cost, bias=0.0):
     return _ORIG(s, dist, edge_cost, wait_cost, free, turn_cost, bias)
 
 
+# 계획기(FMS)는 **풀 수 없는 시나리오를 SystemExit 로 알린다.**
+#   `run_h` 독스트링: "전원 도달 못 하면 SystemExit"
+#   `pibt_scene.setup` 도 맵·인자 문제를 같은 방식으로 낸다.
+#
+# 이 도구는 시드 20개를 훑어 **어느 것이 막히는지 표로 내는 것**이 목적이라
+# 그 신호를 잡아야 한다. 다만 아무 SystemExit 이나 삼키면 진짜 종료 요청
+# (`sys.exit()`)까지 먹어 버린다. 그래서 **계획기 신호인지 확인하고**,
+# 아니면 그대로 다시 올린다.
+_PLANNER_SIGNS = ("정체", "미도달", "도달 불가", "invalid", "맵 파일")
+
+
+def _planner_said(e: SystemExit) -> bool:
+    """계획기가 낸 '이 시나리오는 못 푼다' 신호인가."""
+    return any(k in str(e) for k in _PLANNER_SIGNS)
+
+
 def _quiet(fn, *a, **kw):
     buf, old = io.StringIO(), sys.stdout
     sys.stdout = buf
@@ -111,12 +127,16 @@ def _one_seed(seed, on, diag):
         geom, free, starts, goals = _quiet(
             pibt_scene.setup, MAP, N, PITCH, seed, "cross")
     except SystemExit as e:
+        if not _planner_said(e):
+            raise                       # 진짜 종료 요청 — 삼키지 않는다
         return None, f"시나리오 실패: {str(e)[:30]}"
 
     geom = dataclasses.replace(geom, front_swing=on, front_diag=diag)
     try:
         hist, _ = _quiet(HD.run_h, free, starts, goals, max_steps=STEPS)
     except SystemExit as e:
+        if not _planner_said(e):
+            raise                       # 진짜 종료 요청 — 삼키지 않는다
         m = str(e)
         who = m.split("미도달")[-1].strip() if "미도달" in m else m[:24]
         return None, f"계획 정체 {who}"

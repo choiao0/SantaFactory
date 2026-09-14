@@ -89,55 +89,75 @@ def fingerprint(adg) -> dict:
 EXIT_OK, EXIT_DIFF, EXIT_USAGE = 0, 1, 2
 
 
-def main():
-    save = "--save" in sys.argv
-    cur = {}
+def _collect():
+    """시드를 전부 돌려 지문을 찍고 (지문표, 설정) 을 돌려준다."""
     print(f"모드 {MODE}  대수 {N}  pitch {PITCH}  시드 {SEEDS}")
     print(f"지평 {HORIZON}틱 · 주기 {GAP}틱   (전진 1틱 · 회전 {TURN_TICKS}틱)\n")
     print(f"{'시드':>5}{'액션':>8}{'type1':>8}{'type2':>8}{'비순환':>8}"
           f"{'actions_sig':>18}{'edges_sig':>18}")
+    cur = {}
     for s in SEEDS:
         fp = fingerprint(build(s))
         cur[str(s)] = fp
         print(f"{s:>5}{fp['actions']:>8}{fp['type1']:>8}{fp['type2']:>8}"
               f"{str(fp['acyclic']):>8}{fp['actions_sig']:>18}{fp['edges_sig']:>18}")
+    return cur, {"mode": MODE, "n": N, "pitch": PITCH, "horizon": HORIZON,
+                 "gap": GAP, "seeds": SEEDS, "fp": cur}
 
-    meta = {"mode": MODE, "n": N, "pitch": PITCH, "horizon": HORIZON,
-            "gap": GAP, "seeds": SEEDS, "fp": cur}
 
-    if save:
-        with open(OUT, "w", encoding="utf-8") as f:
-            json.dump(meta, f, ensure_ascii=False, indent=1, sort_keys=True)
-        print(f"\n기준 저장: {OUT}")
-        print("★ 이 파일은 **코드를 고치기 전** 상태다. 커밋해 둘 것.")
-        return EXIT_OK
+def _save(meta):
+    with open(OUT, "w", encoding="utf-8") as f:
+        json.dump(meta, f, ensure_ascii=False, indent=1, sort_keys=True)
+    print(f"\n기준 저장: {OUT}")
+    print("★ 이 파일은 **코드를 고치기 전** 상태다. 커밋해 둘 것.")
+    return EXIT_OK
 
+
+def _load_base(meta):
+    """기준을 읽고 설정이 같은지 본다. 못 쓰면 (None, 종료코드)."""
     if not os.path.exists(OUT):
         print(f"★ 기준이 없습니다. 먼저 --save 로 떠 두세요: {OUT}")
-        return EXIT_USAGE
+        return None, EXIT_USAGE
     with open(OUT, encoding="utf-8") as f:
         base = json.load(f)
-
     for k in ("mode", "n", "pitch", "horizon", "gap", "seeds"):
         if base.get(k) != meta[k]:
-            print(f"★ 설정이 기준과 다릅니다: {k} "
-                  f"{base.get(k)} != {meta[k]}")
-            return EXIT_USAGE
+            print(f"★ 설정이 기준과 다릅니다: {k} {base.get(k)} != {meta[k]}")
+            return None, EXIT_USAGE
+    return base, EXIT_OK
 
+
+def _compare(base, cur):
+    """시드별로 대조하고 다른 개수를 돌려준다."""
     bad = 0
     print()
     for s in SEEDS:
         b, c = base["fp"].get(str(s)), cur[str(s)]
         if b is None:
-            print(f"  seed {s}: 기준에 없음"); bad += 1; continue
-        diff = [k for k in c if b.get(k) != c[k]]
-        if diff:
+            print(f"  seed {s}: 기준에 없음")
             bad += 1
-            print(f"  seed {s} ★ 다름: {diff}")
-            for k in diff:
-                print(f"      {k:<12} 기준 {b.get(k)}  ->  현재 {c[k]}")
-        else:
+            continue
+        diff = [k for k in c if b.get(k) != c[k]]
+        if not diff:
             print(f"  seed {s}   동일")
+            continue
+        bad += 1
+        print(f"  seed {s} ★ 다름: {diff}")
+        for k in diff:
+            print(f"      {k:<12} 기준 {b.get(k)}  ->  현재 {c[k]}")
+    return bad
+
+
+def main():
+    cur, meta = _collect()
+    if "--save" in sys.argv:
+        return _save(meta)
+
+    base, rc = _load_base(meta)
+    if base is None:
+        return rc
+
+    bad = _compare(base, cur)
     if bad:
         print(f"\n★ {bad}개 시드가 기준과 다릅니다 — "
               f"스위치가 꺼진 상태에서는 완전히 같아야 합니다.")
