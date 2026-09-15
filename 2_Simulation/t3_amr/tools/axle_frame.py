@@ -127,7 +127,8 @@ def _report_fit(rows):
     rms0 = np.array([r[3] for r in rows]) * 1000.0
     expl = np.array([r[4] for r in rows]) * 100.0
 
-    print(f"  회전 {len(rows)}개  ·  로봇 {len({r[0] for r in rows})}대")
+    print(f"  회전 {len(rows)}개  ·  로봇 {len({r[0] for r in rows})}대"
+          f"  ·  pitch {PITCH}")
     print()
     print("  1) 원 모델이 궤적을 얼마나 설명하나")
     print(f"     delta 없이 흩어짐 (기준)   RMS 중앙 {np.median(rms0):7.1f} mm")
@@ -185,8 +186,19 @@ def _verdict(D, expl, mag):
         return True
     if ratio > 0.60:
         print("     -> **(a) 진짜 밀림** 쪽이다. delta 가 회전마다 다르다.")
-        print("        74 mm 는 실제 예산 소모다. 1.0 재측정에서 더 커질 것을")
-        print("        예상해야 한다 — 정지·출발이 늘면 마찰 사건도 는다.")
+        # 예전엔 「74 mm 는 실제 예산 소모다. 1.0 재측정에서 더 커질 것」이
+        # 박혀 있었다. 74.3 mm 는 **이 도구의 값이 아니다** — turn_error 의
+        # 「구간 최대」(칸 중심에서 가장 멀었던 거리)이고, 여기 |delta| 는
+        # 회전 중 축이 그리는 원의 반지름이라 다른 양이다. 그래서 하드코딩을
+        # 걷어내고 측정값을 쓴다.
+        #
+        # ★ 다만 그 예측 자체는 **맞았다.** 같은 양으로 비교하면
+        #   축 흔들림 RMS 가 pitch 1.2 의 2.3 mm -> 1.0/v2.2 의 9.2 mm 로
+        #   4배 늘었다. "정지·출발이 늘면 마찰 사건도 는다" 가 그대로 나왔다.
+        #   (2026-09-15 에 이걸 "예측이 틀렸다" 고 잘못 적은 적이 있다.)
+        print(f"        |delta| 중앙 {med:.1f} mm 는 **실제 예산 소모**다."
+              f" 프레임을 고쳐서 없앨 수 있는 값이 아니다.")
+        print(f"        두 대 사이 판정에는 두 번 들어간다 -> {med*2:.1f} mm.")
         return False
     print("     -> 섞여 있다. 일관된 성분과 흩어진 성분이 함께 있다.")
     print("        로봇별 delta 표를 보라. 로봇마다 다르면 프레임이 아니라")

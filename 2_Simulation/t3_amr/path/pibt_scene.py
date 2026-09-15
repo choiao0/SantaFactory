@@ -84,6 +84,25 @@ for _d in (os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__
         import config as _CFG                                  # noqa: E402
         break
 
+# ★ 못 찾으면 **조용히 다른 격자가 만들어진다** — 아래 `build_free` 가
+#   `apply_aisle_block` 을 건너뛰어 랙 사이 통로가 열린다. 계획이 달라지는데
+#   아무 표시가 없다.
+#
+#   실제로 당했다 (2026-09-15). FMS 가 우리 도구를 재현하려고 `path/` ·
+#   `warehouse/map` · `tools/` 만 꺼내 가고 이 파일을 빠뜨렸다. 통로가 열린
+#   격자(9425칸 vs 8919칸)에서 계획이 돌아 시드별 틱 수가 전부 달랐고, 그것을
+#   플랫폼 차이(Windows · Python 3.14 · numpy 2.5)로 의심하며 하루를 썼다.
+#   파일을 넣자 우리 표가 **틱 수까지** 재현됐다.
+#
+#   그래서 조용히 넘어가지 않는다. stderr 로 낸다 — stdout 을 비교하는
+#   도구들(지문·측정표)의 출력은 건드리지 않기 위해서다.
+if _CFG is None:
+    print("★ pibt_scene: amr/make_path/config.py 를 못 찾았습니다.\n"
+          "  랙 사이 통로 차단(AISLE_BLOCK)이 꺼진 채로 격자가 만들어집니다 —\n"
+          "  통로가 열려 **계획이 조용히 달라집니다** (실측 8919 -> 9425칸).\n"
+          "  저장소 일부만 복사해 쓰는 경우 이 파일을 반드시 같이 가져오세요.",
+          file=sys.stderr)
+
 from isaac_drive import RobotGeom                      # noqa: E402
 from pibt_core_v2 import valid_state, dist_map_h       # noqa: E402
 
@@ -168,15 +187,88 @@ def charge_slots(rect=None, lat=None, step_x=None, step_y=None):
 
 CHARGE_ZONE_LEGACY = [(105.5, y) for y in (50, 53, 56, 59, 62, 65)] + \
                      [(107.8, y) for y in (50, 53, 56, 59, 62, 65)]
-CHARGE_ZONE = (CHARGE_ZONE_LEGACY
-               if os.environ.get("CHARGE_START", "auto").lower() == "legacy"
-               else charge_slots())
+
+
+def charge_zone(lat=None):
+    """충전존 슬롯 — **호출 시점에** 격자를 받아 만든다.
+
+    ★ 예전에는 `CHARGE_ZONE` 을 모듈 import 시점에 `PIBT_PITCH` 로 굳혔다.
+      그런데 도구들(`adg_cycles` · `goal_oscillation` 등)은 격자를 **`PITCH`**
+      라는 다른 이름으로 준다. `PITCH=1.0` 만 주면 계획은 1.0 격자인데 충전존은
+      1.2 격자로 만들어져 **시나리오가 조용히 달라졌다.**
+
+          PIBT_PITCH=1.0   충전 x [103.5, 105.5, 107.5]   starts 103·105·107
+          PIBT_PITCH 없음   충전 x [103.8, 106.2, 108.6]   starts 103·106·108
+
+      2026-09-15 FMS 와 지문을 대조하다 드러났다. 양쪽 다 `PIBT_PITCH` 없이
+      돌려 **같은 방식으로 틀린** 시나리오를 재현해 왔다.
+
+      이제 `geom.pitch` 에서 받는다 — 계획과 충전존이 같은 값을 쓰므로 어긋날
+      수가 없다. 이름이 둘이던 문제가 사라진다.
+    """
+    if os.environ.get("CHARGE_START", "auto").lower() == "legacy":
+        return CHARGE_ZONE_LEGACY
+    return charge_slots(lat=lat)
 GOAL_CATS = ["packing", "consol", "handoff", "aisle_buf", "inbound_buf"]
+
+
+def front_rule(pitch):
+    """앞 칸 규칙(S15P21A106-204)을 정하고 (front_swing, front_diag) 를 돌려준다.
+
+    왜 여기인가
+    -----------
+    규칙은 **스위치가 둘**이다 — 계획기 쪽 `pibt.geometry.configure(...)` 와
+    `RobotGeom` 의 필드. 한쪽만 켜지면 `isaac_drive._check_front_swing` 이
+    주행 전에 죽인다. 둘을 같이 정하는 자리가 없어서 지금까지 **주행 경로에서는
+    규칙이 통째로 꺼진 채** 돌았다 (`geo.configure` 를 부르는 곳이 도구
+    하나뿐이었다). 그 두 스위치를 여기 한 곳에서 맞춘다.
+
+    `PIBT_FRONT_RULE`
+        4      앞 2칸 + 섞임 대각 2칸  {f0, f1, mA, mB}   <- 채택한 규칙
+        2      앞 2칸만               {f0, f1}
+        off    규칙 없음 (대조군)
+        (없음) **계획기에 이미 설정된 상태를 그대로 읽는다.** 도구가 자기
+               `geo.configure(...)` 를 먼저 부르는 경우가 있어서, 그걸 덮으면
+               `adg_cycles.py` 의 RULE=off 대조군이 망가진다.
+
+    ★ 규칙은 pitch 게이팅을 받는다. 1.2 에서는 무엇을 넣든 꺼진다 (차체가
+      이미 충분히 떨어져 규칙이 필요 없다). 그래서 **요청값이 아니라 계획기가
+      실제로 켠 값**(`front_swing_on()`)을 읽어 돌려준다. 요청과 결과가 다르면
+      한 줄 찍는다 — 켠 줄 알고 1.2 로 돌리는 것을 막기 위해서다.
+    """
+    try:
+        import pibt.geometry as geo
+    except ImportError:
+        return False, False                     # 계획기 기하가 없는 환경
+
+    want = os.environ.get("PIBT_FRONT_RULE")
+    if want is not None:
+        want = want.strip().lower()
+        geo.configure(front_swing=(want not in ("off", "0", "no", "")),
+                      front_diag=(want == "4"),
+                      robot_dims=(GEOM_KW["front_len"], GEOM_KW["rear_len"],
+                                  GEOM_KW["width"]),
+                      pitch=pitch)
+    on, diag = bool(geo.front_swing_on()), bool(geo.front_diag_on())
+    if want is not None:
+        if diag:
+            got = "4칸"
+        elif on:
+            got = "앞2칸"
+        else:
+            got = "꺼짐"
+        note = ""
+        if want not in ("off", "0", "no", "") and not on:
+            note = f"  ★ pitch {pitch} 는 게이팅 구간이라 규칙이 꺼졌습니다"
+        print(f"[scene] 앞 칸 규칙 PIBT_FRONT_RULE={want} -> {got}{note}")
+    return on, diag
 
 
 def make_geom(pitch):
     """우리 로봇 기하 + 격자. origin 은 셀 (0,0) **중심**의 world 좌표."""
-    return RobotGeom(pitch=pitch, origin=(pitch / 2.0, pitch / 2.0), **GEOM_KW)
+    on, diag = front_rule(pitch)
+    return RobotGeom(pitch=pitch, origin=(pitch / 2.0, pitch / 2.0),
+                     front_swing=on, front_diag=diag, **GEOM_KW)
 
 
 def _pick(map_dir, *names):
@@ -365,10 +457,11 @@ def _assign_slots(free, geom, n, verbose=True, tag="scene"):
     막힌 슬롯은 `_nearest_free` 로 밀지 않고 **건너뛴다** — 밀면 간격이 깨진다.
     """
     H, W = free.shape
+    zone = charge_zone(geom.pitch)          # ★ 격자는 geom 에서 받는다
 
     def sweep(strict):
         st, used, skipped = {}, set(), []
-        for (x, y) in CHARGE_ZONE:
+        for (x, y) in zone:
             if len(st) >= n:
                 break
             cell = _cell_of(geom, x, y)
@@ -397,7 +490,7 @@ def _assign_slots(free, geom, n, verbose=True, tag="scene"):
     if len(starts) < n:
         raise SystemExit(
             f"★ 충전존에 {n}대를 놓을 자리가 없습니다 — {len(starts)}대만 가능.\n"
-            f"  슬롯 {len(CHARGE_ZONE)}개 중 {len(skipped)}개를 걸렀습니다:\n  "
+            f"  슬롯 {len(zone)}개 중 {len(skipped)}개를 걸렀습니다:\n  "
             + "\n  ".join(f"({x:.1f},{y:.1f}) {w}" for x, y, w in skipped[:8])
             + f"\n  CHARGE_STEP_Y 를 줄이면(예: 1.2) 행이 늘어납니다. "
               f"CHARGE_STEP_X 는 pitch 의 2배 미만으로 줄일 수 없습니다.")
@@ -529,8 +622,9 @@ def charge_docks(free, geom, n=None):
     보통 시작 칸과 같은 칸들이 나온다.
     """
     H, W = free.shape
+    zone = charge_zone(geom.pitch)          # ★ 격자는 geom 에서 받는다
     out, used = [], set()
-    for (x, y) in (CHARGE_ZONE if n is None else CHARGE_ZONE[:n]):
+    for (x, y) in (zone if n is None else zone[:n]):
         want = _cell_of(geom, x, y)
         cell = want if (0 <= want[0] < H and 0 <= want[1] < W
                         and free[want] and want not in used) else             _nearest_free(free, want, used)
@@ -634,7 +728,8 @@ def main():
     ap.add_argument("--lifelong", action="store_true",
                     help="주문 스트림으로 T틱 순환 (one-shot 대신)")
     ap.add_argument("--horizon", type=int, default=315,
-                    help="lifelong 틱 수. 315틱 = 계획 420 s (1.2/0.9 s/틱)")
+                    help="lifelong 틱 수. 초는 격자에 딸린다 — 315틱 x (pitch/0.9) "
+                         "= 350 s (pitch 1.0, 기본) / 420 s (pitch 1.2)")
     ap.add_argument("--seconds", type=float, default=None,
                     help="틱 대신 초로 지정. --clock 과 함께 쓴다")
     ap.add_argument("--clock", choices=("plan", "wall"), default="plan",

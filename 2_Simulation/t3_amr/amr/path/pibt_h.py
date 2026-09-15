@@ -38,7 +38,8 @@ MODE = "lifelong"          # oneshot | lifelong
 #       주행   PIBT_DISPATCH=robot_first bash run_record.sh
 #   시연·처리량 측정이 목적이면 `robot_first` 가 낫다.
 DISPATCH = "fms"
-HORIZON = 315              # 틱. 315 x (1.2/0.9) = 계획 420 s
+HORIZON = 315              # 틱. 초는 격자에 딸린다 — 315 x (pitch/0.90):
+                           #   pitch 1.0 (기본) -> 350 s · pitch 1.2 -> 420 s
 
 # ★ 2026-09-11: 배터리를 껐다 (S15P21A106-200).
 #
@@ -76,14 +77,21 @@ SEEDS_CHECKED = (1, 2, 4, 5, 7, 9, 11, 16, 18, 21, 22, 25)
 def plan(n=12, seed=None, seconds=None, map_dir=None, extra=None):
     # 기본 시드는 모듈 상수 SEED 를 쓴다. 여기에 숫자를 또 박아 두었더니
     # `main.py plan` 이 SEED 를 바꿔도 옛 값으로 계획했다 (2026-09-07).
-    argv = ["pibt_scene.py", "--n", str(n), "--pitch", str(PITCH),
+    # ★ pitch 도 셸을 먼저 본다. 아래 HORIZON 주석과 같은 이유다 — `plan` 이
+    #   만드는 계획과 Isaac 이 실제로 도는 계획(live_pibt 가 in-process 로 다시
+    #   세운다)이 **같은 격자여야** 한다. `run_record.sh` 가 PIBT_PITCH 기본을
+    #   1.0 으로 두므로, 여기서 안 보면 `REPLAN=1` 이 1.2 로 계획해 놓고 주행은
+    #   1.0 으로 도는 어긋남이 조용히 생긴다.
+    pitch = float(os.environ.get("PIBT_PITCH", str(PITCH)))
+    argv = ["pibt_scene.py", "--n", str(n),
+            "--pitch", str(pitch),
             "--seed", str(SEED if seed is None else seed),
             "--map", map_dir or default_map(), "--out", rel(OUT), "--plan"]
     if MODE == "lifelong":
         argv += ["--lifelong"]
         # `seconds` 가 드디어 쓰인다. 다만 **어느 초인지**를 정해야 한다.
-        #   --clock plan : 계획 시간 (FMS 틱과 같은 단위). 420 s -> 315틱
-        #   --clock wall : Isaac 벽시계.  420 s -> 183틱 (stretch 1.72)
+        #   --clock plan : 계획 시간 (FMS 틱과 같은 단위). pitch 1.0 이면 350 s = 315틱
+        #   --clock wall : Isaac 벽시계. stretch 를 곱한다 (metrics.STRETCH_MEASURED)
         # ★ 여기도 셸 환경변수를 먼저 본다 (2026-09-11).
         #   `main.py plan` 이 만드는 계획과 Isaac 이 실제로 도는 계획(live_pibt 가
         #   in-process 로 다시 세운다)이 **같은 설정이어야** 한다. 한쪽만 환경변수를
@@ -100,9 +108,14 @@ def plan(n=12, seed=None, seconds=None, map_dir=None, extra=None):
         if _oe:
             argv += ["--order-end", _oe]
     out = run(argv + (extra or []))
+    # ★ 이 note 는 주석이 아니라 **밖으로 나가는 값**이다. 예전에는 「계획 420 s ·
+    #   x1.72 = 722 s」가 박혀 있었는데, 그건 pitch 1.2 시절 값이라 기본이 1.0 이
+    #   된 뒤로 계속 틀린 숫자를 뱉고 있었다 (실제로는 350 s). 격자에서 파생시킨다.
+    horizon = int(os.environ.get("PIBT_HORIZON", str(HORIZON)))
+    plan_s = horizon * pitch / 0.90          # 0.90 = 계획 속도 v_plan
     return {"out": os.path.join(rel(OUT), f"fleet_{n:02d}"), "log": out,
-            "note": f"{MODE} · {HORIZON}틱 = 계획 420 s "
-                    f"(Isaac 벽시계로는 x1.72 = 722 s)"}
+            "note": f"{MODE} · {horizon}틱 x (pitch {pitch}/0.90) = 계획 {plan_s:.0f} s "
+                    f"(Isaac 벽시계는 stretch 를 곱한다 — metrics.STRETCH_MEASURED)"}
 
 
 def verify(n=12, map_dir=None):
@@ -120,19 +133,30 @@ def launch(n=12):
     # 모션블러를 끈다. (예전 주석이 "자세를 대입하는 방식이라 순간이동으로 보인다"
     #  고 적었는데 틀렸다 — live_pibt 는 joint_velocities 로 실제 PhysX 주행이다.
     #  자세 대입은 replay_wppl / render_video_wppl 쪽 얘기다. 2026-09-08 정정)
-    # ★ 이 목록이 Isaac 프로세스의 환경을 **통째로 정한다.** 여기 없는 이름은
-    #   셸에서 `PIBT_X=... bash run_record.sh` 로 줘도 **전달되지 않고**, 여기
-    #   하드코딩한 이름은 셸 값을 **덮어쓴다**.
+    # ★ 이 목록은 Isaac 프로세스 환경을 **덮어쓰는 것**이지 통째로 정하는 것이
+    #   아니다. `main.py:155` 가 이렇게 띄운다.
     #
-    #   실제로 그랬다 (2026-09-11): live_pibt 에 PIBT_ORDER_END·PIBT_ORDER_GAP 을
-    #   추가하고 `PIBT_HORIZON=550 PIBT_ORDER_END=315 PIBT_ORDER_GAP=40` 으로
-    #   서버에서 돌렸는데, HORIZON 은 str(HORIZON)=315 에 덮이고 나머지 둘은
-    #   목록에 없어 전달조차 안 됐다. 두 번 돌린 결과가 **숫자까지 동일**했다
-    #   (막힘 232,859 프레임 · 완주 730.3s · 액션 1769). 로그의 "릴리스 지평
-    #   419s"(=315틱)가 그 증거였다.
+    #       os.execvpe(argv[0], argv, dict(os.environ, **env))
     #
-    #   그래서 셸이 준 값을 먼저 보고, 없을 때만 모듈 상수를 쓴다.
-    #   새 변수를 live_pibt 에 추가하면 **여기에도 반드시 한 줄 넣을 것.**
+    #   즉 **셸 환경 전체를 깔고 그 위에 이 목록을 얹는다.**
+    #
+    #       목록에 **있는** 이름   여기 값이 이긴다 (셸 값이 무시된다)
+    #       목록에 **없는** 이름   셸에서 **그대로 상속된다**
+    #
+    #   ★ 2026-09-15 정정. 이 주석이 오래 "여기 없는 이름은 전달조차 안 된다"
+    #     고 적고 있었는데 **틀렸다.** `dict(os.environ, **env)` 는 2026-09-09
+    #     도입 이래 한 번도 바뀐 적이 없다. 그 서술을 믿고 "PIBT_V_EXEC 가
+    #     전달 안 돼 주행이 늘 0.9 였다" 고 잘못 진단한 적이 있다 — 실제로는
+    #     `PIBT_V_EXEC=2.2 bash run_record.sh` 가 계속 먹고 있었다.
+    #
+    #   2026-09-11 의 `PIBT_HORIZON=550` 이 안 먹은 것은 **덮어쓰기** 때문이
+    #   맞다 (그때는 `("PIBT_HORIZON", str(HORIZON))` 로 하드코딩돼 있었다).
+    #   같이 적혀 있던 ORDER_END·ORDER_GAP 의 "전달조차 안 됐다" 는 진단은
+    #   위 정정에 비추어 다시 봐야 한다.
+    #
+    #   그래서 여기 넣는 이유는 «전달» 이 아니라 **기본값을 정하기 위해서**다.
+    #   셸이 안 줬을 때 무엇이 되는지를 이 목록이 정한다.
+    #   `_e` 는 셸 값을 먼저 보고 없을 때만 모듈 상수를 쓴다.
     def _e(name, default):
         return (name, os.environ.get(name, default))
 
@@ -152,7 +176,29 @@ def launch(n=12):
              # 업무 종료 후 전원 충전존 복귀 (-199). 빈 값이면 live_pibt 가
              # 끈 것으로 본다 — 기본 동작은 바뀌지 않는다.
              _e("PIBT_ORDER_END", ""),
-             _e("PIBT_ORDER_GAP", "15")],
+             _e("PIBT_ORDER_GAP", "15"),
+             # 앞 칸 규칙 (-204). `pibt_scene.front_rule()` 이 읽어 계획기와
+             # RobotGeom 두 스위치를 함께 맞춘다. 이 줄이 없으면 셸에서 줘도
+             # Isaac 까지 **전달되지 않는다** (위 설명).
+             #   4 = 앞2칸 + 섞임대각2칸 · 2 = 앞2칸 · off = 규칙 없음
+             # ★ pitch 1.2 는 게이팅 구간이라 무엇을 넣든 꺼진다. 기본값을 4 로
+             #   둬도 1.2 주행의 동작은 바뀌지 않고, 1.0/1.1 에서만 켜진다.
+             _e("PIBT_FRONT_RULE", "4"),
+             # 실행 속도·가속. `isaac_drive.FleetController` 가 읽는다.
+             #   **빈 값이면 `geom.v_max`(=계획 속도)를 쓴다.**
+             #
+             #   ★ 이 줄이 «전달» 을 위한 것은 아니다. 위 정정대로 목록에 없어도
+             #     셸 값은 상속되므로 `PIBT_V_EXEC=2.2 bash run_record.sh` 는
+             #     전부터 먹고 있었다. 여기 두는 것은 **기본값을 한 곳에 적어
+             #     두기 위해서**이고, `cmds` 출력에도 같이 찍혀 무엇이 도는지
+             #     보이게 하려는 것이다.
+             #
+             #   ★ 안 주면 실행 속도 = 계획 속도(0.9)다. 계획을 낮게 잡는 근거
+             #     자체가 "실행이 더 빨라 회전 손실을 따라잡는다" 이므로, 둘이
+             #     같으면 그 논리가 성립하지 않는다. 채택 속도를 정했으면
+             #     **반드시 명시**할 것.
+             _e("PIBT_V_EXEC", ""),
+             _e("PIBT_A_EXEC", "")],
         flags=["--/rtx/post/motionblur/enabled=false"])
 
 

@@ -18,6 +18,11 @@ bash run_record.sh                               시연 + mp4 (10배속)
 STREAM=0 bash run.sh --planner pibt_h --lite     측정 (헤드리스)
 ```
 
+> **★ 2026-09-15: `run_record.sh` · `run_onboard.sh` 의 기본 격자가 1.0 m 다.**
+> 앞 칸 규칙(`PIBT_FRONT_RULE=4`)도 기본으로 켜진다. 1.2 로 돌리려면
+> `PIBT_PITCH=1.2 bash run_record.sh`. 아래 [격자와 앞 칸 규칙](#격자와-앞-칸-규칙)
+> 참고. `amr/main.py` 를 직접 부르면 모듈 상수(1.2)가 그대로다.
+
 ---
 
 ## 폴더
@@ -30,15 +35,18 @@ t3_amr/
 ├─ warehouse/   map/ (계획 맵 단일 소스) · scene/ (창고 씬 + 빌드 스크립트)
 ├─ v2/          계획기가 **쓰는** 출력 자리 (traj_*)
 ├─ plan/        주행이 **읽는** 궤적 ($PLAN). v2/ 에서 복사해 온다
-├─ tools/       에셋 내려받기 등
+├─ tools/       에셋 내려받기 + **측정·검증 도구 20여 개** (아래 「도구」)
+├─ docs/        설계·실측 문서.  `LOCAL_*` · `20*` 는 커밋 안 함 (로컬 메모)
 ├─ todo/        (비어 있음)
-└─ *.sh         run · run_record · paths · install
+└─ *.sh         run · run_record · run_onboard · paths · install
 
   stage/ out/ logs/  — paths.sh 가 만드는 산출물. 지워도 다시 생긴다
 ```
 
 `v2/` 와 `plan/` 에 같은 이름의 하위 폴더가 양쪽에 있는 것은 **생성물과 배치본**
-이기 때문이다. `run_record.sh` 가 `v2/traj_pibt_h/` → `plan/traj_pibt_h/` 로 복사한다.
+이기 때문이다. `run_record.sh` 는 **`REPLAN=1` 일 때만** `v2/traj_pibt_h/` →
+`plan/traj_pibt_h/` 로 복사한다. 평소에는 `plan/` 에 이미 커밋돼 있는 것을 쓴다
+(새 체크아웃에서 바로 돌게 하려고 추적한다).
 
 계층은 셋이다. **어디서 도는 파이썬인지**가 다르다.
 
@@ -76,8 +84,20 @@ paths.sh  run.sh  run_record.sh
 > ### ★ `amr/make_path/` 를 폴더째 지우면 안 된다
 >
 > 이름 때문에 WPPL 전용으로 보이지만, `path/pibt_scene.py` 가 통로차단
-> (`AISLE_BLOCK`) 규칙 때문에 **`config.py` 하나를 읽는다.** 지우면 `pibt_h` 가
-> 깨진다. `config.py` 는 import 가 하나도 없는 독립 파일이라 그 외에는 다 빼도 된다.
+> (`AISLE_BLOCK`) 규칙 때문에 **`config.py` 하나를 읽는다.**
+> `config.py` 는 import 가 하나도 없는 독립 파일이라 그 외에는 다 빼도 된다.
+>
+> **지워도 죽지 않는다 — 조용히 다른 격자가 된다.** 못 찾으면 통로 차단이
+> 꺼져 랙 사이 통로가 열린 격자가 만들어진다 (필터 전 8919 → 9425칸).
+> 계획이 달라지는데 결과만 보면 알 수가 없다.
+>
+> 2026-09-15 에 FMS 가 우리 도구를 재현하려고 `path/` · `warehouse/map` ·
+> `tools/` 만 꺼내 가고 이 파일을 빠뜨렸다. 시드별 틱 수가 전부 달랐고 그것을
+> 플랫폼 차이(Windows · Python 3.14 · numpy 2.5)로 의심하며 하루를 썼다.
+> 파일을 넣자 우리 표가 **틱 수까지** 재현됐다.
+>
+> 그래서 지금은 못 찾으면 **stderr 로 경고**한다. 저장소 일부만 복사해 쓸 때는
+> `amr/make_path/config.py` 를 반드시 같이 가져올 것.
 
 ### import 그래프에는 없지만 **필요한 것**
 
@@ -105,8 +125,11 @@ paths.sh  run.sh  run_record.sh
 | 시각추종 주행 | `path/amr_driver_v2.py`, `runners/{live_wppl12,headless_wppl,render_video_wppl,replay_wppl}.py` |
 | 기타 러너 | `runners/{http_stream,ros2_ping}.py` |
 | 옛 궤적 | `plan/{traj_cmp,traj_v59,traj_wppl,traj_wppl_new}`, `v2/{traj_cmp,traj_pibt_official,traj_v59,traj_wppl,traj_wppl_new}` |
-| 일회성·중복 | `patch_fetch_dest.py`, `v2/server/fetch_iwhub.py`(= `tools/` 와 중복), `tools/{find_xbrace,measure_seq,measure_turns,path_view}.py` |
+| 일회성·중복 | `patch_fetch_dest.py`, `v2/server/fetch_iwhub.py`(= `tools/` 와 중복) |
 | 빈 폴더 | `todo/` |
+
+★ `tools/` 는 더 이상 "일회성" 이 아니다. 2026-09 에 측정·검증 도구가 20여 개로
+늘었고 그중 여럿이 판단 근거를 낸다 (아래 「도구」).
 
 ★ `plan/traj_fms` 는 **아예 없다.** `amr/path/fms.py` 는 `$PLAN/traj_fms/...` 를
 찾으므로 `fms` 계획기는 지금 상태로는 궤적을 못 읽는다. 쓸 일이 생기면 먼저 볼 것.
@@ -125,7 +148,10 @@ pibt_core.run_h()  →  extract_actions  →  build_adg  →  AdgRuntime  →  �
 2. **액션 추출** — 상태 차이를 전진/회전/후진으로 묶는다. **대기는 버린다**
 3. **ADG** — 같은 칸을 쓰는 액션 사이에 간선을 건다. "계획에서 A 가 먼저 썼으면
    실행에서도 A 가 끝나야 B 가 시작한다". 순환이면 데드락이므로 그 자리에서 던진다
-4. **런타임** — 프레임마다 선행 완료·장애물·릴리스 바닥을 보고 액션을 내보낸다
+4. **런타임** — 프레임마다 ①장애물 ②릴리스 바닥 ③ADG 선행 셋을 보고 액션을
+   내보낸다. **바닥은 태스크의 첫 동작에만 건다** — 주문 도착 제약이라
+   중간 동작에 걸 이유가 없다 (2026-09-15 수정. 전에는 모든 동작에 걸었고,
+   그 상태에서 막힘의 66% 가 바닥이었다). 막힘 귀속은 `[adg-why]` 로 찍힌다
 5. **주행** — `MotionController` → `DifferentialDriver` 가 좌우 바퀴 각속도를 쓴다
 
 **시간표가 아니라 순서로 돌기 때문에** 로봇 하나가 미끄러져도 뒤차가 그만큼 기다린다.
@@ -137,13 +163,104 @@ ADG 가 예약하는 칸은 코어의 `cells_hist` 가 **아니라** `RobotGeom.
 
 ---
 
+## 격자와 앞 칸 규칙
+
+pitch 1.0 에서는 회전할 때 **코가 이웃 칸에 들어간다.** 그래서 앞 칸을 예약에
+넣는 규칙이 있다. 켜고 끄는 것은 `PIBT_FRONT_RULE` 이다.
+
+```
+4     앞 2칸 + 섞임 대각 2칸 {f0, f1, mA, mB}   ← 기본. 채택한 규칙
+2     앞 2칸만 {f0, f1}
+off   규칙 없음 (대조군)
+```
+
+**규칙은 pitch 게이팅을 받는다** — 1.2 에서는 무엇을 넣든 꺼진다. 칸이 넓어
+코가 안 나가기 때문이다. 그래서 `run_record.sh` 가 머리말에 실제로 걸렸는지
+찍는다.
+
+```
+격자        pitch 1.0   (기본 1.0 — 바뀐 ADG 가 사는 격자)
+앞 칸 규칙  PIBT_FRONT_RULE=4   규칙 적용 예
+```
+
+로그에 `[scene] 앞 칸 규칙 PIBT_FRONT_RULE=4 -> 4칸` 이 없으면 안 걸린 것이다.
+
+pitch 1.0 은 2칸 점유 + 스윙 3칸 모델의 **유효 구간(1.117~2.220) 밖**이라
+`RobotGeom.describe()` 가 이렇게 찍는데, **규칙이 켜져 있으면 정상이다.**
+
+```
+pitch      : 1.00 m   (이 모델의 유효 구간 1.12 ~ 2.22 m  ★구간 밖)
+회전 스윙  : ★모델 밖 [(5, 6), (6, 5)]
+```
+
+저 두 칸이 바로 규칙이 덮는 칸이다 (`front_cells((5,5,1)->(5,5,0))
+= [(4,6), (5,6), (6,4), (6,5)]`). 위험한 조합은 **규칙을 끄고 1.0 으로 도는 것**
+이고, 그건 머리말에 `규칙 적용 아니오` 로 찍힌다.
+
+규칙이 왜 4칸인지, 검사가 무엇을 막는지, 켜면 순환이 어떻게 되는지는
+[ADG 축 규칙](docs/ADG_축규칙.md) 에 있다. 20시드 실측으로 **규칙을 끄면 순환
+3건, 켜면 0건**이다 (순환 = 주행 전 데드락).
+
+★ **1.0 채택은 아직 확정이 아니다.** 1.0 vs 1.2 포화 처리량이 마지막 게이트이고
+  거기서 1.2 로 되돌아갈 수 있다. 되돌릴 때는 두 스크립트의
+  `export PIBT_PITCH="${PIBT_PITCH:-1.0}"` 한 줄씩만 바꾸면 된다.
+
+### 실행 속도
+
+```bash
+PIBT_V_EXEC=2.2 bash run_record.sh        # 안 주면 geom.v_max(0.9) = 계획 속도
+```
+
+**안 주면 실행 속도가 계획 속도와 같아진다.** 계획을 느리게 잡는 근거 자체가
+"실행이 더 빨라 회전 손실을 따라잡는다" 이므로, 둘이 같으면 그 논리가 성립하지
+않는다. 채택 속도를 정했으면 명시할 것.
+
+---
+
+## ★ 환경변수가 Isaac 까지 가는 규칙
+
+`amr/main.py:155` 가 이렇게 띄운다.
+
+```python
+os.execvpe(argv[0], argv, dict(os.environ, **env))
+```
+
+**셸 환경 전체를 깔고 그 위에 `pibt_h.launch()` 의 `env` 목록을 얹는다.**
+
+| | |
+|---|---|
+| 목록에 **있는** 이름 | `pibt_h` 의 값이 이긴다 — 셸 값이 무시된다 |
+| 목록에 **없는** 이름 | 셸에서 **그대로 상속된다** |
+
+실제로 덮이는 것은 `PIBT_N` · `PIBT_STAGE` · `PIBT_MAP` · `PIBT_MODE` 넷이다.
+나머지는 `_e(name, default)` 로 감싸 있어 **셸이 이긴다**.
+
+```
+PIBT_MODE=oneshot bash run_record.sh     ->  무시된다 (lifelong 로 하드코딩)
+PIBT_HORIZON=550 bash run_record.sh      ->  먹는다 (_e 로 감싸 있다)
+PIBT_V_EXEC=2.2  bash run_record.sh      ->  먹는다
+```
+
+> ★ 2026-09-15 정정. `pibt_h.py` 주석이 오래 "목록에 없는 이름은 전달조차
+> 안 된다" 고 적고 있었고 **그것이 틀렸다.** 그 서술을 믿고 "실행 속도가
+> 전달 안 돼 주행이 늘 0.9 였다" 고 잘못 진단한 적이 있다. `dict(os.environ,
+> **env)` 는 2026-09-09 도입 이래 바뀐 적이 없다.
+>
+> 2026-09-11 의 `PIBT_HORIZON=550` 이 안 먹은 것은 **그때는 하드코딩이어서**
+> 맞다. 지금은 `_e` 로 바뀌어 먹는다.
+
+`PIBT_MODE` 가 하드코딩인 것은 의도된 것이다 — one-shot 은 12대에서 **어느
+시드도 완주하지 못한다** (통로차단 이후 도달 가능한 목표가 한 줄로 쏠린다).
+
+---
+
 ## 계획기
 
 `amr/path/` 에 모듈 하나 = 계획기 하나. 파일을 넣으면 `main.py` 는 안 고쳐도 된다.
 
 | 이름 | 주행 | 설명 |
 |---|---|---|
-| `pibt_h` | `adg` | PIBT 헤딩(2칸 점유·스윙 예약·후진) + ADG · 1.2 m 격자. **현행 주력** |
+| `pibt_h` | `adg` | PIBT 헤딩(2칸 점유·스윙 예약·후진) + ADG. **현행 주력**<br>격자는 모듈 상수 1.2 이지만 **주행 스크립트 기본은 1.0** (위 절) |
 | `wppl` | `time` | Windowed Parallel PIBT-LNS · 2.4 m 격자 · lifelong 420초 |
 | `astar` | `time` | 우선순위 space-time A* · 0.2 m 격자 · 비교군 |
 | `fms` | `time` | 3_FMS 커널 내보내기 재생. 계획 안 함 · 통제 비교용 |
@@ -212,7 +329,9 @@ export MAP=$W/warehouse/map        # paths.sh:27
 > **둘 다 지금은 사실이 아니다** (2026-09-11 정정). `$MAP_FMS` 는 이 저장소의
 > `paths.sh` 에 없고, `$MAP` 은 t3_amr 안의 사본을 가리킨다.
 
-팀 기본 맵(`../t3_warehouse_map/map`, v6.0)을 쓰지 않는 이유는 두 가지다.
+한때 팀 기본 맵이던 `../t3_warehouse_map/map`(v6.0)을 쓰지 않은 이유는 두
+가지였다. **그 폴더는 -219 로 삭제됐으므로 아래는 이력이다** — 지금 단일
+소스는 `warehouse/map/` 이다.
 
 - 격자가 다르다 (`occupancy_grid` sha `3f9548db…` vs 여기 `563e6aeb…`)
 - `stations.json` 에 `handoff` 가 없다 — `pibt_scene.GOAL_CATS` 다섯 중 하나가
@@ -306,7 +425,59 @@ python tools/fetch_iwhub.py        # iw.hub 에셋 236 MB (git 제외분)
 ```bash
 python path/test_lifelong_battery.py           # lifelong + 배터리 + ADG. Isaac 불필요
 python path/diag_reach.py $MAP                 # 스테이션이 같은 성분에 있나 (4/4)
+python tools/adg_fingerprint.py                # ADG 간선 회귀 — 규칙을 건드리면 먼저
 ```
 
 `diag_reach` 를 먼저 돌리는 이유는, 스테이션이 서로 다른 성분에 갈리면 배차가 영원히
 안 끝나는데 계획이 얼어붙은 것처럼만 보이기 때문이다.
+
+`adg_fingerprint` 는 **규칙이 꺼진 상태에서 간선이 한 줄도 안 바뀌었는지**를
+지킨다. 액션과 간선을 정규 직렬화해 sha256 을 비교하므로, 예약 규칙을 건드릴
+때 이것부터 돌린다.
+
+---
+
+## 도구
+
+`tools/` 는 전부 **Isaac 없이** 돈다 (`add_onboard_cam.py` 만 pxr 을 쓴다).
+`.npz` 를 받는 것들은 `run_record.sh` 에 `PIBT_RECORD=...` 를 주면 나오는
+자세 기록을 읽는다.
+
+```bash
+source paths.sh
+PIBT_RECORD=$OUT/rec.npz bash run_record.sh 12        # 녹화를 만든다
+```
+
+### 계획 층 — Isaac 도, 녹화도 필요 없다
+
+| | |
+|---|---|
+| `adg_fingerprint.py` | ADG 간선 회귀. 규칙을 건드리면 **먼저** 돌린다 |
+| `adg_cycles.py` | 앞 칸 규칙이 ADG 순환을 없애는가. `RULE=off` 로 대조군 |
+| `goal_oscillation.py` | 목표 앞 왕복 정체 재현. 지금은 전부 완주해야 맞다 |
+| `rule_numbers.py` · `axle_rule.py` · `soft_rule_sweep.py` | 규칙 후보별 합법쌍·접촉·여유 |
+| `remeasure_adg_basis.py` | ADG 를 무엇으로 짓느냐에 따른 접촉 수 |
+| `why_blocked.py` · `wait_hotspots.py` | 대기가 진짜 경합인가 · 어디서 나는가 |
+| `speed_sweep.py` · `try_carry.py` · `try_swing5.py` | 속도·이어달리기·규칙 변형 쓸기 |
+
+### 녹화를 읽는 것 — 실측
+
+| | 무엇을 재나 |
+|---|---|
+| `cross_track.py` | 직진 중 횡방향 이탈. **`--diag` 를 먼저** 돌려 격자를 고른다 |
+| `turn_error.py` | 회전 자세 오차. **세로/가로 분해가 핵심** — 예산을 먹는 건 가로다 |
+| `axle_frame.py` | 회전 중 축 이탈이 진짜 밀림인지 좌표 프레임 오차인지 |
+| `measure_turns.py` | 회전·전진이 **실제로 몇 초**인지 (계획 틱과 대조) |
+| `motion_profile.py` | 멈춤의 정체 — 회전 / 대기 / 감속 / 순항 |
+| `measure_seq.py` | 칸마다 멈추나 · 회전→전진 전환 비용 |
+
+> **★ `cross_track.py --diag` 를 건너뛰지 말 것.** 격자를 못 찾으면 모든
+> 녹화에서 최대가 `500.0 mm = pitch/2` 로 딱 떨어지는데, 그건 이탈이 큰 것이
+> 아니라 **차선을 못 고른 것**이다. 1등과 2등의 격차를 봐야 한다.
+>
+> **★ 격자를 받는 도구에는 격자를 줄 것.** `PITCH` 를 안 주면 기본 1.2 로
+> 환산한다. `motion_profile` 을 뺀 다섯 개가 `PITCH`(없으면 `PIBT_PITCH`)를
+> 읽고 머리말에 `칸 ? m` 또는 `pitch ?` 를 찍으니 **첫 줄을 보고 시작할 것**.
+> 틀리면 **칸을 세는 숫자만** 조용히 어긋난다 — 회전·자세 오차는 거리와
+> 무관해 멀쩡하니 눈에 안 띈다. `motion_profile` 은 속도·시간만 보므로
+> 격자와 무관하다.

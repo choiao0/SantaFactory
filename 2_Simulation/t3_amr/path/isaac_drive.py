@@ -696,6 +696,24 @@ class Action:
     #   교집합을 soft 에 두는 건 맞다 — 스윕 밖 칸은 애초에 hard 가 아니라
     #   빼낼 것이 없다. 잘못된 건 그걸 **간선 조회에도** 썼던 것이다.
     guard: frozenset[Cell] = frozenset()
+    # [patch_release] 이 동작이 **태스크의 첫 동작**인가 (-211).
+    #
+    #   ADG 실행기의 시작 관문 ② 는 `clock >= tick x tick_s` 를 요구한다.
+    #   그 줄의 주석이 "아직 주문이 안 왔다" 인데, 주문 도착 제약은 태스크의
+    #   **첫 동작에만** 필요하다. 그런데 모든 동작에 걸려 있었다.
+    #
+    #   실측 (pitch 1.0 · 12대 · 467.65 s · 2026-09-15)
+    #       막힘 111,148 프레임 중 **릴리스 바닥 66.2%** · ADG선행 33.8%
+    #       = 로봇 시간의 21.8% 가 "계획 시각이 안 됐다" 로 서 있었다
+    #       지평(349 s)을 넘기면 막힘이 1,776 프레임으로 62배 줄고 전부 ADG선행
+    #
+    #   즉 이 시스템의 지배적 제약이 경합도 물리도 아니고 계획 시각표였다.
+    #
+    #   True 인 동작만 바닥을 받고 나머지는 0 이다. 순서 안전은 그대로다 —
+    #   관문 ③(ADG 선행)이 손대지 않은 채 남는다. 바닥은 **시각**만 정한다.
+    #   lifelong 이 아닌 경로(one-shot)는 태스크 개념이 없어 전부 False 이고,
+    #   그때는 `tick_s=None` 이라 바닥 자체가 없다.
+    task_start: bool = False
 
     @property
     def hard(self) -> frozenset[Cell]:
@@ -735,6 +753,7 @@ def classify(s0: State, s1: State) -> str:
 
 
 def extract_actions(history: list[dict[int, State]], geom: RobotGeom,
+                    task_start: dict[int, list[int]] | None = None,
                     ) -> tuple[list[list[Action]], list[int], dict]:
     """run_h의 history를 로봇별 액션 체인으로.
 
@@ -744,12 +763,20 @@ def extract_actions(history: list[dict[int, State]], geom: RobotGeom,
     회전이 여러 틱(`TURN_TICKS > 1`)에 걸치면 첫 틱에 방향이 바뀌고 나머지는
     스윙 칸을 물고 대기한다. 그 대기 틱들은 상태가 안 바뀌므로 자연히 건너뛰고,
     회전 액션 하나가 그 시간 전체를 대표한다.
+
+    `task_start` 는 `{agent: [태스크를 받은 틱, ...]}` 다 (lifelong 이 준다).
+    주면 각 틱 **이후 첫 동작**에 `Action.task_start=True` 를 단다 — ADG
+    실행기의 릴리스 바닥이 그것만 본다 (-211, `Action.task_start` 주석).
+    안 주면 전부 False 이고 바닥이 아예 안 걸린다.
     """
     agents = sorted(history[0])
     chains: list[list[Action]] = [[] for _ in agents]
     index = {a: i for i, a in enumerate(agents)}
     uid = 0
     stats = {MOVE: 0, TURN: 0, REVERSE: 0, WAIT: 0}
+    # 아직 첫 동작을 못 찾은 태스크 시작 틱들 (오름차순으로 소비한다)
+    pending = {a: sorted(task_start.get(a, [])) for a in agents} if task_start \
+        else {a: [] for a in agents}
 
     for t in range(len(history) - 1):
         for a in agents:
@@ -764,9 +791,16 @@ def extract_actions(history: list[dict[int, State]], geom: RobotGeom,
             #   목표 칸을 안 벗어난다 (앞길이 0.390 < 반칸). 스위치가 꺼져 있으면
             #   `front_cells()` 가 빈 집합이라 여기도 빈 집합이다.
             guard = geom.front_cells(s0, s1) if kind == TURN else frozenset()
+            # 이 동작이 어느 태스크의 첫 동작인가 — 받은 틱 이하의 표시를
+            # 전부 소비한다 (배정 뒤 여러 틱 대기했다가 움직이는 경우 대비).
+            first = False
+            while pending[a] and pending[a][0] <= t:
+                pending[a].pop(0)
+                first = True
             act = Action(
                 agent=a, idx=len(chains[i]), kind=kind, tick=t, frm=s0, to=s1,
-                cells=cells, soft=guard & cells, guard=guard, uid=uid)
+                cells=cells, soft=guard & cells, guard=guard, uid=uid,
+                task_start=first)
             _check_soft(act)
             chains[i].append(act)
             uid += 1
@@ -1120,7 +1154,18 @@ class AdgRuntime:
                   f"지평 이후 (t>{self._why_horizon:.0f}s — ② 가 안 걸리는 구간)")
 
     def release_time(self, action: Action) -> float:
-        return 0.0 if self.tick_s is None else action.tick * self.tick_s
+        """이 동작을 **언제부터** 시작해도 되는가.
+
+        주문 도착 제약이라 **태스크의 첫 동작에만** 건다. 중간 동작에 걸면
+        로봇이 일찍 끝내도 계획 시각까지 서 있게 되고, 실측에서 그것이
+        막힘의 66.2%(로봇 시간의 21.8%)였다 — `Action.task_start` 주석 참조.
+
+        표시가 없는 동작(태스크 중간 · one-shot · 존 복귀)은 0 이다. 순서는
+        관문 ③(ADG 선행)이 그대로 지킨다.
+        """
+        if self.tick_s is None or not action.task_start:
+            return 0.0
+        return action.tick * self.tick_s
 
     def pending(self, i: int) -> Action | None:
         k = self.next_idx[i]
@@ -2355,7 +2400,11 @@ def plan_and_build_lifelong(free: np.ndarray, starts: dict[int, State],
         order_gap=order_gap, shifts=shifts, zone_cells=zone_cells,
         order_end=order_end, **kw)
 
-    chains, order, stats = extract_actions(history, geom)
+    # ★ 태스크 시작 틱을 넘긴다 (-211). 릴리스 바닥이 태스크 첫 동작에만
+    #   걸리게 하려면 여기서 이어 줘야 한다 — 없으면 전부 False 가 되어
+    #   바닥이 아예 안 걸린다 (그건 그것대로 틀리다: 주문 전 출발을 허용한다).
+    chains, order, stats = extract_actions(history, geom,
+                                           task_start=li.get("task_start"))
     adg = build_adg(chains)
     if adg.topological_order() is None:
         raise RuntimeError("ADG에 순환이 있다 — 실행하면 데드락이다")
