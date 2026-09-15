@@ -152,7 +152,14 @@ def launch(n=12):
              # 업무 종료 후 전원 충전존 복귀 (-199). 빈 값이면 live_pibt 가
              # 끈 것으로 본다 — 기본 동작은 바뀌지 않는다.
              _e("PIBT_ORDER_END", ""),
-             _e("PIBT_ORDER_GAP", "15")],
+             _e("PIBT_ORDER_GAP", "15"),
+             # 앞 칸 규칙 (-204). `pibt_scene.front_rule()` 이 읽어 계획기와
+             # RobotGeom 두 스위치를 함께 맞춘다. 이 줄이 없으면 셸에서 줘도
+             # Isaac 까지 **전달되지 않는다** (위 설명).
+             #   4 = 앞2칸 + 섞임대각2칸 · 2 = 앞2칸 · off = 규칙 없음
+             # ★ pitch 1.2 는 게이팅 구간이라 무엇을 넣든 꺼진다. 기본값을 4 로
+             #   둬도 1.2 주행의 동작은 바뀌지 않고, 1.0/1.1 에서만 켜진다.
+             _e("PIBT_FRONT_RULE", "4")],
         flags=["--/rtx/post/motionblur/enabled=false"])
 
 

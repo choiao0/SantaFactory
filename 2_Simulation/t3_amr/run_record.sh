@@ -157,6 +157,32 @@ export PIBT_SHOT_STRIDE="$SHOT_STRIDE"
 export PIBT_SHOT_FPS="$SHOT_FPS"
 export PIBT_SHOT_EXT="$SHOT_EXT"
 
+# ── ADG 앞 칸 규칙 · 격자 (S15P21A106-204) ──────────────────
+#   ★ `pibt_h.py:launch()` 의 env 목록에 **있는 이름만** Isaac 까지 간다.
+#     `PIBT_FRONT_RULE` 과 `PIBT_PITCH` 는 거기 `_e(...)` 로 들어 있어 여기
+#     값이 이긴다. 목록에 없는 이름은 export 해도 전달조차 안 된다
+#     (README 「함정」· pibt_h.py:120 실측).
+#
+#   규칙은 계획기와 ADG 가 **같은 칸**을 보게 만든다. 전에는 계획기가 3칸
+#   모델로 풀고 ADG 는 실제 스윕으로 지어서, pitch 1.0 에서 ADG 에 순환이
+#   생겼다 (= 주행 전 데드락). 20시드 측정: 규칙 없이 순환 10/20, 규칙을
+#   켜면 0/20.
+#
+#   ★ 규칙은 **pitch 게이팅**을 받는다. 1.2 에서는 무엇을 넣든 꺼진다 —
+#     칸이 넓어 규칙이 필요 없기 때문이다. 바뀐 ADG 를 실제로 보려면
+#     PIBT_PITCH=1.0 (또는 1.1) 이어야 한다.
+export PIBT_FRONT_RULE="${PIBT_FRONT_RULE:-4}"
+export PIBT_PITCH="${PIBT_PITCH:-1.2}"
+
+# 규칙을 켜 달라고 했는데 격자가 게이팅 구간이면, 29분을 쓰고 나서 "규칙이
+# 안 걸렸네" 를 깨닫는 것이 가장 나쁘다. 0초에 알린다.
+RULE_LIVE="예"
+case "$PIBT_FRONT_RULE" in
+    off|0|no|"") RULE_LIVE="아니오 (규칙 없음)" ;;
+    *) awk -v p="$PIBT_PITCH" 'BEGIN{exit !(p >= 1.15)}' && \
+           RULE_LIVE="아니오 — pitch $PIBT_PITCH 는 게이팅 구간" ;;
+esac
+
 SPEED=$(awk -v s="$SHOT_STRIDE" -v f="$SHOT_FPS" 'BEGIN{printf "%.1f", s*f/60}')
 EXPN=$(awk -v s="$SHOT_STRIDE" 'BEGIN{printf "%d", 43800/s}')
 EXPSEC=$(awk -v n="$EXPN" -v f="$SHOT_FPS" 'BEGIN{printf "%d", n/f}')
@@ -167,6 +193,15 @@ echo "  인자        ${ARGS[*]}"
 # [patch_record_n] 플래그가 걸렸는지 로그로 증명한다 (규칙 1번)
 echo "  대수        ${PIBT_N}대"
 echo "  계획        $PLAN_DIR"
+# 플래그가 실제로 걸렸는지 로그로 증명한다 (규칙 1번).
+#   '규칙 적용' 이 '아니오' 인데 규칙을 기대했다면 지금 끊는 편이 낫다.
+echo "  격자        pitch $PIBT_PITCH"
+echo "  앞 칸 규칙  PIBT_FRONT_RULE=$PIBT_FRONT_RULE   규칙 적용 $RULE_LIVE"
+case "$RULE_LIVE" in
+    아니오*게이팅*)
+        echo "              ※ 바뀐 ADG 로 보려면:  PIBT_PITCH=1.0 bash run_record.sh $PIBT_N"
+        ;;
+esac
 if [ "$PIBT_N" -gt 16 ]; then
     echo "  ※ 충전존의 서쪽헤딩 슬롯이 2.4 m 간격에서 16개입니다."
     echo "    ${PIBT_N}대면 CHARGE_STEP_Y=1.2 로 계획해야 할 수 있습니다."

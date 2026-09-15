@@ -174,9 +174,58 @@ CHARGE_ZONE = (CHARGE_ZONE_LEGACY
 GOAL_CATS = ["packing", "consol", "handoff", "aisle_buf", "inbound_buf"]
 
 
+def front_rule(pitch):
+    """앞 칸 규칙(S15P21A106-204)을 정하고 (front_swing, front_diag) 를 돌려준다.
+
+    왜 여기인가
+    -----------
+    규칙은 **스위치가 둘**이다 — 계획기 쪽 `pibt.geometry.configure(...)` 와
+    `RobotGeom` 의 필드. 한쪽만 켜지면 `isaac_drive._check_front_swing` 이
+    주행 전에 죽인다. 둘을 같이 정하는 자리가 없어서 지금까지 **주행 경로에서는
+    규칙이 통째로 꺼진 채** 돌았다 (`geo.configure` 를 부르는 곳이 도구
+    하나뿐이었다). 그 두 스위치를 여기 한 곳에서 맞춘다.
+
+    `PIBT_FRONT_RULE`
+        4      앞 2칸 + 섞임 대각 2칸  {f0, f1, mA, mB}   <- 채택한 규칙
+        2      앞 2칸만               {f0, f1}
+        off    규칙 없음 (대조군)
+        (없음) **계획기에 이미 설정된 상태를 그대로 읽는다.** 도구가 자기
+               `geo.configure(...)` 를 먼저 부르는 경우가 있어서, 그걸 덮으면
+               `adg_cycles.py` 의 RULE=off 대조군이 망가진다.
+
+    ★ 규칙은 pitch 게이팅을 받는다. 1.2 에서는 무엇을 넣든 꺼진다 (차체가
+      이미 충분히 떨어져 규칙이 필요 없다). 그래서 **요청값이 아니라 계획기가
+      실제로 켠 값**(`front_swing_on()`)을 읽어 돌려준다. 요청과 결과가 다르면
+      한 줄 찍는다 — 켠 줄 알고 1.2 로 돌리는 것을 막기 위해서다.
+    """
+    try:
+        import pibt.geometry as geo
+    except ImportError:
+        return False, False                     # 계획기 기하가 없는 환경
+
+    want = os.environ.get("PIBT_FRONT_RULE")
+    if want is not None:
+        want = want.strip().lower()
+        geo.configure(front_swing=(want not in ("off", "0", "no", "")),
+                      front_diag=(want == "4"),
+                      robot_dims=(GEOM_KW["front_len"], GEOM_KW["rear_len"],
+                                  GEOM_KW["width"]),
+                      pitch=pitch)
+    on, diag = bool(geo.front_swing_on()), bool(geo.front_diag_on())
+    if want is not None:
+        got = "4칸" if diag else ("앞2칸" if on else "꺼짐")
+        note = ""
+        if want not in ("off", "0", "no", "") and not on:
+            note = f"  ★ pitch {pitch} 는 게이팅 구간이라 규칙이 꺼졌습니다"
+        print(f"[scene] 앞 칸 규칙 PIBT_FRONT_RULE={want} -> {got}{note}")
+    return on, diag
+
+
 def make_geom(pitch):
     """우리 로봇 기하 + 격자. origin 은 셀 (0,0) **중심**의 world 좌표."""
-    return RobotGeom(pitch=pitch, origin=(pitch / 2.0, pitch / 2.0), **GEOM_KW)
+    on, diag = front_rule(pitch)
+    return RobotGeom(pitch=pitch, origin=(pitch / 2.0, pitch / 2.0),
+                     front_swing=on, front_diag=diag, **GEOM_KW)
 
 
 def _pick(map_dir, *names):
