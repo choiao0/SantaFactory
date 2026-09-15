@@ -63,7 +63,8 @@ class EstimateFlowIT extends PostgresSupport {
         jdbc.update("DELETE FROM zones");
         jdbc.update("DELETE FROM facility");
         jdbc.update("DELETE FROM warehouses");
-        // 창고 시드(품고)와 같은 값 — 목표 처리율 95 %, 가동률 80 %, 예산 3억
+        // 창고 시드(품고)와 같은 값 — 하루 출고 6,000건, 목표 처리율 95 %, 가동률 80 %, 예산 3억.
+        // 출고 물량은 팀 결정(2026-09-11) 견적 부하 "하루 6,000건 / 6시간" 이다 (S15P21A106-97)
         warehouseId = jdbc.queryForObject("""
                 INSERT INTO warehouses
                     (name, area, width, length, worker_count,
@@ -73,7 +74,7 @@ class EstimateFlowIT extends PostgresSupport {
                 VALUES ('품고', 9900.0, 110.0, 90.0, 12,
                         '2026-01-01 01:00:00', '2026-01-01 09:00:00',
                         '2026-01-01 13:00:00', '2026-01-01 18:00:00', 'OUTBOUND',
-                        600, 800, 95.0, 95.0, 80.0, 300000000)
+                        600, 6000, 95.0, 95.0, 80.0, 300000000)
                 RETURNING warehouse_id
                 """, Long.class);
         seedProductMaster(warehouseId);
@@ -131,8 +132,10 @@ new EstimateCreateRequest(warehouseId, null, null, null, null, null, null), ADMI
         assertThat(detail.runs()).hasSize(MAX_AMR);
         assertThat(detail.runs()).extracting(EstimateDetailResponse.Run::status).containsOnly(RunStatus.DONE);
         assertThat(detail.runs().get(11).throughput()).isEqualTo(96.0);
-        // 시뮬 출고창 4시간(6h × 4/6) 실측 96건 → 실제 출고창 5시간 기준 120건/일
-        assertThat(detail.runs().get(11).outbound()).isEqualTo(120L);
+        // 건/일 환산 배율은 (하루 물량 ÷ 보낸 건수)다 (S15P21A106-214). 하루치 주문을 통째로 실어
+        // 보내므로 배율이 1이고, 실측 96건이 그대로 96건/일이다. 예전의 (실제 출고창 ÷ 시뮬 출고창)
+        // 배율이던 시절에는 5시간 창고에서 ×1.25 로 부풀려 120 이 나왔다
+        assertThat(detail.runs().get(11).outbound()).isEqualTo(96L);
     }
 
     @Test

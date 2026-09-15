@@ -1,0 +1,9 @@
+# 빌드 컨텍스트 = t3_amr. 산출물·캐시·대용량 계획 산출물은 이미지에 넣지 않는다.
+__pycache__/
+**/__pycache__/
+out/
+stage/
+logs/
+v2/
+deploy/data/
+*.mp4

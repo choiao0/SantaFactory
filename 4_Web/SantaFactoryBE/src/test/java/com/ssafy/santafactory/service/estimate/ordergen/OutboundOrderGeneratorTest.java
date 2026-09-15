@@ -254,7 +254,7 @@ class OutboundOrderGeneratorTest {
     /** 견적 설정 — 여기서 쓰는 건 한 줄 수량 상한(maxLineQty)뿐이다. */
     private static EstimateProperties props(int maxLineQty) {
         return new EstimateProperties(0L, 0L, 0L, 28, 6, 4, 1, Duration.ofMinutes(30), Duration.ofHours(6), "out", false,
-                Duration.ofMinutes(10), maxLineQty, 6);
+                Duration.ofMinutes(10), maxLineQty, 6, null);
     }
 
     private OrderRuleProfile tinyProfile() {

@@ -467,7 +467,7 @@ public class EstimateService {
             run.markFailed("결과에 kpi 가 없음");
             return;
         }
-        run.markDone(throughputPercent(kpi), utilizationPercent(kpi), dailyOutbound(run, kpi));
+        run.markDone(throughputPercent(kpi), utilizationPercent(kpi), dailyOutbound(run, kpi), kpi.leadTimeP90S());
         log.info("run 완료: runId={}, 처리율={}%, 가동률={}%",
                 run.getRunId(), run.getThroughput(), run.getUtilization());
     }
@@ -564,7 +564,8 @@ public class EstimateService {
                 .map(this::toRunResult)
                 .toList();
         EstimateGoal goal = new EstimateGoal(
-                estimate.getTargetThroughput(), estimate.getTargetUtilization(), estimate.getBudgetLimit());
+                estimate.getTargetThroughput(), estimate.getTargetUtilization(), estimate.getBudgetLimit(),
+                properties.leadTimeP90LimitSeconds());
 
         EstimateVerdict verdict = evaluator.evaluate(results, goal);
         boolean anyFailed = results.size() != runs.size();
@@ -586,7 +587,8 @@ public class EstimateService {
                 run.getAmrCount(),
                 run.getThroughput(),
                 run.getUtilization(),
-                run.getTotalCost() == null ? 0L : run.getTotalCost());
+                run.getTotalCost() == null ? 0L : run.getTotalCost(),
+                run.getLeadTimeP90());
     }
 
     // ── 잡동사니 ─────────────────────────────────────────────────────────────
