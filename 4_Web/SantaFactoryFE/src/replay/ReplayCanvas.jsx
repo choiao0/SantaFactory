@@ -30,10 +30,10 @@ function restoreBackground(ctx, { layer, dpr }) {
 
 /** 최근 지나온 자리. 정지 화면에서도 어디서 왔는지 읽히게 한다. */
 function drawTrails(ctx, canvas, { cell, px, py }, model, ti) {
-  ctx.lineWidth = 2
+  ctx.lineWidth = 3
   ctx.lineCap = 'round'
   ctx.strokeStyle = cssVar(canvas, '--rp-amr')
-  ctx.globalAlpha = 0.28
+  ctx.globalAlpha = 0.35
   for (const rid of Object.keys(model.robots)) {
     const back = Math.max(0, ti - TRAIL_TICKS)
     ctx.beginPath()
@@ -48,28 +48,40 @@ function drawTrails(ctx, canvas, { cell, px, py }, model, ti) {
   ctx.globalAlpha = 1
 }
 
+/** 실제 치수보다 크게 그리는 배율 — 한 칸이 7~8px 인 화면에서 1.5 m × 0.9 m 그대로는 점처럼 보인다 */
+const ROBOT_SCALE = 1.4
+
 /** 로봇 한 대. heading 모델이면 두 칸을 차지하는 차체를 방향대로 돌려 그린다. */
 function drawRobot(ctx, canvas, { cell, px, py }, model, rid, tick) {
   const p = poseAt(model, rid, tick)
   const [dr, dc] = DIRS[p.h]
   ctx.fillStyle = cssVar(canvas, '--rp-amr')
+  ctx.strokeStyle = 'rgba(0,0,0,0.65)'
+  ctx.lineWidth = 1
   if (model.twoCell) {
     // 위치가 앞축 기준이라 차체 중심은 뒤로 0.39 m 물러나 있다 (export_isaac 규약)
     const [len, wid] = model.meta.robot_dim_m || [1.5, 0.92]
     const axleToCenter = len / 2 - 0.39
+    const w = len * cell * ROBOT_SCALE
+    const h = wid * cell * ROBOT_SCALE
     ctx.save()
     ctx.translate(px(p.c) + cell / 2 - dc * axleToCenter * cell,
                   py(p.r) + cell / 2 + dr * axleToCenter * cell)
     ctx.rotate(Math.atan2(-dr, dc))
-    ctx.fillRect((-len * cell) / 2, (-wid * cell) / 2, len * cell, wid * cell)
+    ctx.fillRect(-w / 2, -h / 2, w, h)
+    ctx.strokeRect(-w / 2, -h / 2, w, h)
     ctx.restore()
   } else {
-    ctx.fillRect(px(p.c) + 0.5, py(p.r) + 0.5, cell - 1, cell - 1)
+    const size = cell * ROBOT_SCALE
+    const x = px(p.c) + (cell - size) / 2
+    const y = py(p.r) + (cell - size) / 2
+    ctx.fillRect(x, y, size, size)
+    ctx.strokeRect(x, y, size, size)
   }
   // 진행 방향 표식 — 회전만으로는 앞뒤가 구분되지 않는다
-  ctx.fillStyle = 'rgba(255,255,255,0.92)'
+  ctx.fillStyle = 'rgba(0,0,0,0.85)'
   ctx.beginPath()
-  ctx.arc(px(p.c) + cell / 2 + dc * cell * 0.28, py(p.r) + cell / 2 - dr * cell * 0.28, 1.3, 0, Math.PI * 2)
+  ctx.arc(px(p.c) + cell / 2 + dc * cell * 0.3, py(p.r) + cell / 2 - dr * cell * 0.3, Math.max(1.6, cell * 0.16), 0, Math.PI * 2)
   ctx.fill()
 }
 
@@ -121,14 +133,11 @@ export default function ReplayCanvas({ replay, tick, showTrails = true }) {
     for (let r = 0; r <= model.H; r += 5) {
       s.beginPath(); s.moveTo(0, py(r) + cell + 0.5); s.lineTo(width, py(r) + cell + 0.5); s.stroke()
     }
-    // 역할별로 색을 나눈다. 출고 지점(packing)은 크게 칠해 한눈에 찾게 한다 —
-    // 5칸뿐인데 57칸짜리 스테이션 무리에 묻히면 AMR 이 어디로 가는지 읽히지 않는다
+    // 역할별로 색을 나눈다. 출고 지점(packing)은 색으로 구분한다 — 5칸뿐이라 색이 뚜렷해야 AMR 목적지가 읽힌다
     const roleVar = { pack: '--rp-pack', pick: '--rp-pick', in: '--rp-in', charge: '--rp-charge', etc: '--rp-etc' }
     for (const [key, [r, c]] of Object.entries(model.stations)) {
-      const role = stationRole(key)
-      s.fillStyle = cssVar(canvas, roleVar[role])
-      const pad = role === 'pack' ? 0 : 1.5
-      s.fillRect(px(c) + pad, py(r) + pad, cell - pad * 2, cell - pad * 2)
+      s.fillStyle = cssVar(canvas, roleVar[stationRole(key)])
+      s.fillRect(px(c), py(r), cell, cell)
     }
     staticRef.current = { layer, cell, dpr, px, py }
   }, [model])
