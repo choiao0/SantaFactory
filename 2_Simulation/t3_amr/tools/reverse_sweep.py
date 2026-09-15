@@ -73,6 +73,10 @@ GAP = int(os.environ.get("GAP", "60"))
 #   adg_fingerprint 와 비교했을 때만 맞았다. 주행과는 이것도 달랐다.
 #   순환 원인을 가르려면 이 축이 켜고 끌 수 있어야 한다.
 BATTERY = os.environ.get("BATTERY", "1") not in ("0", "", "no", "off")
+# ★ 이것도 박아 두면 안 된다 (2026-09-15). 계획 산출물 `scene.json` 에
+#   `"dispatch": "robot_first"` 가 찍힌 판이 있다. 배차가 다르면 태스크 배정이
+#   달라지고 경로가 통째로 달라진다 — 순환 여부를 가를 수 있는 축이다.
+DISPATCH = os.environ.get("PIBT_DISPATCH", "fms")
 
 # `off` 는 환경변수를 **안 주는** 기준 판이다 (= 로더가 한 줄도 안 돈다 = FMS 기본).
 # 기본 목록에 넣어 두는 이유: 오버라이드 경로 자체가 무해한지 매 판 같이 보이려고.
@@ -99,8 +103,12 @@ def child(seed):
     try:
         adg, _order, _history, info = D.plan_and_build_lifelong(
             free, starts, goals, geom, horizon=HORIZON, seed=seed,
-            order_gap=GAP, battery=BATTERY, dispatch="fms", zone_cells=zone,
-            order_end=None, docks=pibt_scene.charge_docks(free, geom))
+            order_gap=GAP, battery=BATTERY, dispatch=DISPATCH, zone_cells=zone,
+            # `docks` 는 battery 일 때만 쓰이지만, 주행 경로(pibt_scene:793 ·
+            # live_pibt:903)가 거는 게이팅을 그대로 둔다. 인자 하나라도
+            # 다르면 "주행과 같은 조건" 이라고 말할 수 없다.
+            order_end=None,
+            docks=pibt_scene.charge_docks(free, geom) if BATTERY else ())
     except RuntimeError as e:
         if "순환" not in str(e):
             raise
@@ -189,7 +197,8 @@ def main():
         return 0
 
     print(f"REVERSE_FACTOR 스윕 — n {N} · pitch {PITCH} · 지평 {HORIZON}틱"
-          f" · 주기 {GAP} · 배터리 {'켬' if BATTERY else '끔'} · 시드 {SEEDS}")
+          f" · 주기 {GAP} · 배터리 {'켬' if BATTERY else '끔'}"
+          f" · 배차 {DISPATCH} · 시드 {SEEDS}")
     print("  ★ FMS 기본은 3.0 이다. 나머지는 **합의 전 실험값**이다.")
 
     table = {}
