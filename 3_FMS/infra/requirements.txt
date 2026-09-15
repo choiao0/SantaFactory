@@ -4,6 +4,10 @@
 # 흔들리고, 그러면 B0 vs B1 비교 자체가 무의미해진다.
 numpy==2.4.6
 matplotlib==3.11.1
+# 헤딩 거리장 증분 복구 커널 (sim_engine/pibt/hgraph.py, S15P21A106-225) — 결과 비트 동일, 재계획 경로 10배.
+# numba 0.67 은 numpy <2.6 · Python 3.10~3.14. 첫 실행에 컴파일 캐시(__pycache__/*.nbi·nbc)를 만든다.
+numba==0.67.0
+llvmlite==0.49.0
 
 # BO 탐색
 optuna==4.1.0

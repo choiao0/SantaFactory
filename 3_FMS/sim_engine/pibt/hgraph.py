@@ -2,6 +2,7 @@
 from heapq import heappop, heappush
 
 import numpy as np
+from numba import njit
 
 from .geometry import (DIRS, REVERSE_FACTOR, TURN_COST, turn_mask, turn_ok,
                        valid_state)
@@ -110,18 +111,161 @@ def _build_edges(ec, tc, H, W, mask=None):
     return preds, succs
 
 
+def _csr(edges, n):
+    """튜플 리스트 [(상대, 비용, 대각)]*n → CSR (ptr int32[n+1], idx int32, cost float64, diag int32) — Numba 커널 입력."""
+    ptr = np.zeros(n + 1, dtype=np.int32)
+    np.cumsum([len(e) for e in edges], out=ptr[1:])
+    flat = [t for e in edges for t in e]
+    m = len(flat)
+    idx = np.fromiter((t[0] for t in flat), dtype=np.int32, count=m)
+    cost = np.fromiter((t[1] for t in flat), dtype=np.float64, count=m)
+    diag = np.fromiter((t[2] for t in flat), dtype=np.int32, count=m)
+    return ptr, idx, cost, diag
+
+
 def _finalize_solution(n, dm, succ, sdiag, done):
-    """(dm float64[n] (-1 unreachable), dm list, sdiag int32[n], children dict) — 도달 상태만."""
+    """(dm float64[n] (-1 unreachable), sdiag int32[n], 자식 CSR ch_ptr int32[n+1]·ch_idx int32) — children[j] = {i : succ[i] == j}, 도달 상태만."""
     idx = np.flatnonzero(np.frombuffer(bytes(done), dtype=np.uint8))
     out = np.full(n, -1.0, dtype=np.float64)
     out[idx] = [dm[i] for i in idx.tolist()]
-    sdiag_a = np.array(sdiag, dtype=np.int32)
-    children = {}                                   # j -> [i : succ[i] == j]  (도달 상태만, ~7k)
-    for i in idx.tolist():
-        sj = succ[i]
-        if sj >= 0:
-            children.setdefault(sj, []).append(i)
-    return (out, out.tolist(), sdiag_a, children)
+    succ_a = np.asarray(succ, dtype=np.int64)
+    kids = idx[succ_a[idx] >= 0]
+    parents = succ_a[kids]
+    ch_idx = kids[np.argsort(parents, kind="stable")].astype(np.int32)
+    ch_ptr = np.zeros(n + 1, dtype=np.int32)
+    np.cumsum(np.bincount(parents, minlength=n), out=ch_ptr[1:])
+    return (out, np.asarray(sdiag, dtype=np.int32), ch_ptr, ch_idx)
+
+
+@njit(cache=True)
+def _hpush(hd, hi, n, d, i):
+    """(거리, 인덱스) 전순서 최소 힙 push — heapq 의 (float, int) 튜플 순서와 같다."""
+    hd[n] = d
+    hi[n] = i
+    k = n
+    while k > 0:
+        p = (k - 1) >> 1
+        if hd[k] < hd[p] or (hd[k] == hd[p] and hi[k] < hi[p]):
+            td = hd[k]; hd[k] = hd[p]; hd[p] = td
+            ti = hi[k]; hi[k] = hi[p]; hi[p] = ti
+            k = p
+        else:
+            break
+    return n + 1
+
+
+@njit(cache=True)
+def _hpop(hd, hi, n):
+    """최소 원소를 hd[0]·hi[0] 에서 읽은 뒤 부른다. 남은 개수를 돌려준다."""
+    n -= 1
+    hd[0] = hd[n]
+    hi[0] = hi[n]
+    k = 0
+    while True:
+        l = 2 * k + 1
+        r = l + 1
+        m = k
+        if l < n and (hd[l] < hd[m] or (hd[l] == hd[m] and hi[l] < hi[m])):
+            m = l
+        if r < n and (hd[r] < hd[m] or (hd[r] == hd[m] and hi[r] < hi[m])):
+            m = r
+        if m == k:
+            break
+        td = hd[k]; hd[k] = hd[m]; hd[m] = td
+        ti = hi[k]; hi[k] = hi[m]; hi[m] = ti
+        k = m
+    return n
+
+
+@njit(cache=True)
+def _repair_nb(dm_b, sdiag, ch_ptr, ch_idx, p_ptr, p_idx, p_cost, p_diag, s_ptr, s_idx, s_cost, s_diag,
+               valid, cell_free, bmask, rmask, removed, out):
+    """증분 복구 커널 (-225, 2026-09-15): 옛 파이썬 _affected_set → _seed_boundary → _relax_affected 를 그대로 옮겼다.
+    힙이 (거리, 인덱스) 전순서라 pop 순서가 구현과 무관하게 같고, pop 마다 preds 순서로 dv + cost 한 번이므로 값도 비트 동일.
+    out 은 dm_b 의 복사본으로 받아 제자리 갱신."""
+    n = dm_b.shape[0]
+    inf = np.inf
+    # 영향 집합 A: 무효 상태(도달) ∪ 후속 간선 스윙 대각이 막힌 상태 → 자식(succ == i) 닫힘
+    inA = np.zeros(n, dtype=np.uint8)
+    stack = np.empty(n, dtype=np.int64)
+    top = 0
+    for k in range(removed.shape[0]):
+        i = removed[k]
+        if dm_b[i] >= 0.0 and inA[i] == 0:
+            inA[i] = 1
+            stack[top] = i
+            top += 1
+    for i in range(n):
+        d = sdiag[i]
+        if d >= 0 and bmask[d] != 0 and inA[i] == 0:
+            inA[i] = 1
+            stack[top] = i
+            top += 1
+    while top > 0:
+        top -= 1
+        i = stack[top]
+        for k in range(ch_ptr[i], ch_ptr[i + 1]):
+            c = ch_idx[k]
+            if inA[c] == 0:
+                inA[c] = 1
+                stack[top] = c
+                top += 1
+    for k in range(removed.shape[0]):
+        out[removed[k]] = -1.0
+    # 힙 용량: 경계 시드(≤ todo) + 완화 push(≤ todo 의 선행 간선 수)
+    cap = 0
+    for i in range(n):
+        if inA[i] != 0 and rmask[i] == 0:
+            cap += 1 + (p_ptr[i + 1] - p_ptr[i])
+    if cap == 0:
+        return
+    hd = np.empty(cap, dtype=np.float64)
+    hi = np.empty(cap, dtype=np.int64)
+    hn = 0
+    dm = np.full(n, inf)
+    # 경계 초기값: A 안 상태 i 의 후속 중 A 밖·유효·도달·스윙 열림인 것의 최소 dm_b[j] + cost
+    for i in range(n):
+        if inA[i] == 0 or rmask[i] != 0:
+            continue
+        out[i] = -1.0
+        best = inf
+        for k in range(s_ptr[i], s_ptr[i + 1]):
+            j = s_idx[k]
+            if inA[j] != 0 or valid[j] == 0:
+                continue
+            dj = dm_b[j]
+            if dj < 0.0:
+                continue
+            d = s_diag[k]
+            if d >= 0 and (cell_free[d] == 0 or bmask[d] != 0):
+                continue
+            v = dj + s_cost[k]
+            if v < best:
+                best = v
+        if best < inf:
+            dm[i] = best
+            hn = _hpush(hd, hi, hn, best, i)
+    # A 내부 다익스트라
+    done = np.zeros(n, dtype=np.uint8)
+    while hn > 0:
+        dv = hd[0]
+        i = hi[0]
+        hn = _hpop(hd, hi, hn)
+        if done[i] != 0:
+            continue
+        done[i] = 1
+        out[i] = dv
+        for k in range(p_ptr[i], p_ptr[i + 1]):
+            j = p_idx[k]
+            if inA[j] == 0 or done[j] != 0 or rmask[j] != 0 or valid[j] == 0:
+                continue
+            d = p_diag[k]
+            if d >= 0 and (cell_free[d] == 0 or bmask[d] != 0):
+                continue
+            nd = dv + p_cost[k]
+            if nd < dm[j]:
+                dm[j] = nd
+                hn = _hpush(hd, hi, hn, nd, j)
 
 
 class HGraph:
@@ -154,7 +298,11 @@ class HGraph:
         self.cell_free = cell_free
         self.valid = _valid_states(cell_free, H, W)
         self.preds, self.succs = _build_edges(ec, tc, H, W, turn_mask())    # 회전 발자국 마스크(-203, geometry.configure)
-        self._base = {}          # goal -> (dm float64[n] (-1 unreachable), dm list, sdiag int32[n], children dict)
+        self.p_csr = _csr(self.preds, self.n)                                # Numba 복구 커널 입력 (-225)
+        self.s_csr = _csr(self.succs, self.n)
+        self.valid_a = np.asarray(self.valid, dtype=np.uint8)
+        self.cell_free_a = np.asarray(cell_free, dtype=np.uint8)
+        self._base = {}          # goal -> (dm float64[n] (-1 unreachable), sdiag int32[n], 자식 CSR ptr, idx)
 
     # ---- 기본(막힘 없음) 풀이: 후속 상태 기록 ----
     def base(self, goal):
@@ -193,86 +341,22 @@ class HGraph:
                     heappush(pq, (nd, j))
         return _finalize_solution(n, dm, succ, sdiag, done)
 
-    # ---- 재계획: 증분 복구 ----
+    # ---- 재계획: 증분 복구 (Numba 커널 _repair_nb, -225) ----
     def _removed_states(self, blocked):
-        """막힌 칸 → (막힌 칸 인덱스 집합, 무효가 된 상태 집합: 앞축 또는 뒤 칸이 막힌 칸)."""
+        """막힌 칸 → (막힌 칸 마스크 uint8[H*W], 무효 상태 마스크 uint8[n], 무효 상태 인덱스 int64[]): 앞축 또는 뒤 칸이 막힌 칸인 상태."""
         H, W, valid = self.H, self.W, self.valid
-        bcells = set()
-        removed = set()
+        bmask = np.zeros(H * W, dtype=np.uint8)
+        rmask = np.zeros(self.n, dtype=np.uint8)
         for (r, c) in blocked:
             ci = r * W + c
-            bcells.add(ci)
+            bmask[ci] = 1
             for h in range(4):
                 if valid[ci * 4 + h]:
-                    removed.add(ci * 4 + h)                          # 앞축이 막힌 칸
-                rr, cc = r + DIRS[h][0], c + DIRS[h][1]              # 뒤 칸이 막힌 칸인 상태
+                    rmask[ci * 4 + h] = 1                                 # 앞축이 막힌 칸
+                rr, cc = r + DIRS[h][0], c + DIRS[h][1]                   # 뒤 칸이 막힌 칸인 상태
                 if 0 <= rr < H and 0 <= cc < W and valid[(rr * W + cc) * 4 + h]:
-                    removed.add((rr * W + cc) * 4 + h)
-        return bcells, removed
-
-    def _affected_set(self, removed, bcells, dm_l, sdiag, children):
-        """영향 집합 A: 무효 상태 ∪ 후속 간선의 스윙 대각 칸이 막힌 상태 에서 출발해 자식(succ==i)으로 닫은 집합."""
-        inA = bytearray(self.n)
-        stack = [i for i in removed if dm_l[i] >= 0]
-        if bcells:
-            stack.extend(np.flatnonzero(np.isin(sdiag, np.fromiter(bcells, dtype=np.int32))).tolist())
-        for i in stack:
-            inA[i] = 1
-        while stack:
-            i = stack.pop()
-            for k in children.get(i, ()):
-                if not inA[k]:
-                    inA[k] = 1
-                    stack.append(k)
-        return inA
-
-    def _seed_boundary(self, todo, inA, dm_l, bcells):
-        """A 안 상태를 경계(A 밖·유효·도달) 후속 상태에서 오는 값으로 초기화 → (dm dict, 힙)."""
-        inf = float("inf")
-        dm = {}
-        pq = []
-        for i in todo:
-            best = self._boundary_best(i, inA, dm_l, bcells)
-            if best < inf:
-                dm[i] = best
-                heappush(pq, (best, i))
-        return dm, pq
-
-    def _boundary_best(self, i, inA, dm_l, bcells):
-        """상태 i 의 후속 중 A 밖·유효·도달·스윙 열림인 것으로 얻는 최소 dm_l[j] + cost (없으면 inf)."""
-        valid, cell_free = self.valid, self.cell_free
-        best = float("inf")
-        for j, cost, diag in self.succs[i]:
-            if inA[j] or not valid[j]:
-                continue
-            dj = dm_l[j]
-            if dj < 0 or (diag >= 0 and (not cell_free[diag] or diag in bcells)):
-                continue
-            v = dj + cost
-            if v < best:
-                best = v
-        return best
-
-    def _relax_affected(self, out, dm, pq, inA, removed, bcells):
-        """A 내부 다익스트라 — out 에 확정값 기록."""
-        valid, cell_free, preds = self.valid, self.cell_free, self.preds   # 가장 안쪽 루프 — 메서드 호출 없이 지역 변수로 (성능)
-        inf = float("inf")
-        done = set()
-        while pq:
-            dv, i = heappop(pq)
-            if i in done:
-                continue
-            done.add(i)
-            out[i] = dv
-            for j, cost, diag in preds[i]:
-                if not inA[j] or j in done or j in removed or not valid[j]:
-                    continue
-                if diag >= 0 and (not cell_free[diag] or diag in bcells):
-                    continue
-                nd = dv + cost
-                if nd < dm.get(j, inf):
-                    dm[j] = nd
-                    heappush(pq, (nd, j))
+                    rmask[(rr * W + cc) * 4 + h] = 1
+        return bmask, rmask, np.flatnonzero(rmask).astype(np.int64)
 
     def dist(self, goal, blocked=()):
         """goal까지 최소 비용 (H,W,4), 도달 불가/invalid -1. blocked: 추가로 막을 칸 집합(재계획, 증분 복구).
@@ -280,24 +364,17 @@ class HGraph:
         영향 집합 A = 막힌 칸으로 무효가 된 상태 ∪ 후속 간선의 스윙 대각 칸이 막힌 상태 에서 출발해 자식(succ==i)으로
         닫은 집합. A 밖 값은 정확히 그대로(간선 제거는 거리를 늘리기만 하고 A 밖 상태의 최적 경로는 온전). A 안만
         경계값에서 다시 다익스트라. 시도했다 뺀 것: 동률 경로 가지치기(dm 오름차순 심사) — 실제 시뮬에선 막힌 칸이
-        통로를 끊어 뒤쪽 상태의 거리가 진짜로 바뀌므로 A 가 줄지 않고 심사 힙만 추가돼 20% 느려졌다(2026-09-04 실측)."""
+        통로를 끊어 뒤쪽 상태의 거리가 진짜로 바뀌므로 A 가 줄지 않고 심사 힙만 추가돼 20% 느려졌다(2026-09-04 실측).
+        2026-09-15(-225): 6h 조건에서 A 가 2~3천 상태라 이 함수가 실행 시간의 78 % — 세 단계를 Numba 커널로(값 비트 동일)."""
         H, W = self.H, self.W
-        dm_b, dm_l, sdiag, children = self.base(goal)
+        dm_b, sdiag, ch_ptr, ch_idx = self.base(goal)
         if not blocked:
             return dm_b.reshape(H, W, 4)
-        bcells, removed = self._removed_states(blocked)
-        inA = self._affected_set(removed, bcells, dm_l, sdiag, children)
+        bmask, rmask, removed = self._removed_states(blocked)
         out = dm_b.copy()
-        if removed:
-            out[list(removed)] = -1.0
-        todo = [i for i in np.flatnonzero(np.frombuffer(bytes(inA), dtype=np.uint8)).tolist() if i not in removed]
-        if not todo:
-            return out.reshape(H, W, 4)
-        out[todo] = -1.0
-        dm, pq = self._seed_boundary(todo, inA, dm_l, bcells)
-        self._relax_affected(out, dm, pq, inA, removed, bcells)
+        _repair_nb(dm_b, sdiag, ch_ptr, ch_idx, *self.p_csr, *self.s_csr,
+                   self.valid_a, self.cell_free_a, bmask, rmask, removed, out)
         return out.reshape(H, W, 4)
-
 
 _hgraph_cache = {}
 
