@@ -1361,11 +1361,39 @@ def _yaw_from_quat(q, order: str = "wxyz") -> float:
 # ===========================================================================
 
 
+def _tol_env(name, default):
+    """`PIBT_TOL_POS` 등으로 허용오차를 덮어쓴다. 기본은 아래 값 그대로다.
+
+    ★ 왜 환경변수가 필요한가 (2026-09-16).
+      `pos = 0.05` 는 **pitch 1.2 격자에서 정해진 값**인데, 1.0 에서는
+      「인접 행에 선 이웃 옆에서 한쪽이 회전할 때」의 기하 여유가
+
+          pitch - 폭/2 - 코반경 = 1.0 - 0.400 - 0.5587 = 41.3 mm
+
+      뿐이다. **허용오차 50 mm 가 그 예산보다 크다.** 도착 판정이
+      `hypot(dx,dy) <= pos` 라 로봇은 늘 그 원의 가장자리에 서고(실측 중앙
+      -45.7 mm, 다섯 시드 일치), 그래서 옆에서 누가 돌면 닿는다 — 5판 중
+      2판이 실제로 차체 접촉으로 중단됐다.
+
+      고치려면 값을 흔들어 봐야 하는데 `FleetController` 가 `tol` 을 안 받는다
+      (`live_pibt.py:1078`). 호출부를 고치는 대신 여기서 읽는다 — `_lim` 경고
+      계산도 같은 값을 보게 되어 둘이 갈리지 않는다.
+
+      속도는 제약이 아니다. 멈추기 직전 속도가 최대 0.175 m/s 라
+      `pos = 0.010` 의 경고선 0.60 m/s 에도 안 닿는다 (`tools/stop_error.py
+      --hist`). 감속 때문에 순항 속도 `v_exec` 와 무관하다.
+    """
+    raw = os.environ.get(name, "").strip()
+    return float(raw) if raw else default
+
+
 @dataclass
 class Tolerance:
-    pos: float = 0.05          # m — 목표 칸 중심까지
-    yaw: float = 0.05          # rad — 약 3도
-    cross: float = 0.06        # m — 횡방향 오차 허용
+    # ★ pitch 1.0 에서는 0.05 가 기하 여유 41.3 mm 보다 크다 — 위 설명 참고.
+    #   바꿔 보려면 `PIBT_TOL_POS=0.010` 처럼 준다.
+    pos: float = field(default_factory=lambda: _tol_env("PIBT_TOL_POS", 0.05))
+    yaw: float = field(default_factory=lambda: _tol_env("PIBT_TOL_YAW", 0.05))
+    cross: float = field(default_factory=lambda: _tol_env("PIBT_TOL_CROSS", 0.06))
 
 
 class MotionController:
