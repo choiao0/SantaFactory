@@ -7,8 +7,9 @@ from __future__ import annotations
 
 import os
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Any, Iterable, Optional
+from typing import Any
 
 from . import sparkplug_b_pb2 as pb
 
@@ -40,15 +41,15 @@ class MetricDef:
 @dataclass(frozen=True)
 class Metric:
     """디코드된 메트릭. DATA 는 별칭만 올 수 있어 name 이 None 일 수 있다. is_null 이면 value=None."""
-    name: Optional[str]
-    alias: Optional[int]
+    name: str | None
+    alias: int | None
     value: Any
 
 
 @dataclass(frozen=True)
 class Decoded:
     timestamp: int
-    seq: Optional[int]
+    seq: int | None
     metrics: tuple
 
 
@@ -78,7 +79,7 @@ def _add(payload, d: MetricDef, value: Any, *, with_name: bool, with_type: bool,
     _set_value(m, d.dtype, value)
 
 
-def encode_birth(seq: int, values: Iterable[tuple[MetricDef, Any]], ts: Optional[int] = None) -> bytes:
+def encode_birth(seq: int, values: Iterable[tuple[MetricDef, Any]], ts: int | None = None) -> bytes:
     """NBIRTH · DBIRTH: 이름 + 별칭 + 타입 + 값(없으면 is_null). seq 필수(NBIRTH 는 0)."""
     ts = now_ms() if ts is None else ts
     p = Payload(timestamp=ts, seq=seq)
@@ -87,7 +88,7 @@ def encode_birth(seq: int, values: Iterable[tuple[MetricDef, Any]], ts: Optional
     return p.SerializeToString()
 
 
-def encode_data(seq: int, values: Iterable[tuple[MetricDef, Any]], ts: Optional[int] = None) -> bytes:
+def encode_data(seq: int, values: Iterable[tuple[MetricDef, Any]], ts: int | None = None) -> bytes:
     """NDATA · DDATA: 바뀐 것만. 별칭 + 이름(디버그 편의) + 값, 타입 생략."""
     ts = now_ms() if ts is None else ts
     p = Payload(timestamp=ts, seq=seq)
@@ -96,7 +97,7 @@ def encode_data(seq: int, values: Iterable[tuple[MetricDef, Any]], ts: Optional[
     return p.SerializeToString()
 
 
-def encode_death(bd_seq: int, ts: Optional[int] = None) -> bytes:
+def encode_death(bd_seq: int, ts: int | None = None) -> bytes:
     """NDEATH(유언): bdSeq 하나. seq 없음."""
     p = Payload(timestamp=now_ms() if ts is None else ts)
     m = p.metrics.add()
@@ -105,12 +106,12 @@ def encode_death(bd_seq: int, ts: Optional[int] = None) -> bytes:
     return p.SerializeToString()
 
 
-def encode_ddeath(seq: int, ts: Optional[int] = None) -> bytes:
+def encode_ddeath(seq: int, ts: int | None = None) -> bytes:
     """DDEATH: seq 만 (메트릭 없음)."""
     return Payload(timestamp=now_ms() if ts is None else ts, seq=seq).SerializeToString()
 
 
-def encode_cmd(values: Iterable[tuple[str, int, Any]], ts: Optional[int] = None) -> bytes:
+def encode_cmd(values: Iterable[tuple[str, int, Any]], ts: int | None = None) -> bytes:
     """NCMD · DCMD (Host → Edge): (이름, 타입, 값). seq 없음."""
     p = Payload(timestamp=now_ms() if ts is None else ts)
     for name, dtype, v in values:

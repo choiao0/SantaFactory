@@ -13,7 +13,7 @@ import signal
 import sys
 import threading
 import time
-from typing import Callable, Optional
+from collections.abc import Callable
 
 import paho.mqtt.client as mqtt
 import psutil
@@ -52,8 +52,8 @@ def load_env_file(path: str) -> dict:
     return loaded
 
 
-def reap_stale(process_iter: Callable = psutil.process_iter, send: Optional[Callable[[int, int], None]] = None,
-               me: Optional[int] = None) -> list:
+def reap_stale(process_iter: Callable = psutil.process_iter, send: Callable[[int, int], None] | None = None,
+               me: int | None = None) -> list:
     """지난 엣지가 남긴 런 프로세스(환경에 SIM_RUN_ID)를 그룹째 SIGKILL — 데몬 재시작 때 한 번. [(pid, run_id)]."""
     def _kill(pid: int, sig: int) -> None:
         for fn in (os.killpg, os.kill):
@@ -82,7 +82,7 @@ class Edge:
         self.runner: Runner = None  # type: ignore[assignment]  — build() 가 바로 붙인다
         self.lock = threading.RLock()
         self.stop_event = threading.Event()
-        self.vram_cache: Optional[int] = None
+        self.vram_cache: int | None = None
         self._vram_t = -VRAM_PERIOD_S
         self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=node_id,
                                   protocol=mqtt.MQTTv311, clean_session=True)
@@ -105,7 +105,7 @@ class Edge:
         self.client.will_set(self.runner.topic("NDEATH"), spb.encode_death(bd), qos=1, retain=False)
         log.info("session bdSeq=%d (NDEATH will armed)", bd)
 
-    def cached_vram(self) -> Optional[int]:
+    def cached_vram(self) -> int | None:
         return self.vram_cache
 
     def sample_vram(self, now: float, sample: Callable = telemetry.vram_mb) -> None:
@@ -201,7 +201,8 @@ class Edge:
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="edge", description="t3_amr Sparkplug Edge (MQTT_CONTRACT §5) — Isaac 녹화 러너")
     p.add_argument("--env-file", help=".env (MQTT_HOST · MQTT_PORT · MQTT_PW_SIM_RUNNER · MINIO_*)")
-    p.add_argument("--env-from-environ", action="store_true", help="환경변수만 쓴다(컨테이너). --env-file 없이도 기본 동작")
+    p.add_argument("--env-from-environ", action="store_true",
+                   help="환경변수만 쓴다(컨테이너). --env-file 없이도 기본 동작")
     p.add_argument("--host", help="브로커 (기본 $MQTT_HOST 또는 localhost)")
     p.add_argument("--port", type=int, help="브로커 포트 (기본 $MQTT_PORT 또는 1883)")
     p.add_argument("--group", default="santa")
@@ -242,7 +243,7 @@ def build(args: argparse.Namespace) -> tuple:
     return edge, host, port
 
 
-def main(argv: Optional[list] = None) -> int:
+def main(argv: list | None = None) -> int:
     args = build_parser().parse_args(argv)
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")

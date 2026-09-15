@@ -1,4 +1,5 @@
-"""edge 테스트 공용 가짜: publisher · recorder · uploader · 시나리오 헬퍼. 브로커·프로세스·Isaac 없이 상태기계를 민다."""
+"""edge 테스트 공용 가짜: publisher · recorder · uploader · 시나리오 헬퍼. 브로커·프로세스·Isaac 없이 상태기계를 민다.
+"""
 import json
 
 from edge import runner as R

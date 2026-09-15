@@ -71,7 +71,8 @@ class TestStartToRunning:
         h.runner.tick(2.0)
         assert h.runner.state == R.STOPPING
         h.runner.tick(3.0)
-        assert h.runner.state == R.ERROR and "exited during start" in h.pub.named_with("NDATA", R.LAST_ERROR)[R.LAST_ERROR]
+        assert h.runner.state == R.ERROR
+        assert "exited during start" in h.pub.named_with("NDATA", R.LAST_ERROR)[R.LAST_ERROR]
 
     def test_bad_start_reports_error_without_state_change(self, h):
         h.connect()
@@ -112,7 +113,8 @@ class TestStopAndVideo:
         h.runner.tick(50.0)
         assert h.runner.state == R.STOPPING
         h.runner.tick(51.0)
-        assert h.runner.state == R.IDLE and h.pub.named_with("NDATA", R.VIDEO_URL)[R.VIDEO_URL].endswith("demo_verify_77_n3.mp4")
+        assert h.runner.state == R.IDLE
+        assert h.pub.named_with("NDATA", R.VIDEO_URL)[R.VIDEO_URL].endswith("demo_verify_77_n3.mp4")
 
     def test_no_video_after_stop_is_an_error(self, h):
         h.connect()
@@ -160,7 +162,8 @@ class TestStopAndVideo:
         h2.run_until_running()
         h2.runner.on_host_state(json.dumps({"online": False, "timestamp": 3}).encode(), 10.0)
         h2.runner.tick(26.0)
-        assert h2.runner.state == R.STOPPING and "host-orch offline" in h2.pub.named_with("NDATA", R.LAST_ERROR)[R.LAST_ERROR]
+        assert h2.runner.state == R.STOPPING
+        assert "host-orch offline" in h2.pub.named_with("NDATA", R.LAST_ERROR)[R.LAST_ERROR]
 
     def test_error_state_accepts_the_next_start(self, h):
         h.connect()
@@ -177,7 +180,8 @@ class TestHeartbeat:
         h.connect()
         h.runner.tick(5.0)
         named = h.pub.named("NDATA")
-        assert named[R.HEARTBEAT] == 5000 and named[R.VRAM] == 2000 and R.RAM not in named   # pids 없음 → RAM 0 = 초기값
+        assert named[R.HEARTBEAT] == 5000 and named[R.VRAM] == 2000
+        assert R.RAM not in named                  # pids 없음 → RAM 0 = 초기값
         h.pub.clear()
         h.runner.tick(7.0)
         assert h.pub.msgs == []

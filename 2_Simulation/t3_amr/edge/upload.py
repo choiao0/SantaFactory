@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 CONTENT_TYPE = "video/mp4"
 
@@ -22,7 +22,7 @@ class Uploader:
     secure: bool = False
 
     @staticmethod
-    def from_environ(env: Optional[dict] = None) -> Optional["Uploader"]:
+    def from_environ(env: dict | None = None) -> Uploader | None:
         """MINIO_ENDPOINT · MINIO_ACCESS_KEY · MINIO_SECRET_KEY 가 다 있어야 만든다. 없으면 None(업로드 없이 돈다)."""
         e = os.environ if env is None else env
         endpoint, access, secret = e.get("MINIO_ENDPOINT"), e.get("MINIO_ACCESS_KEY"), e.get("MINIO_SECRET_KEY")
@@ -39,7 +39,7 @@ class Uploader:
         return f"{self.public_base.rstrip('/')}/{self.bucket}/{self.object_name(run_id, path)}"
 
     def client(self) -> Any:
-        from minio import Minio   # 컨테이너에만 있다 — 테스트는 가짜 클라이언트를 넣는다
+        from minio import Minio  # 컨테이너에만 있다 — 테스트는 가짜 클라이언트를 넣는다
         return Minio(self.endpoint, access_key=self.access_key, secret_key=self.secret_key, secure=self.secure)
 
     def upload(self, path: str, run_id: str, client: Any = None) -> str:

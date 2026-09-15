@@ -1,6 +1,7 @@
 """NCMD `Run Control/Start` JSON → RunSpec (MQTT_CONTRACT §5.3). 순수 파싱·검증, I/O 없음.
 
-host-orch 가 보내는 필드: run_id · scenario_pkg · n_robots · models[] · ros_domain_id · timeout_s(= window_s + 300) · scenario · scenario_sha256.
+host-orch 가 보내는 필드: run_id · scenario_pkg · n_robots · models[] · ros_domain_id · timeout_s(= window_s + 300)
+· scenario · scenario_sha256.
 t3_amr 에는 ROS 도메인도 로봇 시리얼도 필요 없어 받기만 하고 쓰지 않는다.
 """
 from __future__ import annotations
@@ -9,7 +10,7 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 MAX_ROBOTS = 64
 DEFAULT_TIMEOUT_S = 3600.0
@@ -34,11 +35,11 @@ class RunSpec:
     n_robots: int
     scenario_pkg: str = ""
     timeout_s: float = DEFAULT_TIMEOUT_S
-    scenario: Optional[dict] = None
-    scenario_sha256: Optional[str] = None
+    scenario: dict | None = None
+    scenario_sha256: str | None = None
 
     @staticmethod
-    def from_json(text: str) -> "RunSpec":
+    def from_json(text: str) -> RunSpec:
         try:
             d = json.loads(text)
         except ValueError as e:
@@ -48,7 +49,7 @@ class RunSpec:
         return RunSpec.from_dict(d)
 
     @staticmethod
-    def from_dict(d: dict) -> "RunSpec":
+    def from_dict(d: dict) -> RunSpec:
         run_id = d.get("run_id")
         if not isinstance(run_id, str) or not SAFE_ID.match(run_id.strip()):
             raise ValueError("run_id must match [A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
@@ -62,7 +63,7 @@ class RunSpec:
         return RunSpec(run_id.strip(), n, str(d.get("scenario_pkg", "") or ""), float(timeout), scenario, sha)
 
     @property
-    def seed(self) -> Optional[int]:
+    def seed(self) -> int | None:
         """scenario.seed — 견적 평가 시드(백엔드 FIXED_SEED). 없으면 None → 러너 기본값."""
         s = (self.scenario or {}).get("seed")
         return s if isinstance(s, int) and not isinstance(s, bool) else None

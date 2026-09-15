@@ -1,15 +1,16 @@
 """엣지 상태기계 — MQTT_CONTRACT §5.2 메트릭 사전 · §5.3 NCMD · §5.4 세션 규칙. 브로커 없이 테스트한다.
 
 상태: IDLE → STARTING(촬영 켜지기 대기) → RUNNING → STOPPING(SIGINT → mp4 조립 → 업로드) → IDLE | ERROR.
-ERROR 는 IDLE 처럼 다음 Start 를 받는다. 로봇 디바이스 메트릭은 없다(에이전트 없음) — host-orch 의 robots_online 은 0 으로 남는다.
-영상 URL 은 STOPPING 을 벗어나는 그 NDATA 에 `Runner/VideoUrl` 로 같이 실린다 — host-orch 가 IDLE 을 보는 순간 URL 도 본다.
+ERROR 는 IDLE 처럼 다음 Start 를 받는다. 로봇 디바이스 메트릭은 없다(에이전트 없음) — host-orch 의 robots_online 은 0.
+영상 URL 은 STOPPING 을 벗어나는 그 NDATA 에 `Runner/VideoUrl` 로 같이 실린다 — host-orch 가 IDLE 과 URL 을 함께 본다.
 """
 from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable, Optional
+from typing import Any
 
 from . import spb, telemetry
 from .recorder import Recorder
@@ -49,20 +50,20 @@ class RunnerConfig:
 
 class Runner:
     def __init__(self, cfg: RunnerConfig, session: EdgeSession, recorder_factory: Callable[[], Recorder],
-                 publisher: Any, uploader: Optional[Uploader] = None,
+                 publisher: Any, uploader: Uploader | None = None,
                  ram_mb: Callable = telemetry.ram_mb, vram_mb: Callable = telemetry.vram_mb):
         self.cfg, self.session, self.recorder_factory, self.pub = cfg, session, recorder_factory, publisher
         self.uploader, self.ram_mb, self.vram_mb = uploader, ram_mb, vram_mb
         self.values = {name: d.initial for name, d in NODE_METRICS.items()}
         self.state = IDLE
-        self.spec: Optional[RunSpec] = None
-        self.rec: Optional[Recorder] = None
+        self.spec: RunSpec | None = None
+        self.rec: Recorder | None = None
         self.started_at = 0.0
         self.last_heartbeat = 0.0
         self.final_state = IDLE
-        self.host_online: Optional[bool] = None
+        self.host_online: bool | None = None
         self.host_ts = 0
-        self.host_offline_since: Optional[float] = None
+        self.host_offline_since: float | None = None
 
     # ---- 토픽 · 발행 ------------------------------------------------------------
     def topic(self, kind: str) -> str:
@@ -74,7 +75,8 @@ class Runner:
     def publish_nbirth(self) -> None:
         self.session.seq = 0
         self.values[BDSEQ] = self.session.bd_seq
-        self.pub.publish(self.topic("NBIRTH"), spb.encode_birth(self.session.next_seq(), self._pairs(NODE_METRICS)), 0, False)
+        payload = spb.encode_birth(self.session.next_seq(), self._pairs(NODE_METRICS))
+        self.pub.publish(self.topic("NBIRTH"), payload, 0, False)
 
     def publish_ndata(self, changes: dict) -> None:
         self.values.update(changes)
@@ -160,7 +162,7 @@ class Runner:
         log.error("run %s failed: %s", self.spec.run_id if self.spec else "?", reason)
         self._stop(now, ERROR, reason)
 
-    def _set_state(self, state: str, extra: Optional[dict] = None) -> None:
+    def _set_state(self, state: str, extra: dict | None = None) -> None:
         self.state = state
         self.publish_ndata({STATE: state, **(extra or {})})
 

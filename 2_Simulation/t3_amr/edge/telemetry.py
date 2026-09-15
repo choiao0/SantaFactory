@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import subprocess
-from typing import Callable, Iterable, Optional
+from collections.abc import Callable, Iterable
 
 import psutil
 
@@ -27,7 +27,7 @@ def ram_mb(pids: Iterable[int]) -> int:
     return total // MB
 
 
-def vram_mb(run: Callable = subprocess.run) -> Optional[int]:
+def vram_mb(run: Callable = subprocess.run) -> int | None:
     """모든 GPU 의 사용 VRAM 합(MB). nvidia-smi 가 없거나 실패하면 None."""
     try:
         out = run(NVIDIA_SMI, capture_output=True, text=True, timeout=5)

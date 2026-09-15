@@ -14,8 +14,9 @@ import math
 import os
 import signal
 import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable, Optional
+from typing import Any
 
 from .spec import RunSpec, canonical_json
 
@@ -25,7 +26,7 @@ DEFAULT_TICK_S = 4.0 / 3.0                   # live_pibt 계획 틱 ≈ 1.33 s (
 HORIZON_MARGIN_S = 60.0                      # 창보다 조금 길게 계획 — 창 끝은 host-orch Stop 이 자른다
 READY_MARKER = "캡처 ON"
 FINISHED_MARKERS = ("post_quit", "전원 완주")
-INT_GRACE_S = 240.0                          # SIGINT 뒤 조립(ffmpeg)까지 기다리는 시간 — 프레임 수천 장이면 1 분 넘게 걸린다
+INT_GRACE_S = 240.0                          # SIGINT 뒤 조립(ffmpeg) 대기 — 프레임 수천 장이면 1 분 넘게 걸린다
 TERM_GRACE_S = 5.0
 
 
@@ -62,8 +63,8 @@ def command(cfg: RecorderConfig) -> list:
     return ["bash", os.path.join(cfg.t3amr_dir, "run_record.sh"), "--planner", cfg.planner]
 
 
-def environment(cfg: RecorderConfig, spec: RunSpec, base: Optional[dict] = None,
-                scenario_path: Optional[str] = None, plan_exists: Optional[bool] = None) -> dict:
+def environment(cfg: RecorderConfig, spec: RunSpec, base: dict | None = None,
+                scenario_path: str | None = None, plan_exists: bool | None = None) -> dict:
     """자식 환경. base 는 기본 os.environ. 계획 폴더가 없으면 REPLAN=1 로 run_record.sh 가 먼저 계획을 만든다."""
     e = dict(os.environ if base is None else base)
     if plan_exists is None:
@@ -93,9 +94,9 @@ class Recorder:
     def __init__(self, cfg: RecorderConfig, spawn: Callable = subprocess.Popen,
                  send: Callable[[Any, int], None] = killpg_or_pid):
         self.cfg, self.spawn, self.send = cfg, spawn, send
-        self.spec: Optional[RunSpec] = None
+        self.spec: RunSpec | None = None
         self.proc: Any = None
-        self.stop_t: Optional[float] = None
+        self.stop_t: float | None = None
         self.step = 0
 
     # ---- 경로 -----------------------------------------------------------------
@@ -108,11 +109,11 @@ class Recorder:
     def shots_dir(self) -> str:
         return os.path.join(self.cfg.out_dir, f"shots_{self.tag()}")
 
-    def video_path(self) -> Optional[str]:
+    def video_path(self) -> str | None:
         p = os.path.join(self.cfg.out_dir, f"demo_{self.tag()}.mp4")
         return p if self.spec and os.path.isfile(p) and os.path.getsize(p) > 0 else None
 
-    def write_scenario(self, spec: RunSpec) -> Optional[str]:
+    def write_scenario(self, spec: RunSpec) -> str | None:
         if spec.scenario is None:
             return None
         d = os.path.join(self.cfg.runs_dir, spec.run_id)
