@@ -154,9 +154,9 @@ function ReplayPlayer({ replay, playing, speed, onTogglePlay, onNextSpeed }) {
           <OutboundPanel replay={replay} seconds={seconds} />
           <div className="rp-controls">
             <button type="button" className="button rp-btn" onClick={onTogglePlay}>
-              {playing ? '⏸︎ 일시정지' : '▶︎ 재생'}
+              {playing ? '⏸︎ PAUSE' : '▶︎ PLAY'}
             </button>
-            <button type="button" className="ghost rp-btn" onClick={onNextSpeed}>배속 ×{speed}</button>
+            <button type="button" className="ghost rp-btn" onClick={onNextSpeed}>SPEED ×{speed}</button>
           </div>
         </div>
       </div>
