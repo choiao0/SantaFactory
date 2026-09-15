@@ -1,0 +1,38 @@
+{
+ "fp": {
+  "1": {
+   "actions": 1931,
+   "actions_sig": "5f8e6a4ebac9803a",
+   "acyclic": true,
+   "edges_sig": "b73db5bf21ed0075",
+   "type1": 1919,
+   "type2": 1326
+  },
+  "2": {
+   "actions": 1791,
+   "actions_sig": "115bee96c430cf88",
+   "acyclic": true,
+   "edges_sig": "9bb62b7523f65cb7",
+   "type1": 1779,
+   "type2": 1061
+  },
+  "4": {
+   "actions": 1914,
+   "actions_sig": "381d9ffc9cf0107c",
+   "acyclic": true,
+   "edges_sig": "aa7925fed62765a7",
+   "type1": 1902,
+   "type2": 1308
+  }
+ },
+ "gap": 15,
+ "horizon": 315,
+ "mode": "lifelong",
+ "n": 12,
+ "pitch": 1.2,
+ "seeds": [
+  1,
+  2,
+  4
+ ]
+}

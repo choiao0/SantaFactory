@@ -559,12 +559,38 @@ def _rec_setup(drivers, arts):
                "flush": flush, "flush_next": flush if flush > 0 else float("inf"),
                "nflush": 0}
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        # ★ 실제로 한 번 써 본다 (2026-09-13). 위 `makedirs(exist_ok=True)` 는
+        #   **폴더가 있기만 하면 통과**한다 — 쓰기 권한을 안 본다. 그래서 못 쓰는
+        #   경로를 줘도 여기서는 `자세 기록 ON` 이 찍히고, 첫 주기저장(기본 60초)
+        #   에서야 PermissionError 가 난다. 주행은 멀쩡히 계속되므로 **기록만
+        #   조용히 빠진 채 20분이 흐른다.**
+        #
+        #   실제로 당했다 (jupyter04): `source paths.sh` 없이
+        #   `PIBT_RECORD=$OUT/...` 를 주면 부모 셸에서 `$OUT` 이 비어
+        #   `/rec_pibt12.npz` 가 된다. 루트에 쓸 수 있을 리 없다.
+        probe = path + ".probe"
+        try:
+            with open(probe, "wb") as fp:
+                # ★ 한 바이트를 **실제로 쓴다.** 여는 것만으로는 부족하다 —
+                #   쿼터가 찼거나 읽기 전용으로 리마운트된 경우 `open` 은
+                #   통과하고 `write` 에서 막힌다. 빈 블록으로 두면 그 경우를
+                #   놓치고, 읽는 사람에게는 빠뜨린 코드처럼 보인다.
+                fp.write(b"0")
+        finally:
+            try:
+                os.remove(probe)
+            except OSError:
+                pass
         carb.log_warn(f"[pibt] 자세 기록 ON: {path}  {hz:g} Hz · "
                       f"로봇 {len(keys)}대 · 주기저장 "
                       f"{('%g초' % flush) if flush > 0 else '없음'}")
         return rec
     except Exception as e:
-        carb.log_error(f"[pibt] 자세 기록 준비 실패 — 기록 없이 진행합니다: {e!r}")
+        carb.log_error(f"[pibt] ★ 자세 기록 준비 실패 — 기록 없이 진행합니다: {e!r}")
+        carb.log_error(f"[pibt]   경로: {os.environ.get('PIBT_RECORD', '')!r}")
+        if isinstance(e, PermissionError):
+            carb.log_error("[pibt]   못 쓰는 경로입니다. `$OUT` 이 비어서 / 로 간 것이")
+            carb.log_error("[pibt]   흔합니다 — `source paths.sh` 를 먼저 하거나 절대경로를 주세요.")
         return None
 
 
@@ -692,13 +718,25 @@ def _tick(f, dt):
         state["done"] = True
         return
 
-    # 차체 겹침은 브리지 버그다. 조용히 넘기지 않는다.
+    # 칸 겹침은 조용히 넘기지 않는다. 다만 **심각도는 거리로 가른다.**
     #   overlap_events 는 **정수 카운터**다 (리스트가 아니다 — FleetStats 참조).
-    #   쌍은 overlap_pairs(set), 최악값은 worst_overlap 에 있다.
-    if f.stats.overlap_events:
-        carb.log_error(f"[pibt] ★ 차체 겹침 {f.stats.overlap_events}건  "
+    #   쌍은 overlap_pairs(set), 공유 칸 수는 worst_overlap 에 있다.
+    #
+    #   ★ `overlap_events` 는 **칸** 공유다. 접촉이 아니다. 1.2 m 칸을 공유
+    #     단위로 쓰면 0.5 m 넘게 떨어진 두 대도 걸린다 — 2026-09-14 실측:
+    #     대각선 이웃이 칸 하나를 각각 5.1 mm · 2.7 mm 씩 스쳤는데 차체
+    #     간격은 **0.568 m** 였다. 예전에는 이 셋을 전부 같은 문구
+    #     ("플랜과 실제 기하가 어긋났다")로 찍어서 오탐을 심각하게 읽었다.
+    #     판정은 `worst_gap`(차체 최소거리)이 한다.
+    #   ★★ **칸 공유로는 주행을 멈추지 않는다** (2026-09-14). 예전에는 멈췄다.
+    #     실측에서 차체 간격 0.568 m 짜리 오탐 하나가 300초짜리 주행을 죽였다 —
+    #     2.7 mm 스침 때문에. ADG 는 **이상적 칸 중심 자세**로 스윕을 계산하는데
+    #     실행은 그만큼 정확하지 않으므로(실측 어긋남 0.051 m) 칸 공유는
+    #     구조적으로 계속 난다. 멈추는 기준은 **접촉**이다.
+    if f.stats.contact_events:
+        carb.log_error(f"[pibt] ★★ 차체 접촉 {f.stats.contact_events}건  "
                        f"쌍 {sorted(f.stats.overlap_pairs)}  "
-                       f"최악 {f.stats.worst_overlap}  — 플랜과 실제 기하가 어긋났다는 뜻")
+                       f"차체 최소거리 {f.stats.worst_gap:.3f} m  — 브리지 버그")
         try:
             for line in str(f.diagnose()).splitlines()[:25]:
                 carb.log_error("   " + line)
@@ -707,6 +745,15 @@ def _tick(f, dt):
         _shot_report()
         state["done"] = True
         return
+
+    # 접촉이 아닌 칸 공유 — **한 번만** 알리고 주행은 계속한다.
+    if f.stats.overlap_events and not state.get("cell_warned"):
+        state["cell_warned"] = True
+        carb.log_warn(f"[pibt] 칸 겹침 {f.stats.overlap_events}건  "
+                      f"쌍 {sorted(f.stats.overlap_pairs)}  "
+                      f"공유칸 최대 {f.stats.worst_overlap}  →  "
+                      f"{f.stats.overlap_grade()}")
+        carb.log_warn("[pibt]   주행은 계속합니다 — 멈추는 기준은 접촉입니다.")
 
     if f.finished:
         carb.log_warn(f"[pibt] 전원 완주 — 시뮬 {state['t']:.1f}s")

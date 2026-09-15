@@ -128,20 +128,39 @@ def expand(v):
     return os.path.expandvars(v)
 
 
+SHELF_USD = "$W/robots/shelf/amr_shelf.usd"
+
+
 def scene_cmd(sub, usd, n=12):
     """씬 빌드 명령.
 
     계획기마다 다른 것은 `$PLAN` 하위 폴더명(SUB)과 결과 USD 이름(USD)뿐이다.
     `$SCENE`·`$ROBOT` 을 변수로 쓰는 것이 중요하다 — 상대경로를 주면 CWD 가 아니라
     **출력 USD 폴더 기준**으로 풀려 창고도 로봇도 없는 씬이 나온다 (2026-09-06 재발).
+
+    ★ **선반을 여기서 넘긴다** (2026-09-14). 예전에는 안 넘겼다. 그런데
+      `main.py:128` 은 계획이 USD 보다 새로우면 **자동으로 씬을 다시 짓고**,
+      그 경로가 이 함수다. 즉 계획을 새로 세운 다음 `run.sh` 를 돌리면
+      선반이 조용히 사라진다 — 오류도 경고도 없이 그림만 달라진다.
+      실제로 당했다: `run.sh` 로 완주 기록을 만든 뒤 `run_onboard.sh` 를
+      돌렸더니 선반 없이 AMR 만 달렸다.
+      `run_webrtc.sh` 는 이걸 알고 **씬을 따로 지어** 우회하고 있었다
+      (`run_webrtc.sh:169` 주석). 우회를 지우고 여기서 고친다 — 그래야
+      `run.sh`·`run_record.sh`·`run_onboard.sh` 전부 같은 씬을 얻는다.
+
+      에셋이 없으면(로컬·미생성) 예전처럼 로봇만 세운다. 선반은 git 제외라
+      서버에서 `warehouse/scene/build_amr_shelf.py` 로 만든다.
     """
     P = server_paths(sub, usd, n)
-    return ["python %s --n %d \\" % (BUILDER, n),
-            "    --warehouse $SCENE \\",
-            "    --robot     $ROBOT \\",
-            "    --traj      %s \\" % P["traj"],
-            "    --starts    %s \\" % P["starts"],
-            "    --out       %s" % P["usd"]]
+    cmd = ["python %s --n %d \\" % (BUILDER, n),
+           "    --warehouse $SCENE \\",
+           "    --robot     $ROBOT \\",
+           "    --traj      %s \\" % P["traj"],
+           "    --starts    %s \\" % P["starts"]]
+    if os.path.exists(expand(SHELF_USD)):
+        cmd.append("    --shelf     %s \\" % SHELF_USD)
+    cmd.append("    --out       %s" % P["usd"])
+    return cmd
 
 
 class Launch(object):

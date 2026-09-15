@@ -139,6 +139,25 @@ def main():
     print(f"[cam] 대상   amr_{idx}  ({why})")
     print(f"[cam] 시점   {a.mode}  눈 {eye} -> 목표 {tgt}  {focal:.0f}mm  (바닥 기준)")
     print(f"[cam] 부모   {a.link} 링크 — 로봇과 같이 움직입니다")
+
+    # ★ 선반이 씬에 있는지 **여기서** 알린다 (2026-09-14).
+    #   `main.py:128` 은 계획이 USD 보다 새로우면 씬을 자동으로 다시 짓는다.
+    #   예전에는 그 경로(`_common.scene_cmd`)가 `--shelf` 를 안 넘겨서 선반이
+    #   조용히 사라졌다. 오류도 경고도 없고 **영상에서만** 보인다 — 25분 녹화가
+    #   끝난 뒤에야 알았다. 스테이지를 어차피 열어 두었으니 지금 확인한다.
+    n_shelf = sum(1 for r in ids
+                  if stage.GetPrimAtPath(f"/World/Robots/amr_{r}/{a.link}/shelf"))
+    if n_shelf == len(ids):
+        print(f"[cam] 선반   {n_shelf}/{len(ids)}대에 얹혀 있습니다")
+    else:
+        print(f"[cam] ★ 선반이 {n_shelf}/{len(ids)}대에만 있습니다 — 씬이 "
+              f"선반 없이 다시 지어졌을 수 있습니다.", file=sys.stderr)
+        print(f"[cam]   씬을 선반 포함으로 다시 지으세요:", file=sys.stderr)
+        print(f"[cam]     python warehouse/scene/build_amr_shelf.py   # 에셋이 없으면", file=sys.stderr)
+        print(f"[cam]     bash run_onboard.sh --rebuild --rec <기록>", file=sys.stderr)
+        print(f"[cam]   `--rebuild` 는 main.py 까지 그대로 내려갑니다. scene_cmd 가 "
+              f"--shelf 를 넘기는 판인지 확인하세요.", file=sys.stderr)
+
     print(path)                      # ★ 마지막 줄 = 카메라 경로. 셸이 이걸 받는다
 
 

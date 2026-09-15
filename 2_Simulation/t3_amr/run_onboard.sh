@@ -4,8 +4,12 @@
 #
 #     bash run_onboard.sh                    주행 시점 (기본)
 #     bash run_onboard.sh --mode chase       뒤 위에서 따라가며
-#     bash run_onboard.sh --amr 7            로봇을 직접 지정
+#     bash run_onboard.sh --amr 7            로봇을 직접 지정 (기록을 안 읽는다)
+#     bash run_onboard.sh --rec $OUT/rec_full.npz   로봇을 고를 기록을 지정
 #     bash run_onboard.sh --skip-cam         카메라는 그대로 두고 녹화만
+#
+# ★ 읽을 기록(`--rec`)과 이번 판의 녹화 대상(`PIBT_RECORD`)은 **달라야 한다.**
+#   같으면 방금 읽은 파일을 이 판이 덮어쓴다. 같으면 실행 전에 죽는다.
 #
 # 나머지 인자는 `run_record.sh` 로 그대로 넘어간다.
 #
@@ -34,6 +38,7 @@ cd "$W"
 [ -n "${VIRTUAL_ENV:-}" ] || source "${VENV:-$HOME/khs/venv}/bin/activate"
 
 MODE="nose"
+REC_IN=""
 AMR=""
 LINK="chassis"
 SKIP_CAM=0
@@ -42,6 +47,7 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --mode)     MODE="$2"; shift 2 ;;
         --amr)      AMR="$2"; shift 2 ;;
+        --rec)      REC_IN="$2"; shift 2 ;;
         --link)     LINK="$2"; shift 2 ;;
         --skip-cam) SKIP_CAM=1; shift ;;
         *) PASS+=("$1"); shift ;;
@@ -53,7 +59,19 @@ source "$W/paths.sh"
 
 N="${PIBT_N:-12}"
 STAGE_USD="$STAGE/pibt$(printf '%02d' "$N").usd"
-REC="${PIBT_RECORD:-$OUT/rec_pibt12.npz}"
+# ★ **읽기용 기록과 이번 판의 녹화 대상을 분리한다** (2026-09-14).
+#   예전에는 `PIBT_RECORD` 하나를 둘 다에 썼다. 그런데 그 값은 자식(run_record
+#   -> live_pibt)으로 그대로 내려가 **녹화 대상**이 된다 — 로봇을 고르려고 읽은
+#   파일을 그 판이 덮어쓴다. 25분 걸려 만든 기록이 날아간다.
+#   `--rec` 로 읽을 파일을 따로 준다. 안 주면 PIBT_RECORD, 그것도 없으면 기본값.
+REC="${REC_IN:-${PIBT_RECORD:-$OUT/rec_pibt12.npz}}"
+if [ -n "${PIBT_RECORD:-}" ] && [ "$REC" = "${PIBT_RECORD:-}" ]; then
+    echo "★ 읽을 기록과 녹화 대상이 같습니다: $REC"
+    echo "  이 판의 녹화가 그 파일을 덮어씁니다. 읽을 파일을 따로 주세요:"
+    echo "    bash run_onboard.sh --rec \$OUT/rec_full.npz"
+    echo "  (또는 --amr 로 로봇을 직접 지정하면 기록을 안 읽습니다)"
+    exit 1
+fi
 
 echo "════════════════════════════════════════════════════"
 echo " run_onboard   시점 $MODE   대수 $N"
