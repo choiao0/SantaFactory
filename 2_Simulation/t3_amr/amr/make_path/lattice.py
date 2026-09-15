@@ -222,8 +222,8 @@ def load_stations(map_dir):
 if __name__ == "__main__":
     import sys
     here = os.path.dirname(os.path.abspath(__file__))
-    md = sys.argv[1] if len(sys.argv) > 1 else os.path.join(
-        here, "..", "..", "v2", "upstream", "2_Simulation", "t3_warehouse_map", "map")
+    md = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("MAP") or os.path.join(   # paths.sh 의 $MAP
+        here, "..", "..", "warehouse", "map")
     lat = Lattice(os.path.abspath(md))
     st = load_stations(os.path.abspath(md))
     pts = [tuple(p) for t in st for p in st[t]]

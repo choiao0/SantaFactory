@@ -1,8 +1,8 @@
 # t3_amr — AMR 계획·주행 스택 (Isaac Sim)
 
-T3 창고 씬 **위에서 도는** AMR 스택. 씬 자체는 [`../t3_warehouse/`](../t3_warehouse/)
-와 [`../scene_builder/`](../scene_builder/) 담당이고, 여기는 그 씬에서 iw.hub AMR 12대를
-계획·주행시키고 처리량을 잰다.
+T3 창고 씬 **위에서 도는** AMR 스택. 씬은 [`warehouse/scene/`](warehouse/scene/)(굽기 스크립트 포함), 맵은
+[`warehouse/map/`](warehouse/map/)(설계도 원본·생성기는 `map/source/`)에 있고, 여기는 그 씬에서 iw.hub AMR 12대를
+계획·주행시키고 처리량을 잰다. (옛 `../t3_warehouse/`·`../scene_builder/` 는 -219 로 삭제.)
 
 계획은 로컬(Isaac 불필요), 주행은 GPU 서버의 Isaac Sim 6.0.1.
 

@@ -20,9 +20,11 @@ v1의 build_amr_scene.py를 팀 씬에 맞게 다시 쓴 것. 두 가지가 다�
 """
 import argparse, json, math, os
 
+HERE = os.path.dirname(os.path.abspath(__file__))
+
 ap = argparse.ArgumentParser()
-ap.add_argument("--warehouse",
-                default=os.path.expanduser("../../t3_warehouse/warehouse_scene.usd"))
+ap.add_argument("--warehouse",   # paths.sh 의 $SCENE 과 같은 값 (옛 ../../t3_warehouse 는 -219 로 삭제)
+                default=os.environ.get("SCENE") or os.path.join(HERE, "..", "warehouse", "scene", "warehouse_scene.usd"))
 ap.add_argument("--robot",
                 default=os.path.expanduser("../robots/iwhub/iw_hub.usd"))
 ap.add_argument("--traj", default=os.path.expanduser("<t3_amr>/traj_v59/fleet_02/trajectories.json"))
