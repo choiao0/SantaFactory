@@ -1,0 +1,28 @@
+#!/bin/sh
+# t3_amr 의 .md 는 저장소에 올리지 않는다 (2026-09-15).
+#
+# 왜 여기인가: 이 저장소는 `core.hooksPath = .githooks` 라 `.git/hooks/` 에
+# 넣은 훅은 **실행되지 않는다.** 실제로 거기 넣었다가 안 도는 것을 확인했다.
+# 이 디렉터리는 추적되므로 규칙이 팀 전체에 같이 간다.
+#
+# 역할 분담:
+#   2_Simulation/t3_amr/.gitignore   미추적 .md 를 애초에 안 잡히게 한다
+#   이 훅                            `git add -f` 로 억지로 올린 것을 막는다
+#
+# ★ core.quotepath=false 가 필요하다. 기본값이면 한글 파일명이
+#   "\354\266..." 로 이스케이프돼 나와 grep 이 못 잡는다.
+staged=$(git -c core.quotepath=false diff --cached --name-only --diff-filter=ACMR \
+         | grep -i '^2_Simulation/t3_amr/.*\.md$')
+
+if [ -n "$staged" ]; then
+    echo "" >&2
+    echo "★ t3_amr 의 .md 는 커밋할 수 없습니다 (문서는 로컬에만 둡니다):" >&2
+    echo "$staged" | sed 's/^/    /' >&2
+    echo "" >&2
+    echo "  빼려면:            git restore --staged <파일>" >&2
+    echo "  정말 올려야 하면:  git commit --no-verify" >&2
+    echo "" >&2
+    exit 1
+fi
+
+exit 0
