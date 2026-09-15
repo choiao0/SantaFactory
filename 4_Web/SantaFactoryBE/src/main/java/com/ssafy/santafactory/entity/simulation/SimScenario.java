@@ -84,6 +84,13 @@ public class SimScenario {
     private Long totalCost;
 
     /**
+     * 주문 리드타임 p90(초) — 명세 §1-2 {@code kpi.lead_time_p90_s} (S15P21A106-97).
+     * 시뮬이 안 주면 null 이고, 그 run 은 리드타임 조건을 건너뛴다.
+     */
+    @Column(name = "lead_time_p90")
+    private Double leadTimeP90;
+
+    /**
      * 이 run 의 앞 구간 궤적 (S15P21A106-205). 시뮬이 준 JSON 을 그대로 담는다.
      * 맵({@code scene})은 대수와 무관하게 같으므로 여기가 아니라 견적 쪽에 한 벌만 둔다.
      */
@@ -107,14 +114,16 @@ public class SimScenario {
     /**
      * 결과 수신 — KPI 를 채우고 DONE 으로 넘긴다.
      *
-     * @param throughput  출고 처리율 %
-     * @param utilization AMR 가동률 %
-     * @param outbound    출고 처리 건수
+     * @param throughput   출고 처리율 %
+     * @param utilization  AMR 가동률 %
+     * @param outbound     출고 처리 건수
+     * @param leadTimeP90  주문 리드타임 p90(초). 시뮬이 안 주면 null
      */
-    public void markDone(Double throughput, Double utilization, Long outbound) {
+    public void markDone(Double throughput, Double utilization, Long outbound, Double leadTimeP90) {
         this.throughput = throughput;
         this.utilization = utilization;
         this.outbound = outbound;
+        this.leadTimeP90 = leadTimeP90;
         this.error = null;
         this.status = RunStatus.DONE;
         this.completedAt = LocalDateTime.now();
