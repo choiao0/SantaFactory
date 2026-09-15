@@ -42,6 +42,8 @@
 
     --agent 0     그 로봇의 시간축 추적을 같이 찍는다 ([1] 을 눈으로 본다)
     --mark 47     분포에서 이 값이 몇 퍼센타일인지 (기본 47)
+    --hist        hypot 분포 · 부호 편향 · 접근 속도까지 (아래 [h1][h2][h3])
+    --tol 0.05    Tolerance.pos [m]. [h1] 의 끊김선과 [h3] 의 _lim 에 쓴다
 """
 import argparse
 import math
@@ -89,12 +91,26 @@ def decompose(x, y, yaw, pitch):
 
 
 def holds(t, x, y, yaw):
-    """멈춰 있던 구간 목록 — (시작 세로, 끝 세로, 시작 가로, 지속, i, j)."""
+    """멈춰 있던 구간 목록.
+
+    낸다: (시작 세로, 끝 세로, 시작 가로, 지속, i, j, **hypot**, **접근 속도**)
+
+    ★ `hypot` 과 접근 속도를 같이 내는 이유 (2026-09-16):
+      도착 판정이 `hypot(dx, dy) <= tol.pos` 라 **세로 단독**으로는 `tol.pos`
+      보다 작은 데서 끊긴다 — 가로 성분이 있으면 그만큼 더. 그런데 실측
+      세로 p99 가 52.0 (s1) 로 50 을 넘는 판이 있다. 도착 판정 말고 다른
+      것도 섞여 있다는 뜻이므로 `hypot` 자체를 봐야 한다.
+
+      접근 속도는 `isaac_drive.py:1614` 의 `_lim = 2*tol.pos*60Hz` 와 대본다.
+      `v_exec` 는 **순항** 속도고 도착 직전에는 감속하므로, 1.6 이 곧바로
+      한계에 걸린다고 볼 수 없다. 실제로 몇 번 걸리는지는 세면 된다.
+    """
     dt = np.diff(t)
     dt[dt <= 0] = np.nan
     v = np.nan_to_num(np.hypot(np.diff(x), np.diff(y)) / dt)
     w = np.nan_to_num(np.abs(np.diff(np.unwrap(yaw))) / dt)
     still = (v < V_MOVE) & (w < W_MOVE)
+    o = PITCH / 2.0
 
     out, i, n = [], 0, len(still)
     while i < n:
@@ -109,8 +125,13 @@ def holds(t, x, y, yaw):
             if abs(axis_offset(yaw[i])) < AXIS_TOL:
                 lon0, lat0 = decompose(x[i], y[i], yaw[i], PITCH)
                 lon1, _ = decompose(x[j], y[j], yaw[j], PITCH)
+                ex = x[i] - (o + round((x[i] - o) / PITCH) * PITCH)
+                ey = y[i] - (o + round((y[i] - o) / PITCH) * PITCH)
+                # 접근 속도 — 멈추기 직전 프레임. 구간 첫 프레임은 이미 정지다.
+                v_in = float(v[i - 1]) if i > 0 else float("nan")
                 out.append((lon0 * 1000, lon1 * 1000, lat0 * 1000,
-                            float(t[j] - t[i]), i, j))
+                            float(t[j] - t[i]), i, j,
+                            math.hypot(ex, ey) * 1000, v_in))
         i = j + 1
     return out
 
@@ -182,12 +203,88 @@ def report(path, rows, mark):
         print("     -> 밀림이 무시 못 할 크기다. 홀딩 쪽도 봐야 한다.")
 
 
+def hist(v, edges, names, total=None):
+    """간단 막대 히스토그램."""
+    v = np.asarray(v, dtype=float)
+    n = total or len(v)
+    for lo, hi, nm in zip(edges, edges[1:], names):
+        k = int(((v >= lo) & (v < hi)).sum())
+        bar = "#" * int(round(40.0 * k / max(1, n)))
+        print(f"     {nm:>12}  {k:>5}회 ({100.0 * k / max(1, n):5.1f}%)  {bar}")
+
+
+def sec_hist(rows, tol_pos):
+    """[h1] hypot 이 허용오차에서 깨끗이 끊기나 · [h2] 부호 편향 · [h3] 접근 속도."""
+    hyp = np.array([r[6] for r in rows])
+    lon0 = np.array([r[0] for r in rows])
+    vin = np.array([r[7] for r in rows])
+    vin = vin[np.isfinite(vin)]
+    tol_mm = tol_pos * 1000.0
+
+    # --- [h1] 도착 판정이 정말 끊는가 ---------------------------------
+    print()
+    print(f"   [h1] `hypot(dx,dy)` 분포 — 도착 판정 `<= {tol_mm:.0f} mm` 가 끊나")
+    e = [0, 10, 20, 30, 40, tol_mm, tol_mm + 10, 1e9]
+    nm = ["0-10", "10-20", "20-30", "30-40", f"40-{tol_mm:.0f}",
+          f"{tol_mm:.0f}-{tol_mm + 10:.0f}", f"{tol_mm + 10:.0f}+"]
+    hist(hyp, e, nm)
+    over = int((hyp > tol_mm).sum())
+    print(f"     {tol_mm:.0f} mm 초과 {over}회 ({100.0 * over / len(hyp):.1f}%)"
+          f"  ·  최대 {hyp.max():.1f} mm")
+    if over > 0.05 * len(hyp):
+        print("     -> ★ 초과가 적지 않다. 도착 판정 말고 다른 것도 섞여 있다")
+        print("        (감속 오버슈트 · 다음 동작 전 밀림 등).")
+    else:
+        print("     -> 허용오차에서 깨끗이 끊긴다. 도착 판정이 지배한다.")
+
+    # --- [h2] 부호 편향 -------------------------------------------------
+    #   허용오차 **크기**만으로는 부호가 갈려야 한다. 한쪽으로 쏠려 있으면
+    #   크기와 **별개인 계통 편향**이 있다는 뜻이고, 그쪽을 고치면
+    #   `tol.pos` 를 덜 줄여도 되므로 속도 상한을 안 건드린다.
+    print()
+    print("   [h2] 부호 있는 세로 — 편향인가 (허용오차 크기와 별개 정보)")
+    e = [-1e9, -tol_mm, -40, -20, 0, 20, 40, tol_mm, 1e9]
+    nm = [f"<-{tol_mm:.0f}", f"-{tol_mm:.0f}~-40", "-40~-20", "-20~0",
+          "0~20", "20~40", f"40~{tol_mm:.0f}", f">{tol_mm:.0f}"]
+    hist(lon0, e, nm)
+    pos = 100.0 * (lon0 > 0).mean()
+    if lon0.std() < 1.0:
+        print(f"     퍼짐이 {lon0.std():.2f} mm 뿐이다 — 이 표본으로는 편향을 못 본다.")
+        return
+    print(f"     양수 비율 {pos:.1f}%  ·  중앙 {np.median(lon0):+.1f} mm")
+    if pos < 35 or pos > 65:
+        print("     -> ★ 한쪽으로 쏠렸다. 허용오차 크기와 **별개인 편향**이 있다.")
+        print("        접근 방향이 한쪽이면 자연스러운 결과이기도 하다 —")
+        print("        「진입하자마자 멈춘다」면 늘 가까운 쪽 가장자리에 선다.")
+        print("        가르려면 **접근 방향별**로 다시 봐야 한다.")
+    else:
+        print("     -> 부호가 갈린다. 크기(허용오차)가 지배한다.")
+
+    # --- [h3] 접근 속도 vs 도착 판정 한계 --------------------------------
+    print()
+    print("   [h3] 멈추기 직전 속도 — `tol.pos` 를 줄일 여지가 있나")
+    if not vin.size:
+        print("     표본 없음")
+        return
+    print(f"     중앙 {np.median(vin):.3f}  p90 {np.percentile(vin, 90):.3f}"
+          f"  p99 {np.percentile(vin, 99):.3f}  최대 {vin.max():.3f} m/s")
+    print(f"     {'tol.pos':>9}{'_lim':>9}{'경고선':>9}{'경고선 초과':>12}")
+    for tp in (0.050, 0.030, 0.020, 0.015, 0.010):
+        lim = 2.0 * tp * 60.0
+        warn = 0.5 * lim
+        k = int((vin > warn).sum())
+        print(f"     {tp * 1000:>7.0f}mm{lim:>9.2f}{warn:>9.2f}"
+              f"{k:>7}회 ({100.0 * k / len(vin):4.1f}%)")
+    print("     (`_lim = 2 x tol.pos x 60Hz` · 경고선은 그 절반 —")
+    print("      isaac_drive.py:1614. **순항 속도가 아니라 이 속도**가 기준이다)")
+
+
 def trace(t, x, y, yaw, k, rows):
     """한 로봇의 정지 구간을 시간순으로 — [1] 을 눈으로 본다."""
     print(f"\n   [추적] agent{k} 의 정지 구간")
     print(f"     {'t0':>8}{'t1':>8}{'지속':>7}{'도착세로':>10}{'출발세로':>10}"
           f"{'밀림':>8}{'도착가로':>10}   mm")
-    for lon0, lon1, lat0, dur, i, j in rows:
+    for lon0, lon1, lat0, dur, i, j, _hyp, _v in rows:
         print(f"     {t[i]:>8.2f}{t[j]:>8.2f}{dur:>7.2f}"
               f"{lon0:>+10.1f}{lon1:>+10.1f}{lon1 - lon0:>+8.1f}{lat0:>+10.1f}")
 
@@ -197,6 +294,9 @@ def main():
     ap.add_argument("npz", nargs="+")
     ap.add_argument("--agent", type=int, default=None, help="이 로봇의 추적도 찍는다")
     ap.add_argument("--mark", type=float, default=47.0, help="퍼센타일을 볼 값 mm")
+    ap.add_argument("--hist", action="store_true",
+                    help="hypot 분포 · 부호 편향 · 접근 속도까지")
+    ap.add_argument("--tol", type=float, default=0.05, help="Tolerance.pos [m]")
     a = ap.parse_args()
 
     print(f"정지 자리 세로(진행축) 오차 — pitch {PITCH}"
@@ -219,6 +319,8 @@ def main():
             print("   정지 구간을 못 찾았다 — V_MOVE / MIN_HOLD 를 확인하라")
             continue
         report(path, allrows, a.mark)
+        if a.hist:
+            sec_hist(allrows, a.tol)
 
     print()
     print("* 세로 + 는 진행 방향으로 지나침. 계통이면 중앙이 0 에서 멀다.")
