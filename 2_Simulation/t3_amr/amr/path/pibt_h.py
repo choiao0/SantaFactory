@@ -1,9 +1,26 @@
 # -*- coding: utf-8 -*-
 """pibt_core_v2(헤딩) + isaac_drive(ADG) — 시간표 없이 **순서**로 주행."""
 import os
+import sys
 
 from . import default_map
 from ._common import Launch, rel, run, scene_cmd as _scene
+
+
+def _move_ticks():
+    """전진 1칸이 몇 틱인가 — **FMS 원본에서 읽는다.**
+
+    기동 층이라 계획기를 안 들여오지만, 이 값을 베껴 두면 상류가 바뀔 때
+    `HORIZON` 과 짝이 어긋난 채 조용히 돈다. 그래서 읽어 오고, 못 읽으면
+    **숫자를 지어내지 않고 예외로 죽는다** — 여기서 죽는 편이 350 s 짜리
+    계획이 87.5 s 로 도는 것보다 낫다.
+    """
+    here = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    path_dir = os.path.join(here, "path")
+    if path_dir not in sys.path:
+        sys.path.insert(0, path_dir)
+    import pibt_core_v2 as _pc
+    return int(_pc.MOVE_TICKS)
 
 NAME = "pibt_h"
 DESC = ("PIBT 헤딩(2칸 점유·스윙 예약·후진) + ADG · 1.2 m 격자 · "
@@ -38,8 +55,15 @@ MODE = "lifelong"          # oneshot | lifelong
 #       주행   PIBT_DISPATCH=robot_first bash run_record.sh
 #   시연·처리량 측정이 목적이면 `robot_first` 가 낫다.
 DISPATCH = "fms"
-HORIZON = 315              # 틱. 초는 격자에 딸린다 — 315 x (pitch/0.90):
-                           #   pitch 1.0 (기본) -> 350 s · pitch 1.2 -> 420 s
+# ★ 2026-09-15 (-211) 틱 모델 정합으로 315 -> 1260. 전진 1칸이 MOVE_TICKS(4)
+#   틱이 되어 **틱 != 칸**이다. 계획 초는 그대로다:
+#
+#       전:  315틱 x (pitch/0.90)       = 350 s   (pitch 1.0)
+#       후: 1260틱 x (pitch/0.90/4)     = 350 s
+#
+#   `tick_s` 와 **짝으로** 움직여야 한다 (path/isaac_drive.py · path/metrics.py).
+#   한쪽만 바꾸면 릴리스 지평이 87.5 s 나 1,400 s 가 되고 에러는 안 난다.
+HORIZON = 1260             # 틱
 
 # ★ 2026-09-11: 배터리를 껐다 (S15P21A106-200).
 #
@@ -59,7 +83,7 @@ HORIZON = 315              # 틱. 초는 격자에 딸린다 — 315 x (pitch/0.
 #   배터리 ON·robot_first 였을 때는 order_gap 25 로 12/12 였다. 배차를 fms 로
 #   맞추며 처리량이 내려가 **부하를 더 낮춰야** 전원이 돌아온다.
 #
-#       전원 복귀 시연:  PIBT_HORIZON=550 PIBT_ORDER_END=315 PIBT_ORDER_GAP=40
+#       전원 복귀 시연:  PIBT_HORIZON=2200 PIBT_ORDER_END=1260 PIBT_ORDER_GAP=160
 #
 #   [되돌리는 법] PIBT_BATTERY=1 로 주행하면 배터리가 다시 붙는다.
 #   `path/battery.py` 는 지우지 않았다 — 배터리 KPI 가 다시 필요할 수 있다.
@@ -103,7 +127,7 @@ def plan(n=12, seed=None, seconds=None, map_dir=None, extra=None):
         if os.environ.get("PIBT_BATTERY", "1" if BATTERY else "0") not in ("0", "", "false"):
             argv += ["--battery"]
         argv += ["--dispatch", os.environ.get("PIBT_DISPATCH", DISPATCH)]
-        argv += ["--order-gap", os.environ.get("PIBT_ORDER_GAP", "15")]
+        argv += ["--order-gap", os.environ.get("PIBT_ORDER_GAP", "60")]
         _oe = os.environ.get("PIBT_ORDER_END", "").strip()
         if _oe:
             argv += ["--order-end", _oe]
@@ -112,9 +136,11 @@ def plan(n=12, seed=None, seconds=None, map_dir=None, extra=None):
     #   x1.72 = 722 s」가 박혀 있었는데, 그건 pitch 1.2 시절 값이라 기본이 1.0 이
     #   된 뒤로 계속 틀린 숫자를 뱉고 있었다 (실제로는 350 s). 격자에서 파생시킨다.
     horizon = int(os.environ.get("PIBT_HORIZON", str(HORIZON)))
-    plan_s = horizon * pitch / 0.90          # 0.90 = 계획 속도 v_plan
+    mt = _move_ticks()
+    plan_s = horizon * pitch / (0.90 * mt)           # 0.90 = 계획 속도 v_plan
     return {"out": os.path.join(rel(OUT), f"fleet_{n:02d}"), "log": out,
-            "note": f"{MODE} · {horizon}틱 x (pitch {pitch}/0.90) = 계획 {plan_s:.0f} s "
+            "note": f"{MODE} · {horizon}틱 x (pitch {pitch}/0.90/{mt}) "
+                    f"= 계획 {plan_s:.0f} s "
                     f"(Isaac 벽시계는 stretch 를 곱한다 — metrics.STRETCH_MEASURED)"}
 
 
@@ -176,7 +202,7 @@ def launch(n=12):
              # 업무 종료 후 전원 충전존 복귀 (-199). 빈 값이면 live_pibt 가
              # 끈 것으로 본다 — 기본 동작은 바뀌지 않는다.
              _e("PIBT_ORDER_END", ""),
-             _e("PIBT_ORDER_GAP", "15"),
+             _e("PIBT_ORDER_GAP", "60"),
              # 앞 칸 규칙 (-204). `pibt_scene.front_rule()` 이 읽어 계획기와
              # RobotGeom 두 스위치를 함께 맞춘다. 이 줄이 없으면 셸에서 줘도
              # Isaac 까지 **전달되지 않는다** (위 설명).

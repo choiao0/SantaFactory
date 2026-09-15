@@ -162,12 +162,12 @@ MAP = os.environ.get("PIBT_MAP", os.path.join(
 N = int(os.environ.get("PIBT_N", "12"))
 PITCH = float(os.environ.get("PIBT_PITCH", "1.2"))
 SEED = int(os.environ.get("PIBT_SEED", "9"))
-MAX_STEPS = int(os.environ.get("PIBT_MAX_STEPS", "400"))
+MAX_STEPS = int(os.environ.get("PIBT_MAX_STEPS", "1600"))  # -211: x4
 # 기본값 "oneshot" 은 사실상 죽은 값이다 — amr/path/pibt_h.py 가 항상
 # PIBT_MODE=lifelong 을 넣는다. one-shot 은 시드를 타므로 직접 켜지 말 것.
 MODE = os.environ.get("PIBT_MODE", "oneshot")          # oneshot | lifelong
-HORIZON = int(os.environ.get("PIBT_HORIZON", "315"))   # 315틱 x (pitch/0.9)
-                                                       # = 350 s (pitch 1.0, 기본)
+HORIZON = int(os.environ.get("PIBT_HORIZON", "1260"))  # -211 틱 모델 정합으로
+                                                      # 315 -> 1260. 1260 x (pitch/0.9/MOVE_TICKS) = 350 s
 BATTERY = os.environ.get("PIBT_BATTERY", "0") not in ("0", "", "false")
 DISPATCH = os.environ.get("PIBT_DISPATCH", "fms")      # fms | robot_first
 # 충전존 복귀. 기본 ON — PIBT_ZONE=0 이면 FREED 가 시작 칸으로 돌아가던
@@ -181,7 +181,7 @@ ORDER_END = float(_OE) if _OE else None
 # 도착하고 13건만 완료돼 적체 8건이 남는다. 그러면 주문을 끊어도 로봇이 계속
 # 일하므로 복귀가 안 된다. 전원 복귀를 보려면 25 이상으로 부하를 낮춘다.
 # 실측(12대·seed 1·업무 315틱·horizon 550): gap 15 → 4/12, gap 25 → **12/12**.
-ORDER_GAP = int(os.environ.get("PIBT_ORDER_GAP", "15"))
+ORDER_GAP = int(os.environ.get("PIBT_ORDER_GAP", "60"))   # -211: 틱 단위라 x4
 CAMERA = os.environ.get("PIBT_CAMERA", "/World/Cameras/Cam_Top")
 SPAWN_Z = float(os.environ.get("PIBT_SPAWN_Z", "0.081"))   # build_amr_scene 의 WHEEL_R
 LEFT_IDX, RIGHT_IDX = 0, 1
