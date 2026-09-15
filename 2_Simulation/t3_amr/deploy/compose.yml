@@ -1,0 +1,35 @@
+# 로컬(GPU 박스) 검증용 — k3s 전 단계. docker compose -f 2_Simulation/t3_amr/deploy/compose.yml up
+# 필요: docker 그룹 권한 + nvidia-container-toolkit (deploy/README.md)
+services:
+  t3amr-runner:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: t3amr-runner:dev
+    container_name: t3amr-runner
+    command: ["edge"]                 # 한 번 녹화만 보려면: ["record", "3"]
+    env_file:
+      - ../../../3_FMS/infra/emqx/.env      # MQTT_HOST · MQTT_PORT · MQTT_PW_SIM_RUNNER (gitignored)
+    environment:
+      NODE_ID: sim-runner-gpu01       # host-orch --node 와 같아야 한다
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT:-100.100.149.68:9002}
+      MINIO_BUCKET: ${MINIO_BUCKET:-verify-videos}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:?}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?}
+      PUBLIC_MEDIA_BASE: ${PUBLIC_MEDIA_BASE:-https://j15a106.p.ssafy.io/media}
+    volumes:
+      - ov-cache:/cache/ov            # Kit 셰이더 캐시 — 첫 기동 수 분, 이후 재사용
+      - ./data:/data                  # out(mp4·프레임) · state(bdSeq · 런 로그)
+    ports:
+      - "49100:49100/tcp"             # WebRTC 시그널링 (관전용, 없어도 촬영은 된다)
+      - "47998:47998/udp"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu, graphics, utility, compute, video]
+    restart: unless-stopped
+volumes:
+  ov-cache:

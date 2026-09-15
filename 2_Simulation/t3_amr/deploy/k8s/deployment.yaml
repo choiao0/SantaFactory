@@ -1,0 +1,46 @@
+# t3_amr 러너 — GPU 노드 1대에 1개. 상주하며 host-orch 의 NCMD Start 를 기다린다.
+# 전제: 노드에 nvidia-container-toolkit + NVIDIA device plugin(nvidia.com/gpu 리소스), RuntimeClass nvidia.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: t3amr-runner
+  namespace: santa
+spec:
+  replicas: 1
+  strategy: { type: Recreate }          # GPU 하나라 두 개가 겹쳐 뜨면 안 된다
+  selector: { matchLabels: { app: t3amr-runner } }
+  template:
+    metadata:
+      labels: { app: t3amr-runner }
+    spec:
+      runtimeClassName: nvidia
+      nodeSelector:
+        santa.io/gpu: "true"            # GPU 박스 노드에 라벨: kubectl label node <gpu-node> santa.io/gpu=true
+      containers:
+        - name: runner
+          image: t3amr-runner:dev       # 로컬 빌드 → k3s containerd 로 import (deploy/README.md). 레지스트리 생기면 교체
+          imagePullPolicy: IfNotPresent
+          args: ["edge"]
+          env:
+            - { name: NODE_ID, value: "sim-runner-gpu01" }
+            - { name: NVIDIA_DRIVER_CAPABILITIES, value: "all" }
+          envFrom:
+            - secretRef: { name: t3amr-runner-env }
+          resources:
+            limits: { nvidia.com/gpu: 1, memory: "24Gi" }
+            requests: { nvidia.com/gpu: 1, memory: "12Gi", cpu: "4" }
+          ports:
+            - { name: webrtc-sig, containerPort: 49100, hostPort: 49100, protocol: TCP }
+            - { name: webrtc-media, containerPort: 47998, hostPort: 47998, protocol: UDP }
+          volumeMounts:
+            - { name: ov-cache, mountPath: /cache/ov }
+            - { name: data, mountPath: /data }
+          livenessProbe:
+            exec: { command: ["sh", "-c", "test -f /data/state/alive && find /data/state/alive -mmin -1 | grep -q ."] }
+            initialDelaySeconds: 60
+            periodSeconds: 30
+      volumes:
+        - name: ov-cache
+          hostPath: { path: /var/lib/t3amr/ov-cache, type: DirectoryOrCreate }
+        - name: data
+          hostPath: { path: /var/lib/t3amr/data, type: DirectoryOrCreate }
