@@ -44,8 +44,14 @@
 쓰는 법
 -------
     source paths.sh
-    python tools/reverse_sweep.py                      # RF 3.0 vs 1.0, 시드 1,2,4
+    python tools/reverse_sweep.py                      # 기본/3.0/1.0, 시드 1,2,4
     RF=3.0,2.0,1.5,1.0 SEEDS=1 python tools/reverse_sweep.py
+
+    RF=off 로 두면 **순환 진단 도구**가 된다 — 후진 비용을 안 건드린 채
+    격자·지평·배터리만 흔들 수 있다:
+
+        PIBT_PITCH=1.2 BATTERY=1 RF=off python tools/reverse_sweep.py
+        PIBT_PITCH=1.0 BATTERY=0 RF=off python tools/reverse_sweep.py
 """
 import json
 import os
@@ -61,6 +67,13 @@ SEEDS = [int(x) for x in os.environ.get("SEEDS", "1,2,4").split(",")]
 # 틱 정합 뒤 값 (-211). adg_fingerprint.py 와 같은 이유로 둘을 같이 움직인다.
 HORIZON = int(os.environ.get("HORIZON", "1260"))
 GAP = int(os.environ.get("GAP", "60"))
+# ★ 실제 주행은 배터리를 **안 켠다** (`amr/path/pibt_h.py:90` BATTERY=False →
+#   `plan()` 이 PIBT_BATTERY 기본을 "0" 으로 두어 `--battery` 를 안 붙인다).
+#   처음 스윕을 True 로 박아 두고 「pitch 말고는 다 같다」고 적었는데, 그건
+#   adg_fingerprint 와 비교했을 때만 맞았다. 주행과는 이것도 달랐다.
+#   순환 원인을 가르려면 이 축이 켜고 끌 수 있어야 한다.
+BATTERY = os.environ.get("BATTERY", "1") not in ("0", "", "no", "off")
+
 # `off` 는 환경변수를 **안 주는** 기준 판이다 (= 로더가 한 줄도 안 돈다 = FMS 기본).
 # 기본 목록에 넣어 두는 이유: 오버라이드 경로 자체가 무해한지 매 판 같이 보이려고.
 RFS = [None if x.strip().lower() in ("off", "기본", "none") else float(x)
@@ -86,7 +99,7 @@ def child(seed):
     try:
         adg, _order, _history, info = D.plan_and_build_lifelong(
             free, starts, goals, geom, horizon=HORIZON, seed=seed,
-            order_gap=GAP, battery=True, dispatch="fms", zone_cells=zone,
+            order_gap=GAP, battery=BATTERY, dispatch="fms", zone_cells=zone,
             order_end=None, docks=pibt_scene.charge_docks(free, geom))
     except RuntimeError as e:
         if "순환" not in str(e):
@@ -176,7 +189,7 @@ def main():
         return 0
 
     print(f"REVERSE_FACTOR 스윕 — n {N} · pitch {PITCH} · 지평 {HORIZON}틱"
-          f" · 시드 {SEEDS}")
+          f" · 주기 {GAP} · 배터리 {'켬' if BATTERY else '끔'} · 시드 {SEEDS}")
     print("  ★ FMS 기본은 3.0 이다. 나머지는 **합의 전 실험값**이다.")
 
     table = {}
