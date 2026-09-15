@@ -20,7 +20,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import pibt.geometry as geo  # noqa: E402
 from fms_kernel import FmsKernel, KernelConfig  # noqa: E402
 from kernel.states import TO_PICK  # noqa: E402
-from pibt.geometry import stay_map_h  # noqa: E402
+from pibt.geometry import occupied, stay_map_h, swing_cells  # noqa: E402
 from pibt.liveness import Stagnation  # noqa: E402
 
 
@@ -148,3 +148,31 @@ def test_r1_patient_only_for_temporary_holds():
     k.robots[5]["pos"], k.robots[5]["h"] = (5, 3), 2
     states = _states(k)
     assert k._patient(states, _dists(k, states), _extra(k), soft_hold) == set()
+
+
+# ---- R2′ (-159) 축소 장면: r0 의 전진 wish 칸 (4,3) 이 r1 의 **회전 중 스윙**(extra)에 막힘. 몸은 안 겹친다 ----
+def _swing_block():
+    free = np.ones((8, 6), dtype=bool)
+    # r0 (5,3,2): −행 방향(위)을 보고 목표 (1,3) → 전진 wish = (4,3). r1 (3,4,1) → h=2 로 회전 중: 스윙 [(3, 3), (4, 3), (4, 4)] 에 (4,3) 포함
+    k = _kernel(free, {0: dict(pos=(5, 3), h=2, goal=(1, 3), stag=40),
+                       1: dict(pos=(3, 4), h=1, goal=(3, 0), stag=40, busy=3,
+                               swing=set(swing_cells(3, 4, 1, 2)), swing_soft=set())})
+    return k
+
+
+def test_r2prime_detects_wish_blocked_by_rotating_swing():
+    k = _swing_block()
+    states = _states(k)
+    dists = _dists(k, states)
+    hard, _ = k._wish_cells(0, states, dists)
+    swing = k.robots[1]["swing"]
+    assert (4, 3) in hard and hard & swing and not (hard & set(occupied(states[1]))), (hard, swing)   # 스윙에만 막힘
+    # 임시 예약에만 막힌 상대는 stag ≥ 2×hd_after(32) 부터 — 그 전(30)엔 R1 인내 구간, 대치 없음 (4칸 고밀도 과감지 방지)
+    k._stag.stag[0] = 30
+    assert not k._detect_standoffs(0, states, [0, 1], dists, _extra(k), soft_hold={}) and k.standoffs == 0
+    k._stag.stag[0] = 40
+    # V2(몸만 봄)라면 상대 없음 → 대치 없음. R2′: 스윙 주인 r1 이 상대.
+    assert k._detect_standoffs(0, states, [0, 1], dists, _extra(k), soft_hold={})
+    assert k.robots[0]["hd_peer"] == 1 and k.robots[1]["hd_peer"] == 0
+    assert k.robots[0]["hd_role"] == "L"                     # 회전 중 r1 은 못 움직이고 r0 은 움직일 수 있다 → r0 이 L (R3)
+    assert k.standoffs == 1
