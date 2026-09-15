@@ -723,7 +723,8 @@ def main():
     ap.add_argument("--lifelong", action="store_true",
                     help="주문 스트림으로 T틱 순환 (one-shot 대신)")
     ap.add_argument("--horizon", type=int, default=315,
-                    help="lifelong 틱 수. 315틱 = 계획 420 s (1.2/0.9 s/틱)")
+                    help="lifelong 틱 수. 초는 격자에 딸린다 — 315틱 x (pitch/0.9) "
+                         "= 350 s (pitch 1.0, 기본) / 420 s (pitch 1.2)")
     ap.add_argument("--seconds", type=float, default=None,
                     help="틱 대신 초로 지정. --clock 과 함께 쓴다")
     ap.add_argument("--clock", choices=("plan", "wall"), default="plan",

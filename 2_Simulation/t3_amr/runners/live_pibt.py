@@ -166,7 +166,8 @@ MAX_STEPS = int(os.environ.get("PIBT_MAX_STEPS", "400"))
 # 기본값 "oneshot" 은 사실상 죽은 값이다 — amr/path/pibt_h.py 가 항상
 # PIBT_MODE=lifelong 을 넣는다. one-shot 은 시드를 타므로 직접 켜지 말 것.
 MODE = os.environ.get("PIBT_MODE", "oneshot")          # oneshot | lifelong
-HORIZON = int(os.environ.get("PIBT_HORIZON", "315"))   # 315틱 = 계획 420 s
+HORIZON = int(os.environ.get("PIBT_HORIZON", "315"))   # 315틱 x (pitch/0.9)
+                                                       # = 350 s (pitch 1.0, 기본)
 BATTERY = os.environ.get("PIBT_BATTERY", "0") not in ("0", "", "false")
 DISPATCH = os.environ.get("PIBT_DISPATCH", "fms")      # fms | robot_first
 # 충전존 복귀. 기본 ON — PIBT_ZONE=0 이면 FREED 가 시작 칸으로 돌아가던

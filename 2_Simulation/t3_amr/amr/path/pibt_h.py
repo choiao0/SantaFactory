@@ -38,7 +38,8 @@ MODE = "lifelong"          # oneshot | lifelong
 #       주행   PIBT_DISPATCH=robot_first bash run_record.sh
 #   시연·처리량 측정이 목적이면 `robot_first` 가 낫다.
 DISPATCH = "fms"
-HORIZON = 315              # 틱. 315 x (1.2/0.9) = 계획 420 s
+HORIZON = 315              # 틱. 초는 격자에 딸린다 — 315 x (pitch/0.90):
+                           #   pitch 1.0 (기본) -> 350 s · pitch 1.2 -> 420 s
 
 # ★ 2026-09-11: 배터리를 껐다 (S15P21A106-200).
 #
@@ -81,15 +82,16 @@ def plan(n=12, seed=None, seconds=None, map_dir=None, extra=None):
     #   세운다)이 **같은 격자여야** 한다. `run_record.sh` 가 PIBT_PITCH 기본을
     #   1.0 으로 두므로, 여기서 안 보면 `REPLAN=1` 이 1.2 로 계획해 놓고 주행은
     #   1.0 으로 도는 어긋남이 조용히 생긴다.
+    pitch = float(os.environ.get("PIBT_PITCH", str(PITCH)))
     argv = ["pibt_scene.py", "--n", str(n),
-            "--pitch", os.environ.get("PIBT_PITCH", str(PITCH)),
+            "--pitch", str(pitch),
             "--seed", str(SEED if seed is None else seed),
             "--map", map_dir or default_map(), "--out", rel(OUT), "--plan"]
     if MODE == "lifelong":
         argv += ["--lifelong"]
         # `seconds` 가 드디어 쓰인다. 다만 **어느 초인지**를 정해야 한다.
-        #   --clock plan : 계획 시간 (FMS 틱과 같은 단위). 420 s -> 315틱
-        #   --clock wall : Isaac 벽시계.  420 s -> 183틱 (stretch 1.72)
+        #   --clock plan : 계획 시간 (FMS 틱과 같은 단위). pitch 1.0 이면 350 s = 315틱
+        #   --clock wall : Isaac 벽시계. stretch 를 곱한다 (metrics.STRETCH_MEASURED)
         # ★ 여기도 셸 환경변수를 먼저 본다 (2026-09-11).
         #   `main.py plan` 이 만드는 계획과 Isaac 이 실제로 도는 계획(live_pibt 가
         #   in-process 로 다시 세운다)이 **같은 설정이어야** 한다. 한쪽만 환경변수를
@@ -106,9 +108,14 @@ def plan(n=12, seed=None, seconds=None, map_dir=None, extra=None):
         if _oe:
             argv += ["--order-end", _oe]
     out = run(argv + (extra or []))
+    # ★ 이 note 는 주석이 아니라 **밖으로 나가는 값**이다. 예전에는 「계획 420 s ·
+    #   x1.72 = 722 s」가 박혀 있었는데, 그건 pitch 1.2 시절 값이라 기본이 1.0 이
+    #   된 뒤로 계속 틀린 숫자를 뱉고 있었다 (실제로는 350 s). 격자에서 파생시킨다.
+    horizon = int(os.environ.get("PIBT_HORIZON", str(HORIZON)))
+    plan_s = horizon * pitch / 0.90          # 0.90 = 계획 속도 v_plan
     return {"out": os.path.join(rel(OUT), f"fleet_{n:02d}"), "log": out,
-            "note": f"{MODE} · {HORIZON}틱 = 계획 420 s "
-                    f"(Isaac 벽시계로는 x1.72 = 722 s)"}
+            "note": f"{MODE} · {horizon}틱 x (pitch {pitch}/0.90) = 계획 {plan_s:.0f} s "
+                    f"(Isaac 벽시계는 stretch 를 곱한다 — metrics.STRETCH_MEASURED)"}
 
 
 def verify(n=12, map_dir=None):

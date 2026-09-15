@@ -25,7 +25,19 @@ makespan 이 없으면 `stretch`(실행/계획 비율)로 추정치를 낸다. �
 이다. `--stretch` 로 갱신하라. 계획 격자·대수·맵이 바뀌면 다시 재야 한다.
 """
 
-STRETCH_MEASURED = 1.72      # 2026-09-06 Isaac 12대 실측 (325 s / 189 s)
+# ★ stretch 는 상수가 아니라 **조건에 딸린 실측값**이다. 격자·실행속도가
+#   바뀌면 같이 바뀐다. 기본값은 셸 기본 설정(pitch 1.0 · v_exec 미지정=0.9)에
+#   맞춘다 — `run_record.sh` 가 PIBT_PITCH 를 1.0 으로, PIBT_V_EXEC 를 빈 값
+#   (= geom.v_max 0.9) 으로 두기 때문이다.
+#
+#     pitch  v_exec   계획 s   실측 s   stretch   측정일
+#      1.2     0.9      189     325      1.72     2026-09-06  (옛 기본값)
+#      1.0     0.9      350     461.1    1.32     2026-09-15  <- 지금 기본
+#      1.0     2.2      350     362.8    1.04     2026-09-15  (채택 검토 중)
+#
+#   1.72 를 pitch 1.0 에 그대로 쓰면 `horizon_for(clock="wall")` 이 30% 틀린다.
+#   v_exec 2.2 를 채택하면 이 값을 1.04 로 내려야 한다.
+STRETCH_MEASURED = 1.32
 
 
 def tick_seconds(geom):
@@ -67,12 +79,19 @@ def throughput(tasks_done, horizon, geom, makespan=None,
 
 
 def horizon_for(seconds, geom, clock="plan", stretch=STRETCH_MEASURED):
-    """"420초 돌린다" -> 틱 수. **어느 420초인지**를 반드시 정해야 한다.
+    """"N초 돌린다" -> 틱 수. **어느 N초인지**를 반드시 정해야 한다.
 
-        clock="plan"  계획 시간 420 s  -> 315틱. Isaac 에서는 1.72배 더 걸린다.
-        clock="wall"  Isaac 벽시계 420 s -> 183틱. 계획으로는 244 s 짜리.
+        clock="plan"  계획 시간. Isaac 에서는 stretch 배 더 걸린다.
+        clock="wall"  Isaac 벽시계. 틱당 시간에 stretch 를 곱해서 센다.
+
+    pitch 1.0 · stretch 1.32 기준 예시:
+
+        horizon_for(350, geom, "plan")  -> 315틱  (계획 350 s = 실측 461 s)
+        horizon_for(350, geom, "wall")  -> 239틱  (실측 350 s = 계획 266 s)
 
     FMS 와 숫자를 맞출 때는 plan, 심사 영상 길이를 맞출 때는 wall 이다.
+    ``stretch`` 기본값의 조건은 STRETCH_MEASURED 옆 표를 볼 것 — 격자나
+    실행 속도를 바꿨으면 그 값도 같이 줘야 한다.
     """
     ts = tick_seconds(geom)
     if clock == "wall":
