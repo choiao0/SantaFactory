@@ -328,7 +328,8 @@ section.step > p.desc { font-size: 18px; line-height: 1.7; max-width: 760px; mar
   background: #1d1d1d; border: 1px solid #353535; image-rendering: pixelated;
 }
 /* 캔버스와 현황 패널을 나란히. 좁아지면 패널이 아래로 내려간다 */
-.rp-stage { display: grid; grid-template-columns: 1fr 210px; gap: 16px; align-items: start; }
+.rp-stage { display: grid; grid-template-columns: 1fr 210px; gap: 16px; align-items: stretch; }
+.rp-sidecol { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 .rp-side { border: 1px solid #2c2c2c; background: #141414; padding: 14px 16px; }
 .rp-side h5 {
   font: 600 14px var(--font-mono); letter-spacing: .06em; color: #8a8a86;
@@ -348,10 +349,10 @@ section.step > p.desc { font-size: 18px; line-height: 1.7; max-width: 760px; mar
   background: transparent; cursor: pointer;
 }
 .rp-time { font: 500 13px var(--font-mono); letter-spacing: .04em; color: #999; white-space: nowrap; }
-.rp-controls { display: flex; justify-content: center; gap: 12px; margin-top: 14px; }
+.rp-controls { display: flex; flex-direction: column; gap: 10px; margin-top: auto; }
 .rp-btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 8px;
-  height: 48px; min-width: 150px; padding: 0 22px; box-sizing: border-box;
+  width: 100%; height: 48px; padding: 0 16px; box-sizing: border-box;
   font: 600 17px/1 var(--font-head); letter-spacing: .02em;
 }
 .rp-btn.ghost { color: #eee; border-color: #555; }

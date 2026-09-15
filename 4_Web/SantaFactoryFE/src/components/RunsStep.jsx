@@ -150,7 +150,15 @@ function ReplayPlayer({ replay, playing, speed, onTogglePlay, onNextSpeed }) {
     <>
       <div className="rp-stage">
         <ReplayCanvas replay={replay} tick={tick} />
-        <OutboundPanel replay={replay} seconds={seconds} />
+        <div className="rp-sidecol">
+          <OutboundPanel replay={replay} seconds={seconds} />
+          <div className="rp-controls">
+            <button type="button" className="button rp-btn" onClick={onTogglePlay}>
+              {playing ? '⏸︎ 일시정지' : '▶︎ 재생'}
+            </button>
+            <button type="button" className="ghost rp-btn" onClick={onNextSpeed}>배속 ×{speed}</button>
+          </div>
+        </div>
       </div>
       {/* 전체를 담으니 건너뛸 수단이 없으면 뒤쪽은 사실상 못 본다 */}
       <div className="rp-seekrow">
@@ -165,12 +173,6 @@ function ReplayPlayer({ replay, playing, speed, onTogglePlay, onNextSpeed }) {
           aria-label="재생 위치"
         />
         <span className="rp-time">{formatDuration(seconds)} / {formatDuration(replay.seconds ?? (ticks - 1) * dt)}</span>
-      </div>
-      <div className="rp-controls">
-        <button type="button" className="button rp-btn" onClick={onTogglePlay}>
-          {playing ? '⏸︎ 일시정지' : '▶︎ 재생'}
-        </button>
-        <button type="button" className="ghost rp-btn" onClick={onNextSpeed}>배속 ×{speed}</button>
       </div>
     </>
   )
