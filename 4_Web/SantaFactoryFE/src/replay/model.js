@@ -80,6 +80,36 @@ function snapStations(scene, free) {
 }
 
 /**
+ * 바깥 벽 두께를 네 면 같게 잘라낸다. 시뮬 지도는 1 m 격자로 줄일 때 세 면에만 채움 칸이 붙어 와서
+ * 그대로 그리면 한 면만 테두리가 얇다. 벽이 없는 면이 있으면 자르지 않는다.
+ */
+function trimBorder(grid, H, W) {
+  const wallRow = (r) => {
+    for (let c = 0; c < W; c += 1) if (grid[r][c] !== '#') return false
+    return true
+  }
+  const wallCol = (c) => {
+    for (let r = 0; r < H; r += 1) if (grid[r][c] !== '#') return false
+    return true
+  }
+  let low = 0
+  while (low < H && wallRow(low)) low += 1
+  let high = 0
+  while (high < H - low && wallRow(H - 1 - high)) high += 1
+  let left = 0
+  while (left < W && wallCol(left)) left += 1
+  let right = 0
+  while (right < W - left && wallCol(W - 1 - right)) right += 1
+  const keep = Math.min(low, high, left, right)
+  if (keep === 0) return { grid, H, W, r0: 0, c0: 0 }
+  const r0 = low - keep
+  const r1 = H - (high - keep)
+  const c0 = left - keep
+  const c1 = W - (right - keep)
+  return { grid: grid.slice(r0, r1).map((row) => row.slice(c0, c1)), H: r1 - r0, W: c1 - c0, r0, c0 }
+}
+
+/**
  * @returns {{H, W, grid, T, stations, robots, meta, twoCell}} robots 는 rid → [[r, c, heading, action], …]
  */
 export function buildModel(replay) {
@@ -95,6 +125,10 @@ export function buildModel(replay) {
     ({ grid, H, W } = gridFromNodes(scene))
   }
   const free = (r, c) => r >= 0 && r < H && c >= 0 && c < W && (grid[r][c] === '.' || grid[r][c] === 'z')
+  const stations = snapStations(scene, free)
+  const trimmed = trimBorder(grid, H, W)
+  const shift = ([r, c]) => [r - trimmed.r0, c - trimmed.c0]
+  for (const key of Object.keys(stations)) stations[key] = shift(stations[key])
 
   const robots = {}
   let T = 0
@@ -102,7 +136,7 @@ export function buildModel(replay) {
     // 헤딩은 변할 때만 기록돼 오므로 틱으로 찾아 쓴다. 없으면 동쪽으로 본다
     const hd = new Map((replay.headings?.[rid] || []).map(([t, y]) => [Math.round(t), y]))
     const arr = pts.map(([t, x, y]) => {
-      const [r, c] = toRC(x, y)
+      const [r, c] = shift(toRC(x, y))
       const tt = Math.round(t)
       return [r, c, hd.has(tt) ? yawToH(hd.get(tt)) : 1]
     })
@@ -112,11 +146,11 @@ export function buildModel(replay) {
 
   const model = replay.model || scene.meta?.model || 'heading'
   return {
-    H,
-    W,
-    grid,
+    H: trimmed.H,
+    W: trimmed.W,
+    grid: trimmed.grid,
     T,
-    stations: snapStations(scene, free),
+    stations,
     robots,
     // heading 모델은 로봇이 두 칸을 차지한다 — 위치가 앞축 기준이라 그리는 위치를 뒤로 민다
     twoCell: model === 'heading',

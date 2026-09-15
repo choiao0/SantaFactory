@@ -312,14 +312,14 @@ section.step > p.desc { font-size: 18px; line-height: 1.7; max-width: 760px; mar
   background: #111; border: 1px solid #2c2c2c; padding: 18px; max-width: 920px; position: relative;
   --rp-floor: #161616; --rp-wall: #3f3f3d; --rp-picker: #2a2a28; --rp-zone: #16241d;
   --rp-pack: #e72d2d;     /* 출고 — AMR 이 토트를 내려놓는 곳 */
-  --rp-pick: #4fd18b;     /* 통로 집하 — 집으러 가는 곳 */
+  --rp-pick: #a78bfa;     /* 통로 집하 — 집으러 가는 곳 */
   --rp-in: #4dc3e8;       /* 입고 버퍼 */
-  --rp-charge: #a78bfa;   /* 충전 */
+  --rp-charge: #f5c542;   /* 충전 */
   --rp-etc: #4a4a48;      /* 나머지(검수·합포장 등) — 배경으로 둔다 */
   --rp-gridline: rgba(255,255,255,.045);
   /* 로봇 색은 하나다 — 시뮬이 상태(주행·대기·회전…)를 보내지 않아서, 색을 나누면
      아무 근거 없이 다른 상태인 척하게 된다 */
-  --rp-amr: #f5b641;
+  --rp-amr: #3ee6c1;
 }
 .board-head, .board-foot { display: flex; justify-content: space-between; color: #aaa; font: 500 13px var(--font-mono); letter-spacing: .05em; }
 .board-head { margin-bottom: 14px; }
