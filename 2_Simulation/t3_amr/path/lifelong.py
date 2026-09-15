@@ -172,13 +172,26 @@ class Kernel(object):
     """재배차 + PIBT 1틱. `history` 는 run_h 와 같은 형식이라 ADG 를 그대로 지을 수 있다."""
 
     def __init__(self, free, starts, stream, edge_cost=None, wait_cost=None,
-                 turn_cost=None, turn_ticks=None, *, zone_cells=()):
+                 turn_cost=None, turn_ticks=None, *, move_ticks=None,
+                 zone_cells=()):
         self.free = free
         H, W = free.shape
         self.edge_cost = np.ones((H, W, 4)) if edge_cost is None else edge_cost
         self.wait_cost = np.ones((H, W)) if wait_cost is None else wait_cost
         self.turn_ticks = int(turn_ticks or _pc.TURN_TICKS)
-        self.turn_cost = float(self.turn_ticks if turn_cost is None else turn_cost)
+        # ★ 틱 모델 정합 (2026-09-15, S15P21A106-211).
+        #   FMS 가 `run_h` 의 전진을 MOVE_TICKS(4) 틱으로 맞췄다. `lifelong` 은
+        #   `_after_step_h` · `_default_costs_h` 를 안 타고 아래를 자체
+        #   구현하므로 그 머지가 **여기까지 안 온다.** 맞춰 주지 않으면
+        #   도구(run_h 경로)와 운영(lifelong)이 갈린 채 둘 다 에러 없이 돈다.
+        #
+        #   turn_cost 는 **틱 수가 아니라 전진 1칸 대비 배율**이다. 전진이
+        #   1틱이던 시절에는 turn_ticks(5.0)가 곧 배율이었지만, 전진이
+        #   move_ticks 틱이 된 뒤로는 TURN_COST = TURN_TICKS/MOVE_TICKS = 1.25 다.
+        #   5.0 을 그대로 두면 거리장이 회전을 커널보다 4배 비싸게 봐서
+        #   **경로 자체가 달라진다**.
+        self.move_ticks = int(move_ticks or _pc.MOVE_TICKS)
+        self.turn_cost = float(_pc.TURN_COST if turn_cost is None else turn_cost)
         self.stream = stream
         self.states = dict(starts)
         for a, s in self.states.items():
@@ -456,9 +469,14 @@ class Kernel(object):
 
         for a in agents:
             s0, s1 = self.states[a], new[a]
-            if s1[:2] == s0[:2] and s1[2] != s0[2]:
+            if s1[:2] == s0[:2] and s1[2] != s0[2]:          # 회전 시작
                 self.busy[a] = self.turn_ticks - 1
                 self.swing[a] = swing_cells(s0[0], s0[1], s0[2], s1[2])
+            elif s1[:2] != s0[:2]:                            # 전진·후진 시작
+                # 칸은 첫 틱에 옮기고 나머지는 busy 로 제자리 — 몸 2칸이 새 칸 +
+                # 떠난 칸을 그대로 쥔다. `pibt.heading._after_step_h` 와 같다.
+                self.busy[a] = self.move_ticks - 1
+                self.swing[a] = set()
             elif self.busy[a] > 0:
                 self.busy[a] -= 1
                 if self.busy[a] == 0:
@@ -502,7 +520,7 @@ class Kernel(object):
 
 def run_lifelong(free, starts, cells_by_cat, horizon=600, seed=0, order_gap=15,
                  shifts=("in", "out", "out"), edge_cost=None, wait_cost=None,
-                 turn_cost=None, turn_ticks=None, verbose=True,
+                 turn_cost=None, turn_ticks=None, move_ticks=None, verbose=True,
                  kernel_cls=None, kernel_kw=None, zone_cells=(), order_end=None):
     """T틱까지 돌린다. **정체로 죽지 않는다** — 못 가는 로봇은 대기할 뿐이다.
 
@@ -525,6 +543,8 @@ def run_lifelong(free, starts, cells_by_cat, horizon=600, seed=0, order_gap=15,
     #   섞이지 않게 하려는 것이다.
     kkw = dict(kernel_kw or {})
     kkw.setdefault("zone_cells", tuple(zone_cells))
+    if move_ticks is not None:
+        kkw.setdefault("move_ticks", move_ticks)
     K = (kernel_cls or Kernel)(free, starts, stream, edge_cost, wait_cost,
                                turn_cost, turn_ticks, **kkw)
     history, cells_hist = [dict(K.states)], []

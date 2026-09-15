@@ -1,35 +1,35 @@
 {
  "fp": {
   "1": {
-   "actions": 1931,
-   "actions_sig": "5f8e6a4ebac9803a",
+   "actions": 2681,
+   "actions_sig": "eeb359160b3f216f",
    "acyclic": true,
-   "edges_sig": "b73db5bf21ed0075",
-   "type1": 1919,
-   "type2": 1326
+   "edges_sig": "c9e39f612f0e3d48",
+   "type1": 2669,
+   "type2": 4345
   },
   "2": {
-   "actions": 1791,
-   "actions_sig": "115bee96c430cf88",
+   "actions": 2669,
+   "actions_sig": "dc6ae765a87dc7a6",
    "acyclic": true,
-   "edges_sig": "9bb62b7523f65cb7",
-   "type1": 1779,
-   "type2": 1061
+   "edges_sig": "0eefc87ee3c303a0",
+   "type1": 2657,
+   "type2": 5596
   },
   "4": {
-   "actions": 1914,
-   "actions_sig": "381d9ffc9cf0107c",
+   "actions": 2664,
+   "actions_sig": "b2210ae040330ff6",
    "acyclic": true,
-   "edges_sig": "aa7925fed62765a7",
-   "type1": 1902,
-   "type2": 1308
+   "edges_sig": "0d32373987ccb22d",
+   "type1": 2652,
+   "type2": 5053
   }
  },
- "gap": 15,
- "horizon": 315,
+ "gap": 60,
+ "horizon": 1260,
  "mode": "lifelong",
  "n": 12,
- "pitch": 1.2,
+ "pitch": 1.0,
  "seeds": [
   1,
   2,

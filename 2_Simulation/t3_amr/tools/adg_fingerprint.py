@@ -22,7 +22,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.environ["W"], "path"))
 import pibt_core_v2                      # noqa: F401
-from pibt_core import TURN_TICKS, run_h  # noqa: E402
+from pibt_core import MOVE_TICKS, TURN_TICKS, run_h  # noqa: E402
 import isaac_drive as D                  # noqa: E402
 import pibt_scene                        # noqa: E402
 
@@ -31,12 +31,14 @@ N = int(os.environ.get("N", "12"))
 PITCH = float(os.environ.get("PIBT_PITCH", "1.2"))
 SEEDS = [int(x) for x in os.environ.get("SEEDS", "1,2,4").split(",")]
 MODE = os.environ.get("MODE", "lifelong")        # lifelong | oneshot
-# [patch_ticks] 우리 경로(step_h)에서 전진은 1틱, 회전만 TURN_TICKS(5)틱이다.
-#   -194 이후 같은 일에 드는 틱이 1.3~1.6배 늘었다(회전 빈도에 따라).
-#   지평은 그대로 두고 기준 지문을 다시 떴다 — 이 값은 비교 기준일 뿐이라
-#   절대량이 중요하지 않다.
-HORIZON = int(os.environ.get("HORIZON", "315"))
-GAP = int(os.environ.get("GAP", "15"))
+# [patch_ticks] ★ 2026-09-15 (-211) 정정. 이 주석이 「우리 경로(step_h)에서
+#   전진은 1틱」이라고 적고 있었는데 이제 아니다 — `lifelong` 을 커널 틱
+#   모델로 맞추면서 전진도 MOVE_TICKS(4) 틱이 됐다.
+#
+#   그래서 지평·주기도 4배다 (315/15 -> 1260/60). 계획 초는 그대로 350 s 다.
+#   둘 다 안 바꾸면 이 도구가 **4배 짧은 구간**의 지문을 뜨게 된다.
+HORIZON = int(os.environ.get("HORIZON", "1260"))
+GAP = int(os.environ.get("GAP", "60"))
 OUT = os.path.join(os.environ["W"], "tools", "adg_fingerprint.json")
 
 
@@ -92,7 +94,8 @@ EXIT_OK, EXIT_DIFF, EXIT_USAGE = 0, 1, 2
 def _collect():
     """시드를 전부 돌려 지문을 찍고 (지문표, 설정) 을 돌려준다."""
     print(f"모드 {MODE}  대수 {N}  pitch {PITCH}  시드 {SEEDS}")
-    print(f"지평 {HORIZON}틱 · 주기 {GAP}틱   (전진 1틱 · 회전 {TURN_TICKS}틱)\n")
+    print(f"지평 {HORIZON}틱 · 주기 {GAP}틱   "
+          f"(전진 {MOVE_TICKS}틱 · 회전 {TURN_TICKS}틱)\n")
     print(f"{'시드':>5}{'액션':>8}{'type1':>8}{'type2':>8}{'비순환':>8}"
           f"{'actions_sig':>18}{'edges_sig':>18}")
     cur = {}

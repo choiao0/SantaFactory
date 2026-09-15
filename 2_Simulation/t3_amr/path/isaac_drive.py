@@ -171,6 +171,7 @@ import numpy as np
 
 from pibt_core import (
     DIRS,
+    MOVE_TICKS,
     REAR_CELLS,
     REVERSE_FACTOR,
     TURN_TICKS,
@@ -1587,8 +1588,13 @@ class FleetController:
         #     그래서 회전이 많은 계획에서는 릴리스 하한이 늦게 잡힌다. 틱이
         #     더는 균일한 시간 단위가 아니라 상수 하나로는 못 맞춘다.
         #     `release` 는 lifelong 에서만 켜므로 지금은 감수한다.
-        self.rt = AdgRuntime(adg, tick_s=(geom.pitch / geom.v_max) if release
-                             else None)
+        # ★ 틱 모델 정합 (2026-09-15, -211). 전진 1칸이 MOVE_TICKS 틱이 되어
+        #   **틱 != 칸**이다. 릴리스 바닥은 `action.tick x tick_s` 라 틱 단위를
+        #   써야 한다. `HORIZON` 도 같이 4배가 되어야 지평(350 s)이 보존된다 —
+        #   한쪽만 바꾸면 87.5 s 나 1,400 s 가 되고 **에러는 안 난다**.
+        self.rt = AdgRuntime(
+            adg,
+            tick_s=(geom.pitch / (geom.v_max * MOVE_TICKS)) if release else None)
         self.drivers = drivers
         # chains의 인덱스 = extract_actions가 쓴 agent 순서. 명시적으로 받는다.
         self.order = list(order) if order is not None else sorted(drivers)
@@ -2088,7 +2094,7 @@ def sweep_audit(geom: RobotGeom, history, cells_hist) -> dict:
     return {"total": total, "short": short, "by_kind": missing, "examples": examples}
 
 
-def selftest(geom: RobotGeom, n_agents: int = 12, max_steps: int = 240,
+def selftest(geom: RobotGeom, n_agents: int = 12, max_steps: int = 960,
              dt: float = 1.0 / 60.0, seeds: int = 4, verbose: bool = True) -> bool:
     say = print if verbose else (lambda *a, **k: None)
     ok = True
@@ -2300,7 +2306,7 @@ def selftest(geom: RobotGeom, n_agents: int = 12, max_steps: int = 240,
 
 
 def plan_and_build(free: np.ndarray, starts: dict[int, State], goals: dict[int, Cell],
-                   geom: RobotGeom, max_steps: int = 400, **run_kw
+                   geom: RobotGeom, max_steps: int = 1600, **run_kw
                    ) -> tuple[ADG, list[int], list[dict[int, State]], dict]:
     """pibt_core로 계획하고 ADG까지 만든다. Isaac Sim 쪽에서 부를 함수.
 
@@ -2463,7 +2469,7 @@ def main() -> int:
     if args.sweep_audit:
         free = demo_map()
         starts, goals = pick_states(free, args.agents, seed=0)
-        history, cells_hist = run_h(free, starts, goals, max_steps=150)
+        history, cells_hist = run_h(free, starts, goals, max_steps=600)
         aud = sweep_audit(geom, history, cells_hist)
         print("\n" + "=" * 74)
         print("예약 칸 감사 — pibt_core의 cells_hist vs 실제 스윕")
