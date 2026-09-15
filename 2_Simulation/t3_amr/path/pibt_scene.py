@@ -251,7 +251,12 @@ def front_rule(pitch):
                       pitch=pitch)
     on, diag = bool(geo.front_swing_on()), bool(geo.front_diag_on())
     if want is not None:
-        got = "4칸" if diag else ("앞2칸" if on else "꺼짐")
+        if diag:
+            got = "4칸"
+        elif on:
+            got = "앞2칸"
+        else:
+            got = "꺼짐"
         note = ""
         if want not in ("off", "0", "no", "") and not on:
             note = f"  ★ pitch {pitch} 는 게이팅 구간이라 규칙이 꺼졌습니다"
