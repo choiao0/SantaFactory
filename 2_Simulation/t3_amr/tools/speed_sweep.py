@@ -58,40 +58,63 @@ def one(geom, free, starts, goals, seed, v, a):
     return fleet
 
 
+def sweep_one(v, a):
+    """속도·가속 한 조합 — 전 시드를 돌려 합친다.
+
+    (완주시간들, 접촉, 칸공유, 최악여유, 이어감, 완주수). ADG 가 순환이면
+    그 시드는 빠지므로, 완주시간 목록이 비면 그 조합은 잴 것이 없다는 뜻이다.
+    """
+    ts, ct, ov, gap, cr, fin = [], 0, 0, 9e9, 0, 0
+    for s in SEEDS:
+        geom, free, starts, goals = setup(MAP, N, PITCH, s, "cross")
+        f = one(geom, free, starts, goals, s, v, a)
+        if f is None:
+            continue
+        ts.append(f.stats.sim_time)
+        ct += f.stats.contact_events
+        ov += f.stats.overlap_events
+        gap = min(gap, f.stats.worst_gap)
+        cr += f.stats.carried
+        fin += bool(f.finished)
+    return ts, ct, ov, gap, cr, fin
+
+
+def print_row(v, a, agg, base):
+    """한 줄을 찍고 **기준 완주 시간**을 돌려준다.
+
+    기준은 표에서 처음 성공한 줄이다 — 그 줄부터 아래로 몇 % 줄었는지 읽는다.
+    """
+    ts, ct, ov, gap, cr, fin = agg
+    if not ts:
+        print(f"{v:>8.2f}{a:>8.2f}   (ADG 순환)")
+        return base
+    m = sum(ts) / len(ts)
+    if base is None:
+        base = m
+    g = "—" if gap > 1e8 else f"{gap:.3f}"
+    mark = "  ★접촉" if ct else ""
+    print(f"{v:>8.2f}{a:>8.2f}{m:>10.1f}{(m-base)/base*100:>9.1f}%"
+          f"{ct:>7d}{ov:>8d}{g:>12}{cr // len(ts):>8d}"
+          f"{fin:>4d}/{len(ts)}{mark}")
+    return base
+
+
+def print_header():
+    print(f"대수 {N}  pitch {PITCH}  시드 {SEEDS}")
+    print("계획 속도(geom.v_max) 는 그대로 두고 **실행 상한**만 바꾼다\n")
+    print(f"{'v_exec':>8}{'a_exec':>8}{'완주 s':>10}{'기준대비':>10}"
+          f"{'접촉':>7}{'칸공유':>8}{'최소거리 m':>12}{'이어감':>8}{'완주':>7}")
+
+
 def main():
     # 환경변수가 인자를 이기므로, 쓸어보는 동안은 비워 둔다.
     os.environ.pop("PIBT_V_EXEC", None)
     os.environ.pop("PIBT_A_EXEC", None)
-    print(f"대수 {N}  pitch {PITCH}  시드 {SEEDS}")
-    print(f"계획 속도(geom.v_max) 는 그대로 두고 **실행 상한**만 바꾼다\n")
-    print(f"{'v_exec':>8}{'a_exec':>8}{'완주 s':>10}{'기준대비':>10}"
-          f"{'접촉':>7}{'칸공유':>8}{'최소거리 m':>12}{'이어감':>8}{'완주':>7}")
+    print_header()
     base = None
     for a in AS_:
         for v in VS:
-            ts, ct, ov, gap, cr, fin = [], 0, 0, 9e9, 0, 0
-            for s in SEEDS:
-                geom, free, starts, goals = setup(MAP, N, PITCH, s, "cross")
-                f = one(geom, free, starts, goals, s, v, a)
-                if f is None:
-                    continue
-                ts.append(f.stats.sim_time)
-                ct += f.stats.contact_events
-                ov += f.stats.overlap_events
-                gap = min(gap, f.stats.worst_gap)
-                cr += f.stats.carried
-                fin += bool(f.finished)
-            if not ts:
-                print(f"{v:>8.2f}{a:>8.2f}   (ADG 순환)")
-                continue
-            m = sum(ts) / len(ts)
-            if base is None:
-                base = m
-            g = "—" if gap > 1e8 else f"{gap:.3f}"
-            mark = "  ★접촉" if ct else ""
-            print(f"{v:>8.2f}{a:>8.2f}{m:>10.1f}{(m-base)/base*100:>9.1f}%"
-                  f"{ct:>7d}{ov:>8d}{g:>12}{cr // len(ts):>8d}"
-                  f"{fin:>4d}/{len(ts)}{mark}")
+            base = print_row(v, a, sweep_one(v, a), base)
     print("\n접촉이 0 이 아닌 줄은 채택 불가다. 완주가 안 줄면 병목이 속도가")
     print("아니다 — 지금 ADG 대기가 전체의 45.7% 다.")
 

@@ -85,6 +85,29 @@ def decompose(x, y, yaw, pitch):
     return lon, lat
 
 
+def spin_segments(spin, yaw):
+    """회전 구간을 훑어 (i, j, 회전각) 을 차례로 낸다.
+
+    `[i, j)` 가 회전으로 판정된 프레임이고, 자세 인덱스로는 `i..j` 다.
+    총 회전각이 `MIN_DEG` 미만인 구간은 흔들림이라 보고 버린다.
+
+    ★ 이 루프는 전에 `turns_of` 와 `split_report` 에 **두 벌** 있었다.
+      둘이 같은 구간을 봐야 하는데 따로 두면 조용히 어긋난다.
+    """
+    i, n = 0, len(spin)
+    while i < n:
+        if not spin[i]:
+            i += 1
+            continue
+        j = i
+        while j < n and spin[j]:
+            j += 1
+        deg = abs(np.degrees(yaw[j] - yaw[i]))
+        if deg >= MIN_DEG:
+            yield i, j, deg
+        i = j + 1
+
+
 def turns_of(t, x, y, yaw):
     """회전 구간을 찾아 (종료오차, 구간최대, 회전각, 지속) 목록을 낸다."""
     yaw = np.unwrap(yaw)
@@ -95,31 +118,17 @@ def turns_of(t, x, y, yaw):
     err = off_center(x, y, PITCH) * 1000.0
 
     out = []
-    i, n = 0, len(spin)
-    while i < n:
-        if not spin[i]:
-            i += 1
-            continue
-        j = i
-        while j < n and spin[j]:
-            j += 1
-        # [i, j) 가 회전 구간. 프레임 인덱스로는 i..j
-        deg = abs(np.degrees(yaw[j] - yaw[i]))
-        if deg >= MIN_DEG:
-            # 종료: 각속도가 떨어진 뒤 SETTLE 만큼 지나서 잰다
-            k = j
-            while k + 1 < len(t) and t[k] - t[j] < SETTLE:
-                k += 1
-            out.append((err[k], err[i:j + 1].max(), deg, t[j] - t[i]))
-        i = j + 1
+    for i, j, deg in spin_segments(spin, yaw):
+        # 종료: 각속도가 떨어진 뒤 SETTLE 만큼 지나서 잰다
+        k = j
+        while k + 1 < len(t) and t[k] - t[j] < SETTLE:
+            k += 1
+        out.append((err[k], err[i:j + 1].max(), deg, t[j] - t[i]))
     return out
 
 
-def split_report(path):
-    """회전 **시작 시점** 오차를 세로/가로로 나눠 찍는다."""
-    z = np.load(path, allow_pickle=True)
-    t = np.asarray(z["t"], dtype=np.float64)
-    pose = np.asarray(z["pose"], dtype=np.float64)
+def split_rows(t, pose):
+    """회전 **시작 시점** 오차 — (세로, 가로, 구간 내 축 이동 RMS) 목록, mm."""
     yaw_all = np.unwrap(pose[:, :, 2], axis=0)
     dt = np.diff(t)
     dt[dt <= 0] = np.nan
@@ -128,29 +137,19 @@ def split_report(path):
     for a in range(pose.shape[1]):
         x, y, yw = pose[:, a, 0], pose[:, a, 1], yaw_all[:, a]
         spin = np.nan_to_num(np.abs(np.diff(yw) / dt)) > W_MIN
-        i, n = 0, len(spin)
-        while i < n:
-            if not spin[i]:
-                i += 1
-                continue
-            j = i
-            while j < n and spin[j]:
-                j += 1
-            if abs(np.degrees(yw[j] - yw[i])) >= MIN_DEG:
-                lo, la = decompose(x[i], y[i], yw[i], PITCH)
-                lons.append(lo * 1000.0)
-                lats.append(la * 1000.0)
-                # 구간 안에서 축이 실제로 움직인 양 (평균 둘레 RMS)
-                sx, sy = x[i:j + 1], y[i:j + 1]
-                wander.append(float(np.sqrt(np.mean(
-                    (sx - sx.mean()) ** 2 + (sy - sy.mean()) ** 2))) * 1000.0)
-            i = j + 1
-    if not lons:
-        return
-    slon = np.array(lons)          # 부호 있음: + 는 진행 방향으로 지나침
-    slat = np.array(lats)          # 부호 있음: + 는 진행 방향 기준 왼쪽
-    lon, lat = np.abs(slon), np.abs(slat)
-    wd = np.array(wander)
+        for i, j, _deg in spin_segments(spin, yw):
+            lo, la = decompose(x[i], y[i], yw[i], PITCH)
+            lons.append(lo * 1000.0)
+            lats.append(la * 1000.0)
+            # 구간 안에서 축이 실제로 움직인 양 (평균 둘레 RMS)
+            sx, sy = x[i:j + 1], y[i:j + 1]
+            wander.append(float(np.sqrt(np.mean(
+                (sx - sx.mean()) ** 2 + (sy - sy.mean()) ** 2))) * 1000.0)
+    return lons, lats, wander
+
+
+def print_magnitudes(lon, lat, wd):
+    """크기만 본 표. 회전이 오차를 만드는지 축 이동량과 나란히 둔다."""
     print()
     print("   회전 **시작 시점** 오차를 진행축 기준으로 나눔 (크기)")
     print(f"   {'':<20}{'중앙':>8}{'p95':>8}{'최대':>8}   mm")
@@ -161,9 +160,13 @@ def split_report(path):
     print(f"   {'회전 중 축 이동량':<20}{np.median(wd):>8.1f}"
           f"{np.percentile(wd, 95):>8.1f}{wd.max():>8.1f}   <- 구간 안 RMS")
 
-    # ── 계통인가 무작위인가 ────────────────────────────────────────────
-    #   무작위면 부호 있는 중앙값이 0 근처여야 한다. 한쪽으로 치우쳐 있으면
-    #   목표점이 틀린 것이고 **고칠 수 있다.**
+
+def print_signed(slon, slat):
+    """계통인가 무작위인가.
+
+    무작위면 부호 있는 중앙값이 0 근처여야 한다. 한쪽으로 치우쳐 있으면
+    목표점이 틀린 것이고 **고칠 수 있다.**
+    """
     print()
     print("   부호 있는 값 — 계통 오차인가")
     for nm, v in (("세로", slon), ("가로", slat)):
@@ -172,9 +175,13 @@ def split_report(path):
               f"   양수 비율 {pos:5.1f}%")
     print("     (세로 +는 진행 방향으로 지나침 · 가로 +는 왼쪽)")
 
-    # ── 가로 분포 모양 ────────────────────────────────────────────────
-    #   중앙은 0 인데 p95 가 크면 분포가 둘로 갈린 것이다. 접촉은 꼬리
-    #   사건이라 예산에 쓰는 것은 꼬리다 — 중앙값으로 안심하면 안 된다.
+
+def print_lat_hist(lat):
+    """가로 분포 모양.
+
+    중앙은 0 인데 p95 가 크면 분포가 둘로 갈린 것이다. 접촉은 꼬리 사건이라
+    예산에 쓰는 것은 꼬리다 — 중앙값으로 안심하면 안 된다.
+    """
     print()
     print("   가로 오차 분포 — 꼬리가 얼마나 두꺼운가")
     edges = [0, 5, 10, 20, 40, 60, 1e9]
@@ -187,6 +194,22 @@ def split_report(path):
     print(f"   ★ 예산에 쓰는 것은 꼬리다. 가로 p95 {np.percentile(lat, 95):.1f} ·"
           f" 최대 {lat.max():.1f} mm.")
     print("     중앙값이 작다고 안심하면 안 된다 — 접촉은 꼬리에서 난다.")
+
+
+def split_report(path):
+    """회전 **시작 시점** 오차를 세로/가로로 나눠 찍는다."""
+    z = np.load(path, allow_pickle=True)
+    t = np.asarray(z["t"], dtype=np.float64)
+    pose = np.asarray(z["pose"], dtype=np.float64)
+    lons, lats, wander = split_rows(t, pose)
+    if not lons:
+        return
+    slon = np.array(lons)          # 부호 있음: + 는 진행 방향으로 지나침
+    slat = np.array(lats)          # 부호 있음: + 는 진행 방향 기준 왼쪽
+    lat = np.abs(slat)
+    print_magnitudes(np.abs(slon), lat, np.array(wander))
+    print_signed(slon, slat)
+    print_lat_hist(lat)
 
 
 def analyse(path):

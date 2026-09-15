@@ -76,6 +76,31 @@ def _rebind(name, new, old):
     return hit
 
 
+# 이 도구는 (패치 × pitch × 시드) 표를 채우는 것이 목적이라, 한 칸이 실패해도
+# 나머지 칸은 의미가 있다. 그래서 실패를 칸 글자로 바꿔 넣는다.
+#
+# 다만 **전 칸이 똑같이 죽는 설정 오류**까지 칸에 넣으면 같은 문구가 칸 수만큼
+# 찍힐 뿐이다. 그것만 골라 그대로 올린다. 가르는 기준은 하나 —
+# "시드나 pitch 에 따라 달라질 수 있는가".
+#
+#   [올린다] 시드·pitch 와 무관하다. 지도나 인자 자체가 틀렸다
+#     pibt_scene   맵 파일을 찾을 수 없습니다
+#                  pitch 는 0.1 m 의 배수여야 합니다
+#                  어느 성분에도 스테이션이 없습니다
+#
+#   [칸에 넣는다] 칸마다 다를 수 있는 **결과**다. 표에 남아야 한다
+#     계획기       PIBT(헤딩) 정체: N스텝 내 미도달 {...}
+#     pibt_scene   도달 가능한 목표 스테이션이 없습니다   <- pitch 를 키우면 난다
+#                  robot N: 시작 ... 에서 도달 가능한 목표가 없습니다  <- 시드별
+#     battery      통행가능한 충전 도크가 없습니다 · 배터리 워치독 실패
+#
+# ★ 여기서는 앞의 도구들과 필터 방향이 **반대**다. 저쪽은 계획기 신호만
+#   골라 잡았지만, 여기서 칸을 채우는 실패는 종류가 여럿이라 그럴 수 없다.
+# ★ `RuntimeError` 는 그대로 잡는다 — `isaac_drive` 가 규칙 위반을 그것으로
+#   알리고(14곳), 그게 바로 이 표가 보려는 결과다. 죽은 절이 아니다.
+_SETUP_ERRORS = ("맵 파일", "0.1 m 의 배수", "어느 성분에도 스테이션")
+
+
 def plan_once(pitch, seed):
     """`pibt_scene.py --plan --lifelong --battery` 와 같은 경로."""
     import importlib
@@ -96,6 +121,8 @@ def plan_once(pitch, seed):
     except RuntimeError as e:
         return f"RuntimeError: {str(e)[:30]}"
     except SystemExit as e:
+        if any(k in str(e) for k in _SETUP_ERRORS):
+            raise               # 전 칸이 똑같이 죽는다 — 한 번 죽는 편이 낫다
         return f"SystemExit: {str(e)[:30]}"
 
 
