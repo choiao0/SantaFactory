@@ -37,18 +37,32 @@ docker compose -f 2_Simulation/t3_amr/deploy/compose.yml run --rm t3amr-runner r
   `docker save t3amr-runner:dev | sudo k3s ctr images import -`
 - `k8s/secret.example.yaml` 을 채워 apply → `k8s/deployment.yaml` apply.
 
-## 3. 엣지(상주 러너) — 다음 단계
+## 3. 엣지(상주 러너) — `edge/` (-215)
 
-219 로 지운 `sim_runner`(마지막 커밋 ac10c76)의 Sparkplug 코덱·NBIRTH/NDATA·NCMD 상태기계를 `t3_amr/edge/` 로 되살리고,
-프로세스 런처만 `run_record.sh` + MinIO 업로드로 바꾼다. host-orch 쪽은 `Runner/VideoUrl` 을 `artifacts.video` 에 싣는 한 줄과
-`--fms-node` 제거가 필요하다. 계약은 `3_FMS/contracts/SIM_VERIFY_CONTRACT.md` · `MQTT_CONTRACT.md` §5.
+`python -m edge` 가 Sparkplug B 노드 `sim-runner-gpu01` 로 상주한다(`entrypoint.sh edge`). 219 로 지운 `sim_runner`(ac10c76)의
+코덱(`spb.py`)·세션(`EdgeSession`)·텔레메트리·MQTT 연결부를 되살렸고, 에이전트 런처 대신 `recorder.py` 가 `run_record.sh` 하나를 띄운다.
+
+| 파일 | 역할 |
+|---|---|
+| `edge/edge.py` | paho 연결, NDEATH 유언·NBIRTH, NCMD/STATE 구독, 틱 루프, `alive` 파일(livenessProbe) |
+| `edge/runner.py` | 상태기계 IDLE → STARTING(첫 프레임 대기) → RUNNING → STOPPING(SIGINT → mp4 조립 → 업로드) → IDLE/ERROR. `Runner/VideoUrl` 메트릭 |
+| `edge/recorder.py` | Start → `RUN_TAG`·`PIBT_N`·`PIBT_SEED`·`PIBT_HORIZON`·`REPLAN` 환경으로 `run_record.sh` 기동, 촬영 감지(`캡처 ON`·프레임), 정지 사다리 |
+| `edge/upload.py` | mp4 → MinIO(`MINIO_*`) → `PUBLIC_MEDIA_BASE/<bucket>/<run_id>/<파일>` |
+| `edge/spec.py` | Start JSON 파싱. `window_s` 는 `timeout_s − 300` 에서 되돌린다 |
+
+host-orch 쪽(-215 같이): `Runner/VideoUrl` → `sim.verify.result.artifacts.video`. **EC2 host-orch 는 `--fms-node` 없이 띄운다** — t3_amr 이 자체 계획으로 돌아 fms-core 가 RUNNING 이 될 일이 없다.
+
+단위 테스트(브로커·Isaac 없이): `cd 2_Simulation && python3 -m pytest` (40건). 브로커 붙여 손으로 돌리기:
+```bash
+cd 2_Simulation/t3_amr && python3 -m edge --env-file ../../3_FMS/infra/emqx/.env -v     # MINIO_* 없으면 VideoUrl = file://…
+```
 
 | 요청 필드 | t3_amr 환경변수 | 비고 |
 |---|---|---|
-| `n_robots` | `PIBT_N` | 1..64 (씬의 충전 존 한도는 별도) |
+| `n_robots` | `PIBT_N` | 계획 폴더 `plan/traj_pibt_h/fleet_NN` 이 없으면 `REPLAN=1` 로 run_record.sh 가 먼저 계획한다(로컬, Isaac 불필요) |
 | `scenario.seed` | `PIBT_SEED` | |
-| `window_s` | `PIBT_HORIZON`(틱) | 창 길이. 초 → 틱 환산은 run 의 dt 로 |
-| `scenario.orders` | — | **못 받는다.** t3_amr 은 lifelong 자체 발주. `PIBT_ORDER_GAP` 으로 부하만 맞춘다 |
+| `timeout_s − 300` (= window_s) | `PIBT_HORIZON`(틱 = (창+60 s) ÷ 1.33 s) | 창 끝은 host-orch Stop 이 자른다. 틱 길이는 `T3AMR_TICK_S` |
+| `scenario.orders` | — | **못 받는다.** t3_amr 은 lifelong 자체 발주. `PIBT_ORDER_GAP` 으로 부하만 맞춘다(후속) |
 
 ## 4. 아직 안 정한 것
 - 검증 런에서 fms-core 를 뺄지(권장, 영상이 목표) — 빼면 host-orch 를 `--fms-node` 없이 띄운다.
