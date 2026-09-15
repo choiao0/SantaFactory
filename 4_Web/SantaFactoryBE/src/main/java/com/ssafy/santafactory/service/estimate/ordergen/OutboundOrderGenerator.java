@@ -5,6 +5,7 @@ import com.ssafy.santafactory.entity.store.Product;
 import com.ssafy.santafactory.entity.warehouse.Warehouse;
 import com.ssafy.santafactory.repository.ProductRepository;
 import com.ssafy.santafactory.service.estimate.EstimateProperties;
+import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -63,6 +64,12 @@ public class OutboundOrderGenerator {
     private final ProductRepository productRepository;
     private final OrderRuleProfileLoader profileLoader;
     private final EstimateProperties properties;
+
+    /** 상한 설정 오류(상한 이하 수량 값 없음)는 첫 견적 요청의 500 이 아니라 부팅 실패로 드러나게 한다. */
+    @PostConstruct
+    void validateLineQtyCap() {
+        capQuantities(profileLoader.getProfile().quantity(), properties.maxLineQty());
+    }
 
     public List<SimulationRequest.Outbound> generate(Warehouse warehouse, long horizonSeconds, int orderCount, long seed) {
         List<Product> products = productRepository.findAllWithStoreAndRack();
@@ -152,7 +159,7 @@ public class OutboundOrderGenerator {
         int kept = (int) java.util.Arrays.stream(values).filter(v -> v <= maxLineQty).count();
         if (maxLineQty < 1 || kept == 0) {
             throw new IllegalStateException(String.format(
-                    "estimate.max-line-qty=%d 아래에 수량 값이 없음 (프로파일 최소 %d)", maxLineQty, java.util.Arrays.stream(values).min().orElse(0)));
+                    "estimate.max-line-qty=%d 이하인 수량 값이 프로파일에 없음 (최소 %d)", maxLineQty, java.util.Arrays.stream(values).min().orElse(0)));
         }
         int[] cappedValues = new int[kept];
         double[] cappedWeights = new double[kept];

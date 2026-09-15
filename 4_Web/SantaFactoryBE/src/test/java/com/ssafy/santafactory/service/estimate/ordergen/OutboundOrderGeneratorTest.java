@@ -163,6 +163,7 @@ class OutboundOrderGeneratorTest {
 
     /**
      * 실제 프로파일(order_rules.json) 회귀: 상한 10 이면 줄 수량 최대 10, 남는 분포의 평균은 2.13 (상한 없이 3.52).
+     * 상한값 10 이 실제로 나오는지도 본다 — 경계를 &lt; 로 잘못 쓰면 평균 구간만으로는 못 잡는다.
      * 한 줄이 최대 2토트라 24토트 안전핀은 발동하지 않는다.
      */
     @Test
@@ -173,8 +174,9 @@ class OutboundOrderGeneratorTest {
 
         List<Integer> quantities = orders.stream().flatMap(o -> o.lines().stream()).map(SimulationRequest.Line::qty).toList();
         assertThat(quantities).allMatch(qty -> qty >= 1 && qty <= 10);
+        assertThat(quantities).contains(10);                                  // 상한값 자체는 뽑힌다 (< 가 아니라 <=)
         double mean = quantities.stream().mapToInt(Integer::intValue).average().orElseThrow();
-        assertThat(mean).isBetween(1.9, 2.4);
+        assertThat(mean).isBetween(2.0, 2.3);                                 // 기대 2.13, 시드 고정이라 결정적
         assertThat(orders).allSatisfy(o -> assertThat(OutboundOrderGenerator.orderTotes(o.lines(), 8)).isLessThanOrEqualTo(24));
     }
 
@@ -208,14 +210,24 @@ class OutboundOrderGeneratorTest {
                     .hasMessageContaining("24");
         }
 
-        /** 참조 통계표는 12 에서 다스 봉우리가 서는 도매 꼬리를 품고 있다 — 상한 위 값은 추첨 대상에서 아예 뺀다. */
+        /** 참조 통계표는 12 에서 다스 봉우리가 서는 도매 꼬리를 품고 있다 — 상한 위 값은 추첨 대상에서 아예 뺀다. 상한값 자체는 남는다. */
         @Test
         void capQuantities_drops_values_above_the_cap_and_keeps_weights() {
             OrderRuleProfile.Histogram capped = OutboundOrderGenerator.capQuantities(
-                    new OrderRuleProfile.Histogram(new int[]{1, 2, 12, 24}, new double[]{5, 3, 2, 1}), 10);
+                    new OrderRuleProfile.Histogram(new int[]{1, 2, 10, 12, 24}, new double[]{5, 3, 4, 2, 1}), 10);
 
-            assertThat(capped.values()).containsExactly(1, 2);
-            assertThat(capped.weights()).containsExactly(5.0, 3.0);
+            assertThat(capped.values()).containsExactly(1, 2, 10);
+            assertThat(capped.weights()).containsExactly(5.0, 3.0, 4.0);
+        }
+
+        /** 잘못된 상한은 첫 견적이 아니라 부팅 때 걸린다. */
+        @Test
+        void startup_validation_rejects_a_cap_below_every_profile_value() {
+            when(profileLoader.getProfile()).thenReturn(profileWithQuantities(new int[]{12, 24}, new double[]{2, 1}));
+
+            assertThatThrownBy(() -> generator.validateLineQtyCap())
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("max-line-qty=10");
         }
 
         /** 상한 아래 값이 하나도 없으면 설정 오류 — 조용히 넘기지 않는다. */
