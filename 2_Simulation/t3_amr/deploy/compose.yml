@@ -20,9 +20,7 @@ services:
     volumes:
       - ov-cache:/cache/ov            # Kit 셰이더 캐시 — 첫 기동 수 분, 이후 재사용
       - ./data:/data                  # out(mp4·프레임) · state(bdSeq · 런 로그)
-    ports:
-      - "49100:49100/tcp"             # WebRTC 시그널링 (관전용, 없어도 촬영은 된다)
-      - "47998:47998/udp"
+    # WebRTC 관전 포트는 기본으로 열지 않는다(녹화에 불필요, 캠퍼스망 UDP 차단). 필요하면 ports: ["49100:49100/tcp", "47998:47998/udp"]
     deploy:
       resources:
         reservations:

@@ -28,6 +28,7 @@ docker run --rm --gpus all t3amr-runner:dev check                               
 docker compose -f 2_Simulation/t3_amr/deploy/compose.yml run --rm t3amr-runner record 3        # 3대 녹화 1회 → deploy/data/out/*.mp4
 ```
 첫 실행은 셰이더 캐시(볼륨 `ov-cache`)를 만드느라 몇 분 더 걸린다.
+컨테이너는 uid 1000 `runner` 로 돈다 — bind mount 하는 `deploy/data` 는 호스트 계정(uid 1000) 소유면 된다. 다른 uid 면 소유권을 1000 으로 맞춘다.
 
 ## 2. k3s
 

@@ -63,10 +63,16 @@ RUN mkdir -p /home/runner /cache/ov /data/out /data/stage /data/logs /data/state
     && ln -s /cache/ov /home/runner/.cache \
     && for d in out stage logs; do rm -rf "/app/t3_amr/$d"; ln -s "/data/$d" "/app/t3_amr/$d"; done
 
-# WebRTC 라이브스트림(촬영에 뷰포트가 필요하다). 클라이언트가 안 붙어도 촬영은 된다.
+# 루트로 돌리지 않는다. uid 1000 = 호스트 개발 계정과 같게 두어 bind mount(./data)·hostPath 소유권이 맞는다.
+# plan/·v2/ 는 REPLAN 이 쓰므로 /app/t3_amr 전체를 runner 소유로.
+RUN useradd -m -u 1000 -s /bin/bash runner \
+    && chown -R runner:runner /home/runner /cache /data /app/t3_amr
+
+# WebRTC 라이브스트림(촬영에 뷰포트가 필요하다). 클라이언트가 안 붙어도 촬영은 된다 — 포트는 문서용이고 기본으로 열지 않는다.
 EXPOSE 49100/tcp 47998/udp
 
-COPY deploy/entrypoint.sh /app/entrypoint.sh
+COPY --chown=runner:runner deploy/entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
+USER runner
 ENTRYPOINT ["/usr/bin/tini", "--", "/app/entrypoint.sh"]
 CMD ["edge"]
