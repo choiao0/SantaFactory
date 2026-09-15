@@ -143,26 +143,42 @@ def main():
     for (i, j) in pairs:
         ci = corners(P[:, i, 0], P[:, i, 1], P[:, i, 2])
         cj = corners(P[:, j, 0], P[:, j, 1], P[:, j, 2])
-        # 대충 걸러내고 (축 거리) 가까운 후보만 정밀 계산
+        # ★ 후보를 **거리 문턱**으로 고른다. 예전에는 축 거리 상위 200 프레임만
+        #   봤는데, 축이 멀어도 헤딩이 직각이면 꼬리가 더 가까울 수 있어
+        #   진짜 최소를 놓쳤다 (FleetStats worst_gap 26.7 mm 를 40.5 로 읽었다).
+        #   차체 반대각 = hypot(max(front,rear), 폭/2) 이므로 그 두 배 + 여유
+        #   안쪽이면 전부 정밀 계산한다.
+        reach = 2.0 * np.hypot(max(FRONT, REAR), WIDTH / 2.0) + 0.05
         d0 = np.hypot(P[:, i, 0] - P[:, j, 0], P[:, i, 1] - P[:, j, 1])
-        cand = np.argsort(d0)[:200]
+        cand = np.flatnonzero(d0 < reach)
         for f in cand:
             g = sat_gap(ci[f], cj[f])
             rows.append((g, f, i, j))
     rows.sort()
+    # ★ 회전 중인 프레임은 차선 기준 분해가 **성립하지 않는다.** 헤딩이 축에서
+    #   45도 벗어나 있으면 (θ+π/4)%(π/2)−π/4 가 0.77 rad 이 나오고 「꼬리 이탈」
+    #   이 830 mm 로 찍힌다 — 그건 이탈이 아니라 그냥 비스듬히 선 것이다.
+    #   (2026-09-15 v1.6 판에서 실제로 그렇게 나왔다.) 간격(SAT)은 헤딩과
+    #   무관하게 유효하므로 그 열만 믿고, 나머지는 '회전' 으로 표시한다.
+    W = np.abs(np.diff(np.unwrap(P[:, :, 2], axis=0), axis=0)) / dt   # [F-1, N]
     print(f"   {'간격mm':>8}{'t':>8}  쌍      "
           f"{'요잉a':>7}{'요잉b':>7}   {'축a':>6}{'축b':>6}  {'꼬리a':>7}{'꼬리b':>7}  mm")
     for g, f, i, j in rows[:a.top]:
-        info = []
+        cells = []
         for k in (i, j):
+            turning = f < len(W) and W[f, k] > 0.15
             th = P[f, k, 2]
             d = (th + np.pi / 4) % (np.pi / 2) - np.pi / 4
+            if turning or abs(d) > 0.25:      # 축에서 14도 넘게 틀어짐 = 회전 중
+                cells.append((f"{d:>7.3f}", "  회전", "   회전"))
+                continue
             horiz = abs(np.cos(th)) > abs(np.sin(th))
             axk = lane_off(P[f, k, 1] if horiz else P[f, k, 0], PITCH)
-            info.append((d, axk * 1000, (axk + REAR * abs(np.sin(d))) * 1000))
-        (da, aa, ta), (db, ab, tb) = info
+            cells.append((f"{d:>7.3f}", f"{axk*1000:>6.1f}",
+                          f"{(axk + REAR*abs(np.sin(d)))*1000:>7.1f}"))
+        (ya, aa, ta), (yb, ab, tb) = cells
         print(f"   {g*1000:>8.1f}{t[f]:>8.1f}  {i:>2}-{j:<2}   "
-              f"{da:>7.3f}{db:>7.3f}   {aa:>6.1f}{ab:>6.1f}  {ta:>7.1f}{tb:>7.1f}")
+              f"{ya}{yb}   {aa}{ab}  {ta}{tb}")
 
     print("\n  읽는 법")
     print("   · '꼬리 최대'가 '축 최대'보다 크게 높으면 예산표가 축만 보고")
