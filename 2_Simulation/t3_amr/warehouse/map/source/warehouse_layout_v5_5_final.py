@@ -41,6 +41,8 @@
 # ============================================================
 import time
 
+import os
+
 import ezdxf
 from ezdxf import path
 import numpy as np
@@ -53,6 +55,9 @@ from matplotlib import font_manager
 # ------------------------------------------------------------
 # 설정
 # ------------------------------------------------------------
+# -219 (2026-09-15): 어디서 실행하든 이 파일이 있는 source/ 안에서 DXF 를 읽고 산출물을 쓴다 —
+# 상위 warehouse/map(실사용 맵)을 실수로 덮어쓰지 않게. 적용하려면 산출물을 손으로 상위로 옮긴다.
+os.chdir(os.path.dirname(os.path.abspath(__file__)))
 DXF_FILE = "Factory_Building_Design.dxf"
 CELL = 100                                   # mm/cell (0.1 m)
 X0, X1, Y0, Y1 = 660_000, 775_000, 782_000, 888_000   # 크롭 (mm)

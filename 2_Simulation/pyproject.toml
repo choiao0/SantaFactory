@@ -1,7 +1,5 @@
-[tool.pytest.ini_options]
-testpaths = ["t3_amr"]
-pythonpath = ["."]
-addopts = "-q"
+# pytest 설정 없음 — 2_Simulation 에는 pytest 로 수집되는 테스트가 없다(-219 로 tests/ 삭제).
+# t3_amr/tools 의 test_*.py 는 main() 으로 도는 실측 스크립트다.
 
 [tool.ruff]
 line-length = 120
