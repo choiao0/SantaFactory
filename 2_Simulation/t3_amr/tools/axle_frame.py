@@ -127,7 +127,8 @@ def _report_fit(rows):
     rms0 = np.array([r[3] for r in rows]) * 1000.0
     expl = np.array([r[4] for r in rows]) * 100.0
 
-    print(f"  회전 {len(rows)}개  ·  로봇 {len({r[0] for r in rows})}대")
+    print(f"  회전 {len(rows)}개  ·  로봇 {len({r[0] for r in rows})}대"
+          f"  ·  pitch {PITCH}")
     print()
     print("  1) 원 모델이 궤적을 얼마나 설명하나")
     print(f"     delta 없이 흩어짐 (기준)   RMS 중앙 {np.median(rms0):7.1f} mm")

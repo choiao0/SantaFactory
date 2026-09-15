@@ -20,13 +20,21 @@
 분류는 measure_turns.py 와 같다 (30 Hz 자세열 → 회전/전진/정지).
 """
 import argparse
+import os
 import sys
 from collections import Counter
 
 import numpy as np
 
-TICK_S = 1.0 / 0.75
-V_MAX, W_MAX, CELL = 0.90, 1.80, 1.2
+# ★ 격자를 **환경변수로 받는다** (2026-09-15) — measure_turns.py 와 같은 이유.
+#   CELL 이 하드코딩이면 칸 수를 거리/CELL 로 세는 곳(전진 구간 길이)이 전부
+#   틀린다. TICK_S 도 1.0/0.75 가 따로 박혀 있었는데, 이건 1.2/0.90 과 우연히
+#   같아서 pitch 1.2 에서만 맞았다. 이제 격자에서 파생시킨다.
+CELL = float(os.environ.get("PITCH",
+             os.environ.get("PIBT_PITCH", "1.2")))   # m  계획 격자 pitch
+V_MAX = float(os.environ.get("PIBT_V_PLAN", "0.90"))  # m/s  **계획** 속도
+W_MAX = 1.80                 # rad/s
+TICK_S = CELL / V_MAX        # 계획 틱 — 격자를 따라간다
 
 
 def segments(mask, min_len, bridge):
@@ -69,7 +77,9 @@ def main():
     F, N, _ = P.shape
     dt = float(np.median(np.diff(t)))
     print(f"[in] {a.npz}  {F} 표본 · {N}대 · {t[-1]-t[0]:.1f} s · {1/dt:.0f} Hz")
-    print(f"     틱 {TICK_S:.4f}s · 이론: 전진 1칸 1.00틱 · 회전 90도 0.65틱\n")
+    print(f"     틱 {TICK_S:.4f}s · 칸 {CELL} m · v_max {V_MAX} m/s · "
+          f"이론: 전진 1칸 1.00틱 · "
+          f"회전 90도 {(np.pi/2)/W_MAX/TICK_S:.2f}틱\n")
 
     gap_tm, gap_mt, gap_mm = [], [], []      # 전환 사이 정지 시간
     seq_tm = []                              # 회전시작 → 전진끝 총 시간
