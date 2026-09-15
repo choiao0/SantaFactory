@@ -47,6 +47,28 @@ DIRS = ((-1, 0), (0, 1), (1, 0), (0, -1))    # pibt.geometry 와 같은 순서
 HEADING_OFFSET = int(os.environ.get("HEADING_OFFSET", "2"))
 
 
+def load_npz(path):
+    """`np.load` + **`$OUT` 이 비어서 `/` 로 간 경우**를 이름 붙여 잡는다.
+
+    `PITCH=1.0 python tools/x.py $OUT/rec_s2.npz` 를 `source paths.sh` 안 한
+    셸에서 돌리면 `$OUT` 이 빈 문자열이라 경로가 `/rec_s2.npz` 가 된다.
+    2026-09-15 하루에 세 번 걸렸다 (기록 때 한 번은 20분짜리 주행을 기록
+    없이 돌렸다). `FileNotFoundError: '/rec_s2.npz'` 만 봐서는 원인이 안
+    보이므로 여기서 이름을 붙인다. `live_pibt._rec_setup` 도 같은 안내를 한다.
+    """
+    if not os.path.exists(path):
+        hint = ""
+        if os.path.dirname(path) == os.sep:
+            hint = ("\n  ★ 경로가 '/' 에서 시작합니다 — `$OUT` 이 비어서 그리 간"
+                    " 것이 흔합니다.\n"
+                    "     `source paths.sh` 를 **이 셸에서** 먼저 하거나"
+                    " 절대경로를 주세요.\n"
+                    "     (`run_record.sh` 는 자식 셸에서 source 하므로 부모"
+                    " 셸의 $OUT 은 안 채워집니다)")
+        raise SystemExit(f"[contact_frame] 없는 파일: {path!r}{hint}")
+    return np.load(path, allow_pickle=True)
+
+
 def cell_of(x, y, pitch):
     """world (x, y) -> 격자 (r, c). origin = pitch/2 규약 (칸 **중심**)."""
     return int(round(y / pitch - 0.5)), int(round(x / pitch - 0.5))
@@ -105,7 +127,7 @@ def main():
     ap.add_argument("--back", type=int, default=20, help="최소 프레임 앞으로 몇 프레임")
     a = ap.parse_args()
 
-    z = np.load(a.npz, allow_pickle=True)
+    z = load_npz(a.npz)
     t = np.asarray(z["t"], dtype=np.float64)
     P = np.asarray(z["pose"], dtype=np.float64)
     n = P.shape[1]
