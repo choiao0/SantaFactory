@@ -82,6 +82,12 @@ BATTERY = os.environ.get("BATTERY", "1") not in ("0", "", "no", "off")
 #   `"dispatch": "robot_first"` 가 찍힌 판이 있다. 배차가 다르면 태스크 배정이
 #   달라지고 경로가 통째로 달라진다 — 순환 여부를 가를 수 있는 축이다.
 DISPATCH = os.environ.get("PIBT_DISPATCH", "fms")
+# ★ 이 값은 여기서 안 쓰지만 **반드시 찍는다** (2026-09-15). `pibt_scene.front_rule`
+#   은 이 변수가 없으면 `geo.configure()` 를 아예 안 불러 앞 칸 규칙이 꺼진 채
+#   돈다. 그런데 실제 주행은 `run_record.sh:187` 이 기본을 `4` 로 내보내 **켜고**
+#   돈다. 그걸 모르고 돌렸다가 pitch 1.0 12시드 전부 순환을 보고 격자 탓을 했다.
+#   결과를 읽을 때 규칙 상태를 모르면 그 오독이 반복된다.
+FRONT_RULE = os.environ.get("PIBT_FRONT_RULE", "(안 줌 → 규칙 꺼짐)")
 
 # `off` 는 환경변수를 **안 주는** 기준 판이다 (= 로더가 한 줄도 안 돈다 = FMS 기본).
 # 기본 목록에 넣어 두는 이유: 오버라이드 경로 자체가 무해한지 매 판 같이 보이려고.
@@ -204,6 +210,8 @@ def main():
     print(f"REVERSE_FACTOR 스윕 — n {N} · pitch {PITCH} · 지평 {HORIZON}틱"
           f" · 주기 {GAP} · 배터리 {'켬' if BATTERY else '끔'}"
           f" · 배차 {DISPATCH} · 시드 {SEEDS}")
+    print(f"  앞 칸 규칙 PIBT_FRONT_RULE={FRONT_RULE}"
+          "   ← 주행(run_record.sh)은 4 로 돈다")
     print("  ★ FMS 기본은 3.0 이다. 나머지는 **합의 전 실험값**이다.")
 
     table = {}
