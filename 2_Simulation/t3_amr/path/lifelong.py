@@ -186,6 +186,8 @@ class Kernel(object):
         self.rb = {a: {"state": IDLE, "goal": None, "task": None,
                        "home": s[:2], "svc": 0} for a, s in starts.items()}
         self.waiting = []
+        # agent -> 태스크를 받은 틱들 (-211, 릴리스 바닥용. `step` 이 채운다)
+        self.task_start = {}
         self._dm = {}                       # 목표별 거리표 캐시 — 재배차가 잦아 필수
         self.busy = {a: 0 for a in starts}
         self.swing = {a: set() for a in starts}
@@ -404,7 +406,20 @@ class Kernel(object):
     def step(self, t):
         for task in self.stream.arrivals(t):
             self.waiting.append(task)
+
+        # ★ 태스크가 **배정된 틱**을 기록한다 (-211). ADG 실행기의 릴리스 바닥이
+        #   이걸 본다 — "주문이 오기 전에 출발하지 않는다" 는 태스크의 **첫
+        #   동작에만** 필요한 제약인데, 지금은 모든 동작에 걸려 로봇 시간의
+        #   21.8% 가 계획 시각 대기로 사라진다 (2026-09-15 실측).
+        #
+        #   ★ `dispatch` 안이 아니라 여기서 **전이를 감지**한다. 배차 정책이
+        #     둘(`fms` · `robot_first`)이고 `dispatch.py` 가 갈아끼우므로,
+        #     정책 안에 손을 대면 한쪽만 기록되거나 패리티가 깨진다.
+        _idle = [a for a, r in self.rb.items() if r["task"] is None]
         self.assign(t)
+        for a in _idle:
+            if self.rb[a]["task"] is not None:
+                self.task_start.setdefault(a, []).append(t)
 
         self._send_freed_home()          # 남은 FREED 는 홈으로
 
@@ -524,6 +539,8 @@ def run_lifelong(free, starts, cells_by_cat, horizon=600, seed=0, order_gap=15,
             "tasks_done": K.done, "waiting": len(K.waiting),
             "windows": stream.windows, "order_end": stream.order_end,
             "parked_end": parked,
+            # agent -> 태스크를 받은 틱들. `isaac_drive` 가 릴리스 바닥에 쓴다 (-211)
+            "task_start": {a: list(v) for a, v in K.task_start.items()},
             "busy_robots": sum(1 for r in K.rb.values() if r["state"] != IDLE)}
     if hasattr(K, "report"):
         info.update(K.report())
