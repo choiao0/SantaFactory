@@ -32,6 +32,9 @@ import java.time.Duration;
  * @param verifyWindow      물리 검증(Isaac) 창 길이. SIM_VERIFY_CONTRACT.md 기본값(600s)과 같다
  * @param maxLineQty        출고 주문 한 줄(상품 하나)의 수량 상한 — 개인 온라인몰 1회 구매 기준(S15P21A106-146).
  *                          참조 통계표의 도매 꼬리(12·24·36·48… 다스·케이스 봉우리)를 추첨 대상에서 뺀다
+ * @param amrCapacity       로봇이 한 왕복에 싣는 토트 수(1~6, 시뮬 {@code --capacity}). 안 보내면 시뮬 기본 1 로 돌아
+ *                          처리율이 3~4배 비관적으로 나온다 — 6,000건/6h 20대: 1토트 283건/h vs 6토트 1,000건/h (S15P21A106-218).
+ *                          로봇 시드의 capacity(200)는 단위가 달라 쓰지 않는다
  * @param exportReplay      run 마다 앞 구간 궤적을 함께 받을지 (S15P21A106-205). 워커 시간이 run 당 약
  *                          35 % 늘고 견적당 약 1 MB 를 저장한다. 끄면 대수별 재생 화면이 비어 보인다
  */
@@ -49,7 +52,8 @@ public record EstimateProperties(
         @DefaultValue("out") String shifts,
         @DefaultValue("true") boolean exportReplay,
         @DefaultValue("10m") Duration verifyWindow,
-        @DefaultValue("10") int maxLineQty
+        @DefaultValue("10") int maxLineQty,
+        @DefaultValue("6") int amrCapacity
 ) {
 
     /** 대수에 비례하는 1대당 비용 — 단가 + 구축·설치비. 충전기는 대수의 계단 함수라 여기 넣지 않는다. */

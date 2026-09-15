@@ -56,7 +56,7 @@ import static org.mockito.Mockito.when;
 class EstimateServiceTest {
 
     private static final EstimateProperties PROPS =
-            new EstimateProperties(15_000_000L, 5_000_000L, 500_000L, 28, 6, 4, 1, Duration.ofMinutes(30), Duration.ofHours(6), "out", false, Duration.ofMinutes(10), 10);
+            new EstimateProperties(15_000_000L, 5_000_000L, 500_000L, 28, 6, 4, 1, Duration.ofMinutes(30), Duration.ofHours(6), "out", false, Duration.ofMinutes(10), 10, 6);
 
     @Mock
     EstimateRepository estimateRepository;
@@ -223,6 +223,8 @@ class EstimateServiceTest {
         assertThat(sent.shifts()).isEqualTo("out");                        // 출고 전용 — 팀 결정(2026-09-11) 견적 부하 = 출고만 (S15P21A106-214)
         assertThat(sent.inboundGapS()).isEqualTo(48.0);                   // 600건 / 8시간
         assertThat(sent.outboundGapS()).isEqualTo(22.5);                  // 800건 / 5시간
+        // 왕복당 토트 수. 안 보내면 시뮬 기본 1 로 돌아 처리율이 3~4배 비관적으로 나온다 (S15P21A106-218)
+        assertThat(sent.amr().capacity()).isEqualTo(6);
     }
 
     @Test

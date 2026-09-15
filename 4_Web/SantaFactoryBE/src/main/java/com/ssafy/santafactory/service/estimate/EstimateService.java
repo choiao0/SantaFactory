@@ -156,7 +156,8 @@ public class EstimateService {
      * <p>도착 간격은 창고의 <b>작업 시간 기준</b>으로 계산한다 — 하루 물량을 실제 작업창으로 나눈
      * 도착률이다(입고 600건 / 8시간 → 48초). 시간만 줄이고 간격은 유지하므로 부하 밀도가 보존된다.
      *
-     * <p>AMR 사양(속도·배터리·소모량)은 비워 둔다 — 시뮬이 자체 기본값을 쓴다. 출고 주문은 이제 백엔드가
+     * <p>AMR 사양(속도·배터리·소모량)은 비워 둔다 — 시뮬이 자체 기본값을 쓴다. 단 왕복당 토트 수({@code capacity})는
+     * 반드시 보낸다 — 시뮬 기본값이 1 이라 비우면 견적이 3~4배 비관적으로 나온다 (S15P21A106-218). 출고 주문은 이제 백엔드가
      * 생성한 목록을 그대로 싣는다({@code outboundOrderGenerator}) — 대수마다 다시 생성하지 않고 호출자가
      * 넘긴 같은 리스트를 재사용해야 대수별 비교가 의미 있다. 입고는 여전히 간격(gap) 기반이다.
      */
@@ -171,7 +172,7 @@ public class EstimateService {
                 toInt(warehouse.getInboundAvg()),
                 toInt(warehouse.getOutboundAvg()));
         SimulationRequest.Amr amr =
-                new SimulationRequest.Amr(0, null, null, null, null, null, null, null);
+                new SimulationRequest.Amr(0, null, null, null, null, null, null, properties.amrCapacity());
         return new SimulationRequest(
                 baseRunId,
                 FIXED_SEED,
