@@ -25,7 +25,7 @@ import os
 import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-V58_DIR = os.path.normpath(os.path.join(HERE, "..", "..", "2_Simulation", "t3_warehouse_map", "map"))
+V58_DIR = os.path.normpath(os.path.join(HERE, "..", "..", "2_Simulation", "t3_amr", "warehouse", "map"))   # -219: 옛 t3_warehouse_map 삭제
 OBSTACLE_VALUES = (1, 2, 5, 6)     # map_loader.OBSTACLE_VALUES 와 동일 (1=구조물·기둥 2=랙 5=컨베이어 6=바닥 파렛트)
 
 

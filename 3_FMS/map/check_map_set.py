@@ -58,4 +58,4 @@ def main(set_dir):
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1] if len(sys.argv) > 1 else os.path.join(HERE, "..", "..", "2_Simulation", "t3_warehouse_map", "map")))
+    sys.exit(main(sys.argv[1] if len(sys.argv) > 1 else os.path.join(HERE, "..", "..", "2_Simulation", "t3_amr", "warehouse", "map")))
