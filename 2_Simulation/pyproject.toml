@@ -1,5 +1,5 @@
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["t3_amr"]
 pythonpath = ["."]
 addopts = "-q"
 
