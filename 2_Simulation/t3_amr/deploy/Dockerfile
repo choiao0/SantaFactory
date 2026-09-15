@@ -32,7 +32,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get clean && rm -r /var/lib/apt/lists
 
 # venv — install.sh 의 $HOME/khs/venv 에 해당. 경로만 /opt/venv 로 고정한다.
-ENV VE=/opt/venv
+# VIRTUAL_ENV 를 박아 두어야 run_record.sh 가 $HOME/khs/venv 를 source 하려 들지 않는다 (run_record.sh:53).
+ENV VE=/opt/venv VIRTUAL_ENV=/opt/venv
 RUN python${PY} -m venv $VE && $VE/bin/pip install -q --upgrade pip setuptools wheel
 ENV PATH=$VE/bin:$PATH
 
