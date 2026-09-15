@@ -4,6 +4,7 @@ import com.ssafy.santafactory.dto.simulation.SimulationRequest;
 import com.ssafy.santafactory.entity.store.Product;
 import com.ssafy.santafactory.entity.warehouse.Warehouse;
 import com.ssafy.santafactory.repository.ProductRepository;
+import com.ssafy.santafactory.service.estimate.EstimateProperties;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -30,6 +31,10 @@ import java.util.stream.IntStream;
  * <p>상품 인기도(popularity)는 {@code order_rules.json}의 누적곡선을, 매장 가중치(store factor)는
  * {@code Store.outboundCount}를 쓴다. ABC 등급은 원본에서도 진단용일 뿐 추첨에 안 쓰여 포팅하지 않는다.
  *
+ * <p>개인 소비자 창고 전제(S15P21A106-146): 한 줄 수량은 {@code estimate.max-line-qty}(기본 10) 아래만 뽑는다 —
+ * 참조 통계표의 도매 꼬리를 추첨 대상에서 아예 뺀다({@link #capQuantities}). 주문당 토트 합 24 상한은 그 위의
+ * 안전핀으로 남는다.
+ *
  * <p>생성 직후 시각은 하루 전체([0, 86400)초, 프로파일의 참조 창고 분포)다. DES는 {@code ordered_at_s}를
  * horizon 시작 기준 상대 초로 읽어 horizon 밖은 버리므로, 그대로 보내면 대부분 버려진다(파이썬 쪽
  * {@code slice_orders.rescale_orders}/{@code slice_orders}와 정확히 같은 문제) — 그래서 창고의 실제
@@ -48,7 +53,8 @@ public class OutboundOrderGenerator {
     static final int TOTE_UNITS = 8;
     /**
      * 주문 하나의 토트 합계 상한 — 시뮬 {@code --max-order-totes} 기본값({@code order_stream.MAX_ORDER_TOTES})과
-     * 같다. 개인 소비자 창고 전제라 업자(팔레트) 주문은 없다.
+     * 같다. 개인 소비자 창고 전제라 업자(팔레트) 주문은 없다. 줄 수량 상한(기본 10 → 한 줄 최대 2토트)이
+     * 먼저 걸러 주므로 실제로는 안전핀이다 — 같은 랙 줄이 12개 넘게 겹쳐야 닿는다.
      */
     static final int MAX_ORDER_TOTES = 24;
     /** 상한을 넘는 주문의 수량 재추첨 한도 — 파이썬 원본과 같은 값. */
@@ -56,6 +62,7 @@ public class OutboundOrderGenerator {
 
     private final ProductRepository productRepository;
     private final OrderRuleProfileLoader profileLoader;
+    private final EstimateProperties properties;
 
     public List<SimulationRequest.Outbound> generate(Warehouse warehouse, long horizonSeconds, int orderCount, long seed) {
         List<Product> products = productRepository.findAllWithStoreAndRack();
@@ -81,8 +88,9 @@ public class OutboundOrderGenerator {
 
         List<Integer> lineValues = box(profile.lineCount().values());
         List<Double> lineWeights = box(profile.lineCount().weights());
-        List<Integer> qtyValues = box(profile.quantity().values());
-        List<Double> qtyWeights = box(profile.quantity().weights());
+        OrderRuleProfile.Histogram quantity = capQuantities(profile.quantity(), properties.maxLineQty());
+        List<Integer> qtyValues = box(quantity.values());
+        List<Double> qtyWeights = box(quantity.weights());
         List<Integer> minuteIndices = IntStream.range(0, 1440).boxed().toList();
         List<Double> minuteWeights = java.util.Arrays.stream(profile.minuteWeights()).asDoubleStream().boxed().toList();
 
@@ -130,6 +138,32 @@ public class OutboundOrderGenerator {
         log.info("출고 주문 생성: 하루 {}건 중 실행 창 {}건 (seed {}), {}토트 상한 재추첨 {}건",
                 orderCount, window.size(), seed, MAX_ORDER_TOTES, cappedOrders);
         return window;
+    }
+
+    /**
+     * 한 줄 수량 히스토그램에서 {@code maxLineQty} 를 넘는 값을 뺀 사본 (S15P21A106-146). 참조 통계표(신발 물류센터
+     * 피킹 로그)는 1~11 까지 매끈하게 줄다가 12 에서 다시 튀고 24·36·48·72 에 봉우리가 선다 — 다스·케이스로 사는
+     * 도매 흔적이다. 개인은 온라인몰 1회 최대 구매 수량이 10 안팎이라 그 아래만 쓴다. 가중치는 다시 정규화하지
+     * 않는다({@link #weightedChoice} 가 매번 남은 합으로 나눈다). 남는 값이 없으면 설정 오류로 바로 실패한다.
+     */
+    static OrderRuleProfile.Histogram capQuantities(OrderRuleProfile.Histogram quantity, int maxLineQty) {
+        int[] values = quantity.values();
+        double[] weights = quantity.weights();
+        int kept = (int) java.util.Arrays.stream(values).filter(v -> v <= maxLineQty).count();
+        if (maxLineQty < 1 || kept == 0) {
+            throw new IllegalStateException(String.format(
+                    "estimate.max-line-qty=%d 아래에 수량 값이 없음 (프로파일 최소 %d)", maxLineQty, java.util.Arrays.stream(values).min().orElse(0)));
+        }
+        int[] cappedValues = new int[kept];
+        double[] cappedWeights = new double[kept];
+        for (int i = 0, j = 0; i < values.length; i++) {
+            if (values[i] <= maxLineQty) {
+                cappedValues[j] = values[i];
+                cappedWeights[j] = weights[i];
+                j++;
+            }
+        }
+        return new OrderRuleProfile.Histogram(cappedValues, cappedWeights);
     }
 
     /** 한 주문의 라인과, 그걸 상한 안에 넣느라 수량을 다시 뽑은 횟수. */

@@ -6,6 +6,8 @@ import com.ssafy.santafactory.entity.store.Store;
 import com.ssafy.santafactory.entity.warehouse.Rack;
 import com.ssafy.santafactory.entity.warehouse.Warehouse;
 import com.ssafy.santafactory.repository.ProductRepository;
+import com.ssafy.santafactory.service.estimate.EstimateProperties;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -15,6 +17,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -42,7 +45,7 @@ class OutboundOrderGeneratorTest {
 
     @BeforeEach
     void setUp() {
-        generator = new OutboundOrderGenerator(productRepository, profileLoader);
+        generator = new OutboundOrderGenerator(productRepository, profileLoader, props(10));
         OrderRuleProfile profile = tinyProfile();
         List<Product> products = fakeProducts();
         when(profileLoader.getProfile()).thenReturn(profile);
@@ -135,11 +138,43 @@ class OutboundOrderGeneratorTest {
      */
     @Test
     void no_order_exceeds_the_tote_cap() {
+        generator = new OutboundOrderGenerator(productRepository, profileLoader, props(300));   // 줄 상한을 열어 꼬리를 살린다
         when(profileLoader.getProfile()).thenReturn(profileWithQuantities(new int[]{1, 200}, new double[]{1, 1}));   // 200개 = 25토트
 
         List<SimulationRequest.Outbound> orders = generator.generate(warehouse, HORIZON_S, 30, 101L);
 
         assertThat(orders).hasSize(30);
+        assertThat(orders).allSatisfy(o -> assertThat(OutboundOrderGenerator.orderTotes(o.lines(), 8)).isLessThanOrEqualTo(24));
+    }
+
+    // ── 개인 구매 상한: 한 줄 수량 ≤ maxLineQty (S15P21A106-146) ─────────────
+
+    /** 200개짜리 줄이 프로파일에 있어도 재추첨이 아니라 애초에 추첨 대상에서 빠진다. */
+    @Test
+    void no_line_exceeds_the_personal_purchase_cap() {
+        when(profileLoader.getProfile()).thenReturn(profileWithQuantities(new int[]{1, 12, 200}, new double[]{1, 1, 1}));
+
+        List<SimulationRequest.Outbound> orders = generator.generate(warehouse, HORIZON_S, 30, 101L);
+
+        assertThat(orders).flatExtracting(SimulationRequest.Outbound::lines)
+                .extracting(SimulationRequest.Line::qty)
+                .allMatch(qty -> qty <= 10);
+    }
+
+    /**
+     * 실제 프로파일(order_rules.json) 회귀: 상한 10 이면 줄 수량 최대 10, 남는 분포의 평균은 2.13 (상한 없이 3.52).
+     * 한 줄이 최대 2토트라 24토트 안전핀은 발동하지 않는다.
+     */
+    @Test
+    void shipped_profile_under_the_cap_yields_personal_sized_lines() {
+        when(profileLoader.getProfile()).thenReturn(new OrderRuleProfileLoader(new ObjectMapper()).getProfile());
+
+        List<SimulationRequest.Outbound> orders = generator.generate(warehouse, HORIZON_S, 2000, 101L);
+
+        List<Integer> quantities = orders.stream().flatMap(o -> o.lines().stream()).map(SimulationRequest.Line::qty).toList();
+        assertThat(quantities).allMatch(qty -> qty >= 1 && qty <= 10);
+        double mean = quantities.stream().mapToInt(Integer::intValue).average().orElseThrow();
+        assertThat(mean).isBetween(1.9, 2.4);
         assertThat(orders).allSatisfy(o -> assertThat(OutboundOrderGenerator.orderTotes(o.lines(), 8)).isLessThanOrEqualTo(24));
     }
 
@@ -165,11 +200,32 @@ class OutboundOrderGeneratorTest {
         /** 어떤 수량을 뽑아도 상한을 못 맞추면 무한히 돌지 않고 실패한다 (파이썬 구현과 같은 1,000회 한도). */
         @Test
         void fails_when_no_quantity_draw_fits_the_cap() {
+            generator = new OutboundOrderGenerator(productRepository, profileLoader, props(300));   // 줄 상한을 열어 꼬리를 살린다
             when(profileLoader.getProfile()).thenReturn(profileWithQuantities(new int[]{300}, new double[]{1}));   // 38토트
 
             assertThatThrownBy(() -> generator.generate(warehouse, HORIZON_S, 5, 101L))
                     .isInstanceOf(IllegalStateException.class)
                     .hasMessageContaining("24");
+        }
+
+        /** 참조 통계표는 12 에서 다스 봉우리가 서는 도매 꼬리를 품고 있다 — 상한 위 값은 추첨 대상에서 아예 뺀다. */
+        @Test
+        void capQuantities_drops_values_above_the_cap_and_keeps_weights() {
+            OrderRuleProfile.Histogram capped = OutboundOrderGenerator.capQuantities(
+                    new OrderRuleProfile.Histogram(new int[]{1, 2, 12, 24}, new double[]{5, 3, 2, 1}), 10);
+
+            assertThat(capped.values()).containsExactly(1, 2);
+            assertThat(capped.weights()).containsExactly(5.0, 3.0);
+        }
+
+        /** 상한 아래 값이 하나도 없으면 설정 오류 — 조용히 넘기지 않는다. */
+        @Test
+        void capQuantities_fails_when_nothing_remains_below_the_cap() {
+            OrderRuleProfile.Histogram tail = new OrderRuleProfile.Histogram(new int[]{12, 24}, new double[]{2, 1});
+
+            assertThatThrownBy(() -> OutboundOrderGenerator.capQuantities(tail, 10))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("10");
         }
     }
 
@@ -181,6 +237,12 @@ class OutboundOrderGeneratorTest {
                 new OrderRuleProfile.Histogram(values, weights),
                 minuteWeights,
                 new double[][]{{0.0, 0.0}, {1.0, 1.0}});
+    }
+
+    /** 견적 설정 — 여기서 쓰는 건 한 줄 수량 상한(maxLineQty)뿐이다. */
+    private static EstimateProperties props(int maxLineQty) {
+        return new EstimateProperties(0L, 0L, 0L, 28, 6, 4, 1, Duration.ofMinutes(30), Duration.ofHours(6), "out", false,
+                Duration.ofMinutes(10), maxLineQty);
     }
 
     private OrderRuleProfile tinyProfile() {
