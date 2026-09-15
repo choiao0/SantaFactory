@@ -7,7 +7,7 @@ addopts = "-q"
 [tool.ruff]
 line-length = 120
 target-version = "py310"
-extend-exclude = ["**/out"]
+extend-exclude = ["**/out", "**/sparkplug_b_pb2.py"]   # 생성 코드(protoc)
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP"]
