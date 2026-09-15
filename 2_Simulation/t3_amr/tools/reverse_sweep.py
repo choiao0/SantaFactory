@@ -8,8 +8,14 @@
     후진 N칸        = N × REVERSE_FACTOR
     180° + 전진 N칸 = 2 × TURN_COST + N          (TURN_COST 1.25 → 2.5)
 
-    RF 3.0 :  3N < 2.5+N  ⟺  N < 1.25   → 1칸일 때만 후진. 2칸 이상이면 180°.
-    RF 1.0 :   N < 2.5+N  은 **항상 참** → 180° 를 고를 이유가 없다.
+    후진이 이기는 조건은  N × RF < 2×TURN_COST + N  ⟺  **N < 2.5 / (RF − 1)**
+
+    RF 3.0 :  N < 1.25  → 1칸일 때만 후진. 2칸 이상이면 180°.
+    RF 1.5 :  N < 5     → 5칸 이상 이동에는 **여전히 180°** 를 쓴다.
+    RF 1.0 :  분모가 0  → 항상 후진. 180° 를 고를 이유가 없다.
+
+    ★ 분기점은 RF 한 값이 아니라 **이동 거리에 걸린다.** 「RF 2.5 아래면
+      180° 가 사라진다」는 N=1 에만 맞는 얘기다 (2026-09-15 정정).
 
 그리고 후진은 `core.py` 에서 **전진과 같은 `MOVE_TICKS`(4틱)** 다. RF 는
 비용(선택)만 바꾸고 소요 틱은 안 바꾼다. 그래서 180° 10틱이 통째로 빠진다.
@@ -55,7 +61,10 @@ SEEDS = [int(x) for x in os.environ.get("SEEDS", "1,2,4").split(",")]
 # 틱 정합 뒤 값 (-211). adg_fingerprint.py 와 같은 이유로 둘을 같이 움직인다.
 HORIZON = int(os.environ.get("HORIZON", "1260"))
 GAP = int(os.environ.get("GAP", "60"))
-RFS = [float(x) for x in os.environ.get("RF", "3.0,1.0").split(",")]
+# `off` 는 환경변수를 **안 주는** 기준 판이다 (= 로더가 한 줄도 안 돈다 = FMS 기본).
+# 기본 목록에 넣어 두는 이유: 오버라이드 경로 자체가 무해한지 매 판 같이 보이려고.
+RFS = [None if x.strip().lower() in ("off", "기본", "none") else float(x)
+       for x in os.environ.get("RF", "off,3.0,1.0").split(",")]
 
 
 # --------------------------------------------------------------------------
@@ -70,10 +79,19 @@ def child(seed):
     geom, free, starts, goals = pibt_scene.setup_lifelong(
         MAP, N, PITCH, seed, "cross", verbose=False)
     zone = pibt_scene.charge_zone_cells(free, geom)
-    adg, _order, _history, info = D.plan_and_build_lifelong(
-        free, starts, goals, geom, horizon=HORIZON, seed=seed,
-        order_gap=GAP, battery=True, dispatch="fms", zone_cells=zone,
-        order_end=None, docks=pibt_scene.charge_docks(free, geom))
+    # ★ 순환은 **실패가 아니라 관측값**이다 (2026-09-15). 스윕을 처음 돌렸을 때
+    #   12판 중 11판이 여기서 죽었는데, 부모가 그걸 삼켜서 표에는 "전부 실패"
+    #   한 줄만 남았다. 순환이 RF 에 따라 달라지는지가 이 도구의 답 중 하나이므로
+    #   세어서 표에 남긴다.
+    try:
+        adg, _order, _history, info = D.plan_and_build_lifelong(
+            free, starts, goals, geom, horizon=HORIZON, seed=seed,
+            order_gap=GAP, battery=True, dispatch="fms", zone_cells=zone,
+            order_end=None, docks=pibt_scene.charge_docks(free, geom))
+    except RuntimeError as e:
+        if "순환" not in str(e):
+            raise
+        return {"seed": seed, "error": "cycle"}
 
     kinds = {}
     for a in adg.actions:
@@ -123,20 +141,32 @@ def child(seed):
 # 부모 — 설정마다 자식을 띄우고 표로 묶는다
 # --------------------------------------------------------------------------
 def run_one(rf, seed):
+    """`rf` 가 None 이면 환경변수를 **안 준다** = 로더가 한 줄도 안 돈다 = FMS 기본.
+
+    기준 판이 따로 필요한 이유: `RF=3.0` 은 값이 기본과 같지만 오버라이드
+    경로를 **거친다.** 둘 다 같은 결과여야 오버라이드가 무해하다고 말할 수 있다.
+    """
     env = dict(os.environ)
-    env["PIBT_REVERSE_FACTOR"] = repr(rf)
+    if rf is None:
+        env.pop("PIBT_REVERSE_FACTOR", None)
+    else:
+        env["PIBT_REVERSE_FACTOR"] = repr(rf)
     p = subprocess.run([sys.executable, os.path.abspath(__file__), "--child", str(seed)],
                        env=env, capture_output=True, text=True)
     for line in reversed(p.stdout.splitlines()):
         if line.startswith("{"):
             return json.loads(line)
-    sys.stderr.write(f"\n[reverse_sweep] RF={rf} seed={seed} 실패\n")
-    sys.stderr.write((p.stderr or "")[-2000:] + "\n")
-    return None
+    sys.stderr.write(f"\n[reverse_sweep] RF={rf} seed={seed} — 계획이 죽었다\n")
+    sys.stderr.write((p.stderr or "")[-1500:] + "\n")
+    return {"seed": seed, "error": "crash"}
+
+
+def ok(rows):
+    return [r for r in rows if r and "error" not in r]
 
 
 def mean(rows, key):
-    v = [r[key] for r in rows if r]
+    v = [r[key] for r in ok(rows)]
     return sum(v) / len(v) if v else float("nan")
 
 
@@ -155,36 +185,44 @@ def main():
         for seed in SEEDS:
             sys.stderr.write(f"  ... RF={rf} seed={seed}\n")
             rows.append(run_one(rf, seed))
-        table[rf] = [r for r in rows if r]
+        table[rf] = rows
+
+    def label(rf):
+        return "기본" if rf is None else f"{rf:.1f}"
 
     print()
-    print(f"  {'RF':>5}{'180도':>7}{'회전':>7}{'물리전진':>10}{'후진칸':>8}"
-          f"{'전진칸':>8}{'임계경로':>10}{'태스크':>8}{'tasks/h':>9}")
+    print(f"  {'RF':>5}{'성공':>6}{'순환':>6}{'180도':>7}{'회전':>7}{'물리전진':>10}"
+          f"{'후진칸':>8}{'전진칸':>8}{'임계경로':>10}{'태스크':>8}{'tasks/h':>9}")
     for rf in RFS:
         rows = table.get(rf) or []
-        if not rows:
-            print(f"  {rf:>5.1f}   (전부 실패)")
+        good = ok(rows)
+        ncyc = sum(1 for r in rows if r and r.get("error") == "cycle")
+        head = f"  {label(rf):>5}{len(good):>6}{ncyc:>6}"
+        if not good:
+            print(head + "   (성공 판 없음 — 평균을 낼 수 없다)")
             continue
-        print(f"  {rf:>5.1f}{mean(rows, 'n180'):>7.1f}{mean(rows, 'turn'):>7.1f}"
+        print(head + f"{mean(rows, 'n180'):>7.1f}{mean(rows, 'turn'):>7.1f}"
               f"{mean(rows, 'phys_fwd_pct'):>9.1f}%{mean(rows, 'move'):>8.0f}"
               f"{mean(rows, 'reverse'):>8.0f}{mean(rows, 'makespan'):>9.1f}s"
               f"{mean(rows, 'tasks'):>8.1f}{mean(rows, 'tph'):>9.1f}")
-    print(f"  (시드 {len(SEEDS)}개 평균 · 임계경로 초 · 물리전진 ="
-          " pibt reverse/(move+reverse), heading_offset=2 기준)")
+    print(f"  (시드 {len(SEEDS)}개 중 **성공 판만** 평균 · 임계경로 초 ·")
+    print("   물리전진 = pibt reverse/(move+reverse), heading_offset=2 기준)")
+    print("  ★ 「순환」은 도구 실패가 아니라 관측값이다. RF 와 무관하게 전 열에서")
+    print("    나면 원인은 RF 가 아니라 그 격자·지평 조합이다.")
 
-    base = table.get(3.0)
+    base = ok(table.get(3.0) or [])
     if base:
         print()
-        print("  FMS 기본(3.0) 대비")
+        print("  FMS 기본값(3.0) 대비")
         for rf in RFS:
-            rows = table.get(rf)
+            rows = ok(table.get(rf) or [])
             if not rows or rf == 3.0:
                 continue
             d180 = mean(rows, "n180") - mean(base, "n180")
             dms = mean(rows, "makespan") - mean(base, "makespan")
             dfw = mean(rows, "phys_fwd_pct") - mean(base, "phys_fwd_pct")
             dtp = mean(rows, "tph") - mean(base, "tph")
-            print(f"    RF {rf:<4} 180도 {d180:+6.1f}회 ·"
+            print(f"    RF {label(rf):<5} 180도 {d180:+6.1f}회 ·"
                   f" 임계경로 {dms:+7.1f}s · 물리전진 {dfw:+5.1f}%p ·"
                   f" tasks/h {dtp:+6.1f}")
     print()
