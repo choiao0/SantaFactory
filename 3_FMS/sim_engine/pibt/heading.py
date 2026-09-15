@@ -9,6 +9,13 @@ from .hgraph import dist_map_h
 from .liveness import Replanner, Stagnation, wait_bias
 
 
+# 계약 v3.11 (-223, 6h 병목 진단 2026-09-15): 대기 상승(bias)을 '거리가 줄지 않는 제자리 회전'에도 붙인다. 대기에만 붙으면
+# 포장대 앞 줄에서 대기(1+20+d) 보다 헛회전(1.25+d′)이 싸져 5틱 왕복을 반복한다(24대·103: 회전이 로봇 시간의 26~40 %, 그중 66 % 가 왕복).
+# 진전 없는 회전은 대기와 같은 값이 되고, 후진(×3, 상승 없음)이 상대적으로 싸져 진짜로 물러난다. six 6런 p90 74 → 53분.
+# 모듈 전역 — sim_v2(--no-turn-bias 로 끔)·kernel_planner 가 실행마다 세팅한다. legacy 는 v3.3 비트 동일이라 False. run_h 도 공유.
+NO_PROGRESS_TURN_BIAS = True
+
+
 def candidates_h(s, dist, edge_cost, wait_cost, free, turn_cost, bias=0.0):
     """s에서 가능한 다음 상태 후보를 score 오름차순으로: [(상태, 점유칸 집합, soft 칸 집합), ...].
     score = 액션 비용 + dist[결과 상태]. 대기 후보에는 bias(대기 상승)가 더해진다.
@@ -28,9 +35,11 @@ def candidates_h(s, dist, edge_cost, wait_cost, free, turn_cost, bias=0.0):
     if _inb(free, (rr, cc)) and dist[rr, cc, h] >= 0:
         scored.append((edge_cost[r, c, h] + dist[rr, cc, h], 1, (rr, cc, h),
                        frozenset(((rr, cc), (r, c))), none))
+    d0 = dist[r, c, h]
     for i, h2 in enumerate(((h + 1) % 4, (h - 1) % 4)):
         if dist[r, c, h2] >= 0 and turn_ok(free, r, c, h, h2):
-            scored.append((turn_cost + dist[r, c, h2], 2 + i, (r, c, h2),
+            tb = bias if (NO_PROGRESS_TURN_BIAS and d0 >= 0 and dist[r, c, h2] >= d0) else 0.0   # 진전 없는 회전 = 대기와 같은 상승
+            scored.append((turn_cost + tb + dist[r, c, h2], 2 + i, (r, c, h2),
                            frozenset({(r, c)} | swing_cells(r, c, h, h2)), frozenset(front_cells(r, c, h, h2))))
     br, bc = r - dr, c - dc                            # 후진: pos→rear, rear→rear의 뒤
     if valid_state(free, (br, bc, h)) and dist[br, bc, h] >= 0:
