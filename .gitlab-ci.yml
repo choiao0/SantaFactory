@@ -188,3 +188,27 @@ sonarqube-mr-comment:
   script:
     - test -f .scannerwork/report-task.txt
     - python .gitlab/scripts/sonar_mr_comment.py
+
+# 2_Simulation 엣지(t3_amr/edge, S15P21A106-215) 파이썬 테스트 — 브로커·Isaac 없이 상태기계·코덱 사본을 검사한다.
+# 2_Simulation 이나 host_orch 코덱(spb.py·sparkplug_b_pb2.py 사본의 원본)을 건드리는 MR 에서 돈다.
+sim-python-test:
+  stage: test
+  image: python:3.11.9-slim
+  tags:
+    - sonar-ec2
+  variables:
+    PIP_CACHE_DIR: "${CI_PROJECT_DIR}/.cache/pip"
+  cache:
+    key: sim-pip-cache
+    paths:
+      - .cache/pip
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - 2_Simulation/**/*
+        - 3_FMS/host_orch/spb.py
+        - 3_FMS/host_orch/sparkplug_b_pb2.py
+  script:
+    - pip install --no-cache-dir pytest==8.3.4 paho-mqtt==2.1.0 protobuf==7.36.1 psutil==7.2.2
+    - cd 2_Simulation
+    - python -m pytest
