@@ -76,7 +76,13 @@ SEEDS_CHECKED = (1, 2, 4, 5, 7, 9, 11, 16, 18, 21, 22, 25)
 def plan(n=12, seed=None, seconds=None, map_dir=None, extra=None):
     # 기본 시드는 모듈 상수 SEED 를 쓴다. 여기에 숫자를 또 박아 두었더니
     # `main.py plan` 이 SEED 를 바꿔도 옛 값으로 계획했다 (2026-09-07).
-    argv = ["pibt_scene.py", "--n", str(n), "--pitch", str(PITCH),
+    # ★ pitch 도 셸을 먼저 본다. 아래 HORIZON 주석과 같은 이유다 — `plan` 이
+    #   만드는 계획과 Isaac 이 실제로 도는 계획(live_pibt 가 in-process 로 다시
+    #   세운다)이 **같은 격자여야** 한다. `run_record.sh` 가 PIBT_PITCH 기본을
+    #   1.0 으로 두므로, 여기서 안 보면 `REPLAN=1` 이 1.2 로 계획해 놓고 주행은
+    #   1.0 으로 도는 어긋남이 조용히 생긴다.
+    argv = ["pibt_scene.py", "--n", str(n),
+            "--pitch", os.environ.get("PIBT_PITCH", str(PITCH)),
             "--seed", str(SEED if seed is None else seed),
             "--map", map_dir or default_map(), "--out", rel(OUT), "--plan"]
     if MODE == "lifelong":

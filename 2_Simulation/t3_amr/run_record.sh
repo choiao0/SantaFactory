@@ -169,10 +169,23 @@ export PIBT_SHOT_EXT="$SHOT_EXT"
 #   켜면 0/20.
 #
 #   ★ 규칙은 **pitch 게이팅**을 받는다. 1.2 에서는 무엇을 넣든 꺼진다 —
-#     칸이 넓어 규칙이 필요 없기 때문이다. 바뀐 ADG 를 실제로 보려면
-#     PIBT_PITCH=1.0 (또는 1.1) 이어야 한다.
+#     칸이 넓어 규칙이 필요 없기 때문이다. 규칙이 사는 곳은 1.0~1.1 이다.
+#
+#   ── 기본 격자를 1.0 으로 둔다 ────────────────────────────
+#   바뀐 ADG 로 주행하는 것이 지금의 기본 동작이다. 1.2 로 두면 규칙이 게이팅에
+#   걸려 꺼지므로, 기본값으로는 **바뀐 ADG 를 영영 못 본다.**
+#
+#   ★ 1.0 은 2칸 점유 + 스윙 3칸 모델의 **유효 구간(1.117~2.220) 밖**이다.
+#     `RobotGeom.describe()` 가 로그에 「★구간 밖」과 함께
+#     「회전 스윙 : ★모델 밖 [(5,6), (6,5)]」 을 찍는다. 그 두 칸이 바로
+#     4칸 규칙이 덮는 칸이다 — front_cells = [(4,6),(5,6),(6,4),(6,5)].
+#     즉 경고는 "규칙 없이 쓰면 안 된다" 는 뜻이지 설정 오류가 아니다.
+#
+#   ★ 1.0 채택은 **아직 확정이 아니다.** 1.0 vs 1.2 포화 처리량이 남아 있고
+#     거기서 1.2 로 되돌아갈 수 있다. 그때는 이 한 줄만 1.2 로 바꾸면 된다.
+#     1.2 로 한 판 돌리려면:  PIBT_PITCH=1.2 bash run_record.sh
 export PIBT_FRONT_RULE="${PIBT_FRONT_RULE:-4}"
-export PIBT_PITCH="${PIBT_PITCH:-1.2}"
+export PIBT_PITCH="${PIBT_PITCH:-1.0}"
 
 # 규칙을 켜 달라고 했는데 격자가 게이팅 구간이면, 29분을 쓰고 나서 "규칙이
 # 안 걸렸네" 를 깨닫는 것이 가장 나쁘다. 0초에 알린다.
@@ -195,11 +208,12 @@ echo "  대수        ${PIBT_N}대"
 echo "  계획        $PLAN_DIR"
 # 플래그가 실제로 걸렸는지 로그로 증명한다 (규칙 1번).
 #   '규칙 적용' 이 '아니오' 인데 규칙을 기대했다면 지금 끊는 편이 낫다.
-echo "  격자        pitch $PIBT_PITCH"
+echo "  격자        pitch $PIBT_PITCH   (기본 1.0 — 바뀐 ADG 가 사는 격자)"
 echo "  앞 칸 규칙  PIBT_FRONT_RULE=$PIBT_FRONT_RULE   규칙 적용 $RULE_LIVE"
 case "$RULE_LIVE" in
     아니오*게이팅*)
-        echo "              ※ 바뀐 ADG 로 보려면:  PIBT_PITCH=1.0 bash run_record.sh $PIBT_N"
+        echo "              ※ pitch $PIBT_PITCH 는 칸이 넓어 규칙이 필요 없는 구간입니다."
+        echo "                옛 ADG 로 도는 판이고, 그게 의도였다면 그대로 두세요."
         ;;
 esac
 if [ "$PIBT_N" -gt 16 ]; then
