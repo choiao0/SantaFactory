@@ -5,7 +5,7 @@ EC2 에 상시로 떠서 host-orch 의 NCMD Start 를 받으면 (1) GPU 박스�
 (3) 전 로봇이 그 노드에 도착하면(틱 배리어) 다음 틱을 계산한다. Stop 이 오면 `cancelOrder` 를 보내고 DES 와 같은 산식의 KPI 를
 `biz/v1/event` kpi_summary 로 낸다 — host-orch 가 `sim.verify.result.kpi` 에 싣는다.
 규칙의 원본: [`../contracts/MQTT_CONTRACT.md`](../contracts/MQTT_CONTRACT.md) §4 (VDA 마스터) · §5 (Edge fms-core), [`../contracts/SIM_VERIFY_CONTRACT.md`](../contracts/SIM_VERIFY_CONTRACT.md) §3.
-짝: [`../host_orch/`](../host_orch/) (Host), [`2_Simulation/sim_runner/`](../../2_Simulation/sim_runner/) (로봇 쪽 Edge), [`1_Robot/amr_agent/`](../../1_Robot/amr_agent/) (order 수용자).
+짝: [`../host_orch/`](../host_orch/) (Host), 로봇 쪽 Edge 는 [`2_Simulation/t3_amr/`](../../2_Simulation/t3_amr/) 에 붙인다(구 sim_runner 는 -219 로 삭제), [`1_Robot/amr_agent/`](../../1_Robot/amr_agent/) (order 수용자).
 
 | 파일 | 역할 |
 |---|---|
@@ -17,7 +17,7 @@ EC2 에 상시로 떠서 host-orch 의 NCMD Start 를 받으면 (1) GPU 박스�
 | `scenario.py` | Start JSON → `RunSpec`(sha 대조), `scenario.orders` → 커널 주문(`window_start_s` 오프셋), DES pass-through(`capacity(토트/왕복) · tote_units · outbound_gap_s · inbound_gap_s · shifts · seed`) |
 | `kpi.py` | `cli/report.py` 고정 시간 산식 그대로 → 견적 워커 `to_kpi` 의 14개 키 (`test_kernel_planner` 가 report() 와 대조) |
 | `edge.py` · `app.py` | paho 연결부(유언 NDEATH · NBIRTH · ACL 과 1:1 구독) · CLI |
-| `spb.py` · `sparkplug_b_pb2.py` | `2_Simulation/sim_runner/` 와 **바이트 동일 복사본** (`tests/test_spb_copy.py`) |
+| `spb.py` · `sparkplug_b_pb2.py` | `../host_orch/` 와 **바이트 동일 복사본** (`tests/test_spb_copy.py`; 원본이던 sim_runner 는 -219 로 삭제) |
 | `tests/` | 브로커 없는 단위 테스트 123개 (1_Robot/amr_agent 의 `OrderBook` 을 오라클로 쓴다). `test_des_parity.py` 는 견적 워커·sim_v2 와 직접 대조한다 |
 
 ## 견적과 같은 조건으로 돈다 (S15P21A106-185)

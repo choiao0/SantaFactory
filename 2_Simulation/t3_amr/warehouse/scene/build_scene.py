@@ -10,8 +10,8 @@
   - V&V: isaacsim.asset.gen.omap으로 씬→점유맵 재생성 후 원 그리드와 diff
 
 실행:
-  cd ~/isaacsim && ./python.sh <repo>/sil/t3_warehouse/build_scene.py
-전제: sil/t3_warehouse_map/map/에서 warehouse_layout_v5_5_final.py 실행 완료(npy 존재).
+  cd ~/isaacsim && ./python.sh <repo>/2_Simulation/t3_amr/warehouse/scene/build_scene.py
+전제: ../map/ 에 맵 세트(occupancy_grid.npy 등)가 있다 — 없으면 ../map/source/warehouse_layout_v5_5_final.py 로 생성.
 """
 
 from isaacsim import SimulationApp
@@ -36,16 +36,13 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 
 def _map_dir():
-    """맵 폴더. **배치가 두 가지다** — 안 맞으면 `occupancy_grid.npy` 를 못 찾고
-    즉시 죽는다 (2026-09-09).
+    """맵 폴더 — 안 맞으면 `occupancy_grid.npy` 를 못 찾고 즉시 죽는다 (2026-09-09).
 
         $MAP                              paths.sh 가 잡아준 값 (서버)
-        <저장소>/warehouse/map            Santa 배치
-        <저장소>/../t3_warehouse_map/map  팀 저장소(2_Simulation) 배치
+        <t3_amr>/warehouse/map            기본 (2026-09-15 -219: 옛 2_Simulation/t3_warehouse_map 폴백은 삭제됨)
     """
     for d in (os.environ.get("MAP", ""),
-              os.path.join(HERE, "..", "map"),
-              os.path.join(HERE, "..", "t3_warehouse_map", "map")):
+              os.path.join(HERE, "..", "map")):
         if d and os.path.isfile(os.path.join(d, "occupancy_grid.npy")):
             return os.path.abspath(d)
     raise SystemExit(

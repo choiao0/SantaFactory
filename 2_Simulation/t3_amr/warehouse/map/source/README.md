@@ -1,3 +1,7 @@
+> **2026-09-15 (S15P21A106-219):** 이 폴더는 삭제된 `2_Simulation/t3_warehouse_map/` 에서 **설계도 원본과 맵 생성기만** 옮겨 둔 것이다.
+> 실제로 쓰는 맵은 상위 `../`(t3_amr/warehouse/map, 3_FMS/map 과 정합)이고, 여기 스크립트를 다시 돌리면 그 맵을 재생성할 수 있다
+> (ezdxf·numpy·scipy·matplotlib 필요, 산출물은 이 폴더에 생김 — 상위 맵을 덮어쓰려면 손으로 옮긴다). 나머지 산출물(png·pgm·csv)은 커밋 ac10c76 에 있다.
+
 # T3 창고 맵 — DXF → occupancy grid (v6.0)
 
 설계도 DXF(64m x 96m 철골 창고)를 0.1m/셀 occupancy grid로 변환하고, 물류 레이아웃

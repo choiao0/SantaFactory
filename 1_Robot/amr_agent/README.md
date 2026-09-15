@@ -26,7 +26,7 @@ src/amr_agent
 
 | 층 (위가 이긴다) | 넣는 법 | 누가 넣나 |
 |---|---|---|
-| `profile_overrides:='<JSON>'` | 런치 인자. BE 키·프로파일 키 모두 | **sim-runner** — Start 의 `scenario.amr` 을 그대로 (`sim_runner/procs.py::agent_cmd`) |
+| `profile_overrides:='<JSON>'` | 런치 인자. BE 키·프로파일 키 모두 | **실행기(구 sim-runner, -219 로 삭제)** — Start 의 `scenario.amr` 을 그대로. 새 실행기(t3_amr)도 같은 인자로 넘긴다 |
 | `profile_file:=<yaml\|json>` | 파일 경로 | 손으로 돌릴 때, 나중에 컨테이너 볼륨 |
 | `config/models/<model>.yaml` | `model:=iw_hub` | 기종 팩토리 값 (치수·바퀴·한계·타이밍) + `profile.py` SECTION_DEFAULTS |
 
@@ -53,7 +53,7 @@ src/amr_agent
 | 절 | 키 | 뜻 |
 |---|---|---|
 | 상위 | `v_min v_max v_max_loaded a_max w_max alpha_max w_min` | 컨트롤러 한계 = factsheet physicalParameters |
-| 상위 | `length width height front_overhang rear_overhang swing_radius wheels` | factsheet 기하 (원천 `2_Simulation/sil_isaac/robot/profile.py`) |
+| 상위 | `length width height front_overhang rear_overhang swing_radius wheels` | factsheet 기하 (원천이던 `2_Simulation/sil_isaac/robot/profile.py` 는 -219 로 삭제, 값은 `2_Simulation/README.md` 실측 상수 절) |
 | 상위 | `state_interval order_interval` | state 발행 주기(1/state_interval Hz) · factsheet timing |
 | `control` | `rate_hz tol_xy tol_theta timeout_s turn_threshold zero_edge_eps first_node_tol k_turn k_heading k_lateral` | 제어기 성질. order 의 `allowedDeviationXY/Theta` 가 더 작으면 그것 |
 | `battery` | `soc_init_pct consumption_pct_per_s idle_ratio charge_time_s charge_threshold_pct` | 위 BE 매핑 대상 |
@@ -107,9 +107,11 @@ ros2 launch amr_agent agent.launch.py serial:=amr01 mqtt_username:=amr01 mqtt_pa
 빌드 주의: `~/.local` 에 최신 setuptools 가 있으면 `amr_agent_msgs` 의 egg_info 가 시스템 packaging 과 충돌한다
 (`canonicalize_version() … strip_trailing_zero`). `PYTHONNOUSERSITE=1 colcon build --symlink-install` 로 빌드하고 실행은 평소대로.
 
-### sim-runner 연동
+### 실행기 연동 (구 sim-runner — 2026-09-15 -219 로 삭제, 인터페이스 기록)
 
-`2_Simulation/sim_runner` 는 기본으로 `1_Robot/amr_agent/install/setup.bash` 를 source 하고(`--ros-setup` 으로 바꿀 수 있다),
+> `2_Simulation/sim_runner` 는 삭제됐다(마지막 커밋 ac10c76). 아래는 그 연동 방식 기록이고, t3_amr 에 붙일 새 실행기가 같은 인터페이스(`--ros-setup`, `profile_overrides:=`, `model:=`)를 쓴다.
+
+`sim_runner` 는 기본으로 `1_Robot/amr_agent/install/setup.bash` 를 source 하고(`--ros-setup` 으로 바꿀 수 있다),
 NCMD Start 의 `scenario.amr`(= BE 견적 요청의 amr 블록, SIM_VERIFY_CONTRACT §2)을 `profile_overrides:=` 로 그대로 넘긴다.
 `models[]` 의 `model` 이 `model:=` 이 된다. 그래서 **검증 런의 로봇은 견적이 받은 그 파라미터로 돈다.**
 
@@ -122,7 +124,7 @@ NCMD Start 의 `scenario.amr`(= BE 견적 요청의 amr 블록, SIM_VERIFY_CONTR
 | 단절 | LWT `connection` CONNECTIONBROKEN(retained). keepalive 30 s → 최대 45 s 안에 도착. 정상 종료는 OFFLINE |
 | 중복 order | 같은 orderId·같은 orderUpdateId = FMS 재발행 → 무시하고 state 만 다시 낸다(오류 없음). 낮은 orderUpdateId → `orderUpdateError` |
 | state | `batteryState.batteryCharge` 가 SoC 모델을 따라 움직인다. threshold 아래면 `information[{infoType: batteryLow}]` — 충전 결정은 FMS 몫 |
-| 기종 추가 | `config/models/<model>.yaml` 하나 추가 + `model:=<model>`. 숫자의 원천은 `2_Simulation/sil_isaac/robot/profile.py` |
+| 기종 추가 | `config/models/<model>.yaml` 하나 추가 + `model:=<model>`. 숫자의 원천은 `2_Simulation/README.md` 실측 상수 절(구 sil_isaac/robot/profile.py, -219 로 삭제) |
 
 ## 테스트
 

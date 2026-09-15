@@ -1,6 +1,6 @@
 # T3 — 창고 씬 빌더 (그리드 → Isaac USD)
 
-"그리드가 곧 씬"이 원칙: 맵(`../t3_warehouse_map/map/`)의 occupancy grid와 랙 좌표를
+"그리드가 곧 씬"이 원칙: 맵(`../map/`)의 occupancy grid와 랙 좌표를
 그대로 Isaac USD 씬으로 세운다. DES와 SIL이 단일 소스를 공유하는 구조의 물리 실체.
 콜라이더는 전부 그리드 rect에서 나오고, 에셋은 시각 전용이다.
 
@@ -12,24 +12,22 @@
 | `roof_structure.py` | 박공지붕·상부 철골·H형강 기둥 모듈 (DXF 치수선 실측 기하) |
 | `warehouse_scene.usd` | 산출 씬 — 커밋본 그대로 열림 (에셋은 NVIDIA S3 원격 참조, 383KB) |
 | `view_scene.py` | WebRTC 스트리밍 뷰어 (헤드리스 서버 관전용) |
-| `http_stream.py` | TCP 전용 HTTP MJPEG 관전 경로 — UDP 차단망(교육장 내부망) 대응 |
-| `export_replay.py` | 맵 → `../isaac_export_t3/` 재생 데이터 생성 (isaac_replay 포맷) |
-| `warehouse_sim.py` | **T3 본편** — 씬 + iw.hub + 물리 라이다, ROS2 개통 (/scan /odom /tf /clock, /cmd_vel 구독) |
-| `ros2/` | localization 스택 — nav2 AMCL + map_server + foxglove_bridge 런치·파라미터 |
 | `out/scene_*.png` | 검수 스크린샷 (외관·트러스·통로·스테이션·사무실 등) |
+
+옛 T3 본편(`warehouse_sim.py`·`ros2/`·`http_stream.py`)과 재생 데이터 생성(`export_replay.py`)은 -219(2026-09-15)로 삭제됐다 — 커밋 ac10c76 의 `2_Simulation/t3_warehouse/`.
 
 ## 실행
 
 ```bash
 # 씬 열람만 (빌드 불필요 — 커밋된 usd 사용)
-cd <isaacsim> && ./python.sh <repo>/2_Simulation/t3_warehouse/view_scene.py
+cd <isaacsim> && ./python.sh <repo>/2_Simulation/t3_amr/warehouse/scene/view_scene.py
 # 접속: Isaac Sim WebRTC Streaming Client → 서버 IP (동시 1인스턴스 주의)
 # UDP 차단망(교육장 내부망 — tailscale이 DERP/TCP 릴레이로 떨어지는 환경)에서는
 # WebRTC 대신 브라우저로 http://<서버IP>:8211/  (TCP MJPEG ~6fps, 관전 전용)
 
 # 씬 재생성 (맵 산출물 갱신 시)
-cd <repo>/2_Simulation/t3_warehouse_map/map && python warehouse_layout_v5_5_final.py
-cd <isaacsim> && ./python.sh <repo>/2_Simulation/t3_warehouse/build_scene.py
+cd <repo>/2_Simulation/t3_amr/warehouse/map/source && python warehouse_layout_v5_5_final.py   # 산출물은 source/ 에 생김 → 상위 map/ 으로 옮겨 적용
+cd <isaacsim> && ./python.sh <repo>/2_Simulation/t3_amr/warehouse/scene/build_scene.py
 ```
 
 ## 구성 요소
@@ -58,36 +56,10 @@ cd <isaacsim> && ./python.sh <repo>/2_Simulation/t3_warehouse/build_scene.py
   현행: 벽·컨베이어·작업대·파렛트 재현율 100.0% · 랙 풋프린트 점유 93.3% ·
   풋프린트 밖 오검출 0셀. 빌드 시 자동 실행
 
-## 재생 (그리드 시뮬 검증 재생기 연동)
+## 재생 · ROS2 localization (삭제됨)
 
-`../isaac_replay.py`(재생기)의 홈서버 확장 — 실물 씬 안에서 궤적 재생 + WebRTC:
-
-```bash
-./python.sh 2_Simulation/isaac_replay.py --export-dir 2_Simulation/isaac_export_t3 \
-    --stage 2_Simulation/t3_warehouse/warehouse_scene.usd --livestream --loop
-```
-
-- `../isaac_export_t3/`는 `export_replay.py` 산출(스테이션 미션 6건, A* 침범 0 자가검증)
-- sim_v1 익스포트를 쓰려면 `--export-dir`만 바꾸면 됨 (포맷 동일)
-
-## ROS2 — 라이다 · localization (T3 본편 1단계, 개통 완료)
-
-AMR 내부 = ROS2 원칙(외부는 VDA5050/MQTT 예정). 물리 레이캐스트 라이다(720빔
-0.5° 0.4~20m — 콜라이더 기준이라 map.pgm과 원천 일치)로 AMCL이 우리 맵 위에서
-실시간 추적한다(개통 검증: 회전·직진 중 오차 0.1~0.4m, 70회 갱신).
-
-```bash
-# 1) 시뮬 (Isaac — ROS2 소싱 필수)
-source /opt/ros/humble/setup.bash
-cd <isaacsim> && ./python.sh <repo>/2_Simulation/t3_warehouse/warehouse_sim.py
-# 2) localization (별도 셸)
-source /opt/ros/humble/setup.bash
-ros2 launch <repo>/2_Simulation/t3_warehouse/ros2/loc.launch.py
-# 3) 조종: ros2 run teleop_twist_keyboard teleop_twist_keyboard
-#    또는 자동 순회 데모: python3 <repo>/2_Simulation/t3_warehouse/ros2/patrol.py
-#    (스테이션 그랜드 투어 A* 무한 순회 + AMCL 오차 로그)
-#    재시드: /initialpose 발행 (Foxglove의 Pose Estimate 버튼도 가능)
-```
+그리드 재생기(`isaac_replay.py`·`isaac_export_t3/`)와 T3 본편 ROS2 스택(`warehouse_sim.py`·`ros2/` AMCL·patrol)은 -219(2026-09-15)로 삭제됐다.
+실행 절차와 개통 기록은 커밋 ac10c76 의 이 README 에 있다. 로봇 주행은 이제 `../../runners/`(ADG)가 맡고, ROS 2 연동은 1_Robot/amr_agent 를 t3_amr 에 붙이는 후속 이슈로 옮겼다.
 
 시각화(전부 TCP — UDP 차단망 통과):
 - **Foxglove**: https://app.foxglove.dev → Open connection → `ws://<서버IP>:8765`

@@ -134,8 +134,8 @@ def compress(lat, path):
 def main():
     here = os.path.dirname(os.path.abspath(__file__))
     ap = argparse.ArgumentParser()
-    ap.add_argument("--map", default=os.path.join(
-        here, "..", "..", "v2", "upstream", "2_Simulation", "t3_warehouse_map", "map"))
+    ap.add_argument("--map", default=os.environ.get("MAP") or os.path.join(   # paths.sh 의 $MAP (-219: 옛 upstream 경로 삭제)
+        here, "..", "..", "warehouse", "map"))
     ap.add_argument("--fleet", type=int, nargs="+", default=[12])
     ap.add_argument("--seconds", type=float, default=420.0)
     ap.add_argument("--seed", type=int, default=42)

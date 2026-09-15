@@ -1,7 +1,7 @@
 """T3 씬 뷰어 — warehouse_scene.usd를 WebRTC 스트리밍으로 띄운다 (관전 전용).
 
 실행:
-  cd <isaacsim> && ./python.sh <repo>/2_Simulation/t3_warehouse/view_scene.py
+  cd <isaacsim> && ./python.sh <repo>/2_Simulation/t3_amr/warehouse/scene/view_scene.py
 접속: Isaac Sim WebRTC Streaming Client → 서버 IP (LAN 192.168.0.6 / tailscale 100.89.12.112)
 UDP 차단망(캠퍼스 내부망 — tailscale DERP 릴레이 실측): WebRTC 대신 브라우저로
   http://100.89.12.112:8211/  (TCP 전용 MJPEG, http_stream.py — 조작 불가·관전만)

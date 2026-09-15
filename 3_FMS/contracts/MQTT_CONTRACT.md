@@ -119,7 +119,7 @@ FMS ↔ AMR 에이전트 ↔ sim-runner ↔ Host ↔ 시뮬 WMS 가 한 브로�
 | `biz/v1/event` | `eventId` · `runId` · `at` · `type` ∈ task_assigned · task_done · order_shipped · robot_error · stall · **kpi_summary** · `tick` · `orderId` · `taskId` · `robot{manufacturer, serial}` |
 | `biz/v1/event` `type = kpi_summary` (v1.1, fms-core → Host, Stop 뒤 1건) | + `status` ∈ done · failed · `error` · `ticks` · `elapsed_s` · `planner` · `counters{open_tasks, done_tasks, orders_done, orders_total}` · `kpi` = SIM_VERIFY_CONTRACT §3 의 14개 키 블록(플래너가 없었으면 null) · `warnings`(v1.2, 없으면 null — 견적과 다른 조건으로 돌았다는 신호). host-orch 가 `sim.verify.result.kpi` 와 `verify.fms.warnings` 에 그대로 싣는다 |
 
-## 5. Sparkplug B 3.0 (`spBv1.0`, protobuf) — sim-runner 적용 2026-09-08 (`2_Simulation/sim_runner/`) · host-orch 적용 2026-09-09 (`3_FMS/host_orch/`, 잡 큐는 `SIM_VERIFY_CONTRACT.md`) · fms-core 적용 2026-09-09 (`3_FMS/fms_core/`)
+## 5. Sparkplug B 3.0 (`spBv1.0`, protobuf) — sim-runner 적용 2026-09-08 (`2_Simulation/sim_runner/`, -219 로 삭제 — 코덱 참조 구현은 `3_FMS/host_orch/spb.py`) · host-orch 적용 2026-09-09 (`3_FMS/host_orch/`, 잡 큐는 `SIM_VERIFY_CONTRACT.md`) · fms-core 적용 2026-09-09 (`3_FMS/fms_core/`)
 
 ### 5.1 아이덴티티
 

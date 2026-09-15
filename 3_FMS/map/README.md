@@ -42,12 +42,12 @@ FMS 엔진 맵(벽있음, 8/31 복사본)과 Isaac 씬 맵(2_Simulation v5.8, �
 1. **벽있음** (`grid_v56a_wall` 변형) — 남쪽 r26~39·북쪽 r75~ 구역 폐쇄, 스테이션은 `stations_wall_ref.json` 위치(r40 라인)
 2. v5.8 요소 반영: 바닥 파렛트 블록(셀값 6), 랙 길이 1칸 연장, 기둥 도면 105개 전부
 3. `charge_zone.json` 내용을 `stations.json`에 `charge_zone` 키로 추가 (기존 `charger`/`charge_q` 12개는 남겨도 무관)
-4. **저장 위치: `2_Simulation/t3_warehouse_map/map/`에 덮어써서 커밋** (Isaac 씬이 읽는 곳). FMS는 `check_map_set.py`로
+4. **저장 위치: `2_Simulation/t3_amr/warehouse/map/`에 덮어써서 커밋** (Isaac 씬이 읽는 곳). FMS는 `check_map_set.py`로
    이 폴더 정답지와 대조해 1 m 통행성 차이 0이면 그 세트로 교체하고, 이 폴더의 `occupancy_grid.npy`는 그 사본으로 갱신
 5. Isaac 씬을 그 세트로 재빌드. 벽을 물리 객체로 세우는 것은 보류 (FMS가 벽 구역에 진입하지 않음)
 
 ```
-python check_map_set.py ../../2_Simulation/t3_warehouse_map/map     # 세트 수신 후 대조
+python check_map_set.py ../../2_Simulation/t3_amr/warehouse/map     # 세트 수신 후 대조
 ```
 
 ## 합성 창고 (S15P21A106-139)
