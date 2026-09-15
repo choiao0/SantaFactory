@@ -75,76 +75,118 @@ def _reasons(kernel, rid, s, cand, forbid, forbid_axle, occ_now, axle_now, soft_
     return why
 
 
-def diag(kernel, t, n_events, robots_only=()):
-    robots, rids = kernel.robots, kernel.rids
-    states = {rid: (robots[rid]["pos"][0], robots[rid]["pos"][1], robots[rid]["h"]) for rid in rids}
-    extra = {rid: robots[rid]["swing"] for rid in rids if robots[rid]["busy"] > 0}
-    soft_hold = {cell: rid for rid in rids if robots[rid]["busy"] > 0 for cell in robots[rid]["swing_soft"]}
-    dists = kernel._dists_h(t, states, extra)
-    forbid, forbid_axle = kernel._standoff_forbid(states, dists)
-    occ_now = {c: rid for rid in rids for c in set(occupied(states[rid])) | set(extra.get(rid, ()))}
-    axle_now = {states[rid][:2]: rid for rid in rids}
+class _Snap:
+    """진단 시점의 커널 상태 한 벌 — 후보 차단 사유(_reasons)가 쓰는 표들을 한 번만 만든다."""
 
-    print(f"\n[DIAG t={t}] hd_after={kernel.cfg.hd_after} hd_timeout={kernel.cfg.hd_timeout} "
-          f"standoffs={kernel.standoffs} swaps={kernel.standoff_swaps}")
-    if robots_only:
-        patient = kernel._patient(states, dists, extra, soft_hold)
-        print("  --- 지정 로봇 후보 (점수 = 액션비용 + dist, 대기엔 bias 가산) ---")
-        for rid in robots_only:
-            rb, s = robots[rid], states[rid]
-            b = 0.0 if rid in patient else wait_bias(kernel._stag.get(rid))
-            print(f"  robot{rid} {s} {rb['state']} goal={rb['goal']} stag={kernel._stag.get(rid)} busy={rb['busy']} "
-                  f"hd={rb['hd_role']}/{rb['hd_peer']} bias={b:.0f}{' (인내)' if rid in patient else ''} "
-                  f"swing={sorted(rb['swing'])} soft={sorted(rb['swing_soft'])}")
-            for cand in candidates_h(s, dists[rid], kernel.edge_cost, kernel.wait_cost, kernel.free, kernel.turn_cost, b):
-                why = _reasons(kernel, rid, s, cand, forbid, forbid_axle, occ_now, axle_now, soft_hold)
-                d = dists[rid][cand[0]]
-                kind = _action_kind(s, cand[0])
-                print(f"       {kind:4s} -> {cand[0]} dist={d:.1f} {'OK' if not why else '✗ ' + '; '.join(why)}")
+    def __init__(self, kernel, t):
+        robots, rids = kernel.robots, kernel.rids
+        self.kernel, self.t = kernel, t
+        self.states = {rid: (robots[rid]["pos"][0], robots[rid]["pos"][1], robots[rid]["h"]) for rid in rids}
+        self.extra = {rid: robots[rid]["swing"] for rid in rids if robots[rid]["busy"] > 0}
+        self.soft_hold = {cell: rid for rid in rids if robots[rid]["busy"] > 0 for cell in robots[rid]["swing_soft"]}
+        self.dists = kernel._dists_h(t, self.states, self.extra)
+        self.forbid, self.forbid_axle = kernel._standoff_forbid(self.states, self.dists)
+        self.occ_now = {c: rid for rid in rids for c in set(occupied(self.states[rid])) | set(self.extra.get(rid, ()))}
+        self.axle_now = {self.states[rid][:2]: rid for rid in rids}
+
+    def candidates(self, rid, bias=0.0):
+        s = self.states[rid]
+        k = self.kernel
+        return candidates_h(s, self.dists[rid], k.edge_cost, k.wait_cost, k.free, k.turn_cost, bias)
+
+    def reasons(self, rid, cand):
+        return _reasons(self.kernel, rid, self.states[rid], cand, self.forbid, self.forbid_axle,
+                        self.occ_now, self.axle_now, self.soft_hold)
+
+    def print_candidates(self, rid, bias=0.0):
+        """후보를 점수순으로 찍고 합법(차단 사유 없음) 후보 수를 돌려준다."""
+        s, legal = self.states[rid], 0
+        for cand in self.candidates(rid, bias):
+            why = self.reasons(rid, cand)
+            legal += not why
+            verdict = "OK" if not why else "✗ " + "; ".join(why)
+            print(f"       {_action_kind(s, cand[0]):4s} -> {cand[0]} dist={self.dists[rid][cand[0]]:.1f} {verdict}")
+        return legal
+
+
+def _robot_line(kernel, snap, rid):
+    rb = kernel.robots[rid]
+    return (f"robot{rid} {snap.states[rid]} {rb['state']} goal={rb['goal']} stag={kernel._stag.get(rid)} "
+            f"busy={rb['busy']}")
+
+
+def _print_selected(kernel, snap, robots_only):
+    """--robots 로 지정한 로봇의 후보 — 실제 결정과 같은 bias(인내 포함)로."""
+    patient = kernel._patient(snap.states, snap.dists, snap.extra, snap.soft_hold)
+    print("  --- 지정 로봇 후보 (점수 = 액션비용 + dist, 대기엔 bias 가산) ---")
+    for rid in robots_only:
+        rb = kernel.robots[rid]
+        b = 0.0 if rid in patient else wait_bias(kernel._stag.get(rid))
+        note = " (인내)" if rid in patient else ""
+        print(f"  {_robot_line(kernel, snap, rid)} hd={rb['hd_role']}/{rb['hd_peer']} bias={b:.0f}{note} "
+              f"swing={sorted(rb['swing'])} soft={sorted(rb['swing_soft'])}")
+        snap.print_candidates(rid, b)
+
+
+def _print_unfinished(kernel, snap):
     print("  --- 로봇 (미도달 또는 대치 중) ---")
-    for rid in rids:
-        rb = robots[rid]
+    for rid in kernel.rids:
+        rb = kernel.robots[rid]
         if rb["pos"] == rb["goal"] and rb["hd_peer"] is None:
             continue
-        print(f"  robot{rid} {states[rid]} {rb['state']} goal={rb['goal']} stag={kernel._stag.get(rid)} busy={rb['busy']} "
+        print(f"  {_robot_line(kernel, snap, rid)} "
               f"hd_peer={rb['hd_peer']} role={rb['hd_role']} until={rb['hd_until']} swapped={rb['hd_swapped']} "
               f"swing={sorted(rb['swing'])} soft={sorted(rb['swing_soft'])} bias={wait_bias(kernel._stag.get(rid)):.0f}")
 
-    print("  --- 대치 쌍 ---")
-    seen = set()
-    for rid in rids:
-        rb = robots[rid]
+
+def _standoff_pairs(kernel):
+    """(W, L, hd_until) — 쌍마다 한 번."""
+    seen, out = set(), []
+    for rid in kernel.rids:
+        rb = kernel.robots[rid]
         peer = rb["hd_peer"]
         if peer is None or frozenset((rid, peer)) in seen:
             continue
         seen.add(frozenset((rid, peer)))
         w, l = (rid, peer) if rb["hd_role"] == "W" else (peer, rid)
-        print(f"  W=robot{w} {states[w]}  L=robot{l} {states[l]}  until={rb['hd_until']} (남은 {rb['hd_until'] - t}틱)")
-        hard, soft = kernel._wish_cells(w, states, dists)
+        out.append((w, l, rb["hd_until"]))
+    return out
+
+
+def _print_pairs(kernel, snap):
+    print("  --- 대치 쌍 ---")
+    pairs = _standoff_pairs(kernel)
+    for w, l, until in pairs:
+        print(f"  W=robot{w} {snap.states[w]}  L=robot{l} {snap.states[l]}  until={until} (남은 {until - snap.t}틱)")
+        hard, soft = kernel._wish_cells(w, snap.states, snap.dists)
         print(f"    W wish hard={sorted(hard)} soft={sorted(soft)}")
-        print(f"    L forbid={sorted(forbid.get(l, ()))}  forbid_axle={sorted(forbid_axle.get(l, ()))}")
-        for who in (l, w):
-            s = states[who]
-            cands = candidates_h(s, dists[who], kernel.edge_cost, kernel.wait_cost, kernel.free, kernel.turn_cost)
-            legal = 0
-            print(f"    {'L' if who == l else 'W'} robot{who} 후보 (dist={dists[who][s]:.1f}):")
-            for cand in cands:
-                why = _reasons(kernel, who, s, cand, forbid, forbid_axle, occ_now, axle_now, soft_hold)
-                legal += not why
-                print(f"       {_action_kind(s, cand[0]):4s} -> {cand[0]} dist={dists[who][cand[0]]:.1f} "
-                      f"{'OK' if not why else '✗ ' + '; '.join(why)}")
-            if legal == 0:
+        print(f"    L forbid={sorted(snap.forbid.get(l, ()))}  forbid_axle={sorted(snap.forbid_axle.get(l, ()))}")
+        for role, who in (("L", l), ("W", w)):
+            print(f"    {role} robot{who} 후보 (dist={snap.dists[who][snap.states[who]]:.1f}):")
+            if snap.print_candidates(who) == 0:
                 print(f"       ⚠ robot{who}: 제약 아래 합법 후보 0 (대기 포함) → 제자리 고정")
-    if not seen:
+    if not pairs:
         print("  (대치 쌍 없음)")
 
-    print("  --- 대치 이벤트 ---")
-    ev = kernel.yield_events
+
+def _print_events(ev, n_events, head):
     by_action = Counter(e["action"] for e in ev)
     by_pair = Counter(frozenset((e["yielder"], e["peer"])) for e in ev)
-    print(f"  총 {len(ev)}건 {dict(by_action)}; 쌍 {len(by_pair)}개, 최다 {[(sorted(p), n) for p, n in by_pair.most_common(5)]}")
+    print(f"{head}{len(ev)}건 {dict(by_action)}; 쌍 {len(by_pair)}개, 최다 {[(sorted(p), n) for p, n in by_pair.most_common(5)]}")
     for e in ev[-n_events:]:
         print(f"   t={e['t']:>6} {e['action']:<8} L=robot{e['yielder']} W=robot{e['peer']}")
+
+
+def diag(kernel, t, n_events, robots_only=()):
+    snap = _Snap(kernel, t)
+    print(f"\n[DIAG t={t}] hd_after={kernel.cfg.hd_after} hd_timeout={kernel.cfg.hd_timeout} "
+          f"standoffs={kernel.standoffs} swaps={kernel.standoff_swaps}")
+    if robots_only:
+        _print_selected(kernel, snap, robots_only)
+    _print_unfinished(kernel, snap)
+    _print_pairs(kernel, snap)
+    print("  --- 대치 이벤트 ---")
+    _print_events(kernel.yield_events, n_events, "  총 ")
 
 
 def main(argv):
@@ -159,13 +201,7 @@ def main(argv):
     t, how = _run(kernel, stream, a.horizon, at)
     print(f"[RUN] {how} t={t} done={len(kernel.tasks_done)}")
     if how == "DONE":
-        ev = kernel.yield_events
-        by_action = Counter(e["action"] for e in ev)
-        by_pair = Counter(frozenset((e["yielder"], e["peer"])) for e in ev)
-        print(f"  대치 이벤트 총 {len(ev)}건 {dict(by_action)}; 쌍 {len(by_pair)}개, "
-              f"최다 {[(sorted(p), n) for p, n in by_pair.most_common(5)]}")
-        for e in ev[-n_events:]:
-            print(f"   t={e['t']:>6} {e['action']:<8} L=robot{e['yielder']} W=robot{e['peer']}")
+        _print_events(kernel.yield_events, n_events, "  대치 이벤트 총 ")
         return
     diag(kernel, t, n_events, robots_only)
 

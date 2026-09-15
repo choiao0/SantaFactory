@@ -35,34 +35,57 @@ def _key(row, cols):
     return tuple(str(row.get(c, "")) for c in cols)
 
 
-def compare(base_path, new_path, metric="tasks_per_h", show_rows=False):
-    base, new = read_csv(base_path), read_csv(new_path)
-    cols = [c for c in KEYS if base and new and c in base[0] and c in new[0]]
-    b = {_key(r, cols): r for r in base}
-    pairs, stall_b, stall_n = [], 0, 0
-    for r in new:
-        k = _key(r, cols)
-        if k not in b:
-            continue
-        rb = b[k]
-        sb, sn = is_stall(rb), is_stall(r)
-        stall_b += sb
-        stall_n += sn
-        if sb or sn or r.get(metric, "") == "" or rb.get(metric, "") == "":
-            pairs.append((k, rb.get(metric, ""), r.get(metric, ""), None, sb, sn))
-            continue
-        pairs.append((k, rb[metric], r[metric], r[metric] / rb[metric] - 1, sb, sn))
+def _common_keys(base, new):
+    if not base or not new:
+        return []
+    return [c for c in KEYS if c in base[0] and c in new[0]]
+
+
+def _pair(rb, r, k, metric):
+    """(키, 기준값, 새값, 변화율 또는 None, 기준 STALL, 새 STALL). 어느 쪽이든 STALL 이거나 값이 비면 변화율 없음."""
+    sb, sn = is_stall(rb), is_stall(r)
+    vb, vn = rb.get(metric, ""), r.get(metric, "")
+    delta = None if (sb or sn or vb == "" or vn == "") else vn / vb - 1
+    return (k, vb, vn, delta, sb, sn)
+
+
+def pair_rows(base, new, metric):
+    """새 CSV 의 각 행을 기준 CSV 의 같은 키 행과 짝짓는다. 짝이 없는 행은 건너뛴다."""
+    cols = _common_keys(base, new)
+    by_key = {_key(r, cols): r for r in base}
+    pairs = [_pair(by_key[k], r, k, metric) for r in new if (k := _key(r, cols)) in by_key]
+    return cols, pairs
+
+
+def _delta_label(delta, stall_base, stall_new):
+    if stall_new:
+        return "STALL"
+    if stall_base:
+        return "(기준 STALL)"
+    return f"{delta * 100:+.1f} %"
+
+
+def _print_summary(base_path, new_path, cols, metric, pairs):
     deltas = [p[3] for p in pairs if p[3] is not None]
+    stall_b, stall_n = sum(p[4] for p in pairs), sum(p[5] for p in pairs)
     print(f"{os.path.basename(base_path)} → {os.path.basename(new_path)}  키={cols}  지표={metric}")
     print(f"  짝 {len(pairs)}행 (비교 가능 {len(deltas)}) · STALL {stall_b} → {stall_n}")
     if deltas:
         print(f"  평균 {statistics.mean(deltas) * 100:+.1f} %  중앙 {statistics.median(deltas) * 100:+.1f} %  "
               f"범위 {min(deltas) * 100:+.1f} ~ {max(deltas) * 100:+.1f} %")
+
+
+def _print_rows(cols, pairs):
+    for k, vb, vn, d, sb, sn in pairs:
+        tag = " ".join(f"{c}={v}" for c, v in zip(cols, k))
+        print(f"    {tag:<48} {str(vb):>8} → {str(vn):>8}  {_delta_label(d, sb, sn)}")
+
+
+def compare(base_path, new_path, metric="tasks_per_h", show_rows=False):
+    cols, pairs = pair_rows(read_csv(base_path), read_csv(new_path), metric)
+    _print_summary(base_path, new_path, cols, metric, pairs)
     if show_rows:
-        for k, vb, vn, d, sb, sn in pairs:
-            tag = " ".join(f"{c}={v}" for c, v in zip(cols, k))
-            ds = "STALL" if sn else ("(기준 STALL)" if sb else f"{d * 100:+.1f} %")
-            print(f"    {tag:<48} {str(vb):>8} → {str(vn):>8}  {ds}")
+        _print_rows(cols, pairs)
     return pairs
 
 
