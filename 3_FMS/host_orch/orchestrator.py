@@ -22,6 +22,7 @@ STATE, RUN_ID, HEARTBEAT, RTF = "Runner/State", "Runner/RunId", "Runner/Heartbea
 RAM, VRAM, LAST_ERROR = "Runner/RamMB", "Runner/VramMB", "Runner/LastError"
 ISAAC = "Runner/IsaacInstances"
 SCENARIO_SHA = "Runner/ScenarioSha"
+VIDEO_URL = "Runner/VideoUrl"          # t3_amr 엣지(-215)가 런 종료 NDATA 에 싣는 mp4 공개 URL → artifacts.video
 FMS_STATE, FMS_RUN_ID, FMS_LAST_ERROR, FMS_TICK = "Fms/State", "Fms/RunId", "Fms/LastError", "Fms/Tick"
 KPI_EVENT = "kpi_summary"
 CMD_START, CMD_STOP, REBIRTH = "Run Control/Start", "Run Control/Stop", "Node Control/Rebirth"
@@ -155,9 +156,13 @@ class Stats:
     vram_mb_max: int = 0
     isaac_max: int = 0
     runner_scenario_sha: str = ""
+    video_url: str = ""
 
     def observe(self, node: Node) -> None:
         self.robots_online = max(self.robots_online, len(node.alive_devices()))
+        url = node.get(VIDEO_URL)
+        if isinstance(url, str) and url:
+            self.video_url = url
         sha = node.get(SCENARIO_SHA)
         if isinstance(sha, str) and sha:
             self.runner_scenario_sha = sha
@@ -372,7 +377,8 @@ class Job:
 
     # ---- 결과 -------------------------------------------------------------------
     def result(self) -> dict:
-        """sim.verify.result 본문 (SIM_VERIFY_CONTRACT §3). kpi 는 fms-core 의 kpi_summary, 없으면 null. artifacts 는 아직 null."""
+        """sim.verify.result 본문 (SIM_VERIFY_CONTRACT §3). kpi 는 fms-core 의 kpi_summary, 없으면 null.
+        artifacts.video 는 러너가 Runner/VideoUrl 로 준 mp4 URL(-215), 없으면 artifacts 는 null."""
         s = self.stats
         elapsed = (self.ended_at - self.started_at) if self.started_at is not None and self.ended_at is not None else 0.0
         return {"run_id": self.req.run_id, "status": "done" if self.phase == "DONE" else "failed",
@@ -388,7 +394,7 @@ class Job:
                            "scenario_ack": (self.req.scenario_sha256 is not None
                                             and s.runner_scenario_sha == self.req.scenario_sha256),
                            "reason": self.reason, "fms": self._fms_block()},
-                "kpi": self.kpi, "artifacts": None,
+                "kpi": self.kpi, "artifacts": {"video": s.video_url} if s.video_url else None,
                 "source_run_id": self.req.source_run_id, "estimate_id": self.req.estimate_id}
 
     def _fms_block(self) -> Optional[dict]:
