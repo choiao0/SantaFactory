@@ -56,7 +56,7 @@ import static org.mockito.Mockito.when;
 class EstimateServiceTest {
 
     private static final EstimateProperties PROPS =
-            new EstimateProperties(15_000_000L, 5_000_000L, 500_000L, 28, 6, 4, 1, Duration.ofMinutes(30), Duration.ofHours(6), "out", false, Duration.ofMinutes(10), 10, 6);
+            new EstimateProperties(15_000_000L, 5_000_000L, 500_000L, 28, 6, 4, 1, Duration.ofMinutes(30), Duration.ofHours(6), "out", false, Duration.ofMinutes(10), 10, 6, null);
 
     @Mock
     EstimateRepository estimateRepository;
@@ -298,7 +298,7 @@ class EstimateServiceTest {
     void ignores_a_second_result_for_a_run_already_finished() {
         Estimate estimate = estimate(85.0, 90.0, 1_000_000_000L);
         SimScenario run = run(estimate, 4);
-        run.markDone(85.0, 95.0, 85L);
+        run.markDone(85.0, 95.0, 85L, null);
         when(scenarioRepository.findByRunId(run.getRunId())).thenReturn(Optional.of(run));
 
         service().applyResult(done(run.getRunId(), 100, 10, 0.1));   // 다른 값으로 재전달
@@ -329,8 +329,8 @@ class EstimateServiceTest {
         SimScenario twoAmr = run(estimate, 2);
         SimScenario fourAmr = run(estimate, 4);
         SimScenario sixAmr = run(estimate, 6);
-        twoAmr.markDone(60.0, 98.0, 60L);
-        fourAmr.markDone(85.0, 95.0, 85L);
+        twoAmr.markDone(60.0, 98.0, 60L, null);
+        fourAmr.markDone(85.0, 95.0, 85L, null);
         when(scenarioRepository.findByRunId(sixAmr.getRunId())).thenReturn(Optional.of(sixAmr));
         when(scenarioRepository.findByEstimateIdOrderByAmrCountAsc(any()))
                 .thenReturn(List.of(twoAmr, fourAmr, sixAmr));
@@ -350,8 +350,8 @@ class EstimateServiceTest {
         SimScenario twoAmr = run(estimate, 2);
         SimScenario fourAmr = run(estimate, 4);
         SimScenario sixAmr = run(estimate, 6);
-        twoAmr.markDone(60.0, 98.0, 60L);
-        fourAmr.markDone(85.0, 95.0, 85L);
+        twoAmr.markDone(60.0, 98.0, 60L, null);
+        fourAmr.markDone(85.0, 95.0, 85L, null);
         when(scenarioRepository.findByRunId(sixAmr.getRunId())).thenReturn(Optional.of(sixAmr));
         when(scenarioRepository.findByEstimateIdOrderByAmrCountAsc(any()))
                 .thenReturn(List.of(twoAmr, fourAmr, sixAmr));
@@ -607,8 +607,8 @@ class EstimateServiceTest {
         SimScenario twoAmr = run(estimate, 2);
         SimScenario fourAmr = run(estimate, 4);
         SimScenario sixAmr = run(estimate, 6);
-        twoAmr.markDone(60.0, 98.0, 60L);
-        fourAmr.markDone(85.0, 95.0, 85L);
+        twoAmr.markDone(60.0, 98.0, 60L, null);
+        fourAmr.markDone(85.0, 95.0, 85L, null);
         when(scenarioRepository.findByStatusInAndPublishedAtBefore(any(), any())).thenReturn(List.of(sixAmr));
         when(scenarioRepository.findByEstimateIdOrderByAmrCountAsc(any()))
                 .thenReturn(List.of(twoAmr, fourAmr, sixAmr));

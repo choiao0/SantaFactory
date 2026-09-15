@@ -10,13 +10,17 @@
 TRUNCATE warehouses, facility, zones, stores, rack, products, robots
     RESTART IDENTITY CASCADE;
 
+-- outbound_avg 는 하루 출고 물량이고, 견적은 이 값을 horizon(6h)에 그대로 싣는다. 팀 결정
+-- (2026-09-11) 견적 부하가 "하루 6,000건 / 6시간 / 출고만" 이므로 6000 이다
+-- (3_FMS/docs/프로젝트_요약.md "부하(팀 결정)"). 800 이던 시절에는 3대 근처에서 처리율이 포화해
+-- FMS 가 대수를 재는 조건과 견적 화면이 서로 다른 세계였다 (S15P21A106-97).
 INSERT INTO warehouses
 (warehouse_id,name,area,width,length,worker_count,
  inbound_start,inbound_end,outbound_start,outbound_end,status,
  inbound_avg,outbound_avg,outbound_rate,target_throughput,target_utilization,budget_limit) VALUES
 (1,'품고',9900.0,110.0,90.0,12,
  '2026-01-01 00:00:00','2026-01-01 09:00:00','2026-01-01 13:00:00','2026-01-01 18:00:00','OUTBOUND',
- 600,800,95.0,95.0,80.0,300000000);
+ 600,6000,95.0,95.0,80.0,300000000);
 
 SELECT setval(pg_get_serial_sequence('warehouses', 'warehouse_id'), (SELECT MAX(warehouse_id) FROM warehouses));
 
