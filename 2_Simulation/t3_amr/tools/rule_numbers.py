@@ -101,31 +101,57 @@ print(f"        배치 {tot}   접촉 {hit}   최악 {worst*1000:+.1f} mm\n")
 # ── §4 규칙별 ───────────────────────────────────────────────────────────
 print("§4  규칙별 (hard = 모델스윕 - soft,  8회전 최악값)")
 print(f"     {'규칙':<14}{'합법쌍':>8}{'접촉':>6}{'최소여유mm':>12}{'hard∪soft':>11}")
+def b_turns():
+    """B 후보 — A 둘레 7x7 칸 × 8가지 90° 회전."""
+    return [(R0+dr, C0+dc, g0, g1)
+            for dr in range(-3,4) for dc in range(-3,4)
+            for g0 in range(4) for g1 in ((g0+1)%4, (g0-1)%4)]
+
+
+def zones(r, c, h0, h1, keys, hard_mode):
+    """회전 하나가 잡는 칸 — (guard, hard).
+
+    guard  규칙이 지정한 칸 그대로. soft 로 쓰면 상대의 **축**만 막는다
+    hard   상대 **몸**이 못 들어오는 칸
+             soft 모드   모델스윕에서 guard 를 덜어낸다  (ca - ga∩ca)
+             hard 모드   반대로 guard 를 몸 금지로 더한다 (ca | ga)
+    """
+    pr = parts(r, c, h0, h1)
+    ca = cells_model(r, c, h0, h1)
+    ga = frozenset(pr[k] for k in keys)
+    return (ga, ca | ga) if hard_mode else (ga, ca - (ga & ca))
+
+
+def pair_ok(A, B, za, zb, hard_mode):
+    """A·B 가 동시에 돌아도 되는가. za·zb 는 zones() 결과."""
+    ga, ha = za
+    gb, hb = zb
+    if body(*B) & ha or body(*A) & hb:
+        return False                       # 몸끼리 — 어느 규칙이든 금지
+    if hard_mode:
+        return True
+    # soft 로 쓸 때만 묻는다: 상대의 **축**이 guard 안에 있으면 안 된다
+    return not ((B[0],B[1]) in ga or (A[0],A[1]) in gb)
+
+
+def one_turn(A, keys, hard_mode):
+    """A 의 회전 하나 — (합법쌍, 접촉, 최악여유, hard∪guard 칸수)."""
+    za = zones(*A, keys, hard_mode)
+    pa = rot_poses(*A)
+    ok = hit = 0; w = 9.9
+    for B in b_turns():
+        if not pair_ok(A, B, za, zones(*B, keys, hard_mode), hard_mode):
+            continue
+        ok += 1
+        gap = min(g.body_gap(x,y) for x in pa for y in rot_poses(*B))
+        if gap <= 0.0: hit += 1
+        w = min(w, gap)
+    return ok, hit, w, len(za[1] | za[0])
+
+
 def run(keys, hard_mode=False):
-    res=[]
-    for h0,h1 in turns:
-        pr = parts(R0,C0,h0,h1); ca = cells_model(R0,C0,h0,h1)
-        ga = frozenset(pr[k] for k in keys)
-        sa = ga & ca if not hard_mode else frozenset()
-        ha = (ca - sa) | (ga if hard_mode else frozenset())
-        pa = rot_poses(R0,C0,h0,h1)
-        ok=h=0; w=9.9; u=len(ha|ga)
-        for dr in range(-3,4):
-         for dc in range(-3,4):
-          for g0 in range(4):
-           for g1 in ((g0+1)%4,(g0-1)%4):
-            B=(R0+dr,C0+dc,g0,g1); prb=parts(*B); cb=cells_model(*B)
-            gb=frozenset(prb[k] for k in keys)
-            sb = gb & cb if not hard_mode else frozenset()
-            hb = (cb - sb) | (gb if hard_mode else frozenset())
-            if body(*B) & ha or body(R0,C0,h0,h1) & hb: continue
-            if not hard_mode and ((B[0],B[1]) in ga or (R0,C0) in gb): continue
-            ok+=1
-            gap=min(g.body_gap(x,y) for x in pa for y in rot_poses(*B))
-            if gap<=0.0: h+=1
-            w=min(w,gap)
-        res.append((ok,h,w,u))
-    return res
+    """8가지 회전 전부. 표에는 이 목록의 최소/합/최대가 들어간다."""
+    return [one_turn((R0,C0,h0,h1), keys, hard_mode) for h0,h1 in turns]
 for name,keys in RULES.items():
     r=run(keys)
     print(f"     {name:<14}{min(x[0] for x in r):>8}{sum(x[1] for x in r):>6}"

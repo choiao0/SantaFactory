@@ -49,57 +49,106 @@ def chains_from(history, cells_hist, geom, basis):
     return chains, agents
 
 
-def main():
-    plans = []
-    for sd in range(SEEDS):
-        geom, free, starts, goals = setup(MAP, N, PITCH, sd, "cross")
-        try:
-            history, cells_hist = run_h(free, starts, goals, max_steps=150)
-        except (SystemExit, RuntimeError) as e:
-            print(f"  seed {sd}: run_h 실패 — {e}")
-            continue
-        plans.append((sd, geom, starts, history, cells_hist))
+# 계획기는 **못 푸는 시나리오를 SystemExit 로 알린다.** 시드 하나가 안 풀려도
+# 나머지 시드로 표를 낼 수 있으니 그 신호만 잡고 넘어간다.
+#
+#   [잡는다] 계획기 정체 — 이 시드만 못 푼다. 다음 시드는 의미가 있다
+#     _pibt_core_vendor.py:840  "PIBT(헤딩) 정체: N스텝 내 미도달 {...}"
+#     `run_h` 가 내는 SystemExit 은 **이것 하나뿐**이다
+#
+#   [안 잡는다] 그 밖의 SystemExit — 시드와 무관한 사정이다. 그대로 올린다
+#
+# ★ `setup` 은 여기서 잡지 않는다. 맵·pitch·스테이션 오류라 시드마다 다를 수가
+#   없고, 잡으면 같은 메시지가 시드 수만큼 찍힐 뿐이다.
+# ★ 옛 코드는 `RuntimeError` 도 함께 잡았다. 그런데 계획기에는 그것을 내는
+#   자리가 **없다** — `_pibt_core_vendor.py` 에 `RuntimeError` 0건이고, 시작
+#   상태·목표 도달 가능성은 `assert` 라 AssertionError 다. 죽은 절이라 뺐다.
+_PLANNER_STALL = ("정체", "미도달")
+
+
+def plan_one(sd):
+    """시드 하나를 계획한다. 계획기가 못 풀면 None."""
+    geom, free, starts, goals = setup(MAP, N, PITCH, sd, "cross")
+    try:
+        history, cells_hist = run_h(free, starts, goals, max_steps=150)
+    except SystemExit as e:
+        if not any(k in str(e) for k in _PLANNER_STALL):
+            raise               # 계획기 정체가 아니다 — 삼키지 않는다
+        print(f"  seed {sd}: run_h 실패 — {e}")
+        return None
+    return (sd, geom, starts, history, cells_hist)
+
+
+def collect_plans():
+    """시드를 전부 계획한다. 하나도 못 내면 거기서 끝낸다."""
+    plans = [p for p in (plan_one(sd) for sd in range(SEEDS)) if p]
     if not plans:
         raise SystemExit("★ 계획이 하나도 안 나왔습니다.")
+    return plans
 
-    print(plans[0][1].describe())
-    aud = D.sweep_audit(plans[0][1], plans[0][3], plans[0][4])
+
+def print_audit(plan):
+    """첫 계획으로 기하와 예약 감사를 찍는다."""
+    _sd, geom, _starts, history, cells_hist = plan
+    print(geom.describe())
+    aud = D.sweep_audit(geom, history, cells_hist)
     print(f"\n예약 감사: 전이 {aud['total']}건 중 예약 < 실제 스윕 "
           f"{aud['short']}건  {aud['by_kind']}")
 
+
+def drive_once(geom, adg, starts, order, seed):
+    """한 판 주행 — 끝난 `FleetController` 를 돌려준다."""
+    drivers = D.make_kinematic_drivers(geom, starts, seed=seed)
+    fleet = D.FleetController(geom, adg, drivers, order=order)
+    for _ in range(200000):
+        fleet.step(DT)
+        for d in drivers.values():
+            d.integrate(DT)
+        if fleet.finished:
+            break
+    return fleet
+
+
+def run_basis(basis, plans):
+    """근거 하나로 전 시드·전 판을 돌린다 — (주행, 접촉, 칸공유, 최악여유, 완주)."""
+    runs = contact = share = done = 0
+    worst = float("inf")
+    for sd, geom, starts, history, cells_hist in plans:
+        chains, order = chains_from(history, cells_hist, geom, basis)
+        adg = D.build_adg(chains)
+        if adg.topological_order() is None:
+            print(f"  [{basis}] seed {sd}: ADG 순환 — 건너뜀")
+            continue
+        for rs in range(RUNS):
+            fleet = drive_once(geom, adg, starts, order, rs * 7 + sd)
+            runs += 1
+            done += bool(fleet.finished)
+            contact += fleet.stats.contact_events
+            share += fleet.stats.overlap_events
+            worst = min(worst, fleet.stats.worst_gap)
+    return runs, contact, share, worst, done
+
+
+def print_table(plans):
+    """두 근거를 같은 계획·같은 시드로 나란히 비교한다."""
     print("\n" + "=" * 74)
     print(f"{'ADG 근거':>12} | {'주행':>4} | {'접촉':>7} | {'칸 공유':>8} | "
           f"{'최소 차체거리':>12} | 완주")
     print("=" * 74)
     for basis in ("sweep", "cells_hist"):
-        runs = contact = share = done = 0
-        worst = float("inf")
-        for sd, geom, starts, history, cells_hist in plans:
-            chains, order = chains_from(history, cells_hist, geom, basis)
-            adg = D.build_adg(chains)
-            if adg.topological_order() is None:
-                print(f"  [{basis}] seed {sd}: ADG 순환 — 건너뜀")
-                continue
-            for rs in range(RUNS):
-                drivers = D.make_kinematic_drivers(geom, starts, seed=rs * 7 + sd)
-                fleet = D.FleetController(geom, adg, drivers, order=order)
-                for _ in range(200000):
-                    fleet.step(DT)
-                    for d in drivers.values():
-                        d.integrate(DT)
-                    if fleet.finished:
-                        break
-                runs += 1
-                done += bool(fleet.finished)
-                contact += fleet.stats.contact_events
-                share += fleet.stats.overlap_events
-                worst = min(worst, fleet.stats.worst_gap)
+        runs, contact, share, worst, done = run_basis(basis, plans)
         w = "—" if worst == float("inf") else f"{worst * 1000:+.1f} mm"
         print(f"{basis:>12} | {runs:>4} | {contact:>7} | {share:>8} | {w:>12} | "
               f"{done}/{runs}")
     print("=" * 74)
     print("접촉 = 차체가 실제로 닿은 건수 (body_gap <= 0)")
     print("칸 공유 = 발자국 칸이 겹친 건수 — 접촉의 상한이지 접촉이 아니다")
+
+
+def main():
+    plans = collect_plans()
+    print_audit(plans[0])
+    print_table(plans)
 
 
 if __name__ == "__main__":
