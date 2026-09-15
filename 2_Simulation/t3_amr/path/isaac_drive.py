@@ -1133,7 +1133,14 @@ class AdgRuntime:
         self._why_next = self._why_every if self._why_on else float("inf")
         self._why = {}                      # agent -> [obstacle, release, adg]
         self._why_late = {}                 # 같은 것, release 지평 이후만
-        self._why_horizon = (max((a.tick for a in adg.actions), default=0)
+        # 「이 시각 뒤로는 관문 ②가 아무도 못 막는다」 = 바닥의 최댓값.
+        # ★ 2026-09-15 (-211): 예전에는 `max(a.tick)`(= 마지막 **액션** 틱)을
+        #   썼다. 바닥이 `action.tick` 이던 시절엔 그게 맞았지만 이제 바닥은
+        #   `release_tick`(주문 도착 틱)이라 실제 지평이 더 이르다. 그대로
+        #   두면 「지평 이후」 구간에 ②가 이미 안 걸리던 프레임이 섞여
+        #   보고가 무뎌진다.
+        self._why_horizon = (max((a.release_tick for a in adg.actions
+                                  if a.release_tick is not None), default=0)
                              * (tick_s or 0.0))
 
     def advance(self, dt: float) -> None:
