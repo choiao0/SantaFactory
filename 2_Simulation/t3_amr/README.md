@@ -329,7 +329,9 @@ export MAP=$W/warehouse/map        # paths.sh:27
 > **둘 다 지금은 사실이 아니다** (2026-09-11 정정). `$MAP_FMS` 는 이 저장소의
 > `paths.sh` 에 없고, `$MAP` 은 t3_amr 안의 사본을 가리킨다.
 
-팀 기본 맵(`../t3_warehouse_map/map`, v6.0)을 쓰지 않는 이유는 두 가지다.
+한때 팀 기본 맵이던 `../t3_warehouse_map/map`(v6.0)을 쓰지 않은 이유는 두
+가지였다. **그 폴더는 -219 로 삭제됐으므로 아래는 이력이다** — 지금 단일
+소스는 `warehouse/map/` 이다.
 
 - 격자가 다르다 (`occupancy_grid` sha `3f9548db…` vs 여기 `563e6aeb…`)
 - `stations.json` 에 `handoff` 가 없다 — `pibt_scene.GOAL_CATS` 다섯 중 하나가
