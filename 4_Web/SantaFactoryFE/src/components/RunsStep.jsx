@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { ESTIMATE_STATUS_LABEL, RUN_STATUS_LABEL } from '../data/replay.js'
 import { formatDateTime, formatPercent } from '../utils/format.js'
 import ReplayCanvas from '../replay/ReplayCanvas.jsx'
@@ -44,12 +44,16 @@ function RunCard({ run, selected, onSelect }) {
 // 그래도 프레임당 시뮬 0.5~1초라 샘플(4.4초 간격) 사이를 보간이 메운다
 const SPEEDS = [8, 16, 32, 64]
 
-/** 재생 시계를 "HH:MM:SS" 로. 시뮬 안의 경과 시간이지 벽시계가 아니다. */
-function formatClock(sec) {
+function formatDuration(sec) {
   const h = String(Math.floor(sec / 3600)).padStart(2, '0')
   const m = String(Math.floor((sec % 3600) / 60)).padStart(2, '0')
   const s = String(Math.floor(sec % 60)).padStart(2, '0')
-  return `T+${h}:${m}:${s}`
+  return `${h}:${m}:${s}`
+}
+
+/** 재생 시계를 "HH:MM:SS" 로. 시뮬 안의 경과 시간이지 벽시계가 아니다. */
+function formatClock(sec) {
+  return `T+${formatDuration(sec)}`
 }
 
 /**
@@ -109,10 +113,10 @@ function OutboundPanel({ replay, seconds }) {
         <dt>최근 1시간</dt>
         <dd>{perHour.toLocaleString()}<span>건/시간</span></dd>
       </dl>
-      <div className="rp-progress" role="img" aria-label={`접수 ${total}건 중 ${now}건 완료`}>
+      <div className="rp-progress" role="img" aria-label={`처리 ${total}건 중 ${now}건 완료`}>
         <i style={{ width: `${pct}%` }} />
       </div>
-      <p className="mono dim">접수 {total.toLocaleString()}건 중 {pct}%</p>
+      <p className="mono dim">처리 {total.toLocaleString()}건 중 {pct}% 완료</p>
     </aside>
   )
 }
@@ -121,7 +125,7 @@ function OutboundPanel({ replay, seconds }) {
  * 재생 루프. 대수가 바뀌면 부모가 key 를 갈아 이 컴포넌트를 새로 만든다 —
  * 그래야 "새 데이터가 오면 0초부터" 를 초기화 effect 없이 얻는다.
  */
-function ReplayPlayer({ replay, playing, speed, onTick }) {
+function ReplayPlayer({ replay, playing, speed, onTogglePlay, onNextSpeed }) {
   const [tick, setTick] = useState(0)
   const ticks = Math.max(...Object.values(replay.robots).map((a) => a.length))
   const dt = replay.dt_s ?? 1
@@ -141,8 +145,6 @@ function ReplayPlayer({ replay, playing, speed, onTick }) {
     return () => cancelAnimationFrame(raf)
   }, [playing, speed, ticks, dt])
 
-  useEffect(() => { onTick(tick * dt) }, [tick, dt, onTick])
-
   const seconds = tick * dt
   return (
     <>
@@ -151,45 +153,41 @@ function ReplayPlayer({ replay, playing, speed, onTick }) {
         <OutboundPanel replay={replay} seconds={seconds} />
       </div>
       {/* 전체를 담으니 건너뛸 수단이 없으면 뒤쪽은 사실상 못 본다 */}
-      <input
-        className="rp-seek"
-        type="range"
-        min={0}
-        max={Math.max(0, ticks - 1)}
-        step={1}
-        value={Math.floor(tick)}
-        onChange={(e) => setTick(Number(e.target.value))}
-        aria-label="재생 위치"
-      />
+      <div className="rp-seekrow">
+        <button type="button" className="ghost sm rp-btn" onClick={onTogglePlay} aria-label={playing ? '일시정지' : '재생'}>
+          {playing ? '⏸︎' : '▶︎'}
+        </button>
+        <input
+          className="rp-seek"
+          type="range"
+          min={0}
+          max={Math.max(0, ticks - 1)}
+          step={1}
+          value={Math.floor(tick)}
+          onChange={(e) => setTick(Number(e.target.value))}
+          aria-label="재생 위치"
+        />
+        <span className="rp-time">{formatDuration(seconds)} / {formatDuration(replay.seconds ?? (ticks - 1) * dt)}</span>
+        <button type="button" className="ghost sm rp-btn" onClick={onNextSpeed} aria-label="재생 배속">×{speed}</button>
+      </div>
     </>
   )
 }
 
 /** 선택한 대수의 주행을 재생한다 (S15P21A106-205). 데이터 수급과 컨트롤만 맡는다. */
-function ReplayBoard({ estimateId, amrCount, runLabel }) {
+function ReplayBoard({ estimateId, amrCount }) {
   const { replay, loading, error } = useReplay(estimateId, amrCount)
   const [playing, setPlaying] = useState(true)
-  const [seconds, setSeconds] = useState(0)
   // 6시간을 ×64 로 보면 5.6분. ×32 는 11분이라 끝까지 보는 사람이 없다
   const [speed, setSpeed] = useState(64)
 
   const nextSpeed = () => setSpeed((v) => SPEEDS[(SPEEDS.indexOf(v) + 1) % SPEEDS.length])
-  const onTick = useCallback((s) => setSeconds(s), [])
+  const togglePlay = () => setPlaying((v) => !v)
 
   return (
     <div className="rp-wrap">
       <div className="rp-bar">
-        <h4>
-          REPRESENTATIVE RUN
-          <span>{runLabel} · SEED 101</span>
-        </h4>
-        <div className="rp-ctrl">
-          <span className="rp-clock">{formatClock(seconds)}</span>
-          <button type="button" className="ghost" disabled={!replay} onClick={() => setPlaying((v) => !v)}>
-            {playing ? '⏸ PAUSE' : '▶ PLAY'}
-          </button>
-          <button type="button" className="ghost" disabled={!replay} onClick={nextSpeed}>SPEED ×{speed}</button>
-        </div>
+        <h4>REPRESENTATIVE RUN</h4>
       </div>
 
       <div className="sim-board">
@@ -205,7 +203,7 @@ function ReplayBoard({ estimateId, amrCount, runLabel }) {
 
         {replay && (
           <ReplayPlayer key={`${estimateId}:${amrCount}`} replay={replay}
-                        playing={playing} speed={speed} onTick={onTick} />
+                        playing={playing} speed={speed} onTogglePlay={togglePlay} onNextSpeed={nextSpeed} />
         )}
         {!replay && (
           <div className="rp-placeholder">
@@ -249,7 +247,6 @@ export default function RunsStep({ estimateId, estimate, connected, error }) {
   const done = runs.filter((r) => r.status === 'DONE')
   const fallback = estimate?.recommended_count ?? done.at(-1)?.amr_count ?? null
   const shown = picked ?? fallback
-  const runLabel = estimate ? `est_${estimate.estimate_id}_n${shown ?? '?'}` : 'est_?_n?'
 
   return (
     <section className="step section-dark reveal" id="s3">
@@ -295,7 +292,7 @@ export default function RunsStep({ estimateId, estimate, connected, error }) {
         </>
       )}
 
-      <ReplayBoard estimateId={estimateId} amrCount={shown} runLabel={runLabel} />
+      <ReplayBoard estimateId={estimateId} amrCount={shown} />
     </section>
   )
 }

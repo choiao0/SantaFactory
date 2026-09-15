@@ -210,9 +210,9 @@ section.step > p.desc { font-size: 18px; line-height: 1.7; max-width: 760px; mar
 .range .track { position: absolute; left: 0; right: 0; top: 26px; height: 3px; background: #333; }
 .range .fill { position: absolute; top: 26px; height: 3px; background: var(--red); }
 .range .knob {
-  position: absolute; top: 17px; width: 20px; height: 20px;
+  position: absolute; top: 15px; width: 24px; height: 24px;
   background: #111; border: 2px solid var(--red); border-radius: 50%;
-  transform: translateX(-50%); cursor: grab;
+  transform: translateX(-50%); cursor: grab; touch-action: none;
 }
 .range .knob::after { content: ''; position: absolute; inset: -10px; border-radius: 50%; }
 .range .knob:hover { background: #1c1c1c; }
@@ -303,8 +303,6 @@ section.step > p.desc { font-size: 18px; line-height: 1.7; max-width: 760px; mar
 .rp-bar { display: flex; justify-content: space-between; align-items: center; gap: 14px; flex-wrap: wrap; margin: 0 0 12px; max-width: 920px; }
 .rp-bar h4 { font: 700 20px var(--font-head); margin: 0; letter-spacing: -.02em; }
 .rp-bar h4 span { font: 500 14px var(--font-mono); letter-spacing: .05em; color: #999; margin-left: 10px; }
-.rp-ctrl { display: flex; gap: 8px; align-items: center; }
-.rp-clock { font: 600 16px var(--font-mono); color: var(--red); min-width: 100px; }
 /* 격자·로봇은 캔버스가 그리므로 CSS 로는 색만 넘긴다 — ReplayCanvas 가 getComputedStyle 로
    읽어가고, 테마를 바꾸면 캔버스도 따라온다. 스테이션은 역할별로 색이 다르다:
    출고 지점(packing)이 어디인지 보여야 AMR 의 목적지가 읽힌다 */
@@ -330,7 +328,7 @@ section.step > p.desc { font-size: 18px; line-height: 1.7; max-width: 760px; mar
   background: #1d1d1d; border: 1px solid #353535; image-rendering: pixelated;
 }
 /* 캔버스와 현황 패널을 나란히. 좁아지면 패널이 아래로 내려간다 */
-.rp-stage { display: grid; grid-template-columns: 1fr 190px; gap: 16px; align-items: start; }
+.rp-stage { display: grid; grid-template-columns: 1fr 210px; gap: 16px; align-items: start; }
 .rp-side { border: 1px solid #2c2c2c; background: #141414; padding: 14px 16px; }
 .rp-side h5 {
   font: 600 14px var(--font-mono); letter-spacing: .06em; color: #8a8a86;
@@ -342,11 +340,18 @@ section.step > p.desc { font-size: 18px; line-height: 1.7; max-width: 760px; mar
 .rp-stat dd span { font: 500 13px var(--font-mono); color: #8a8a86; margin-left: 4px; }
 .rp-progress { height: 6px; background: #2c2c2c; overflow: hidden; }
 .rp-progress i { display: block; height: 100%; background: var(--rp-pack); transition: width .2s linear; }
-.rp-side .mono.dim { margin: 8px 0 0; }
+.rp-side .mono.dim { margin: 8px 0 0; white-space: nowrap; }
 
+.rp-seekrow { display: flex; align-items: center; gap: 12px; margin-top: 10px; }
 .rp-seek {
-  display: block; width: 100%; margin-top: 10px; accent-color: var(--red);
+  display: block; flex: 1; min-width: 0; accent-color: var(--red);
   background: transparent; cursor: pointer;
+}
+.rp-time { font: 500 13px var(--font-mono); letter-spacing: .04em; color: #999; white-space: nowrap; }
+.rp-btn {
+  flex: none; display: inline-flex; align-items: center; justify-content: center;
+  height: 48px; min-width: 68px; padding: 0 18px; box-sizing: border-box;
+  font: 600 19px/1 var(--font-mono);
 }
 .rp-placeholder {
   display: grid; place-items: center; min-height: 220px;
