@@ -133,12 +133,18 @@ export function buildModel(replay) {
   const robots = {}
   let T = 0
   for (const [rid, pts] of Object.entries(replay.robots || {})) {
-    // 헤딩은 변할 때만 기록돼 오므로 틱으로 찾아 쓴다. 없으면 동쪽으로 본다
-    const hd = new Map((replay.headings?.[rid] || []).map(([t, y]) => [Math.round(t), y]))
+    // 헤딩은 변할 때만 기록돼 온다. 기록이 없는 시점은 마지막 기록을 유지한다 — 시점마다 동쪽으로
+    // 되돌리면 서 있는 로봇이 빙글빙글 돈다. 첫 기록 전에는 동쪽
+    const events = [...(replay.headings?.[rid] || [])].sort((a, b) => a[0] - b[0])
+    let k = 0
+    let h = 1
     const arr = pts.map(([t, x, y]) => {
       const [r, c] = shift(toRC(x, y))
-      const tt = Math.round(t)
-      return [r, c, hd.has(tt) ? yawToH(hd.get(tt)) : 1]
+      while (k < events.length && events[k][0] <= t + 1e-6) {
+        h = yawToH(events[k][1])
+        k += 1
+      }
+      return [r, c, h]
     })
     robots[rid] = arr
     T = Math.max(T, arr.length)
