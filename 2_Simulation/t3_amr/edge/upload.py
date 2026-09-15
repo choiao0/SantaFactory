@@ -10,6 +10,9 @@ from dataclasses import dataclass
 from typing import Any
 
 CONTENT_TYPE = "video/mp4"
+CONNECT_TIMEOUT_S = 10.0
+READ_TIMEOUT_S = 120.0                  # 100 MB 급 mp4 도 tailnet 에서 이 안에 올라간다
+RETRIES = 2
 
 
 @dataclass(frozen=True)
@@ -39,8 +42,14 @@ class Uploader:
         return f"{self.public_base.rstrip('/')}/{self.bucket}/{self.object_name(run_id, path)}"
 
     def client(self) -> Any:
-        from minio import Minio  # 컨테이너에만 있다 — 테스트는 가짜 클라이언트를 넣는다
-        return Minio(self.endpoint, access_key=self.access_key, secret_key=self.secret_key, secure=self.secure)
+        """타임아웃을 박은 MinIO 클라이언트 — 끝없이 매달리면 런이 STOPPING 에 갇힌다.
+        컨테이너에만 있는 의존성이라 늦게 import 한다."""
+        import urllib3
+        from minio import Minio
+        http = urllib3.PoolManager(timeout=urllib3.Timeout(connect=CONNECT_TIMEOUT_S, read=READ_TIMEOUT_S),
+                                   retries=urllib3.Retry(total=RETRIES, backoff_factor=1.0))
+        return Minio(self.endpoint, access_key=self.access_key, secret_key=self.secret_key, secure=self.secure,
+                     http_client=http)
 
     def upload(self, path: str, run_id: str, client: Any = None) -> str:
         """올리고 공개 URL 을 돌려준다. 실패는 예외로 — 호출자가 LAST_ERROR 로 바꾼다."""

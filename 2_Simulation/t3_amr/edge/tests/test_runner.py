@@ -5,7 +5,7 @@ import pytest
 
 from edge import runner as R
 from edge import spb
-from edge.tests.fakes import FakeUploader, Harness, ncmd
+from edge.tests.fakes import FakeUploader, Harness, ManualExecutor, ncmd
 
 
 @pytest.fixture
@@ -164,6 +164,39 @@ class TestStopAndVideo:
         h2.runner.tick(26.0)
         assert h2.runner.state == R.STOPPING
         assert "host-orch offline" in h2.pub.named_with("NDATA", R.LAST_ERROR)[R.LAST_ERROR]
+
+    def test_upload_runs_off_the_tick_and_run_stays_stopping_until_it_finishes(self, tmp_path):
+        ex = ManualExecutor()
+        h = Harness(tmp_path, executor=ex, heartbeat_s=5.0)
+        h.connect()
+        h.run_until_running()
+        h.rec.video = "/data/out/demo_verify_77_n3.mp4"
+        h.stop(100.0)
+        h.runner.tick(101.0)                       # 레코더 종료 → 업로드 제출, 아직 STOPPING
+
+        assert h.runner.state == R.STOPPING and len(ex.pending) == 1
+        h.start(102.0, run_id="other")             # 업로드 중 새 Start 는 busy
+        assert "busy" in h.pub.named_with("NDATA", R.LAST_ERROR)[R.LAST_ERROR]
+        h.runner.tick(103.0)                       # 아직 안 끝남 → 그대로
+        assert h.runner.state == R.STOPPING
+
+        ex.complete("https://media.example/verify-videos/verify_77_n3/demo_verify_77_n3.mp4")
+        h.runner.tick(104.0)
+        named = h.pub.named_with("NDATA", R.VIDEO_URL)
+        assert h.runner.state == R.IDLE and named[R.STATE] == "IDLE" and named[R.VIDEO_URL].endswith(".mp4")
+
+    def test_upload_failure_on_the_worker_becomes_error(self, tmp_path):
+        ex = ManualExecutor()
+        h = Harness(tmp_path, executor=ex, heartbeat_s=5.0)
+        h.connect()
+        h.run_until_running()
+        h.rec.video = "/data/out/demo_verify_77_n3.mp4"
+        h.stop(100.0)
+        h.runner.tick(101.0)
+        ex.fail(TimeoutError("read timed out"))
+        h.runner.tick(102.0)
+        assert h.runner.state == R.ERROR
+        assert "upload failed: read timed out" in h.pub.named_with("NDATA", R.LAST_ERROR)[R.LAST_ERROR]
 
     def test_error_state_accepts_the_next_start(self, h):
         h.connect()

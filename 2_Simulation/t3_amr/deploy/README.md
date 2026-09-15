@@ -51,6 +51,7 @@ docker compose -f 2_Simulation/t3_amr/deploy/compose.yml run --rm t3amr-runner r
 | `edge/spec.py` | Start JSON 파싱. `window_s` 는 `timeout_s − 300` 에서 되돌린다 |
 
 host-orch 쪽(-215 같이): `Runner/VideoUrl` → `sim.verify.result.artifacts.video`. **EC2 host-orch 는 `--fms-node` 없이 띄운다** — t3_amr 이 자체 계획으로 돌아 fms-core 가 RUNNING 이 될 일이 없다.
+**`--stop-timeout-s` 도 올려야 한다(기본 60 → 300 권장)** — Stop 뒤 Kit 정리(≤25 s) + ffmpeg 조립(프레임 수천 장이면 1 분 넘게) + MinIO 업로드가 STOPPING 안에서 일어난다. 업로드는 워커 스레드라 그동안 하트비트·NCMD 는 계속 처리된다.
 
 단위 테스트(브로커·Isaac 없이): `cd 2_Simulation && python3 -m pytest` (40건). 브로커 붙여 손으로 돌리기:
 ```bash

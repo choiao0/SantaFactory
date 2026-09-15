@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Callable
+from concurrent.futures import Executor, Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any
 
@@ -51,9 +52,14 @@ class RunnerConfig:
 class Runner:
     def __init__(self, cfg: RunnerConfig, session: EdgeSession, recorder_factory: Callable[[], Recorder],
                  publisher: Any, uploader: Uploader | None = None,
-                 ram_mb: Callable = telemetry.ram_mb, vram_mb: Callable = telemetry.vram_mb):
+                 ram_mb: Callable = telemetry.ram_mb, vram_mb: Callable = telemetry.vram_mb,
+                 executor: Executor | None = None):
         self.cfg, self.session, self.recorder_factory, self.pub = cfg, session, recorder_factory, publisher
         self.uploader, self.ram_mb, self.vram_mb = uploader, ram_mb, vram_mb
+        # 업로드는 워커 스레드에서 — tick() 은 Edge 의 락을 쥐고 도니 여기서 기다리면
+        # paho 스레드(Stop 재전송·keepalive)가 막힌다
+        self.executor = executor or ThreadPoolExecutor(max_workers=1, thread_name_prefix="t3amr-upload")
+        self._upload: Future | None = None
         self.values = {name: d.initial for name, d in NODE_METRICS.items()}
         self.state = IDLE
         self.spec: RunSpec | None = None
@@ -69,7 +75,7 @@ class Runner:
     def topic(self, kind: str) -> str:
         return f"spBv1.0/{self.cfg.group}/{kind}/{self.cfg.node_id}"
 
-    def _pairs(self, names) -> list:
+    def _pairs(self, names) -> list[tuple[MetricDef, Any]]:
         return [(NODE_METRICS[n], self.values[n]) for n in names]
 
     def publish_nbirth(self) -> None:
@@ -106,8 +112,10 @@ class Runner:
         try:
             d = json.loads(payload)
         except (ValueError, UnicodeDecodeError):
+            log.debug("host STATE payload undecodable: %r", payload[:80])
             return
         if not isinstance(d, dict) or not isinstance(d.get("online"), bool):
+            log.debug("host STATE payload ignored (not {online: bool}): %r", payload[:80])
             return
         online, ts = d["online"], d.get("timestamp", 0)
         came_back = online and (self.host_online is False or (self.host_online and ts > self.host_ts))
@@ -172,8 +180,12 @@ class Runner:
             self._tick_starting(now)
         elif self.state == RUNNING:
             self._tick_running(now)
-        elif self.state == STOPPING and self.rec.poll_stop(now):
-            self._finish()
+        elif self.state == STOPPING:
+            if self._upload is not None:
+                if self._upload.done():
+                    self._finish_upload()
+            elif self.rec.poll_stop(now):
+                self._finish()
         if now - self.last_heartbeat >= self.cfg.heartbeat_s:
             self.last_heartbeat = now
             self.publish_ndata({HEARTBEAT: int(now * 1000), **self._telemetry_changes()})
@@ -200,28 +212,36 @@ class Runner:
             self._fail(now, f"host-orch offline > {self.cfg.host_offline_s:g}s")
 
     def _finish(self) -> None:
-        """STOPPING 끝: 정상 종료면 mp4 를 올리고 URL 과 함께 IDLE. 영상이 없거나 업로드가 실패하면 ERROR."""
-        state, extra = self.final_state, {RUN_ID: "", SCENARIO_SHA: ""}
-        if state == IDLE:
-            url, err = self._collect_video()
-            if err:
-                state, extra[LAST_ERROR] = ERROR, err
-            else:
-                extra[VIDEO_URL] = url
-        self._set_state(state, extra)
-
-    def _collect_video(self) -> tuple:
-        """(url, error). 업로더가 없으면 로컬 경로를 URL 자리에 둔다(단독 검증용)."""
+        """레코더가 끝났다. 정상 종료면 mp4 를 워커 스레드로 올리기 시작하고(STOPPING 유지), 아니면 바로 최종 상태."""
+        extra = {RUN_ID: "", SCENARIO_SHA: ""}
+        if self.final_state != IDLE:
+            self._set_state(self.final_state, extra)
+            return
         path = self.rec.video_path()
         if not path:
-            return "", "no video produced (프레임 0장 — record 로그의 '캡처' 줄 확인)"
+            err = "no video produced (프레임 0장 — record 로그의 '캡처' 줄 확인)"
+            self._set_state(ERROR, {**extra, LAST_ERROR: err})
+            return
         if self.uploader is None:
             log.warning("no uploader configured — video left at %s", path)
-            return f"file://{path}", ""
+            self._set_state(IDLE, {**extra, VIDEO_URL: f"file://{path}"})
+            return
+        log.info("run %s: uploading %s", self.spec.run_id, path)
+        self._upload = self.executor.submit(self.uploader.upload, path, self.spec.run_id)
+        if self._upload.done():            # 동기 executor(테스트)면 같은 틱에 끝난다
+            self._finish_upload()
+
+    def _finish_upload(self) -> None:
+        """업로드 결과 → URL 과 함께 IDLE, 실패면 ERROR. 어느 쪽이든 그 NDATA 하나로 host-orch 가 런을 닫는다."""
+        fut, self._upload = self._upload, None
+        extra = {RUN_ID: "", SCENARIO_SHA: ""}
         try:
-            return self.uploader.upload(path, self.spec.run_id), ""
+            url = fut.result()
         except Exception as e:  # noqa: BLE001 — 업로드 실패는 런 실패로 보고한다
-            return "", f"upload failed: {e}"
+            log.error("run %s: upload failed: %s", self.spec.run_id if self.spec else "?", e)
+            self._set_state(ERROR, {**extra, LAST_ERROR: f"upload failed: {e}"})
+            return
+        self._set_state(IDLE, {**extra, VIDEO_URL: url})
 
     def _telemetry_changes(self) -> dict:
         pids = self.rec.pids() if self.rec else []

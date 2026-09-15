@@ -1,6 +1,7 @@
 """edge 테스트 공용 가짜: publisher · recorder · uploader · 시나리오 헬퍼. 브로커·프로세스·Isaac 없이 상태기계를 민다.
 """
 import json
+from concurrent.futures import Future
 
 from edge import runner as R
 from edge import spb
@@ -88,6 +89,38 @@ class FakeRecorder:
         self._alive = False
 
 
+class ImmediateExecutor:
+    """submit 을 그 자리에서 실행 — 상태기계 테스트를 결정적으로."""
+
+    def submit(self, fn, *args, **kwargs):
+        f = Future()
+        try:
+            f.set_result(fn(*args, **kwargs))
+        except Exception as e:  # noqa: BLE001 — 테스트용
+            f.set_exception(e)
+        return f
+
+
+class ManualExecutor:
+    """submit 은 미완료 Future 를 돌려주고, 테스트가 complete()/fail() 로 끝낸다 — 업로드 진행 중 동작 검증용."""
+
+    def __init__(self):
+        self.pending = []
+
+    def submit(self, fn, *args, **kwargs):
+        f = Future()
+        self.pending.append((f, fn, args))
+        return f
+
+    def complete(self, value):
+        f, *_ = self.pending.pop(0)
+        f.set_result(value)
+
+    def fail(self, exc):
+        f, *_ = self.pending.pop(0)
+        f.set_exception(exc)
+
+
 class FakeUploader:
     def __init__(self, fail=None):
         self.fail, self.calls = fail, []
@@ -114,7 +147,7 @@ def ncmd(**metrics):
 class Harness:
     """Runner + 가짜 publisher/recorder/uploader/telemetry. 벽시계는 now 로 직접 민다."""
 
-    def __init__(self, tmp_path, uploader=None, **cfg):
+    def __init__(self, tmp_path, uploader=None, executor=None, **cfg):
         self.pub = FakePublisher()
         self.session = spb.EdgeSession(str(tmp_path / "bdseq"))
         self.session.new_session()
@@ -122,7 +155,8 @@ class Harness:
         self.uploader = uploader if uploader is not None else FakeUploader()
         self.telemetry = {"ram": 100, "vram": 2000}
         self.runner = R.Runner(R.RunnerConfig(**cfg), self.session, lambda: self.rec, self.pub, self.uploader,
-                               ram_mb=lambda pids: self.telemetry["ram"], vram_mb=lambda: self.telemetry["vram"])
+                               ram_mb=lambda pids: self.telemetry["ram"], vram_mb=lambda: self.telemetry["vram"],
+                               executor=executor if executor is not None else ImmediateExecutor())
 
     def connect(self, now=0.0):
         self.runner.on_connected(now)

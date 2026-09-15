@@ -14,6 +14,7 @@ import sys
 import threading
 import time
 from collections.abc import Callable
+from typing import Any
 
 import paho.mqtt.client as mqtt
 import psutil
@@ -53,7 +54,7 @@ def load_env_file(path: str) -> dict:
 
 
 def reap_stale(process_iter: Callable = psutil.process_iter, send: Callable[[int, int], None] | None = None,
-               me: int | None = None) -> list:
+               me: int | None = None) -> list[tuple[int, str]]:
     """지난 엣지가 남긴 런 프로세스(환경에 SIM_RUN_ID)를 그룹째 SIGKILL — 데몬 재시작 때 한 번. [(pid, run_id)]."""
     def _kill(pid: int, sig: int) -> None:
         for fn in (os.killpg, os.kill):
@@ -77,15 +78,16 @@ def reap_stale(process_iter: Callable = psutil.process_iter, send: Callable[[int
 
 
 class Edge:
-    def __init__(self, node_id: str, username: str, password: str, session: EdgeSession, alive_path: str):
+    def __init__(self, node_id: str, username: str, password: str, session: EdgeSession, alive_path: str,
+                 client: Any = None):
         self.session, self.alive_path = session, alive_path
-        self.runner: Runner = None  # type: ignore[assignment]  — build() 가 바로 붙인다
+        self._runner: Runner | None = None          # build() 가 붙인다
         self.lock = threading.RLock()
         self.stop_event = threading.Event()
         self.vram_cache: int | None = None
         self._vram_t = -VRAM_PERIOD_S
-        self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=node_id,
-                                  protocol=mqtt.MQTTv311, clean_session=True)
+        self.client = client if client is not None else mqtt.Client(
+            mqtt.CallbackAPIVersion.VERSION2, client_id=node_id, protocol=mqtt.MQTTv311, clean_session=True)
         self.client.suppress_exceptions = True
         self.client.username_pw_set(username, password)
         self.client.reconnect_delay_set(1, 10)
@@ -93,7 +95,17 @@ class Edge:
         self.client.on_disconnect = self._on_disconnect
         self.client.on_message = self._on_message
 
-    def subscriptions(self) -> list:
+    @property
+    def runner(self) -> Runner:
+        if self._runner is None:
+            raise RuntimeError("runner not attached — call build()")
+        return self._runner
+
+    @runner.setter
+    def runner(self, value: Runner) -> None:
+        self._runner = value
+
+    def subscriptions(self) -> list[tuple[str, int]]:
         """(topic, qos) — acl.conf 의 sim-runner subscribe 허용 목록 안이어야 한다. 벗어나면 EMQX 가 접속을 끊는다."""
         return [(self.runner.topic(kind), qos) for kind, qos in NODE_SUBSCRIPTIONS] + list(EXTRA_SUBSCRIPTIONS)
 
