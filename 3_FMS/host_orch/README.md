@@ -64,7 +64,7 @@ Stop 둘 다 → sim-runner IDLE(Isaac 정리 21 s) + fms-core IDLE → `done`, 
 
 ## 남은 것
 
-- `artifacts` 는 null — 리플레이·영상 키
+- `artifacts.video` 는 러너의 `Runner/VideoUrl`(-215, t3_amr 엣지)에서 온다 — replay·heatmap 키는 아직 null. 새 러너는 fms-core 없이 자체 계획으로 도니 EC2 host-orch 는 `--fms-node` 를 빼고 띄운다(안 빼면 창이 안 열린다)
 - sim-wms 파드 · k3s Job — 지금은 fms-core 도 compose 상시 데몬(`infra/compose.fms-core.yml`)
 - 러너가 여러 대면 NBIRTH `Runner/State` 가 IDLE 인 노드를 골라 보내고 prefetch 를 러너 수로 (지금은 `--node` 하나)
 - `uagv/v2/+/+/#` 관측 구독은 ACL 에 있지만 아직 안 쓴다 (`biz/v1/#` 은 kpi_summary 에 쓴다)
