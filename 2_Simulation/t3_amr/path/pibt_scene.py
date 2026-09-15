@@ -187,9 +187,28 @@ def charge_slots(rect=None, lat=None, step_x=None, step_y=None):
 
 CHARGE_ZONE_LEGACY = [(105.5, y) for y in (50, 53, 56, 59, 62, 65)] + \
                      [(107.8, y) for y in (50, 53, 56, 59, 62, 65)]
-CHARGE_ZONE = (CHARGE_ZONE_LEGACY
-               if os.environ.get("CHARGE_START", "auto").lower() == "legacy"
-               else charge_slots())
+
+
+def charge_zone(lat=None):
+    """충전존 슬롯 — **호출 시점에** 격자를 받아 만든다.
+
+    ★ 예전에는 `CHARGE_ZONE` 을 모듈 import 시점에 `PIBT_PITCH` 로 굳혔다.
+      그런데 도구들(`adg_cycles` · `goal_oscillation` 등)은 격자를 **`PITCH`**
+      라는 다른 이름으로 준다. `PITCH=1.0` 만 주면 계획은 1.0 격자인데 충전존은
+      1.2 격자로 만들어져 **시나리오가 조용히 달라졌다.**
+
+          PIBT_PITCH=1.0   충전 x [103.5, 105.5, 107.5]   starts 103·105·107
+          PIBT_PITCH 없음   충전 x [103.8, 106.2, 108.6]   starts 103·106·108
+
+      2026-09-15 FMS 와 지문을 대조하다 드러났다. 양쪽 다 `PIBT_PITCH` 없이
+      돌려 **같은 방식으로 틀린** 시나리오를 재현해 왔다.
+
+      이제 `geom.pitch` 에서 받는다 — 계획과 충전존이 같은 값을 쓰므로 어긋날
+      수가 없다. 이름이 둘이던 문제가 사라진다.
+    """
+    if os.environ.get("CHARGE_START", "auto").lower() == "legacy":
+        return CHARGE_ZONE_LEGACY
+    return charge_slots(lat=lat)
 GOAL_CATS = ["packing", "consol", "handoff", "aisle_buf", "inbound_buf"]
 
 
@@ -433,10 +452,11 @@ def _assign_slots(free, geom, n, verbose=True, tag="scene"):
     막힌 슬롯은 `_nearest_free` 로 밀지 않고 **건너뛴다** — 밀면 간격이 깨진다.
     """
     H, W = free.shape
+    zone = charge_zone(geom.pitch)          # ★ 격자는 geom 에서 받는다
 
     def sweep(strict):
         st, used, skipped = {}, set(), []
-        for (x, y) in CHARGE_ZONE:
+        for (x, y) in zone:
             if len(st) >= n:
                 break
             cell = _cell_of(geom, x, y)
@@ -465,7 +485,7 @@ def _assign_slots(free, geom, n, verbose=True, tag="scene"):
     if len(starts) < n:
         raise SystemExit(
             f"★ 충전존에 {n}대를 놓을 자리가 없습니다 — {len(starts)}대만 가능.\n"
-            f"  슬롯 {len(CHARGE_ZONE)}개 중 {len(skipped)}개를 걸렀습니다:\n  "
+            f"  슬롯 {len(zone)}개 중 {len(skipped)}개를 걸렀습니다:\n  "
             + "\n  ".join(f"({x:.1f},{y:.1f}) {w}" for x, y, w in skipped[:8])
             + f"\n  CHARGE_STEP_Y 를 줄이면(예: 1.2) 행이 늘어납니다. "
               f"CHARGE_STEP_X 는 pitch 의 2배 미만으로 줄일 수 없습니다.")
@@ -597,8 +617,9 @@ def charge_docks(free, geom, n=None):
     보통 시작 칸과 같은 칸들이 나온다.
     """
     H, W = free.shape
+    zone = charge_zone(geom.pitch)          # ★ 격자는 geom 에서 받는다
     out, used = [], set()
-    for (x, y) in (CHARGE_ZONE if n is None else CHARGE_ZONE[:n]):
+    for (x, y) in (zone if n is None else zone[:n]):
         want = _cell_of(geom, x, y)
         cell = want if (0 <= want[0] < H and 0 <= want[1] < W
                         and free[want] and want not in used) else             _nearest_free(free, want, used)
