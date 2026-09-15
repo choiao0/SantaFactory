@@ -14,6 +14,11 @@ from .liveness import Replanner, Stagnation, wait_bias
 # 진전 없는 회전은 대기와 같은 값이 되고, 후진(×3, 상승 없음)이 상대적으로 싸져 진짜로 물러난다. six 6런 p90 74 → 53분.
 # 모듈 전역 — sim_v2(--no-turn-bias 로 끔)·kernel_planner 가 실행마다 세팅한다. legacy 는 v3.3 비트 동일이라 False. run_h 도 공유.
 NO_PROGRESS_TURN_BIAS = True
+# 계약 v3.12 (-90, 2026-09-15): 목표 상태(dist 0)의 대기 점수에서 θ wait_cost 도 면제 → 대기 = 0. -204 는 bias 만 면제했는데 θ 의
+# 기본 대기 비용이 TURN_COST(1.25) 를 넘으면(six θ r24_g15: 2.74) 목표에 도착한 로봇에게 회전(1.25+0) 이 대기(2.74) 보다 싸서
+# 홈에 주차한 유휴 로봇이 5틱마다 90° 씩 영원히 돈다(24대·103 6h: 비임무 회전 57,691회, 충전 존 회전 83k = 로봇 시간 22 %).
+# 중립 θ(wait_cost 1) 에서는 대기가 이미 1위라 기준값 불변. sim_v2 --no-goal-wait-free 로 끔. 모듈 전역 — run_h 도 공유.
+GOAL_WAIT_FREE = True
 
 
 def candidates_h(s, dist, edge_cost, wait_cost, free, turn_cost, bias=0.0):
@@ -28,8 +33,12 @@ def candidates_h(s, dist, edge_cost, wait_cost, free, turn_cost, bias=0.0):
         # 목표 상태(dist 0)에는 대기 상승을 붙이지 않는다 (-204 물리 팀 보고 2026-09-14): bias 를 안고 도착하면 "나가기(1+d) < 대기(1+bias)"
         # 로 첫 틱에 목표를 떠나고, 뒤쪽 1칸은 후진 배율 3 으로 d=3 이라 "돌아오기(3) < 대기(1+bias+3)" 도 성립해 왕복이 굳는다.
         # Stagnation 은 2틱 연속 머물러야 리셋되므로(seed 11) 스스로 못 풀린다. kernel 은 도착 즉시 상태 전이라 무관(비트 동일).
-        b = 0.0 if dist[r, c, h] == 0 else bias
-        scored.append((wait_cost[r, c] + b + dist[r, c, h], 0, s, frozenset(occupied(s)), none))
+        if dist[r, c, h] == 0 and GOAL_WAIT_FREE:
+            wscore = 0.0                                    # 목표 도달: 머무는 데 비용 없음 (v3.12)
+        else:
+            b = 0.0 if dist[r, c, h] == 0 else bias
+            wscore = wait_cost[r, c] + b + dist[r, c, h]
+        scored.append((wscore, 0, s, frozenset(occupied(s)), none))
     dr, dc = DIRS[h]
     rr, cc = r + dr, c + dc
     if _inb(free, (rr, cc)) and dist[rr, cc, h] >= 0:
