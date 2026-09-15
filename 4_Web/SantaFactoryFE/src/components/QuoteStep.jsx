@@ -303,7 +303,7 @@ export default function QuoteStep({ estimateId, estimate, verdict, model, form }
                       <th>처리율</th>
                       <th>목표</th>
                       <th>가동률</th>
-                      <th>출고 <span>건/일</span></th>
+                      <th>처리 완료 <span>건/일</span></th>
                       <th>구축비용</th>
                       <th>예산</th>
                     </tr>
