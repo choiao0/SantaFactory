@@ -63,7 +63,12 @@ sys.path.insert(0, os.path.join(os.environ["W"], "path"))
 MAP = os.environ["MAP"]
 N = int(os.environ.get("N", "12"))
 PITCH = float(os.environ.get("PIBT_PITCH", "1.0"))
-SEEDS = [int(x) for x in os.environ.get("SEEDS", "1,2,4").split(",")]
+# ★ 기본이 1,2,4 인 것은 `adg_fingerprint.py` 를 베낀 탓이다. **주행 기본은 9 다**
+#   (`runners/live_pibt.py:164` PIBT_SEED 기본값). 그걸 확인 안 하고 1,2,4 로
+#   돌렸다가 pitch 1.0 에서 3시드 전부 ADG 순환이 나서, 주행은 되는데 계획만
+#   죽는 것처럼 보였다 (2026-09-15). 순환은 **시드를 탄다** — 한 시드로
+#   「이 격자는 된다/안 된다」를 말하면 안 된다.
+SEEDS = [int(x) for x in os.environ.get("SEEDS", "9,1,2,4").split(",")]
 # 틱 정합 뒤 값 (-211). adg_fingerprint.py 와 같은 이유로 둘을 같이 움직인다.
 HORIZON = int(os.environ.get("HORIZON", "1260"))
 GAP = int(os.environ.get("GAP", "60"))
