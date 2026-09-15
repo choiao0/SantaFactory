@@ -37,11 +37,27 @@ stderr 에 찍히므로 로그만 봐도 무엇으로 돌았는지 안다.
 ----
 파일명이 `_v2` 인 것은 `isaac_drive.py` 가 `from pibt_core import ...` 로
 부르기 때문이다. 이 모듈은 로드 후 **자기 자신을 그 모듈로 치환**하므로
-`pibt_core` 와 `pibt_core_v2` 가 같은 객체다 — 둘 중 무엇으로 접근해도
-`REVERSE_FACTOR` 같은 모듈 변수 대입이 서로에게 보인다.
+`pibt_core` 와 `pibt_core_v2` 가 같은 객체다.
 
     import pibt_core_v2 as pc
     pc is sys.modules["pibt_core"]      # True
+
+★ 그렇다고 **여기에 대입하면 안쪽까지 바뀌는 것은 아니다** (2026-09-15 정정).
+  예전 주석은 "`REVERSE_FACTOR` 같은 모듈 변수 대입이 서로에게 보인다" 고
+  적어 두었는데 사실이 아니다. 파사드는 `from pibt.geometry import *` 로
+  **값을 복사**하고, `pibt/heading.py` · `pibt/hgraph.py` 도 각각
+  `from .geometry import REVERSE_FACTOR` 로 제 이름공간에 복사본을 갖는다.
+  그래서 파사드에만 넣으면 정작 읽는 쪽이 옛 값을 본다:
+
+      pc.REVERSE_FACTOR = 1.0
+      pibt_core        = 1.0    <- 바뀐 것처럼 보이고
+      pibt.geometry    = 3.0
+      pibt.heading     = 3.0    <- candidates_h 가 실제로 읽는 곳
+      pibt.hgraph      = 3.0    <- 거리장이 읽는 곳
+
+  상수를 흔들어 보려면 **네 곳을 다 세팅**해야 한다. `MOVE_TICKS` 처럼
+  `from ... import` 로 퍼진 다른 상수도 같다. 실험용 헬퍼는
+  `tools/reverse_sweep.py` 의 `set_const()` 를 쓸 것.
 """
 import importlib.util
 import os
@@ -105,6 +121,53 @@ else:
     _core = _load(os.path.join(_HERE, "_pibt_core_vendor.py"), "pibt_core")
     _core.__pibt_source__ = os.path.join(_HERE, "_pibt_core_vendor.py")
     _core.__pibt_vendored__ = True
+
+def set_const(name, value):
+    """상수 하나를 **복사본을 가진 모든 모듈**에 세팅한다. 바꾼 모듈 이름을 낸다.
+
+    왜 필요한가: 위 ★ 에 적은 대로 `from ... import` 가 값을 복사해 가므로
+    한 곳에 대입해서는 정작 읽는 쪽이 안 바뀐다. 실험할 때 이걸 쓴다.
+
+        set_const("REVERSE_FACTOR", 1.0)
+        -> ['pibt.geometry', 'pibt.heading', 'pibt.hgraph', 'pibt_core']
+
+    ★ 거리장 캐시가 있으면 먼저 비워야 한다. 비용을 바꿔도 이미 계산된
+      `dist` 를 재사용하면 옛 비용으로 짠 경로가 그대로 나온다.
+    """
+    hit = []
+    for mod_name, mod in list(sys.modules.items()):
+        d = getattr(mod, "__dict__", None)
+        if d is not None and name in d:
+            d[name] = value
+            hit.append(mod_name)
+    if not hit:
+        raise KeyError(f"{name} 을 가진 모듈이 없다 — 코어가 로드되기 전인가")
+    return sorted(hit)
+
+
+# --- 실험용 상수 오버라이드 (기본 꺼짐) -----------------------------------
+#   `geometry.py` 는 FMS 소스라 우리가 못 고친다. 그런데 계획을 돌리는 것은
+#   `pibt_scene.py` 라는 **별도 프로세스**라 in-process 몽키패치가 안 닿는다.
+#   그래서 환경변수를 로더가 읽어 준다 — 프로세스 경계를 넘는 유일한 통로다.
+#
+#   ★ 환경변수를 안 주면 **한 줄도 실행되지 않는다.** FMS 와 비트 동일이
+#     기본이고, `adg_fingerprint` 가 지키는 것이 바로 그 동일성이다.
+#     여기서 기본값을 바꾸면 두 트랙의 경로가 조용히 갈린다.
+#   ★ 마지막 줄이 이 모듈을 `_core` 로 치환하므로, 헬퍼는 `_core` 에 붙여야
+#     `import pibt_core_v2 as pc; pc.set_const(...)` 가 된다.
+_core.set_const = set_const
+
+_OVERRIDABLE = {"PIBT_REVERSE_FACTOR": ("REVERSE_FACTOR", float)}
+for _env, (_const, _cast) in _OVERRIDABLE.items():
+    _raw = os.environ.get(_env, "").strip()
+    if not _raw:
+        continue
+    _val = _cast(_raw)
+    _where = set_const(_const, _val)
+    sys.stderr.write(
+        "[pibt_core_v2] ★ %s=%s 로 %s 를 덮어썼습니다 (%s).\n"
+        "   FMS 기본값이 아닙니다 — 결과를 기록할 때 반드시 같이 적으세요.\n"
+        % (_env, _raw, _const, ", ".join(_where)))
 
 # `import pibt_core_v2` 도 같은 모듈 객체를 받게 한다. 이 줄이 마지막이어야 한다.
 sys.modules[__name__] = _core
