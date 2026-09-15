@@ -431,8 +431,16 @@ class Kernel(object):
         _idle = [a for a, r in self.rb.items() if r["task"] is None]
         self.assign(t)
         for a in _idle:
-            if self.rb[a]["task"] is not None:
-                self.task_start.setdefault(a, []).append(t)
+            tk = self.rb[a]["task"]
+            if tk is not None:
+                # ★ (배정 틱, **주문 도착 틱**) 쌍이다 (-211, 2026-09-15).
+                #   앞은 실행기가 첫 동작을 **찾는** 데 쓰고, 뒤가 릴리스
+                #   바닥의 **값**이다. 전에는 배정 틱만 넘겼고 실행기가
+                #   `action.tick`(계획 시간표)으로 바닥을 매겼는데, 그건
+                #   「주문이 오기 전에 출발하지 않는다」가 아니라 「계획이
+                #   말한 시각에 출발한다」였다. 적체가 있으면 이미 온 주문을
+                #   두고 기다린다.
+                self.task_start.setdefault(a, []).append((t, tk["born"]))
 
         self._send_freed_home()          # 남은 FREED 는 홈으로
 
@@ -559,7 +567,8 @@ def run_lifelong(free, starts, cells_by_cat, horizon=600, seed=0, order_gap=15,
             "tasks_done": K.done, "waiting": len(K.waiting),
             "windows": stream.windows, "order_end": stream.order_end,
             "parked_end": parked,
-            # agent -> 태스크를 받은 틱들. `isaac_drive` 가 릴리스 바닥에 쓴다 (-211)
+            # agent -> [(배정 틱, 주문 도착 틱)]. `isaac_drive` 가 릴리스
+            # 바닥에 쓴다 — 앞은 첫 동작을 찾는 데, 뒤가 바닥 값 (-211)
             "task_start": {a: list(v) for a, v in K.task_start.items()},
             "busy_robots": sum(1 for r in K.rb.values() if r["state"] != IDLE)}
     if hasattr(K, "report"):
