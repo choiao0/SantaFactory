@@ -85,7 +85,7 @@ def classify(s0, s1, cell):
     return named.get(tuple(cell), "기타")
 
 
-def scan(geom, history):
+def scan(geom, history, cells_hist):
     """틱마다 「A 가 쓸고 가는 칸」 x 「B 의 몸」 교집합을 센다.
 
     ★ `swept_cells(s0, s1)` 은 **실제 스윕**이다 (`cells_hist` 의 예약이
@@ -109,13 +109,17 @@ def scan(geom, history):
             # 회전만 본다. 전진은 스윕이 두 칸 직선이라 성격이 다르다.
             if st0[a][:2] != st1[a][:2] or st0[a][2] == st1[a][2]:
                 continue
-            # ★ 계획기가 **예약한** 칸. `candidates_h` 의 회전 후보가 그대로
-            #   `{축} | swing_cells` 다. 겹친 칸이 여기 들었나가 갈림길이다:
-            #     예약 안 = 계획기가 진짜 충돌을 허용했다      -> 계획기 문제
-            #     예약 밖 = 예약 모델이 실제 스윕보다 작다      -> sweep_audit 이
-            #               세는 그 차이. 이산 기준으로는 합법이다
-            r, c, h0 = st0[a]
-            resv = frozenset({(r, c)}) | frozenset(pc.swing_cells(r, c, h0, st1[a][2]))
+            # ★ 계획기가 **실제로 예약한** 칸 — `cells_hist` 에서 그대로 읽는다.
+            #
+            #   처음에는 `{축} | pc.swing_cells(...)` 로 다시 계산했는데 **틀렸다**
+            #   (2026-09-15). `sweep_audit` 이 찍는 예약과 부호가 반대로 나온다:
+            #       turn (54,100,3)->(54,100,0)
+            #         cells_hist   [(53,100), (53,101), (54,100), (54,101)]
+            #         재계산        [(54,100), (54,101), (55,100), (55,101)]
+            #   `heading_offset` 계열의 프레임 차이로 보이는데, 어느 쪽이든
+            #   **판정에 쓸 것은 실제 예약**이다. 재계산으로 라벨을 붙였다가
+            #   「계획기가 자기 hard 칸에 남을 들였다」는 없는 결론을 냈다.
+            resv = frozenset(map(tuple, cells_hist[t].get(a, ())))
             for b in agents:
                 if b == a:
                     continue
@@ -131,23 +135,44 @@ def scan(geom, history):
 
 
 def run(seed):
+    """`run_lifelong` 을 직접 불러 **`cells_hist` 까지** 받는다.
+
+    `plan_and_build_lifelong` 은 `(adg, order, history, info)` 만 돌려주고
+    `cells_hist` 는 안 준다. 그런데 실제 예약이 거기 있으므로 한 겹 벗겨서
+    직접 부른다 — `isaac_drive.py:2404` 의 호출을 그대로 옮긴 것이다.
+    """
+    from lifelong import Kernel, run_lifelong                # noqa: E402
     geom, free, starts, goals = pibt_scene.setup_lifelong(
         MAP, N, PITCH, seed, "cross", verbose=False)
     zone = pibt_scene.charge_zone_cells(free, geom)
-    try:
-        adg, _order, history, info = D.plan_and_build_lifelong(
-            free, starts, goals, geom, horizon=HORIZON, seed=seed,
-            order_gap=GAP, battery=BATTERY, dispatch=DISPATCH, zone_cells=zone,
-            order_end=None,
-            docks=pibt_scene.charge_docks(free, geom) if BATTERY else ())
-    except RuntimeError as e:
-        if "순환" not in str(e):
-            raise
-        print(f"   시드 {seed}: ADG 순환 — 계획이 안 나온다")
-        return None
-    hits, kinds = scan(geom, history)
-    return dict(seed=seed, hits=hits, kinds=kinds, adg=adg, info=info,
-                ticks=len(history) - 1)
+
+    kw = {}
+    if BATTERY:
+        from battery import BatteryKernel                    # noqa: E402
+        kw = dict(kernel_cls=BatteryKernel,
+                  kernel_kw=dict(docks=list(pibt_scene.charge_docks(free, geom)),
+                                 pitch=geom.pitch, seed=seed))
+    if DISPATCH != "fms":
+        from dispatch import with_policy                     # noqa: E402
+        kw["kernel_cls"] = with_policy(kw.get("kernel_cls") or Kernel, DISPATCH)
+        kw.setdefault("kernel_kw", {})
+
+    history, cells_hist, li = run_lifelong(
+        free, starts, goals, horizon=HORIZON, seed=seed, order_gap=GAP,
+        shifts=("in", "out", "out"), zone_cells=zone, order_end=None, **kw)
+
+    sweep = D.sweep_audit(geom, history, cells_hist)
+    chains, _order, _stats = extract(history, geom, li)
+    adg = D.build_adg(chains)
+    cyclic = adg.topological_order() is None
+
+    hits, kinds = scan(geom, history, cells_hist)
+    return dict(seed=seed, hits=hits, kinds=kinds, sweep=sweep, cyclic=cyclic,
+                tasks=li.get("tasks_done"), ticks=len(history) - 1)
+
+
+def extract(history, geom, li):
+    return D.extract_actions(history, geom, task_start=li.get("task_start"))
 
 
 def main():
@@ -161,10 +186,13 @@ def main():
         r = run(seed)
         if r is None:
             continue
-        sw = r["info"].get("sweep") if isinstance(r["info"], dict) else None
-        print(f"   {r['ticks']}틱 · 겹침 {len(r['hits'])}건")
+        sw = r["sweep"]
+        print(f"   {r['ticks']}틱 · 태스크 {r['tasks']}"
+              f" · ADG {'★순환' if r['cyclic'] else '비순환'}"
+              f" · 겹침 {len(r['hits'])}건")
         if sw:
-            print(f"   sweep_audit: {sw}")
+            print(f"   sweep_audit 예약부족 {sw['short']}/{sw['total']}"
+                  f" ({100.0 * sw['short'] / max(1, sw['total']):.1f}%)  {sw['by_kind']}")
         if not r["hits"]:
             print("   -> 계획은 깨끗하다. 접촉은 **실행 층**에서 났다는 뜻이다.")
             continue
