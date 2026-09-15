@@ -24,8 +24,10 @@
 #                              [--speed=<m/s>]   (v3.3, -116: 틱 길이 = CELL_M / speed. 1칸 = 1틱은 그대로, 초 환산만 바뀐다)
 #                              [--footprint=exact|legacy|exact,front|exact,front_2cell] [--robot-dims=0.39,1.11,0.80]   (v3.4 -203, front 6칸 -79)
 #   --footprint: 회전할 때 차체가 실제로 쓸고 가는 자리. exact(기본) = 0.1 m 지도로 만든 정적 마스크(랙·벽 침범 금지),
-#              legacy = v3.3 과 비트 동일(뒤 3칸만), exact,front = 앞 2칸 축 규칙 + 양보 v2 까지(소싸움 미해결 — 실험용,
-#              양보 규칙 강제 ON). --robot-dims 는 구동축 앞·뒤·폭 [m](기종 카드). SUMMARY footprint·robot_dims·turn_masked.
+#              legacy = v3.3 과 비트 동일(뒤 3칸만, 양보 v1), exact,front = + 앞 4칸 soft 축 규칙(물리 팀 안전 규칙, 실험 인자 —
+#              처리량 −2~−15 %, 충전 존 매듭). --robot-dims 는 구동축 앞·뒤·폭 [m](기종 카드). SUMMARY footprint·robot_dims·turn_masked.
+#   --no-standoff: 대치 상태기계 V2(-79)를 끄고 양보 규칙 v1(v3.8 경로). v3.9 부터 헤딩 main exact·exact,front 기본 ON —
+#              6,000건/6h 에서 포장대 앞 회전 매듭을 풀어 완료 23~72 % → 99~100 %. SUMMARY standoff·standoffs·standoff_swaps.
 #   기본 = 헤딩 모델 (상태 (r,c,h), 자기+뒤 칸 2칸 점유, 90° 회전 = TURN_TICKS 틱, 회전 중 스윙 칸
 #              예약, 라이브니스 장치 5종). docs/이동계층_PIBT.md#라이브니스-장치-5종
 #   --cell:    칸 모델(점로봇) opt-in — 기준선 CSV 재현·A/B 비교축. (--heading 은 호환용, 무시)
@@ -128,9 +130,6 @@ def _parse_model(a, argv):
     # v3: 차선·양보는 헤딩 main 전용. 칸 모델(--cell)은 A/B 기준 축이라 건드리지 않는다(기준값 2970/127.3 유지).
     a.lanes = "--no-lanes" not in argv and a.heading and a.flow != "v1compat"
     a.yield_rule = "--no-yield" not in argv and a.heading and a.flow != "v1compat"
-    # 실험(-79 D3, 2026-09-15): exact 에도 대치 상태기계 V2 를 켠다(soft 4칸 없이). 6,000건/6h 에서 exact 가 포장대 앞
-    # 회전 매듭으로 23~72 % 에 그친 원인이 대치 장치 부재인지 분리 검증용. 없으면 기존 경로 비트 동일.
-    a.standoff = "--standoff" in argv and a.heading and a.flow != "v1compat"
     # 구간 대수 제한 (-193). 통행 칸을 k×k 블록으로 자르고 블록당 동시 대수를 N 으로 묶는다.
     # 기본 0 = 끔 → 이 인자 없이는 v3 와 비트 동일.
     #
@@ -165,6 +164,10 @@ def _parse_model(a, argv):
     assert a.lane_gain >= 1.0 and a.pocket_gain >= 1.0, f"--lane-gain/--pocket-gain 은 1.0 이상: {a.lane_gain}, {a.pocket_gain}"
     # 주문 도착 간격 평균 [틱] (지수분포). 기본 50 = B-0 이후 전 기준선. --order-gap=<틱> 으로 부하 조절
     # (고부하 스윕, docs/θ_경로_기준선.md#고부하-l1l2). v1compat 은 패리티 때문에 항상 50.
+    # 대치 상태기계 V2 (-79, 계약 v3.9 기본): 헤딩 main 의 exact·exact,front 는 양보 규칙 v1 대신 상태기계로 정면·회전 매듭을 푼다.
+    # 6,000건/6h 에서 exact 가 포장대 앞 회전 매듭으로 23~72 % 에 그쳤고 상태기계만 켜면 99~100 % (D3, 2026-09-15).
+    # --no-standoff 로 v3.8 경로(양보 v1). legacy 는 v3.3 비트 동일이라 항상 끔. --standoff 는 호환용 no-op.
+    a.standoff = ("--no-standoff" not in argv and a.heading and a.flow != "v1compat" and a.footprint != "legacy")
     a.order_gap_arg = next((float(f.split("=", 1)[1]) for f in argv if f.startswith("--order-gap=")), None)
     if a.order_gap_arg is not None and a.flow == "v1compat":
         a.warnings.append("[WARN] --order-gap 은 v1compat 에서 무시 (패리티)")

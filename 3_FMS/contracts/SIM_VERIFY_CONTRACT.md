@@ -7,7 +7,7 @@
 > v0.2 (2026-09-09, 추가만): §2 `scenario.window_start_s`, §3 `kpi` 는 fms-core 가 채운다 + `verify.fms`, §4 fms-core 행, §6 ⑤ 해소.
 > v0.3 (2026-09-10, S15P21A106-185): §2 적재 필드를 [`SIM_RUN_CONTRACT.md`](SIM_RUN_CONTRACT.md) v2.6 에 맞춘다 —
 > `scenario.amr.capacity`(최상위 `scenario.capacity` 도 받는다)는 **왕복당 토트 수(1~6)**, 토트당 상품 수는
-> `scenario.amr.tote_units`(기본 8). 옛 뜻(상품 수)으로 보내면 거절된다. §3 `verify.fms.warnings` 추가 —
+> `scenario.amr.tote_units`(기본 10, v3.9; v2.6~v3.8 은 8). 옛 뜻(상품 수)으로 보내면 거절된다. §3 `verify.fms.warnings` 추가 —
 > null 이 아니면 그 런은 견적과 다른 조건에서 돌았다는 뜻이라 KPI 를 견적과 비교하면 안 된다.
 > 견적과 같은 조건으로 도는지는 `fms_core/tests/test_des_parity.py` 가 견적 워커 코드에서 기준을 읽어 대조한다.
 > v0.4 (2026-09-14, S15P21A106-197 반영): `scenario.orders` 의 원천은 **백엔드가 견적 생성 시 저장한 목록**(`estimates.outbound_orders_json`)이고
@@ -44,7 +44,7 @@
                                             "lines": [{"product_id": 3, "qty": 2, "rack_id": "A3"}]} ] },   // 백엔드가 견적 생성 시 저장한 목록 그대로 (estimates.outbound_orders_json = DES 스윕 outbound[] 와 같은 목록, -197)
     "spawn": "103.1,48.5;103.1,50.5",   // 선택. 로봇 초기 위치(m) → Isaac WSIM_SPAWN. DES 와 같은 배치는 `python3 -m fms_core --spawn N` 이 준다
     "window_start_s": 5400,             // 선택. 주문 시각을 이만큼 앞당겨 재생(창 오프셋, §6 ①). 음수가 되는 주문은 버린다
-    "amr": {"capacity": 3, "tote_units": 8, "speed_empty": 1.2, …},   // 선택. DES 요청 amr 블록 pass-through: capacity = 왕복당 토트 수 1~6, tote_units = 토트당 상품 수(기본 8). sim-runner 가 이 블록을 에이전트 `profile_overrides` 로 그대로 넘겨 속도·배터리·적재가 로봇 동작에 반영된다 (1_Robot/amr_agent README "파라미터")
+    "amr": {"capacity": 3, "tote_units": 8, "speed_empty": 1.2, …},   // 선택. DES 요청 amr 블록 pass-through: capacity = 왕복당 토트 수 1~6, tote_units = 토트당 상품 수(기본 10 — 2026-09-15 개인 주문 상한 10개·토트 10개들이). sim-runner 가 이 블록을 에이전트 `profile_overrides` 로 그대로 넘겨 속도·배터리·적재가 로봇 동작에 반영된다 (1_Robot/amr_agent README "파라미터")
     "outbound_gap_s": 50.0, "inbound_gap_s": 48.0, "shifts": "in,out,out"   // 선택. 없으면 **출고 전용** — 검증 런은 견적 지평선 안의 출고 창 한 조각만 재생한다 (§6 ①)
   }
 }
