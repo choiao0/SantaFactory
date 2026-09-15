@@ -26,7 +26,7 @@ DEFAULT_MANUFACTURER, DEFAULT_MODEL = "idealworks", "iw_hub"
 
 
 def canonical_json(obj: Any) -> bytes:
-    """sha 정규형 — sim_runner.procs · host_orch.orchestrator 와 같은 규칙."""
+    """sha 정규형 — host_orch.orchestrator.canonical_json(기준)과 같은 규칙."""
     return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
 

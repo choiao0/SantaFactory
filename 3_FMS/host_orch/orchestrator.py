@@ -39,7 +39,7 @@ def iso(ts: float) -> str:
 
 
 def canonical_json(obj: Any) -> bytes:
-    """sha 정규형 — sim_runner.procs.canonical_json 과 같은 규칙이어야 sha 가 맞는다."""
+    """sha 정규형 — 이 함수가 기준. fms_core.scenario.canonical_json 과 같은 규칙이어야 sha 가 맞는다 (구 sim_runner.procs 도 같았다, -219 로 삭제)."""
     return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
 
