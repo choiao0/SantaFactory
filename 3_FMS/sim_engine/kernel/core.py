@@ -61,6 +61,7 @@ class KernelConfig:
     move_ticks: int = MOVE_TICKS  # 전진·후진 1칸에 쓰는 틱 (실행, -194)
     hd_after: int = 16            # -79 대치(standoff) 감지: 같은 칸을 다투는 두 로봇이 둘 다 이 틱 이상 무진전 (exact,front 만; -194 다틱 후 4 → 16)
     hd_timeout: int = 80          # -79 대치 상한(틱): 넘으면 역할 교대 1회, 그래도 넘으면 해제. V2: 240 → 80 (교대 전엔 매 틱 재판정, R5)
+    standoff: bool = False        # 실험(-79 D3, 2026-09-15): exact 에도 대치 상태기계 V2 를 켠다(soft 4칸 없이). 기본 False = 기존 경로 비트 동일
     # 회전 발자국 (-203, 계약 v3.4). footprint: "legacy"(v3.3 비트 동일) / "exact"(0.1 m 지도 정적 회전 마스크)
     # / "exact,front"(+ 앞 2칸 축 규칙·양보 v2 — 소싸움 미해결, 인자로만). 마스크 배열은 FmsKernel(turn_mask=) 로 따로 받는다.
     footprint: str = "legacy"
@@ -438,7 +439,7 @@ class FmsKernel(BatteryMixin, MetricsMixin):
         if cfg.dock_prio:
             self._update_dock_leave()
         states = {rid: (robots[rid]["pos"][0], robots[rid]["pos"][1], robots[rid]["h"]) for rid in rids}
-        standoff = front_swing_on()               # -79: exact,front 는 양보 규칙 대신 대치 상태기계 (legacy·exact 기본 경로 불변)
+        standoff = front_swing_on() or cfg.standoff   # -79: exact,front 는 양보 규칙 대신 대치 상태기계 (legacy·exact 기본 경로 불변; --standoff 는 실험)
         extra = {rid: robots[rid]["swing"] for rid in rids if robots[rid]["busy"] > 0}
         # 회전 진행 중인 로봇의 soft 칸: 다른 로봇이 축을 들이지 못하게 이번 틱 예약으로 넘긴다 (-79, 다틱 회전)
         soft_hold = {cell: rid for rid in rids if robots[rid]["busy"] > 0

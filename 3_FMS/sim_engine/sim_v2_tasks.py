@@ -128,6 +128,9 @@ def _parse_model(a, argv):
     # v3: 차선·양보는 헤딩 main 전용. 칸 모델(--cell)은 A/B 기준 축이라 건드리지 않는다(기준값 2970/127.3 유지).
     a.lanes = "--no-lanes" not in argv and a.heading and a.flow != "v1compat"
     a.yield_rule = "--no-yield" not in argv and a.heading and a.flow != "v1compat"
+    # 실험(-79 D3, 2026-09-15): exact 에도 대치 상태기계 V2 를 켠다(soft 4칸 없이). 6,000건/6h 에서 exact 가 포장대 앞
+    # 회전 매듭으로 23~72 % 에 그친 원인이 대치 장치 부재인지 분리 검증용. 없으면 기존 경로 비트 동일.
+    a.standoff = "--standoff" in argv and a.heading and a.flow != "v1compat"
     # 구간 대수 제한 (-193). 통행 칸을 k×k 블록으로 자르고 블록당 동시 대수를 N 으로 묶는다.
     # 기본 0 = 끔 → 이 인자 없이는 v3 와 비트 동일.
     #
@@ -344,7 +347,7 @@ def build(a):
     cfg = KernelConfig(heading=a.heading, zone=a.zone, theta=bool(a.theta_path or a.lanes), check=a.check,
                        dock_prio=a.dock_prio, export=a.export, service_steps=round(SERVICE_TIME_S / a.dt),
                        capacity=a.capacity, svc_per_tote=a.svc_per_tote,
-                       yield_rule=a.yield_rule, section_limit=a.section_limit,
+                       yield_rule=a.yield_rule, section_limit=a.section_limit, standoff=a.standoff,
                        turn_ticks=TURN_TICKS, move_ticks=MOVE_TICKS,
                        stall_warn_only=a.horizon is not None,
                        footprint=a.footprint, robot_dims=a.robot_dims, **bat)

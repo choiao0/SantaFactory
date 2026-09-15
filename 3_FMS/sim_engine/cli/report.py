@@ -168,7 +168,8 @@ def report(a, kernel, stream, ctx):
         footprint=a.footprint, robot_dims=list(a.robot_dims), turn_masked=round(float(ctx.turn_masked), 4),
         # -79 (조건부, exact,front 만): 대치 상태기계 계수
         **({"standoffs": int(kernel.standoffs), "standoff_swaps": int(kernel.standoff_swaps)}
-           if "front" in a.footprint else {}),
+           if "front" in a.footprint or getattr(a, "standoff", False) else {}),
+        **({"standoff_forced": 1} if getattr(a, "standoff", False) else {}),      # 실험 플래그 --standoff (exact + 대치 상태기계)
         tasks_per_h=round(n_tasks / sim_hours, 1),
         orders_per_h=round(orders_ph, 1),
         lead_mean_s=round(_mean(lat_total), 1),
