@@ -53,7 +53,7 @@ src/amr_agent
 | 절 | 키 | 뜻 |
 |---|---|---|
 | 상위 | `v_min v_max v_max_loaded a_max w_max alpha_max w_min` | 컨트롤러 한계 = factsheet physicalParameters |
-| 상위 | `length width height front_overhang rear_overhang swing_radius wheels` | factsheet 기하 (원천 `2_Simulation/sil_isaac/robot/profile.py`) |
+| 상위 | `length width height front_overhang rear_overhang swing_radius wheels` | factsheet 기하 (원천이던 `2_Simulation/sil_isaac/robot/profile.py` 는 -219 로 삭제, 값은 `2_Simulation/README.md` 실측 상수 절) |
 | 상위 | `state_interval order_interval` | state 발행 주기(1/state_interval Hz) · factsheet timing |
 | `control` | `rate_hz tol_xy tol_theta timeout_s turn_threshold zero_edge_eps first_node_tol k_turn k_heading k_lateral` | 제어기 성질. order 의 `allowedDeviationXY/Theta` 가 더 작으면 그것 |
 | `battery` | `soc_init_pct consumption_pct_per_s idle_ratio charge_time_s charge_threshold_pct` | 위 BE 매핑 대상 |
@@ -122,7 +122,7 @@ NCMD Start 의 `scenario.amr`(= BE 견적 요청의 amr 블록, SIM_VERIFY_CONTR
 | 단절 | LWT `connection` CONNECTIONBROKEN(retained). keepalive 30 s → 최대 45 s 안에 도착. 정상 종료는 OFFLINE |
 | 중복 order | 같은 orderId·같은 orderUpdateId = FMS 재발행 → 무시하고 state 만 다시 낸다(오류 없음). 낮은 orderUpdateId → `orderUpdateError` |
 | state | `batteryState.batteryCharge` 가 SoC 모델을 따라 움직인다. threshold 아래면 `information[{infoType: batteryLow}]` — 충전 결정은 FMS 몫 |
-| 기종 추가 | `config/models/<model>.yaml` 하나 추가 + `model:=<model>`. 숫자의 원천은 `2_Simulation/sil_isaac/robot/profile.py` |
+| 기종 추가 | `config/models/<model>.yaml` 하나 추가 + `model:=<model>`. 숫자의 원천은 `2_Simulation/README.md` 실측 상수 절(구 sil_isaac/robot/profile.py, -219 로 삭제) |
 
 ## 테스트
 

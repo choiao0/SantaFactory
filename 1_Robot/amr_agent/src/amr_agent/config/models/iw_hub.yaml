@@ -1,6 +1,6 @@
 # iw.hub 기종 프로파일 — 팩토리 기본값. 이 파일 하나에서 factsheet(MQTT_CONTRACT §4.2) · 컨트롤러 한계 · 상태 주기 ·
 # 배터리 · 가짜 로봇 물리가 나온다. 바깥(BE → sim-runner)이 profile_overrides / profile_file 로 덮어쓴다
-# (amr_agent/profile.py, README "파라미터"). 치수·바퀴의 원천은 2_Simulation/sil_isaac/robot/profile.py 의
+# (amr_agent/profile.py, README "파라미터"). 치수·바퀴의 원천은 2_Simulation/README.md 실측 상수 절(구 sil_isaac/robot/profile.py, -219 로 삭제) 의
 # RobotProfile(IWHUB) 실측값 — 두 곳의 숫자가 다르면 profile.py 가 맞고 이 파일을 고친다.
 model: iw.hub
 manufacturer: idealworks          # VDA manufacturer = 기종별 (계약 §1 결정 5)
