@@ -17,6 +17,8 @@
 #       SWEEP_SEEDS=101,102,103 SWEEP_OUT=load_sweep_eval.csv python sweeps/fleet_sweep_load.py
 #           — 다른 시드 집합을 **별도 CSV/PNG** 로 (기본 load_sweep.csv 는 동일성 검사 기준이라 덮어쓰지 않는다).
 #             θ 평가 시드 후보 기준선용 (2026-09-06, -145 후속; θ감도 실험 §6-3 미합의 항목). PNG 는 load_throughput<접미>.png 식.
+#       SWEEP_ENGINES=heading SWEEP_EXTRA=--footprint=exact,front SWEEP_OUT=load_sweep_front_v38.csv python sweeps/fleet_sweep_load.py
+#           — 실험 인자 스윕(-79 D3): 모든 런에 SWEEP_EXTRA 를 덧붙이고 계열을 헤딩만으로. 기준 CSV 와는 sweeps/compare_csv.py 로 비교.
 # ============================================================
 import csv
 import json
@@ -37,20 +39,24 @@ LOADS = {"L1": (80, 25), "L2": (120, 15)}          # name -> (n_orders, order_ga
 if os.environ.get("SWEEP_LOADS"):
     LOADS = {k: v for k, v in LOADS.items() if k in os.environ["SWEEP_LOADS"].split(",")}
 SERIES = [("cell", ("--flow=main", "--cell")), ("heading", ("--flow=main", "--heading"))]
+# SWEEP_EXTRA="--footprint=exact,front" 처럼 모든 런에 덧붙일 인자 (-79 D3: 실험 인자 스윕은 SWEEP_OUT 별도 CSV 로)
+EXTRA = tuple(os.environ.get("SWEEP_EXTRA", "").split())
+if os.environ.get("SWEEP_ENGINES"):                # SWEEP_ENGINES=heading — 계열 하나만 (칸 모델은 footprint 무관)
+    SERIES = [s for s in SERIES if s[0] in os.environ["SWEEP_ENGINES"].split(",")]
 env = dict(os.environ, SIM_NO_PLOT="1", PYTHONIOENCODING="utf-8")
 
 
 def run_one(n, n_orders, gap, seed, extra):
     t0 = time.perf_counter()
     r = subprocess.run([PY, os.path.join(OUT, "sim_v2_tasks.py"), "load", str(n), str(n_orders),
-                        str(seed), str(AISLE_BLOCK), f"--order-gap={gap}", *extra],
+                        str(seed), str(AISLE_BLOCK), f"--order-gap={gap}", *extra, *EXTRA],
                        capture_output=True, text=True, encoding="utf-8", env=env)
     line = next((ln for ln in r.stdout.splitlines() if ln.startswith("[SUMMARY]")), None)
     if line is None:
         # STALL(계약 §3, exit 1) 은 정보다 — 스윕을 죽이지 말고 행에 stall=1 로 남기고 덤프는 results/stall_<...>.txt 에 보관 (2026-09-06).
         stall = next((ln for ln in r.stdout.splitlines() if ln.startswith("[STALL]")), None)
         assert stall, f"실행 실패 r{n} o{n_orders} g{gap} s{seed} {extra}:\n{r.stdout[-3000:]}\n{r.stderr[-2000:]}"
-        dump = os.path.join(RES, f"stall_load_r{n}_o{n_orders}_g{gap:g}_s{seed}_{'cell' if '--cell' in extra else 'heading'}.txt")
+        dump = os.path.join(RES, f"stall_load_r{n}_o{n_orders}_g{gap:g}_s{seed}_{'cell' if '--cell' in extra else 'heading'}{TAG}.txt")
         with open(dump, "w", encoding="utf-8") as f:
             f.write(r.stdout + r.stderr)
         print(f"  [STALL] r={n} seed={seed} gap={gap}: {stall[:60]} → {os.path.basename(dump)}", flush=True)

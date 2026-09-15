@@ -157,7 +157,7 @@ def _parse_model(a, argv):
     if not a.heading:
         a.footprint = "legacy"
     elif "front" in a.footprint and not a.yield_rule:
-        a.warnings.append(f"[WARN] --footprint={a.footprint} 는 양보 규칙이 유일한 정면 해소 장치 — --no-yield 무시")
+        a.warnings.append(f"[WARN] --footprint={a.footprint} 는 대치 상태기계(-79)가 정면 해소 장치 — --no-yield 무시")
         a.yield_rule = True
     assert a.lane_gain >= 1.0 and a.pocket_gain >= 1.0, f"--lane-gain/--pocket-gain 은 1.0 이상: {a.lane_gain}, {a.pocket_gain}"
     # 주문 도착 간격 평균 [틱] (지수분포). 기본 50 = B-0 이후 전 기준선. --order-gap=<틱> 으로 부하 조절

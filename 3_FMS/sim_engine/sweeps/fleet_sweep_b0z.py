@@ -19,6 +19,8 @@
 #           — **별도 CSV/PNG** 로 (기본 b0z_sweep.csv 는 동일성 검사 기준이라 덮어쓰지 않는다).
 #             fleet_sweep_load.py 의 SWEEP_OUT 과 같은 규약이다. 계약이 바뀌어 결과가 달라질 때
 #             쓴다 — v3(-177) 은 손으로 복사했고, v3.6(-194) 부터 이 인자로 뜬다. PNG 는 b0z_*<접미>.png.
+#       SWEEP_ENGINES=heading SWEEP_EXTRA=--footprint=exact,front SWEEP_OUT=b0z_sweep_front_v38.csv python sweeps/fleet_sweep_b0z.py
+#           — 실험 인자 스윕(-79 D3). fleet_sweep_load.py 와 같은 규약, 비교는 sweeps/compare_csv.py.
 # ============================================================
 import csv
 import json
@@ -37,6 +39,10 @@ SEEDS = [42, 7]
 N_ORDERS, AISLE_BLOCK = 40, 1
 env = dict(os.environ, SIM_NO_PLOT="1", PYTHONIOENCODING="utf-8")
 SERIES = [("cell", ("--flow=main", "--cell")), ("heading", ("--flow=main", "--heading"))]
+# SWEEP_EXTRA="--footprint=exact,front" 처럼 모든 런에 덧붙일 인자, SWEEP_ENGINES=heading 으로 계열 선택 (-79 D3, fleet_sweep_load 와 같은 규약)
+EXTRA = tuple(os.environ.get("SWEEP_EXTRA", "").split())
+if os.environ.get("SWEEP_ENGINES"):
+    SERIES = [s for s in SERIES if s[0] in os.environ["SWEEP_ENGINES"].split(",")]
 # zone_peak 는 2026-09-04 zone_occ_mean/p90(존 체류 분포)으로 교체됨 — CSV 이력 호환을 위해 둘 다 허용
 OCC_KEY = "zone_occ_mean"
 
@@ -44,7 +50,7 @@ OCC_KEY = "zone_occ_mean"
 def run_one(n, seed, extra):
     t0 = time.perf_counter()
     r = subprocess.run([PY, os.path.join(OUT, "sim_v2_tasks.py"), "b0z", str(n),
-                        str(N_ORDERS), str(seed), str(AISLE_BLOCK), *extra],
+                        str(N_ORDERS), str(seed), str(AISLE_BLOCK), *extra, *EXTRA],
                        capture_output=True, text=True, encoding="utf-8", env=env)
     line = next((ln for ln in r.stdout.splitlines() if ln.startswith("[SUMMARY]")), None)
     assert line, f"실행 실패 r{n} s{seed} {extra}:\n{r.stdout[-2000:]}\n{r.stderr[-2000:]}"
