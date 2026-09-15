@@ -8,6 +8,7 @@
 SIL 트랙(ROS 2 에이전트 + Isaac 브리지 + sim-runner)은 t3_amr 로 통일하면서 삭제했다:
 `apps/ sil_isaac/ sil_ros/ sim_runner/ scene_builder/ t3_warehouse/ t3_warehouse_map/ t1_teleop/ t2_follower/ t2_mapping/
 calibration/ isaac_export_t3/ tests/ isaac_replay.py`. 마지막으로 남아 있던 커밋은 `ac10c76` — 필요하면 거기서 꺼낸다.
+설계도 원본 `Factory_Building_Design.dxf` 와 맵 생성기는 [`t3_amr/warehouse/map/source/`](t3_amr/warehouse/map/source/) 에 남겼다.
 host-orch 와의 통신(Sparkplug NBIRTH·Start/Stop)과 1_Robot ROS 2 연동은 t3_amr 에 새로 붙인다. 계약은
 `3_FMS/contracts/MQTT_CONTRACT.md`·`SIM_VERIFY_CONTRACT.md`, Sparkplug 코덱 참조 구현은 `3_FMS/host_orch/spb.py`.
 
