@@ -43,18 +43,63 @@ LIMIT = 400000
 NEAR, MID = 3.0, 7 * PITCH               # 3.0 / 8.4
 
 
-def run_one(seed):
+def plan_and_fleet(seed):
+    """계획해서 (fleet, drivers, uid2act) 를 만든다. ADG 가 순환이면 None."""
     geom, free, starts, goals = setup(MAP, N, PITCH, seed, "cross")
-    history, cells_hist = run_h(free, starts, goals, max_steps=150)
+    history, _ = run_h(free, starts, goals, max_steps=150)
     chains, order, _ = D.extract_actions(history, geom)
     adg = D.build_adg(chains)
     if adg.topological_order() is None:
         return None
-    uid2act = {a.uid: a for a in adg.actions}
     drivers = D.make_kinematic_drivers(geom, starts, seed=seed)
     fleet = D.FleetController(geom, adg, drivers, order=order)
+    return fleet, drivers, {a.uid: a for a in adg.actions}
 
-    near = mid = far = 0
+
+def blockers_of(fleet, a):
+    """로봇 a 가 **지금 기다리는 원인 액션**들. 없으면 빈 목록.
+
+    돌지 않는 경우가 셋이다 — 이미 실행 중이거나, 다음 액션이 없거나 바로
+    시작할 수 있거나, 막는 것이 로봇이 아니라 릴리스 지평인 경우다.
+    마지막 것은 **로봇 탓이 아니라서** 표본에서 뺀다.
+    """
+    if fleet.running[a] is not None:
+        return []
+    nxt = fleet.rt.pending(fleet.slot[a])
+    if nxt is None or fleet.rt.can_start(nxt):
+        return []
+    return [u for u in fleet.rt.blocking(nxt) if u >= 0]
+
+
+def nearest_blocker(drivers, uid2act, a, blk):
+    """막는 로봇들 중 **가장 가까운** 거리 [m]. 잴 것이 없으면 None."""
+    x, y, _ = drivers[a].axle_pose()
+    best = None
+    for u in blk:
+        b = uid2act.get(u)
+        if b is None or b.agent not in drivers:
+            continue
+        bx, by, _ = drivers[b.agent].axle_pose()
+        dd = math.hypot(bx - x, by - y)
+        best = dd if best is None else min(best, dd)
+    return best
+
+
+def sample_frame(fleet, drivers, uid2act, dists, nblk):
+    """이 프레임에서 막힌 로봇마다 가장 가까운 막는 로봇 거리를 모은다."""
+    for a in fleet.agents:
+        blk = blockers_of(fleet, a)
+        if not blk:
+            continue
+        best = nearest_blocker(drivers, uid2act, a, blk)
+        if best is None:
+            continue
+        dists.append(best)
+        nblk.append(len(blk))
+
+
+def drive_and_sample(fleet, drivers, uid2act):
+    """주행하면서 STRIDE 스텝마다 표본을 뜬다 — (거리들, 막는 수들)."""
     dists, nblk = [], []
     step = 0
     while step < LIMIT:
@@ -66,42 +111,31 @@ def run_one(seed):
             break
         if step % STRIDE:
             continue
-        for a in fleet.agents:
-            if fleet.running[a] is not None:
-                continue
-            nxt = fleet.rt.pending(fleet.slot[a])
-            if nxt is None or fleet.rt.can_start(nxt):
-                continue
-            blk = [u for u in fleet.rt.blocking(nxt) if u >= 0]
-            if not blk:
-                continue                              # 릴리스 대기 — 로봇 탓이 아니다
-            x, y, _ = drivers[a].axle_pose()
-            best = None
-            for u in blk:
-                b = uid2act.get(u)
-                if b is None or b.agent not in drivers:
-                    continue
-                bx, by, _ = drivers[b.agent].axle_pose()
-                dd = math.hypot(bx - x, by - y)
-                best = dd if best is None else min(best, dd)
-            if best is None:
-                continue
-            dists.append(best)
-            nblk.append(len(blk))
-            if best < NEAR:
-                near += 1
-            elif best < MID:
-                mid += 1
-            else:
-                far += 1
-    tot = near + mid + far
+        sample_frame(fleet, drivers, uid2act, dists, nblk)
+    return dists, nblk
+
+
+def summarise(seed, fleet, dists, nblk):
+    """거리 표본을 근접/중간/원거리로 나눈다. 표본이 없으면 None."""
+    tot = len(dists)
     if not tot:
         return None
-    dists.sort()
+    near = sum(1 for d in dists if d < NEAR)
+    mid = sum(1 for d in dists if NEAR <= d < MID)
+    far = tot - near - mid
+    s = sorted(dists)
     return dict(seed=seed, t=fleet.stats.sim_time, samples=tot,
                 near=near / tot, mid=mid / tot, far=far / tot,
-                med=dists[len(dists) // 2], p90=dists[int(len(dists) * 0.9)],
+                med=s[len(s) // 2], p90=s[int(len(s) * 0.9)],
                 blk=sum(nblk) / len(nblk))
+
+
+def run_one(seed):
+    got = plan_and_fleet(seed)
+    if got is None:
+        return None
+    fleet, drivers, uid2act = got
+    return summarise(seed, fleet, *drive_and_sample(fleet, drivers, uid2act))
 
 
 def main():

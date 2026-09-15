@@ -570,8 +570,12 @@ def _rec_setup(drivers, arts):
         #   `/rec_pibt12.npz` 가 된다. 루트에 쓸 수 있을 리 없다.
         probe = path + ".probe"
         try:
-            with open(probe, "wb"):
-                pass
+            with open(probe, "wb") as fp:
+                # ★ 한 바이트를 **실제로 쓴다.** 여는 것만으로는 부족하다 —
+                #   쿼터가 찼거나 읽기 전용으로 리마운트된 경우 `open` 은
+                #   통과하고 `write` 에서 막힌다. 빈 블록으로 두면 그 경우를
+                #   놓치고, 읽는 사람에게는 빠뜨린 코드처럼 보인다.
+                fp.write(b"0")
         finally:
             try:
                 os.remove(probe)
