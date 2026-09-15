@@ -15,7 +15,7 @@
 #   stations.json = stations_wall_ref.json (팀 확정 r40 작업 라인) + charge_zone.json 의 charge_zone 키.
 #
 # 입력: occupancy_grid_wall_ref.npy, stations_wall_ref.json, charge_zone.json (이 폴더),
-#       ../../2_Simulation/t3_warehouse_map/map/occupancy_grid.npy (v5.8)
+#       ../../2_Simulation/t3_amr/warehouse/map/occupancy_grid.npy (v5.8)
 # 출력: occupancy_grid.npy, stations.json, map_fms_build_report.txt (이 폴더)
 # 사용: python build_fms_map.py
 # ============================================================

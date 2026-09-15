@@ -7,7 +7,7 @@
 # 차이가 있으면 어디가 다른지 1 m 격자 기준으로 출력한다 (FMS 는 1 m 격자로 다운샘플해 쓰므로
 # 0.1 m 차이가 1 m 통행성에 영향 없는 경우는 '무해'로 분류).
 #
-# 사용: python check_map_set.py <세트 폴더>      예) python check_map_set.py ../../2_Simulation/t3_warehouse_map/map
+# 사용: python check_map_set.py <세트 폴더>      예) python check_map_set.py ../../2_Simulation/t3_amr/warehouse/map
 # ============================================================
 import json
 import os
