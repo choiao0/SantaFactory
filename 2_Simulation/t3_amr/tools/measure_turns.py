@@ -47,14 +47,29 @@
   소요 시간은 시작 위치와 거의 무관하므로 그대로 써도 된다.
 """
 import argparse
+import os
 import sys
 
 import numpy as np
 
-TICK_S = 1.0 / 0.75          # 1.3333 s — 계획 틱 (log: 틱 1.3333s)
-V_MAX = 0.90                 # m/s   (pibt_scene 로그)
+# ★ 격자를 **환경변수로 받는다** (2026-09-15).
+#
+#   전에는 `CELL = 1.2` 가 하드코딩이라 pitch 1.0 녹화를 넣어도 1.2 로
+#   환산됐다. 칸 수를 거리/CELL 로 세므로 **전진 관련 숫자가 전부 틀린다**
+#   (1.0 녹화를 1.2 로 나누면 칸을 1.2배 적게 세고 칸당 시간이 그만큼 길어진다).
+#   회전은 거리와 무관해 영향이 없다.
+#
+#   실제로 두 번 당했다 — 1.0 주행 녹화를 그대로 넣었는데 머리말이 「칸 1.2 m」
+#   를 찍고 있었고, 「1칸 환산 2.62 s」 가 0.9 판과 2.2 판에서 **똑같이** 나와
+#   이상해서 찾았다.
+#
+#   `PITCH` · `PIBT_PITCH` 둘 다 받는다 — 저장소 안에서 두 이름이 섞여 쓰인다.
+#   `TICK_S` 는 격자에서 파생시킨다 (pitch / v_max).
+CELL = float(os.environ.get("PITCH",
+             os.environ.get("PIBT_PITCH", "1.2")))   # m  계획 격자 pitch
+V_MAX = float(os.environ.get("PIBT_V_PLAN", "0.90"))  # m/s  **계획** 속도
 W_MAX = 1.80                 # rad/s
-CELL = 1.2                   # m     계획 격자 pitch
+TICK_S = CELL / V_MAX        # 계획 틱 — 격자를 따라간다
 
 
 def wrap(a):
