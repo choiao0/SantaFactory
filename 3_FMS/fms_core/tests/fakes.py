@@ -84,12 +84,21 @@ class PerfectRobots:
                 self.inbox[t.split("/")[3]] = b
         self.seen = len(self.pub.msgs)
 
-    def deliver(self, now, serials=None):
-        """받은 order 마다 마지막 노드에 도착한 state 를 conductor 에 넣는다."""
+    def deliver(self, now, serials=None, idle=False):
+        """받은 order 마다 마지막 노드에 도착한 state 를 conductor 에 넣는다.
+
+        idle=True 면 order 가 없는 로봇도 현재 포즈로 state 를 낸다. 실 로봇(VDA5050)은
+        명령이 없어도 주기적으로 state 를 내므로 그쪽이 현실적이다 — 기본을 False 로 두는
+        것은 침묵 워치독·재발행 규칙 검사가 "안 보내는" 상황을 만들어야 하기 때문이다.
+        1칸이 여러 틱이 되면(-194) 명령 없는 틱이 생기는데, 그때 기본값으로 두면 로봇이
+        말을 안 해 30 s 침묵 워치독에 걸린다.
+        """
         self.take_orders()
-        for serial in serials or list(self.inbox):
+        for serial in serials or (self.serials if idle else list(self.inbox)):
             o = self.inbox.pop(serial, None)
             if o is None:
+                if idle:
+                    self.idle_state(now, serial)
                 continue
             n = o["nodes"][-1]["nodePosition"]
             self.pose[serial] = (n["x"], n["y"], n["theta"])

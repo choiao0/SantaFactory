@@ -1,21 +1,29 @@
-import { useEffect, useState } from 'react'
-import { BOTS, DOCK, ESTIMATE_STATUS_LABEL, GRID, RACK, RUN_STATUS_LABEL, STATION, buildLayout } from '../data/replay.js'
-import { formatDateTime } from '../utils/format.js'
-
-const CELL_CLASS = { [RACK]: 'c1', [STATION]: 'c2', [DOCK]: 'c3' }
+import { useCallback, useEffect, useState } from 'react'
+import { ESTIMATE_STATUS_LABEL, RUN_STATUS_LABEL } from '../data/replay.js'
+import { formatDateTime, formatPercent } from '../utils/format.js'
+import ReplayCanvas from '../replay/ReplayCanvas.jsx'
+import { useReplay } from '../hooks/useReplay.js'
 
 const FAIL_LABEL = { FAILED: '실패', TIMEOUT: '시간 초과' }
 
-function RunCard({ run }) {
+function RunCard({ run, selected, onSelect }) {
   const failed = run.status === 'FAILED' || run.status === 'TIMEOUT'
+  const playable = run.status === 'DONE'
+  // 완료된 run 만 누를 수 있다 — 나머지는 보여줄 궤적이 없다
+  const Tag = playable ? 'button' : 'div'
   return (
-    <div className={`run ${run.status}`}>
+    <Tag
+      type={playable ? 'button' : undefined}
+      className={`run ${run.status}${playable ? ' playable' : ''}${selected ? ' on' : ''}`}
+      onClick={playable ? () => onSelect(run.amr_count) : undefined}
+      aria-pressed={playable ? selected : undefined}
+    >
       <span className="n">{run.amr_count}<span>대</span></span>
       {run.status === 'DONE' && (
         <span className="metric">
-          처리율 <b>{run.throughput?.toFixed(1)}%</b>
+          처리율 <b>{formatPercent(run.throughput)}%</b>
           <br />
-          가동률 <b>{run.utilization?.toFixed(0)}%</b>
+          가동률 <b>{formatPercent(run.utilization)}%</b>
         </span>
       )}
       {failed && (
@@ -27,41 +35,146 @@ function RunCard({ run }) {
       {(run.status === 'QUEUED' || run.status === 'RUNNING') && (
         <span className="wait">{RUN_STATUS_LABEL[run.status]}</span>
       )}
-    </div>
+      {playable && <span className="play-hint">{selected ? '재생 중' : '주행 보기'}</span>}
+    </Tag>
   )
 }
 
-const SPEEDS = [1, 2, 4, 8]
-const BASE_DURATION = 9
-const START_SECONDS = 2 * 3600 + 14 * 60 + 36
+// run 전체(6시간)를 담으므로 배속이 커야 한다 — ×32 면 11분, ×64 면 5.6분에 다 본다.
+// 그래도 프레임당 시뮬 0.5~1초라 샘플(4.4초 간격) 사이를 보간이 메운다
+const SPEEDS = [8, 16, 32, 64]
 
+/** 재생 시계를 "HH:MM:SS" 로. 시뮬 안의 경과 시간이지 벽시계가 아니다. */
 function formatClock(sec) {
   const h = String(Math.floor(sec / 3600)).padStart(2, '0')
   const m = String(Math.floor((sec % 3600) / 60)).padStart(2, '0')
-  const s = String(sec % 60).padStart(2, '0')
+  const s = String(Math.floor(sec % 60)).padStart(2, '0')
   return `T+${h}:${m}:${s}`
 }
 
-function ReplayBoard({ runLabel, amrCount }) {
-  const cells = buildLayout()
-  const cellPct = 100 / GRID.width
-  const rowPct = 100 / GRID.length
-  const [playing, setPlaying] = useState(true)
-  const [speed, setSpeed] = useState(4)
-  const [clock, setClock] = useState(START_SECONDS)
+/**
+ * 선택한 대수의 주행을 재생한다 (S15P21A106-205).
+ *
+ * 그리는 일은 ReplayCanvas 가 하고 여기서는 시간만 민다. 틱을 state 로 두면 프레임마다 리렌더가
+ * 돌지만, 실제로 다시 그리는 건 캔버스 하나뿐이라 그게 더 단순하다.
+ */
+/** 1시간 창으로 본 최근 처리율. 누적만 보면 "지금 잘 돌고 있나"를 알 수 없다. */
+const RECENT_WINDOW_S = 3600
+
+/**
+ * 출고 현황 (S15P21A106-205). 재생 시각까지 <b>주문</b> 몇 건이 나갔는지 센다.
+ *
+ * 왕복(태스크)이 아니라 주문이다 — 주문 하나가 여러 통로에 걸치면 토트가 나뉘어 AMR 이 여러 번
+ * 오간다(실측 500주문 → 630왕복). 왕복을 보여주면 사용자가 입력한 출고 건수와 어긋난다.
+ *
+ * 입고는 넣지 않는다 — 견적 판정도 출고 처리율만 보고, 시뮬의 입고는 아직 시나리오가 보류다.
+ * 완료 시각 배열이 정렬돼 오므로 이분 탐색으로 센다(6시간이면 수천 건이라 매 프레임 훑으면 밀린다).
+ */
+function OutboundPanel({ replay, seconds }) {
+  const done = replay.outbound_done
+  if (!done || done.length === 0) {
+    return (
+      <aside className="rp-side">
+        <h5>출고 주문</h5>
+        <p className="mono dim">이 run 에는 출고 기록이 없습니다.</p>
+      </aside>
+    )
+  }
+
+  // done[i] <= t 인 마지막 i + 1 = 그 시각까지의 완료 건수
+  const countUntil = (t) => {
+    let lo = 0
+    let hi = done.length
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1
+      if (done[mid] <= t) lo = mid + 1; else hi = mid
+    }
+    return lo
+  }
+
+  const now = countUntil(seconds)
+  const windowStart = Math.max(0, seconds - RECENT_WINDOW_S)
+  const recent = now - countUntil(windowStart)
+  const elapsedHours = Math.max(seconds - windowStart, 1) / 3600
+  const perHour = Math.round(recent / elapsedHours)
+  const total = done.length
+  const pct = Math.round((now / total) * 100)
+
+  return (
+    <aside className="rp-side">
+      <h5>출고 주문</h5>
+      <dl className="rp-stat">
+        <dt>완료</dt>
+        <dd>{now.toLocaleString()}<span>건</span></dd>
+        <dt>최근 1시간</dt>
+        <dd>{perHour.toLocaleString()}<span>건/시간</span></dd>
+      </dl>
+      <div className="rp-progress" role="img" aria-label={`접수 ${total}건 중 ${now}건 완료`}>
+        <i style={{ width: `${pct}%` }} />
+      </div>
+      <p className="mono dim">접수 {total.toLocaleString()}건 중 {pct}%</p>
+    </aside>
+  )
+}
+
+/**
+ * 재생 루프. 대수가 바뀌면 부모가 key 를 갈아 이 컴포넌트를 새로 만든다 —
+ * 그래야 "새 데이터가 오면 0초부터" 를 초기화 effect 없이 얻는다.
+ */
+function ReplayPlayer({ replay, playing, speed, onTick }) {
+  const [tick, setTick] = useState(0)
+  const ticks = Math.max(...Object.values(replay.robots).map((a) => a.length))
+  const dt = replay.dt_s ?? 1
 
   useEffect(() => {
-    if (!playing) return undefined
-    const id = setInterval(() => setClock((c) => c + speed), 1000)
-    return () => clearInterval(id)
-  }, [playing, speed])
+    if (!playing || ticks === 0) return undefined
+    let raf = 0
+    let last = performance.now()
+    const step = (now) => {
+      const elapsed = (now - last) / 1000
+      last = now
+      // 실제 경과 시간으로 민다 — 프레임 수로 세면 화면이 느린 기기에서 재생도 같이 느려진다
+      setTick((t) => (t + (elapsed * speed) / dt) % ticks)
+      raf = requestAnimationFrame(step)
+    }
+    raf = requestAnimationFrame(step)
+    return () => cancelAnimationFrame(raf)
+  }, [playing, speed, ticks, dt])
+
+  useEffect(() => { onTick(tick * dt) }, [tick, dt, onTick])
+
+  const seconds = tick * dt
+  return (
+    <>
+      <div className="rp-stage">
+        <ReplayCanvas replay={replay} tick={tick} />
+        <OutboundPanel replay={replay} seconds={seconds} />
+      </div>
+      {/* 전체를 담으니 건너뛸 수단이 없으면 뒤쪽은 사실상 못 본다 */}
+      <input
+        className="rp-seek"
+        type="range"
+        min={0}
+        max={Math.max(0, ticks - 1)}
+        step={1}
+        value={Math.floor(tick)}
+        onChange={(e) => setTick(Number(e.target.value))}
+        aria-label="재생 위치"
+      />
+    </>
+  )
+}
+
+/** 선택한 대수의 주행을 재생한다 (S15P21A106-205). 데이터 수급과 컨트롤만 맡는다. */
+function ReplayBoard({ estimateId, amrCount, runLabel }) {
+  const { replay, loading, error } = useReplay(estimateId, amrCount)
+  const [playing, setPlaying] = useState(true)
+  const [seconds, setSeconds] = useState(0)
+  // 6시간을 ×64 로 보면 5.6분. ×32 는 11분이라 끝까지 보는 사람이 없다
+  const [speed, setSpeed] = useState(64)
 
   const nextSpeed = () => setSpeed((v) => SPEEDS[(SPEEDS.indexOf(v) + 1) % SPEEDS.length])
-  const boardStyle = {
-    aspectRatio: `${GRID.width} / ${GRID.length}`,
-    '--bot-duration': `${BASE_DURATION / speed}s`,
-    '--bot-play': playing ? 'running' : 'paused',
-  }
+  const onTick = useCallback((s) => setSeconds(s), [])
 
   return (
     <div className="rp-wrap">
@@ -71,47 +184,55 @@ function ReplayBoard({ runLabel, amrCount }) {
           <span>{runLabel} · SEED 101</span>
         </h4>
         <div className="rp-ctrl">
-          <span className="rp-clock">{formatClock(clock)}</span>
-          <button type="button" className="ghost" onClick={() => setPlaying((v) => !v)}>
+          <span className="rp-clock">{formatClock(seconds)}</span>
+          <button type="button" className="ghost" disabled={!replay} onClick={() => setPlaying((v) => !v)}>
             {playing ? '⏸ PAUSE' : '▶ PLAY'}
           </button>
-          <button type="button" className="ghost" onClick={nextSpeed}>SPEED ×{speed}</button>
-          <button type="button" className="ghost" disabled>RUN ▾</button>
+          <button type="button" className="ghost" disabled={!replay} onClick={nextSpeed}>SPEED ×{speed}</button>
         </div>
       </div>
 
       <div className="sim-board">
         <div className="board-head">
           <span>TOP VIEW · SIMPY QUOTE ENGINE</span>
-          <span>{GRID.width} × {GRID.length} · 1 CELL = 1 m</span>
+          <span>
+            {replay
+              ? `전체 ${formatClock(replay.seconds)} · 1 CELL = 1 m`
+              : '1 CELL = 1 m'}
+          </span>
         </div>
-        <div className="hud tl"><b>{amrCount ?? '—'}</b> AMR · PREVIEW</div>
-        <div className="hud tr">위치 로그 연동 예정 · 샘플 재생</div>
-        <div className="replay" style={boardStyle}>
-          {cells.map((c, i) => (
-            <div key={i} className={`cell ${CELL_CLASS[c] ?? ''}`} />
-          ))}
-          {BOTS.map((b) => (
-            <div
-              key={b.path}
-              className={`bot ${b.state} path-${b.path}`}
-              style={{ left: `${b.x * cellPct}%`, top: `${b.y * rowPct}%`, animationDelay: `${-b.x * 0.4}s` }}
-            >
-              <i />
-              <span className="tote" />
-            </div>
-          ))}
-        </div>
+        <div className="hud tl"><b>{amrCount ?? '—'}</b> AMR</div>
+
+        {replay && (
+          <ReplayPlayer key={`${estimateId}:${amrCount}`} replay={replay}
+                        playing={playing} speed={speed} onTick={onTick} />
+        )}
+        {!replay && (
+          <div className="rp-placeholder">
+            {loading && <span className="mono dim">주행 데이터를 불러오는 중…</span>}
+            {!loading && error && <span className="form-error">{error}</span>}
+            {!loading && !error && (
+              <span className="mono dim">
+                {amrCount == null
+                  ? '완료된 대수를 선택하면 그 구성의 주행이 재생됩니다.'
+                  : '이 대수의 주행 기록이 없습니다.'}
+              </span>
+            )}
+          </div>
+        )}
+
         <div className="board-foot">
-          <span>P = 픽업 스테이션 · D = 출고 도크</span>
-          <span>{playing ? 'PLAYING' : 'PAUSED'}<b>×{speed}</b></span>
+          <span>{replay ? `AMR ${Object.keys(replay.robots).length}대` : ''}</span>
+          <span>{replay && playing ? 'PLAYING' : 'PAUSED'}<b>×{speed}</b></span>
         </div>
+        {/* 화면에 실제로 칠해지는 것만 적는다. 로봇 상태(주행·대기 등)는 데이터에 없어서 색이 하나다 */}
         <div className="legend">
-          <span><i style={{ background: '#1d1d1d', border: '1px solid #e8e8e4' }} />이동(공차)</span>
-          <span><i style={{ background: '#d9d7d2' }} />이동(적재)</span>
-          <span><i style={{ background: 'var(--red)' }} />픽/드롭 중</span>
-          <span><i style={{ background: '#555' }} />대기</span>
-          <span><i style={{ background: '#3f3f3d' }} />랙</span>
+          <span><i style={{ background: 'var(--rp-amr)' }} />AMR</span>
+          <span><i style={{ background: 'var(--rp-pack)' }} />출고(패킹)</span>
+          <span><i style={{ background: 'var(--rp-pick)' }} />통로 집하</span>
+          <span><i style={{ background: 'var(--rp-in)' }} />입고</span>
+          <span><i style={{ background: 'var(--rp-charge)' }} />충전</span>
+          <span><i style={{ background: 'var(--rp-wall)' }} />랙</span>
         </div>
       </div>
     </div>
@@ -121,8 +242,14 @@ function ReplayBoard({ runLabel, amrCount }) {
 export default function RunsStep({ estimateId, estimate, connected, error }) {
   const runs = estimate?.runs ?? []
   const finished = runs.filter((r) => r.status !== 'QUEUED' && r.status !== 'RUNNING').length
-  const representative = estimate?.recommended_count ?? runs.at(-1)?.amr_count ?? null
-  const runLabel = estimate ? `est_${estimate.estimate_id}_n${representative ?? '?'}` : 'est_?_n?'
+  const [picked, setPicked] = useState(null)
+
+  // 아무것도 고르지 않았으면 권장 대수를 보여준다 — 사용자가 제일 궁금해할 구성이다.
+  // 권장이 없는 견적(사유만 있는 판정)이면 완료된 것 중 마지막 대수로 떨어진다
+  const done = runs.filter((r) => r.status === 'DONE')
+  const fallback = estimate?.recommended_count ?? done.at(-1)?.amr_count ?? null
+  const shown = picked ?? fallback
+  const runLabel = estimate ? `est_${estimate.estimate_id}_n${shown ?? '?'}` : 'est_?_n?'
 
   return (
     <section className="step section-dark reveal" id="s3">
@@ -161,12 +288,14 @@ export default function RunsStep({ estimateId, estimate, connected, error }) {
             </div>
           </div>
           <div className="runlist">
-            {runs.map((r) => <RunCard key={r.run_id} run={r} />)}
+            {runs.map((r) => (
+              <RunCard key={r.run_id} run={r} selected={r.amr_count === shown} onSelect={setPicked} />
+            ))}
           </div>
         </>
       )}
 
-      <ReplayBoard runLabel={runLabel} amrCount={representative} />
+      <ReplayBoard estimateId={estimateId} amrCount={shown} runLabel={runLabel} />
     </section>
   )
 }

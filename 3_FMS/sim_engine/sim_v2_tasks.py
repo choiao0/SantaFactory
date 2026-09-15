@@ -20,6 +20,14 @@
 #                              [--horizon=<틱>] [--shifts=in,out,out]                     (고정 시간·교대, -145 §1)
 #                              [--battery] [--chargers=6] [--runtime-h=8] [--charge-h=1.5] [--soc=20,80,95]  (배터리, -145 §2)
 #                              [--orders-file=<json>] [--capacity=<토트 수>] [--tote-units=<상품 수>] [--svc-per-tote=<초>]
+#                              [--max-order-totes=24]  (v3.5: 토트 합계 초과 주문 = 팔레트 흐름 제외, 그 아래 큰 주문은 여러 왕복. 0 = 제한 없음)
+#                              [--speed=<m/s>]   (v3.3, -116: 틱 길이 = CELL_M / speed. 1칸 = 1틱은 그대로, 초 환산만 바뀐다)
+#                              [--footprint=exact|legacy|exact,front|exact,front_2cell] [--robot-dims=0.39,1.11,0.80]   (v3.4 -203, front 6칸 -79)
+#   --footprint: 회전할 때 차체가 실제로 쓸고 가는 자리. exact(기본) = 0.1 m 지도로 만든 정적 마스크(랙·벽 침범 금지),
+#              legacy = v3.3 과 비트 동일(뒤 3칸만, 양보 v1), exact,front = + 앞 4칸 soft 축 규칙(물리 팀 안전 규칙, 실험 인자 —
+#              처리량 −2~−15 %, 충전 존 매듭). --robot-dims 는 구동축 앞·뒤·폭 [m](기종 카드). SUMMARY footprint·robot_dims·turn_masked.
+#   --no-standoff: 대치 상태기계 V2(-79)를 끄고 양보 규칙 v1(v3.8 경로). v3.9 부터 헤딩 main exact·exact,front 기본 ON —
+#              6,000건/6h 에서 포장대 앞 회전 매듭을 풀어 완료 23~72 % → 99~100 %. SUMMARY standoff·standoffs·standoff_swaps.
 #   기본 = 헤딩 모델 (상태 (r,c,h), 자기+뒤 칸 2칸 점유, 90° 회전 = TURN_TICKS 틱, 회전 중 스윙 칸
 #              예약, 라이브니스 장치 5종). docs/이동계층_PIBT.md#라이브니스-장치-5종
 #   --cell:    칸 모델(점로봇) opt-in — 기준선 CSV 재현·A/B 비교축. (--heading 은 호환용, 무시)
@@ -52,10 +60,11 @@ from cli.report import _mean, _p90, report
 from cli.export_isaac import export_isaac
 from cli.plot import plot_heat
 from fms_kernel import FmsKernel, KernelConfig, StallError
-from map_loader import (load_map, make_homes, CELL_M, OFFSET_M, MAP_DIR, load_charge_zone,
-                        make_homes_zone, load_rack_map, load_topology_spec)
-from order_stream import OrderStream
-from pibt_core import DIRS, TURN_TICKS
+from map_loader import (load_map, make_homes, CELL_M, OFFSET_M, MAP_DIR, ROBOT_DIMS, load_charge_zone,
+                        make_homes_zone, load_rack_map, load_topology_spec, masked_turn_ratio, turn_mask)
+from pibt.geometry import FOOTPRINT_MARGIN_M
+from order_stream import MAX_ORDER_TOTES, OrderStream
+from pibt_core import DIRS, MOVE_TICKS, TURN_TICKS
 
 SERVICE_TIME_S = 40 / 11            # v1과 동일 (docs/θ_경로_기준선.md#기준선-계보)
 SERVICE_STEPS = round(SERVICE_TIME_S / DT)
@@ -88,6 +97,12 @@ def _parse_positional(argv):
             # 맵 세트 폴더 (기본 = 공식 맵 3_FMS/map). 합성 창고를 돌릴 때만 쓴다 (-139).
             a.map_dir = f.split("=", 1)[1]
     assert a.flow in ("main", "v1compat"), f"알 수 없는 flow: {a.flow}"
+    # 속도 (-116, 계약 v3.3): 커널은 1칸 = 1틱 그대로, 틱의 길이(초)만 CELL_M / speed 로 잡는다.
+    # 입구(창·서비스·주문 도착 초 → 틱)와 출구(틱 → 초) 환산만 바뀌고, 1.0 이면 비트 동일.
+    a.speed = _opt(argv, "speed", float, SPEED)
+    assert 0.1 <= a.speed <= 5.0, f"--speed 는 0.1~5.0 m/s: {a.speed}"
+    # 틱 길이는 나중에 모델이 정해진 뒤 _parse_model 에서 잡는다 (-194) — 헤딩은 1칸이
+    # MOVE_TICKS 틱이고 칸 모델은 1칸 = 1틱이라 같은 speed 라도 틱 길이가 다르다.
     if a.map_dir is not None:
         assert os.path.isdir(a.map_dir), f"--map-dir 폴더가 없다: {a.map_dir}"
     return a, pos
@@ -102,18 +117,57 @@ def _parse_model(a, argv):
         if "--heading" in argv:
             a.warnings.append("[WARN] --heading 은 v1compat 에서 무시 (패리티: 항상 칸 모델)")
         a.heading = False
+    # 틱 길이 (-116 의 dt 를 -194 가 모델별로 나눈다). speed 는 가감속을 포함한 **실효**
+    # 속도고, 1칸에 걸리는 시간이 CELL_M / speed 가 되도록 잡는다.
+    #   헤딩   1칸 = MOVE_TICKS 틱  →  dt = CELL_M / (speed × MOVE_TICKS)
+    #   칸 모델 1칸 = 1틱            →  dt = CELL_M / speed        (v3.3 과 같은 식)
+    # 칸 모델·v1compat 은 A/B 비교축이라 건드리지 않는다 — 여기서 MOVE_TICKS 로 나누면
+    # 서비스 틱이 4 → 15 가 되어 기준값 2317/186.4 · 2970/127.3 이 깨진다.
+    a.dt = CELL_M / (a.speed * (MOVE_TICKS if a.heading else 1))
     # 충전 존 복귀 = main 흐름 기본값 (2026-09-03 결정). 기존 고정 홈 12칸은 --fixed-homes opt-in.
     # v1compat 은 패리티 때문에 항상 고정 홈. (--zone 은 호환용 무시)
     a.zone = "--fixed-homes" not in argv and a.flow != "v1compat"
     # v3: 차선·양보는 헤딩 main 전용. 칸 모델(--cell)은 A/B 기준 축이라 건드리지 않는다(기준값 2970/127.3 유지).
     a.lanes = "--no-lanes" not in argv and a.heading and a.flow != "v1compat"
     a.yield_rule = "--no-yield" not in argv and a.heading and a.flow != "v1compat"
+    # 구간 대수 제한 (-193). 통행 칸을 k×k 블록으로 자르고 블록당 동시 대수를 N 으로 묶는다.
+    # 기본 0 = 끔 → 이 인자 없이는 v3 와 비트 동일.
+    #
+    # N 은 실질적으로 0/1 스위치다. 소싸움은 밀도가 아니라 방향 문제라, 같은 블록에 2대를
+    # 허용하면 그 2대가 마주보는 걸 못 막는다. 실측(16대·250건·gap 4): N=2 는 8틱 이상
+    # 마주보기가 102→121건으로 **늘었고**, N=4·5 는 진입 차단이 3회·0회로 규칙이 없는 것과
+    # 같았다. N=1 만 블록당 배타 점유가 되어 듣는다 (철도 폐색과 같은 구조).
+    a.section_limit = _opt(argv, "section-limit", int, 0)
+    assert a.section_limit >= 0, f"--section-limit 은 0 이상: {a.section_limit}"
+    # 블록 한 변. 클수록 조이는 게 아니라 **무력해진다** — 6런 실측에서 8×8·N=1 은 64칸에
+    # 1대라 로봇이 계속 정체→면제로 풀려 92건(대가 +29%), 3×3 은 67건(대가 +3.2%)이었다.
+    a.section_grid = _opt(argv, "section-grid", int, 3)
+    assert a.section_grid >= 1, f"--section-grid 는 1 이상: {a.section_grid}"
+    if a.section_limit and not a.heading:
+        a.warnings.append("[WARN] --section-limit 은 헤딩 모델 전용 — 칸 모델에서 무시")
+        a.section_limit = 0
     # 차선 비용은 θ(A트랙 계약, 11개) 밖의 운영 규칙이다. 기본 2.0 (2·3·5 A/B: 5 는 평가 시드 102 에서 새 STALL, 3·2 완주).
     a.lane_gain = _opt(argv, "lane-gain", float, 2.0)
     a.pocket_gain = _opt(argv, "pocket-gain", float, 2.0)
+    # 회전 발자국 (-203, 계약 v3.4 결과 변경). 기본 exact = 정적 마스크. 회전이 없는 칸 모델·v1compat 은 legacy 로 둔다.
+    a.footprint = _opt(argv, "footprint", str, "exact")
+    assert a.footprint in ("legacy", "exact", "exact,front", "exact,front_2cell"), \
+        f"--footprint 는 legacy|exact|exact,front|exact,front_2cell: {a.footprint}"
+    dims = _opt(argv, "robot-dims", str, ",".join(f"{v:g}" for v in ROBOT_DIMS))
+    a.robot_dims = tuple(float(x) for x in dims.split(","))
+    assert len(a.robot_dims) == 3 and all(v > 0 for v in a.robot_dims), f"--robot-dims 는 앞,뒤,폭 양수 셋: {dims}"
+    if not a.heading:
+        a.footprint = "legacy"
+    elif "front" in a.footprint and not a.yield_rule:
+        a.warnings.append(f"[WARN] --footprint={a.footprint} 는 대치 상태기계(-79)가 정면 해소 장치 — --no-yield 무시")
+        a.yield_rule = True
     assert a.lane_gain >= 1.0 and a.pocket_gain >= 1.0, f"--lane-gain/--pocket-gain 은 1.0 이상: {a.lane_gain}, {a.pocket_gain}"
     # 주문 도착 간격 평균 [틱] (지수분포). 기본 50 = B-0 이후 전 기준선. --order-gap=<틱> 으로 부하 조절
     # (고부하 스윕, docs/θ_경로_기준선.md#고부하-l1l2). v1compat 은 패리티 때문에 항상 50.
+    # 대치 상태기계 V2 (-79, 계약 v3.9 기본): 헤딩 main 의 exact·exact,front 는 양보 규칙 v1 대신 상태기계로 정면·회전 매듭을 푼다.
+    # 6,000건/6h 에서 exact 가 포장대 앞 회전 매듭으로 23~72 % 에 그쳤고 상태기계만 켜면 99~100 % (D3, 2026-09-15).
+    # --no-standoff 로 v3.8 경로(양보 v1). legacy 는 v3.3 비트 동일이라 항상 끔. --standoff 는 호환용 no-op.
+    a.standoff = ("--no-standoff" not in argv and a.heading and a.flow != "v1compat" and a.footprint != "legacy")
     a.order_gap_arg = next((float(f.split("=", 1)[1]) for f in argv if f.startswith("--order-gap=")), None)
     if a.order_gap_arg is not None and a.flow == "v1compat":
         a.warnings.append("[WARN] --order-gap 은 v1compat 에서 무시 (패리티)")
@@ -176,6 +230,9 @@ def _parse_orders(a, argv):
     a.capacity = _opt(argv, "capacity", int, 1)
     a.tote_units = _opt(argv, "tote-units", int)
     a.svc_per_tote = _opt(argv, "svc-per-tote", int, 0)
+    # 주문 단위 경계 (v3.5, 2026-09-14): 토트 합계 초과 주문 = 팔레트 흐름 제외. 그 아래 큰 주문은 여러 왕복. 0 = 제한 없음.
+    a.max_order_totes = _opt(argv, "max-order-totes", int, MAX_ORDER_TOTES)
+    assert a.max_order_totes >= 0, f"--max-order-totes 는 0 이상 (0 = 제한 없음): {a.max_order_totes}"
     if a.orders_file is not None:
         assert a.flow == "main", "--orders-file 은 main 흐름만"
     assert 1 <= a.capacity <= 6, f"--capacity 는 1~6 토트: {a.capacity}"
@@ -196,6 +253,19 @@ def parse_args(argv):
     _parse_battery(a, argv)
     _parse_orders(a, argv)
     return a
+
+
+def block_sections(free, k):
+    """통행 가능 칸을 k×k 블록으로 타일링한 (H, W) int16 격자. 벽·랙은 -1 (-193).
+
+    맵을 안 보고 자른다 — topology.json 이 없어도, 생성기가 안 만든 외부 창고에서도 된다.
+    접속행 두 줄에만 긋는 안을 먼저 만들어 봤는데(git 이력), 6런 실측에서 8틱 이상
+    마주보기 감소가 30% 대 67% 로 이 쪽이 이겨서 지웠다. 대가는 makespan +3.2%.
+    """
+    rr, cc = np.indices(free.shape)
+    sec = ((rr // k) * ((free.shape[1] + k - 1) // k) + cc // k).astype(np.int16)
+    sec[~free] = -1
+    return sec
 
 
 def load_orders_file(path):
@@ -236,6 +306,7 @@ def build(a):
     if a.theta_path or a.lanes or a.yield_rule:
         from from_theta import GuidanceTheta, extract_topology, from_theta, load_theta
         topo = extract_topology(free, st_cell, spec=load_topology_spec(map_dir))
+    sec_map = block_sections(free, a.section_grid) if a.section_limit else None
     if a.theta_path or a.lanes:
         theta = load_theta(a.theta_path) if a.theta_path else GuidanceTheta.neutral()
         lane_gain, pocket_gain = (a.lane_gain, a.pocket_gain) if a.lanes else (1.0, 1.0)
@@ -252,7 +323,8 @@ def build(a):
         rack_map = load_rack_map(map_dir)
         assert rack_map, f"{map_dir}/rack_buffers.json 없음 — map/build_rack_map.py 로 생성 " \
                          "(합성 창고는 WMS 마스터가 없어 명시 주문 모드를 못 쓴다 — -139)"
-        explicit = dict(orders=load_orders_file(a.orders_file), rack_map=rack_map, tote_units=a.tote_units)
+        explicit = dict(orders=load_orders_file(a.orders_file), rack_map=rack_map, tote_units=a.tote_units, dt=a.dt,
+                        max_order_totes=a.max_order_totes)
     stream = OrderStream(rng, a.flow, a.n_orders, a.order_gap, st_cell, stations, inbound_gap=a.inbound_gap_arg,
                          k_line_p=K_LINE_P, horizon=a.horizon, shifts=a.shifts, **explicit)
     if a.horizon is not None or explicit:
@@ -266,20 +338,27 @@ def build(a):
     if a.battery:
         docks = tuple(st_cell[f"charger[{i}]"] for i in range(a.chargers))
         soc_init = tuple(float(x) for x in np.random.default_rng([a.seed, 0x145]).uniform(0.3, 1.0, a.n_robots))
-        drain_drive = 1.0 / (a.runtime_h * 3600 / DT * (0.7 + 0.3 * 0.25))
+        drain_drive = 1.0 / (a.runtime_h * 3600 / a.dt * (0.7 + 0.3 * 0.25))
         bat = dict(battery=True, dock_cells=docks, soc_init=soc_init, drain_drive=drain_drive,
-                   drain_idle=0.25 * drain_drive, charge_rate=1.0 / (a.charge_h * 3600 / DT),
+                   drain_idle=0.25 * drain_drive, charge_rate=1.0 / (a.charge_h * 3600 / a.dt),
                    soc_low=a.soc[0], soc_go=a.soc[1], soc_leave=a.soc[2], soc_yield=(a.soc[0] + a.soc[1]) / 2)
+    # 회전 발자국 마스크 (-203): 0.1 m 지도 × 기종 치수, 시작 시 1회(< 1 s). legacy 면 없음.
+    mask, turn_masked = None, 0.0
+    if a.footprint != "legacy":
+        mask = turn_mask(map_dir, a.robot_dims, FOOTPRINT_MARGIN_M)
+        turn_masked = masked_turn_ratio(free, mask)
     cfg = KernelConfig(heading=a.heading, zone=a.zone, theta=bool(a.theta_path or a.lanes), check=a.check,
-                       dock_prio=a.dock_prio, export=a.export, service_steps=SERVICE_STEPS,
+                       dock_prio=a.dock_prio, export=a.export, service_steps=round(SERVICE_TIME_S / a.dt),
                        capacity=a.capacity, svc_per_tote=a.svc_per_tote,
-                       yield_rule=a.yield_rule,
-                       turn_ticks=TURN_TICKS, stall_warn_only=a.horizon is not None, **bat)
+                       yield_rule=a.yield_rule, section_limit=a.section_limit, standoff=a.standoff,
+                       turn_ticks=TURN_TICKS, move_ticks=MOVE_TICKS,
+                       stall_warn_only=a.horizon is not None,
+                       footprint=a.footprint, robot_dims=a.robot_dims, **bat)
     kernel = FmsKernel(free, st_cell, edge_cost, wait_cost, homes, a.n_robots, cfg,
                        zone_mask=zone_mask, on_task_completed=stream.on_completed,
-                       lane_dir=None if topo is None else topo.lane_dir)
+                       lane_dir=None if topo is None else topo.lane_dir, sec_map=sec_map, turn_mask=mask)
     a.warnings += kernel.warnings
-    ctx = SimpleNamespace(free=free, st_cell=st_cell, stations=stations, H=H, W=W)
+    ctx = SimpleNamespace(free=free, st_cell=st_cell, stations=stations, H=H, W=W, turn_masked=turn_masked)
     return kernel, stream, ctx
 
 

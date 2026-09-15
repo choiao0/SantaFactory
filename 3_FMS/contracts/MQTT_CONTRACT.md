@@ -85,7 +85,7 @@ FMS ↔ AMR 에이전트 ↔ sim-runner ↔ Host ↔ 시뮬 WMS 가 한 브로�
 | `connection` | AMR → FMS | `connectionState` ∈ ONLINE · OFFLINE · CONNECTIONBROKEN (retained QoS1, LWT) |
 | `factsheet` | AMR → FMS | `typeSpecification` · `physicalParameters` · `protocolLimits` · `protocolFeatures` · `agvGeometry` · `loadSpecification` (retained QoS1, ONLINE 직후) |
 
-### 4.2 factsheet ← 기종 프로파일 (적용 2026-09-08: `t4_agent/config/models/iw_hub.yaml` → `StateBuilder.factsheet()`, ONLINE 직후 retained QoS1. 숫자의 원천은 `2_Simulation/sil_isaac/robot/profile.py`)
+### 4.2 factsheet ← 기종 프로파일 (적용 2026-09-08: `1_Robot/amr_agent/config/models/iw_hub.yaml` + 런 프로파일(`profile_overrides` = BE amr 블록) → `StateBuilder.factsheet()`, ONLINE 직후 retained QoS1. 숫자의 원천은 `2_Simulation/sil_isaac/robot/profile.py`)
 
 | 프로파일 (yaml 키) | factsheet 필드 | iw.hub |
 |---|---|---|
@@ -95,7 +95,7 @@ FMS ↔ AMR 에이전트 ↔ sim-runner ↔ Host ↔ 시뮬 WMS 가 한 브로�
 | 바퀴 · 회전 외곽 | `agvGeometry.wheelDefinitions[] · envelopes2d[]` | r 0.08 · y ±0.29 · 스윙 반경 1.09 m |
 | 타이밍 | `protocolLimits.timing.{minOrderInterval, minStateInterval, defaultStateInterval}` | 0.5 · 0.5 · 0.5 (executor 2 Hz sim time) |
 
-### 4.3 orderUpdateId 스티칭 · 재발행 · 중복 (2_Simulation/t4_agent README 의 표를 옮김)
+### 4.3 orderUpdateId 스티칭 · 재발행 · 중복 (1_Robot/amr_agent README 의 표를 옮김)
 
 | PIBT 액션 | VDA 5050 표현 | 에이전트 동작 |
 |---|---|---|
@@ -119,7 +119,7 @@ FMS ↔ AMR 에이전트 ↔ sim-runner ↔ Host ↔ 시뮬 WMS 가 한 브로�
 | `biz/v1/event` | `eventId` · `runId` · `at` · `type` ∈ task_assigned · task_done · order_shipped · robot_error · stall · **kpi_summary** · `tick` · `orderId` · `taskId` · `robot{manufacturer, serial}` |
 | `biz/v1/event` `type = kpi_summary` (v1.1, fms-core → Host, Stop 뒤 1건) | + `status` ∈ done · failed · `error` · `ticks` · `elapsed_s` · `planner` · `counters{open_tasks, done_tasks, orders_done, orders_total}` · `kpi` = SIM_VERIFY_CONTRACT §3 의 14개 키 블록(플래너가 없었으면 null) · `warnings`(v1.2, 없으면 null — 견적과 다른 조건으로 돌았다는 신호). host-orch 가 `sim.verify.result.kpi` 와 `verify.fms.warnings` 에 그대로 싣는다 |
 
-## 5. Sparkplug B 3.0 (`spBv1.0`, protobuf) — sim-runner 적용 2026-09-08 (`2_Simulation/sim_runner/`) · host-orch 적용 2026-09-09 (`3_FMS/host_orch/`, 잡 큐는 `SIM_VERIFY_CONTRACT.md`) · fms-core 적용 2026-09-09 (`3_FMS/fms_core/`)
+## 5. Sparkplug B 3.0 (`spBv1.0`, protobuf) — sim-runner 적용 2026-09-08 (`2_Simulation/sim_runner/`, -219 로 삭제 — 코덱 참조 구현은 `3_FMS/host_orch/spb.py`) · host-orch 적용 2026-09-09 (`3_FMS/host_orch/`, 잡 큐는 `SIM_VERIFY_CONTRACT.md`) · fms-core 적용 2026-09-09 (`3_FMS/fms_core/`)
 
 ### 5.1 아이덴티티
 

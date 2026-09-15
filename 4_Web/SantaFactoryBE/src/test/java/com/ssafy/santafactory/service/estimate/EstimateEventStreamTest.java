@@ -28,7 +28,7 @@ class EstimateEventStreamTest {
 
     @Test
     void a_running_estimate_keeps_the_subscription_open_until_it_finishes() {
-        when(estimateService.detail(77L)).thenReturn(detail(EstimateStatus.RUNNING));
+        when(estimateService.snapshot(77L)).thenReturn(detail(EstimateStatus.RUNNING));
 
         SseEmitter emitter = stream.subscribe(77L);
 
@@ -44,7 +44,7 @@ class EstimateEventStreamTest {
 
     @Test
     void a_finished_estimate_is_closed_right_after_the_snapshot() {
-        when(estimateService.detail(78L)).thenReturn(detail(EstimateStatus.PARTIAL));
+        when(estimateService.snapshot(78L)).thenReturn(detail(EstimateStatus.PARTIAL));
 
         stream.subscribe(78L);
 
@@ -53,7 +53,7 @@ class EstimateEventStreamTest {
 
     @Test
     void events_for_other_estimates_do_not_touch_a_subscription() {
-        when(estimateService.detail(79L)).thenReturn(detail(EstimateStatus.RUNNING));
+        when(estimateService.snapshot(79L)).thenReturn(detail(EstimateStatus.RUNNING));
         stream.subscribe(79L);
 
         stream.onEstimateFinished(new EstimateFinished(80L, EstimateStatus.DONE, 5, null, null));

@@ -83,6 +83,13 @@ public class SimScenario {
     @Column(name = "total_cost")
     private Long totalCost;
 
+    /**
+     * 이 run 의 앞 구간 궤적 (S15P21A106-205). 시뮬이 준 JSON 을 그대로 담는다.
+     * 맵({@code scene})은 대수와 무관하게 같으므로 여기가 아니라 견적 쪽에 한 벌만 둔다.
+     */
+    @Column(name = "replay_json")
+    private String replayJson;
+
     private SimScenario(Estimate estimate, String runId, int amrCount, long totalCost) {
         this.estimate = estimate;
         this.runId = runId;
@@ -111,6 +118,16 @@ public class SimScenario {
         this.error = null;
         this.status = RunStatus.DONE;
         this.completedAt = LocalDateTime.now();
+    }
+
+    /**
+     * 앞 구간 궤적을 붙인다. 없으면(내보내기를 끄거나 시뮬이 못 만들었으면) 아무것도 하지 않는다 —
+     * 리플레이가 없다고 이미 받아 둔 KPI 를 지울 이유가 없다.
+     */
+    public void applyReplay(String replayJson) {
+        if (replayJson != null) {
+            this.replayJson = replayJson;
+        }
     }
 
     /** 시뮬이 실패로 응답 — 사유를 남기고 나머지 run 은 계속 진행한다. */

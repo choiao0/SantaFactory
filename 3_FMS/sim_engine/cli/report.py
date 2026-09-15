@@ -1,12 +1,15 @@
 # -*- coding: utf-8 -*-
 import json
+import math
 import os
 
 import numpy as np
 
 from pibt_core import TURN_TICKS
 
-from .common import DT, OUT, SPEED
+from map_loader import CELL_M
+
+from .common import OUT, SPEED
 from .export_isaac import export_isaac
 
 
@@ -24,10 +27,11 @@ def _header_line(a, kernel, stream, ctx, lifelong):
             + (f" + 입고 {stream.n_inbound}건" if a.flow == "main" else "")
             + f", seed={a.seed}, flow={a.flow}, 통로차단={'ON' if a.aisle_block else 'OFF'}"
             + (f", 헤딩 모델(회전 {TURN_TICKS}틱)" if kernel.heading else "")
+            + ("" if math.isclose(a.speed, SPEED) else f", 속도 {a.speed:g} m/s (틱 {a.dt:g} s)")
             + (f", 충전 존({len(kernel.zone_cells)}칸, 홈 간격≥2)" if kernel.zone else ", 고정 홈 12칸")
             + (f", 주문 간격 {a.order_gap:g}틱" if a.order_gap_arg is not None else "")
             + (f", 입고 간격 {a.inbound_gap_arg:g}틱" if a.inbound_gap_arg is not None else "")
-            + (f", 고정 시간 {a.horizon}틱 = {a.horizon*DT/3600:.1f}h, 교대 {'/'.join(a.shifts)} "
+            + (f", 고정 시간 {a.horizon}틱 = {a.horizon*a.dt/3600:.1f}h, 교대 {'/'.join(a.shifts)} "
                + " ".join(f"{k}[{s},{e})" for k, s, e in stream.windows) if lifelong else "")
             + (f", 배터리(도크 {len(kernel.docks)}, 가동 {a.runtime_h:g}h/충전 {a.charge_h:g}h, "
                f"SoC {a.soc[0]*100:.0f}/{a.soc[1]*100:.0f}/{a.soc[2]*100:.0f}%)" if a.battery else ""))
@@ -39,9 +43,9 @@ def _print_completion(a, kernel, tasks_done, orders_done, T_END, lifelong):
     if lifelong:
         n_in = sum(1 for tk in tasks_done if tk["kind"] == "in")
         print(f"[2] 완료: 태스크 {n_tasks}개 (입고 {n_in} / 출고 {n_tasks - n_in}), 미완료 {kernel.n_submitted - n_tasks}개, "
-              f"주문 완료 {orders_done}/{a.n_orders}, 고정 시간 {T_END}틱 = {T_END*DT/3600:.2f}h")
+              f"주문 완료 {orders_done}/{a.n_orders}, 고정 시간 {T_END}틱 = {T_END*a.dt/3600:.2f}h")
     else:
-        print(f"[2] 완료: 태스크 {n_tasks}개, makespan {T_END}틱 = {T_END*DT/60:.1f}분")
+        print(f"[2] 완료: 태스크 {n_tasks}개, makespan {T_END}틱 = {T_END*a.dt/60:.1f}분")
 
 
 def _print_kpi(kernel, tot, n_tasks, sim_hours, orders_ph, lat, util, util_incl, conflict_wait):
@@ -112,7 +116,7 @@ def _tote_section(a, kernel, stream):
                  totes=int(stream.totes_total), trips=int(kernel.trips),
                  orders_oversize=int(stream.orders_oversize))
     if stream.explicit_orders is not None:
-        extra.update(orders_file=1, orders_skipped=int(stream.orders_skipped))
+        extra.update(orders_file=1, orders_skipped=int(stream.orders_skipped), max_order_totes=int(a.max_order_totes))
     return extra
 
 
@@ -132,10 +136,11 @@ def report(a, kernel, stream, ctx):
     # 고정 시간 모드의 분모는 T (Lifelong: T 안의 완료 수), 리드타임 표본은 T 안에 완료된 태스크만 (-145 §1-1)
     T_END = a.horizon if lifelong else max(tk["completed"] for tk in tasks_done)
     n_tasks = len(tasks_done)
-    lat_total = np.array([tk["completed"] - tk["created"] for tk in tasks_done]) * DT
-    lat_drive = np.array([tk["completed"] - tk["assigned"] for tk in tasks_done]) * DT
-    lat_queue = np.array([tk["assigned"] - tk["created"] for tk in tasks_done]) * DT
-    sim_hours = T_END * DT / 3600
+    dt = a.dt                                            # 틱 길이[초] (-116: --speed)
+    lat_total = np.array([tk["completed"] - tk["created"] for tk in tasks_done]) * dt
+    lat_drive = np.array([tk["completed"] - tk["assigned"] for tk in tasks_done]) * dt
+    lat_queue = np.array([tk["assigned"] - tk["created"] for tk in tasks_done]) * dt
+    sim_hours = T_END * dt / 3600
     tot = kernel.totals()
     busy_v1 = tot["drive"] + 2 * tot["wait"]              # v1 호환 (대기 이중계산, 서비스 제외)
     util = busy_v1 / (a.n_robots * T_END)
@@ -143,7 +148,7 @@ def report(a, kernel, stream, ctx):
     conflict_wait = tot["wait"] / max(busy_v1, 1)
     orders_done = sum(1 for od in stream.orders.values() if od["completed"] is not None)
     order_lat = np.array([od["completed"] - od["created"] for od in stream.orders.values()
-                          if od["completed"] is not None]) * DT
+                          if od["completed"] is not None]) * dt
     orders_ph = (orders_done if lifelong else a.n_orders) / sim_hours
 
     print(_header_line(a, kernel, stream, ctx, lifelong))
@@ -158,6 +163,14 @@ def report(a, kernel, stream, ctx):
         variant=a.variant, n_robots=a.n_robots, n_orders=a.n_orders, seed=a.seed,
         aisle_block=int(a.aisle_block), flow=a.flow, lanes=int(a.lanes),
         yield_rule=int(a.yield_rule), yield_events=len(kernel.yield_events), makespan_steps=int(T_END),
+        speed=a.speed, dt_s=round(dt, 6),                  # v3.3 (-116): 초 단위 키의 환산 근거
+        # v3.4 (-203): 회전 발자국. turn_masked = legacy 가 허용하던 (칸,회전) 중 마스크가 금지한 비율 (legacy 는 0)
+        footprint=a.footprint, robot_dims=list(a.robot_dims), turn_masked=round(float(ctx.turn_masked), 4),
+        # -79 (조건부, exact,front 만): 대치 상태기계 계수
+        # -79 대치 상태기계: v3.9 부터 헤딩 main 기본(standoff=1). 계수 두 키는 상태기계가 켜진 런에만
+        standoff=int(bool(getattr(a, "standoff", False)) or "front" in a.footprint),
+        **({"standoffs": int(kernel.standoffs), "standoff_swaps": int(kernel.standoff_swaps)}
+           if "front" in a.footprint or getattr(a, "standoff", False) else {}),
         tasks_per_h=round(n_tasks / sim_hours, 1),
         orders_per_h=round(orders_ph, 1),
         lead_mean_s=round(_mean(lat_total), 1),
@@ -176,11 +189,20 @@ def report(a, kernel, stream, ctx):
         **zone_extra,
         # 합성 창고 (-139): 어느 맵 세트로 잰 값인지 없으면 재현이 안 된다. 공식 맵이면 키가 안 붙는다.
         **(dict(map_dir=os.path.basename(os.path.normpath(a.map_dir))) if getattr(a, "map_dir", None) else {}),
+        # 구간 대수 제한 (-193). 안 켜면 키가 안 붙어 기존 SUMMARY 와 같은 모양이다.
+        # blocks 0 = 제한이 한 번도 안 걸림(헐거움). releases 가 blocks 에 육박하면 정체 면제로
+        # 다 풀려 규칙이 무력한 것이다 — 블록이 너무 클 때 그렇게 된다(8×8 실측).
+        **(dict(section_limit=a.section_limit, section_grid=a.section_grid,
+                section_blocks=int(kernel.section_blocks),
+                section_releases=int(kernel.section_releases))
+           if getattr(a, "section_limit", 0) else {}),
         **(dict(order_gap=a.order_gap) if a.order_gap_arg is not None else {}),   # v1compat SUMMARY 불변
         **(dict(inbound_gap=a.inbound_gap_arg) if a.inbound_gap_arg is not None else {}),
         **lifelong_extra, **bat_extra,
         # 견적 워커용 (계약 v2.4, 키 추가만): 입고 생성 수 · 주행 거리 [m] (1칸 = CELL_M = 1.0 m). docs/견적_워커.md
-        inbound_total=int(stream.n_inbound), distance_m=int(tot["drive"]),
+        inbound_total=int(stream.n_inbound), distance_m=int(tot["cells"] * CELL_M),
+        # 주행거리는 **밟은 칸**이다. drive 는 주행 틱이라 전진이 MOVE_TICKS 틱이 된 뒤로
+        # 칸 수와 다르다 (-194) — 예전엔 1칸 = 1틱이라 같은 값이었다.
         **_tote_section(a, kernel, stream))
     print("[SUMMARY] " + json.dumps(summary))
 

@@ -1,0 +1,63 @@
+# iw.hub 기종 프로파일 — 팩토리 기본값. 이 파일 하나에서 factsheet(MQTT_CONTRACT §4.2) · 컨트롤러 한계 · 상태 주기 ·
+# 배터리 · 가짜 로봇 물리가 나온다. 바깥(BE → sim-runner)이 profile_overrides / profile_file 로 덮어쓴다
+# (amr_agent/profile.py, README "파라미터"). 치수·바퀴의 원천은 2_Simulation/README.md 실측 상수 절(구 sil_isaac/robot/profile.py, -219 로 삭제) 의
+# RobotProfile(IWHUB) 실측값 — 두 곳의 숫자가 다르면 profile.py 가 맞고 이 파일을 고친다.
+model: iw.hub
+manufacturer: idealworks          # VDA manufacturer = 기종별 (계약 §1 결정 5)
+kinematic: DIFF                   # agvKinematic: DIFF | OMNI | THREEWHEEL
+agv_class: CARRIER                # FORKLIFT | CONVEYOR | TUGGER | CARRIER
+max_load_kg: 1000                 # 카탈로그 (iw.hub 적재 1,000 kg)
+# 이동 한계 [m/s · m/s² · rad/s · rad/s²] — 컨트롤러 클램프이자 factsheet physicalParameters.
+# v_max 0.8: T1 실측 에셋 상한 0.835 (카탈로그 1.2 는 시뮬 에셋이 못 낸다). BE amr.speed_empty / speed_loaded 가 덮어쓴다.
+v_min: 0.05
+v_max: 0.8
+v_max_loaded: 0.8
+a_max: 1.0
+w_max: 1.2
+alpha_max: 2.5
+w_min: 0.12
+# 치수 [m] — turn_probe 실측: 축 기준 앞 0.40 · 뒤 1.03, 폭 0.66, 높이 0.41
+length: 1.43
+width: 0.66
+height: 0.41
+front_overhang: 0.40
+rear_overhang: 1.03
+swing_radius: 1.09
+# 바퀴 — 실측 반경 0.08, 트랙 0.58 (y ±0.29). 차량 좌표계: x 앞, y 왼쪽, 원점 = 구동축 중심 = 회전 중심
+wheels:
+  - { type: DRIVE, is_active_driven: true, is_active_steered: false, position: { x: 0.0, y: 0.29 }, diameter: 0.16, width: 0.05 }
+  - { type: DRIVE, is_active_driven: true, is_active_steered: false, position: { x: 0.0, y: -0.29 }, diameter: 0.16, width: 0.05 }
+  - { type: CASTER, is_active_driven: false, is_active_steered: false, position: { x: -0.677, y: 0.093 }, diameter: 0.11, width: 0.04 }
+  - { type: CASTER, is_active_driven: false, is_active_steered: false, position: { x: -0.677, y: -0.093 }, diameter: 0.11, width: 0.04 }
+# 타이밍 [s] — state_interval 이 executor 의 state 발행 주기(1/state_interval Hz, sim time)
+state_interval: 0.5
+order_interval: 0.5
+# 컨트롤러 (기종보다 제어기 성질. 기본값은 profile.py SECTION_DEFAULTS 와 같다 — 여기 적어 두는 건 한눈에 보라고)
+control:
+  rate_hz: 20.0
+  tol_xy: 0.05           # 노드 정지 반경 [m] (FMS 요구 ≤ 0.1). order 의 allowedDeviationXY 가 더 작으면 그것
+  tol_theta: 0.03        # 스팟턴 정착 허용 [rad]
+  timeout_s: 30.0        # 프리미티브 하나의 상한
+  turn_threshold: 0.12   # 이보다 헤딩 오차가 크면 주행 전에 회전 [rad]
+  zero_edge_eps: 0.05    # 이보다 가까운 노드 = 순수 스팟턴 [m]
+  first_node_tol: 0.5    # 새 order 첫 노드까지 허용 거리 [m]
+  k_turn: 2.5
+  k_heading: 2.5
+  k_lateral: 1.5
+# 배터리 — BE amr.battery(초기 SoC %) · consumption(주행 중 %/s) · charge_time(s) · charge_threshold(% 또는 비율)
+battery:
+  soc_init_pct: 100.0
+  consumption_pct_per_s: 0.0   # 0 = 안 줄어듦. BE 가 준다
+  idle_ratio: 0.25             # 정지 소모 = 주행의 1/4 (sim_engine 규약)
+  charge_time_s: 3600.0
+  charge_threshold_pct: 20.0
+# 적재 — BE amr.capacity(왕복당 토트 1~6) · tote_units(토트당 상품). 지금은 factsheet·검증 조건 기록용
+load:
+  capacity_totes: 6
+  tote_units: 8
+# 가짜 로봇(fake_robot) 물리 응답 — T1 실측: 거의 즉답(~6 m/s²), 에셋 상한 0.835 m/s
+plant:
+  v_max: 0.835
+  w_max: 2.0
+  a_max: 6.0
+  alpha_max: 12.0

@@ -10,6 +10,12 @@ spring:
     # 읽는다 (test/resources/application.yml) — 이유는 R__seed_demo.sql 주석 참고.
     locations: classpath:db/migration,classpath:db/seed
   jpa:
+    # 요청이 끝날 때까지 영속성 컨텍스트(와 DB 커넥션)를 붙들지 않는다.
+    # 켜져 있으면 SSE 가 커넥션을 삼킨다 — 에미터는 보낼 이벤트가 없으면 쓰기를 하지 않으므로
+    # 브라우저가 닫아도 서버가 끊긴 걸 모르고 35분 타임아웃까지 요청이 살아 있고, 그동안
+    # 커넥션 하나가 묶인다. 풀이 10개라 견적 화면을 열 번만 열면 앱 전체가 멈춘다 (실측).
+    # 끄면 지연 로딩은 트랜잭션 안에서만 가능하다 — 서비스가 DTO 로 바꿔서 내보내므로 문제없다.
+    open-in-view: false
     hibernate:
       # 스키마는 Flyway 가 만든다. 여기서는 엔티티가 요구하는 테이블·컬럼이 마이그레이션
       # 결과에 있는지만 검사한다 — 어긋나면 부팅이 실패한다. 이게 이 설정의 목적이다.
@@ -18,6 +24,11 @@ spring:
     properties:
       hibernate:
         format_sql: true
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
   rabbitmq:
     host: ${RABBITMQ_HOST:localhost}
     port: 5672
@@ -46,13 +57,48 @@ estimate:
   amr-per-charger: 4
   amr-count-margin: 1
   # 시뮬 고정 시간 실행 — 성능 제약(견적 1회 90초)으로 정해지는 값.
-  # shifts 는 이 시간을 토큰 수로 등분한다: 6h / 6토큰 = 1h 단위 → 입고 2h + 출고 4h.
-  # 나중에 하루 전량으로 바꿀 때 horizon: 24h 로만 고치면 된다.
+  # shifts 는 이 시간을 토큰 수로 등분해 입고(in)를 켤 구간을 정한다. 출고는 백엔드가 만든 주문 목록의
+  # 시각을 그대로 따르므로(명시 주문 모드) 토큰의 영향을 받지 않는다.
+  # 팀 결정(2026-09-11): 견적 부하 = 하루 출고 물량 / 6h, 출고만 — 입고를 켜면 고밀도에서 입고 × 차선·양보
+  # 교착이 나고 견적이 실제보다 나쁘게 나온다 (S15P21A106-214). 나중에 하루 전량으로 바꿀 때 horizon: 24h 로만 고치면 된다.
   horizon: 6h
-  shifts: in,in,out,out,out,out
+  shifts: out
+  # 출고 주문 한 줄(상품 하나)의 수량 상한 — 개인 온라인몰 1회 구매 기준 (결정 2026-09-15, S15P21A106-146).
+  # 참조 통계표(신발 물류센터 피킹 로그)는 수량 1~11 까지 매끈하게 줄다가 12 에서 다시 튀고 24·36·48·72 에
+  # 봉우리가 선다 — 다스·케이스로 사는 도매 흔적. 10 은 첫 다스 봉우리 아래이자 온라인몰 1회 최대 구매 수량 관행.
+  # 10 이면 줄의 5 %, 물량의 42 % 가 빠지고 평균 수량 3.52 → 2.13. 한 줄 최대 2토트라 24토트 상한은 안전핀만 된다.
+  max-line-qty: 10
+  # 로봇이 한 왕복에 싣는 토트 수(1~6) → 시뮬 --capacity. 시뮬 엔진 연동 API 명세 v0.4 "백엔드 기본 로봇은 capacity 6".
+  # 안 보내면 시뮬 기본 1 로 돌아 처리율이 3~4배 비관적으로 나온다 (S15P21A106-218). 로봇 시드의 capacity 200 은 단위가 다르다.
+  amr-capacity: 6
   # 발행 후 결과가 이 시간 안에 안 오면 TIMEOUT (명세 §1-4 는 30분 — 시연 때는 줄여도 된다)
   run-timeout: 30m
   timeout-sweep-interval: 60   # 스윕 주기(초)
+
+auth:
+  # HS256 이라 32바이트(256비트) 이상 필요하다 — openssl rand -base64 48
+  secret: ${JWT_SECRET:}
+  # access 는 짧게 두고 refresh 로 갱신한다. 탈취돼도 유효 창이 좁다 (RFC 9700 예시가 15분)
+  access-ttl: 15m
+  refresh-ttl: 7d
+  # Secure 쿠키는 HTTPS 에서만 전달된다. 평문 HTTP 로 뜨는 환경에서는 꺼야 로그인이 동작한다
+  secure-cookie: ${AUTH_SECURE_COOKIE:false}
+
+account:
+  # 관리자는 가입 API 로 만들 수 없다 (가입은 항상 USER). 비밀번호가 비면 만들지 않는다.
+  admin:
+    email: ${ADMIN_EMAIL:admin@santafactory.test}
+    password: ${ADMIN_PASSWORD:}
+    name: 관리자
+    company: Santa Factory
+    phone: "0200000000"
+  # 데모 회원 — 창고 등록 화면이 없는 동안 시드 창고의 주인 역할을 한다. 화면이 생기면 비워 끈다.
+  user:
+    email: ${DEMO_EMAIL:demo@santafactory.test}
+    password: ${DEMO_PASSWORD:}
+    name: 김담당
+    company: 품고물류
+    phone: "01012345678"
 
 springdoc:
   swagger-ui:

@@ -162,6 +162,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import os
 import random
 from dataclasses import dataclass, field
 from typing import Callable, Iterable, Protocol, Sequence
@@ -179,6 +180,27 @@ from pibt_core import (
     swing_cells,
 )
 
+# [patch_ticks] 계획 틱이 무엇인지 — 두 경로가 다르다. 헷갈리면 안 된다.
+#
+#   2026-09-14(-194)에 계획기에 `MOVE_TICKS = 4, TURN_TICKS = 5` 가 생겼다.
+#   그런데 **`MOVE_TICKS` 는 `kernel/core.py`(FmsKernel 실행 경로)에만
+#   적용된다.**
+#
+#       FmsKernel     전진 MOVE_TICKS(4) 틱 · 회전 TURN_TICKS(5) 틱
+#       step_h/run_h  전진 **1틱** · 회전 TURN_TICKS(5) 틱     <- 우리가 쓰는 쪽
+#
+#   `run_h` 도 `lifelong` 도 `step_h` 를 직접 부르므로 우리 경로에서 전진은
+#   여전히 1틱이다. 바뀐 것은 **회전이 1틱에서 5틱이 된 것**뿐이다.
+#
+#   그래서 같은 일에 드는 틱이 회전 빈도만큼 늘었다 — 실측 1.3~1.6배
+#   (같은 시드·같은 맵에서 계획기만 바꿔 잼). FMS 주석의 "2.07배" 가 그
+#   부류의 실측값이다.
+#
+#   ★ 한때 이 자리에 `TICKS_PER_CELL = MOVE_TICKS` 를 두고 지평·max_steps·
+#     tick_s 를 전부 4배로 환산했는데 **틀렸다.** 우리 경로에 MOVE_TICKS 가
+#     안 걸리므로 4배는 과하고, `tick_s` 는 원래 맞던 값을 틀리게 만들었다.
+#     상수를 그대로 두고, 틱이 무엇인지만 여기 적어 둔다.
+
 Cell = tuple[int, int]
 State = tuple[int, int, int]          # (r, c, h)
 
@@ -186,6 +208,13 @@ State = tuple[int, int, int]          # (r, c, h)
 YAW = (math.pi / 2.0, 0.0, -math.pi / 2.0, math.pi)   # N, E, S, W
 
 MOVE, TURN, REVERSE, WAIT = "move", "turn", "reverse", "wait"
+
+# 겹침 심각도를 가르는 차체 간격 [m]. 이 아래면 "근접" 으로 올려 본다.
+#   ★ 칸 공유(= `overlap_events`)는 접촉이 아니다. 1.2 m 칸을 공유 단위로
+#     쓰면 **0.5 m 넘게 떨어진 두 대도 걸린다.** 2026-09-14 실측: 대각선
+#     이웃이 칸 하나를 각각 5.1 mm · 2.7 mm 씩 스쳤는데 간격은 0.568 m 였다.
+#     0.10 은 "이 정도면 눈으로 확인할 값" 이라는 뜻이고 물리 한계가 아니다.
+CONTACT_NEAR = 0.10
 
 
 def wrap(a: float) -> float:
@@ -224,6 +253,28 @@ class RobotGeom:
     a_ang: float = 3.00            # rad/s^2
     origin: tuple[float, float] = (0.0, 0.0)
     axle_in_prim: tuple[float, float] = (0.0, 0.0)
+
+    # [patch_axle] 앞 칸 규칙 스위치. **계획기와 반드시 같아야 한다.**
+    #   계획기 쪽은 `pibt.geometry.configure(front_swing=…)` 로 켜고, 이 값은
+    #   `build_adg` 진입에서 `geo.front_swing_on()` 과 대조한다. 한쪽만 켜지면
+    #   계획에 위험한 배치가 남는데 ADG 가 그걸 못 잡는다 — 주차한 로봇은
+    #   간선의 대상이 아니기 때문이다 (설계서 §0-1).
+    #
+    #   ★ 스위치가 **둘**이다. `pibt_scene` 이 `configure()` 와 이 필드에
+    #     각각 넘긴다. 값이 갈릴 수 있는 지점이 이미 있으므로 검사가 필요하다.
+    front_swing: bool = False
+
+    # [patch_axle] 섞임 대각 2칸(mA, mB)까지 쓰는가 = 4칸 규칙.
+    #   -79 부터 계획기 상태가 **둘**이라 `front_swing` 하나로는 구별이 안 된다.
+    #
+    #       front_swing=True, front_diag=False   -> 2칸 {f0, f1}
+    #       front_swing=True, front_diag=True    -> 4칸 {f0, f1, mA, mB}
+    #
+    #   ★ 이 값은 **규칙 계산에 안 쓴다.** 칸 집합은 `front_cells()` 가 계획기
+    #     함수를 그대로 부르므로 자동으로 따라간다. 여기 두는 이유는 두 가지다 —
+    #     `geo.front_diag_on()` 과 대조해 반쪽 설정을 잡고, 지문·셀프테스트의
+    #     기대값이 어느 상태에서 나온 것인지 기록으로 남기려는 것이다.
+    front_diag: bool = False
 
     # ★ pibt_core의 h를 물리 헤딩으로 옮길 때 더하는 값 (0 또는 2).
     #
@@ -332,6 +383,64 @@ class RobotGeom:
         h = 0.5 * self.pitch
         return (cx - h, cy - h, cx + h, cy + h)
 
+    def footprint_corners(self, x: float, y: float,
+                          yaw: float) -> tuple[tuple[float, float], ...]:
+        """차체 직사각형의 꼭짓점 4개 (전방 좌 · 전방 우 · 후방 우 · 후방 좌).
+
+        `footprint_cells` 와 `body_gap` 이 **같은 수식**을 쓰게 하려고 뺐다.
+        두 벌로 두면 치수를 바꿀 때 한쪽만 고쳐 조용히 갈린다.
+        """
+        cs, sn = math.cos(yaw), math.sin(yaw)
+        f, b, hw = self.front_len, self.rear_len, 0.5 * self.width
+        return ((x + cs * f - sn * hw, y + sn * f + cs * hw),
+                (x + cs * f + sn * hw, y + sn * f - cs * hw),
+                (x - cs * b + sn * hw, y - sn * b - cs * hw),
+                (x - cs * b - sn * hw, y - sn * b + cs * hw))
+
+    @staticmethod
+    def _seg_gap(a, b, c, d) -> float:
+        """선분 ab 와 cd 의 최소 거리."""
+        def pt_seg(p, q, r):                    # 점 p 와 선분 qr
+            vx, vy = r[0] - q[0], r[1] - q[1]
+            L2 = vx * vx + vy * vy
+            t = 0.0 if L2 <= 1e-18 else ((p[0] - q[0]) * vx + (p[1] - q[1]) * vy) / L2
+            t = 0.0 if t < 0.0 else (1.0 if t > 1.0 else t)
+            return math.hypot(p[0] - (q[0] + t * vx), p[1] - (q[1] + t * vy))
+        return min(pt_seg(a, c, d), pt_seg(b, c, d),
+                   pt_seg(c, a, b), pt_seg(d, a, b))
+
+    def body_gap(self, pa, pb) -> float:
+        """두 차체 사이 최소 거리 [m]. 겹치면 0.0.
+
+        ★ **겹침이 터졌을 때만** 부른다. 주행 루프에서 부르면 안 된다.
+
+        [왜 필요한가] `_check` 의 칸 공유(경보)와 **실제 접촉은 다르다.**
+        pitch 1.2 · 폭 0.8 에서 옆 칸 회전이면, 이상적 자세 기준으로
+
+            경보가 울리는 오차   41.3 mm   (앞 모서리 R=0.5587 vs 반칸 0.600)
+            실제로 닿는 오차    241.3 mm   (차체끼리의 간격)
+
+        즉 **5.8배** 차이다. 로그에 칸 개수만 남기면 "감시선이 보수적으로 운
+        것" 과 "진짜 접촉" 을 구별할 수 없다 (2026-09-13 실측 쌍 7-8).
+        """
+        A = self.footprint_corners(*pa)
+        B = self.footprint_corners(*pb)
+
+        def sep(P, Q):                          # P 의 변 법선으로 분리되나 (SAT)
+            for i in range(4):
+                ex = P[(i + 1) % 4][0] - P[i][0]
+                ey = P[(i + 1) % 4][1] - P[i][1]
+                ux, uy = -ey, ex
+                pv = [p[0] * ux + p[1] * uy for p in P]
+                qv = [q[0] * ux + q[1] * uy for q in Q]
+                if max(pv) < min(qv) - 1e-12 or max(qv) < min(pv) - 1e-12:
+                    return True
+            return False
+        if not (sep(A, B) or sep(B, A)):
+            return 0.0                          # 겹친다
+        return min(self._seg_gap(A[i], A[(i + 1) % 4], B[j], B[(j + 1) % 4])
+                   for i in range(4) for j in range(4))
+
     def footprint_cells(self, x: float, y: float, yaw: float) -> frozenset[Cell]:
         """차체가 실제로 덮는 칸 집합. 점 샘플링이 아니라 분리축 정리(SAT).
 
@@ -339,12 +448,7 @@ class RobotGeom:
         직사각형은 고유 분리축이 2개뿐(전방·좌측)이라 world 축까지 4개면 된다.
         """
         cs, sn = math.cos(yaw), math.sin(yaw)
-        f, b, hw = self.front_len, self.rear_len, 0.5 * self.width
-        # 꼭짓점 (전방 fx,fy / 좌측 -sn,cs)
-        p0 = (x + cs * f - sn * hw, y + sn * f + cs * hw)
-        p1 = (x + cs * f + sn * hw, y + sn * f - cs * hw)
-        p2 = (x - cs * b + sn * hw, y - sn * b - cs * hw)
-        p3 = (x - cs * b - sn * hw, y - sn * b + cs * hw)
+        p0, p1, p2, p3 = self.footprint_corners(x, y, yaw)
         poly = (p0, p1, p2, p3)
 
         minx = min(p0[0], p1[0], p2[0], p3[0])
@@ -389,6 +493,67 @@ class RobotGeom:
         return frozenset(out)
 
     # ---- 동작 스윕 ---------------------------------------------------------
+
+    # [patch_axle] 앞 칸 (soft) — 규칙은 FMS 가 단일 소스다 ------------------
+    def front_cells(self, s0: State, s1: State) -> frozenset[Cell]:
+        """회전 중 **코만 스치는** 앞 칸. 몸은 안 들어간다.
+
+        규칙(몇 칸인지, 대각을 넣는지)은 `3_FMS/sim_engine/pibt/geometry.py`
+        가 **단일 소스**다. 여기서는 그 함수를 그대로 부른다.
+
+        ★ 여기서 규칙을 다시 구현하지 말 것. 정의가 두 벌이 되는 순간
+          "계획기 4칸 / ADG 2칸" 같은 어긋남이 **검사로 안 잡힌다**
+          (설계서 §0-1). 2026-09-14 에 실제로 그 버그가 났다 — 교집합을
+          간선 조회에도 써서 4칸이 조용히 2칸으로 퇴화했다.
+
+        ★ **교집합을 여기서 하지 말 것.** 돌려주는 것은 규칙이 준 칸 그대로
+          (`guard`) 이고, 실제 스윕과의 교집합(`soft`)은 `extract_actions`
+          가 따로 만든다. 규칙이 내놓는 칸 중 일부는 스윕 **밖**이다 —
+          pitch 1.0 에서 섞임 대각 mA·mB 가 0/8 로 그렇다. 여기서 깎으면
+          그 칸들이 간선에서 사라진다.
+
+        ★ pitch 게이팅도 여기서 하지 말 것. `configure(robot_dims, pitch)`
+          가 `front_needed()` 로 계획기 안에서 판정한다 (FMS 답신 4 §1).
+          우리가 밖에서 한 번 더 걸면 두 층의 기준이 갈라진다.
+
+        ★ `_sweep_stencil` 캐시를 쓰지 말 것. 키가 `(h0, h1, dr, dc, samples)`
+          라서 "코만 스윕" 을 같은 캐시로 구하면 **몸통 스윕 결과**를 받는다.
+
+        헤딩은 pibt 규약 그대로 넘긴다 — `geo.front_cells` 도 같은 `DIRS` 를
+        쓰므로 `phys_heading` 변환을 끼우면 안 된다.
+        """
+        if not self.front_swing:
+            return frozenset()
+        try:
+            import pibt.geometry as geo
+        except ImportError as e:                       # pragma: no cover
+            raise RuntimeError(
+                "★ front_swing=True 인데 계획기 기하를 못 불러온다.\n"
+                "  pibt_core_v2 가 sys.path 에 sim_engine 을 넣었는지 본다.") from e
+        return frozenset(geo.front_cells(s0[0], s0[1], s0[2], s1[2]))
+
+    @property
+    def lateral_gap(self) -> float:
+        """옆 칸에 나란히 선 두 대의 차체 간격 — `pitch - width`.
+
+        **격자 기하가 정하는 값이라 ADG 규칙과 무관하다.** 대각 케이스를 전부
+        막아도 이 배치는 남으므로, 어떤 예약 규칙으로도 이보다 넓힐 수 없다.
+        네 pitch(1.0/1.1/1.2/1.4)에서 실측과 소수점까지 일치함을 확인했다.
+
+        `CONTACT_NEAR` 를 읽을 때 같이 보라 — 지금 0.10 은 pitch 1.0 의
+        `lateral_gap` 0.200 의 **절반**이다. 채택안(앞 6칸)의 설계 여유가
+        200.0 mm 이므로 그대로 맞는 값이고, 41.4 mm 문제는 앞 2칸에만 있었다.
+        """
+        return self.pitch - self.width
+
+    @property
+    def nose_clears_cell_pitch(self) -> float:
+        """이 값보다 pitch 가 작으면 회전 중 코가 자기 칸을 벗어난다.
+
+        `2 * hypot(front_len, width/2)` — 앞 모서리 반경의 두 배다.
+        치수 0.390 · 0.800 에서 1.1173 m.
+        """
+        return 2.0 * math.hypot(self.front_len, 0.5 * self.width)
 
     def swept_cells(self, s0: State, s1: State, samples: int = 48) -> frozenset[Cell]:
         """s0 -> s1 동작 **전체**에서 차체가 지나는 칸.
@@ -465,6 +630,8 @@ class RobotGeom:
             f"차체             : 뒤 {self.rear_len:.2f} + 앞 {self.front_len:.2f} "
             f"= {self.rear_len + self.front_len:.2f} m, 폭 {self.width:.2f} m",
             f"속도             : v_max {self.v_max:.2f} m/s, w_max {self.w_max:.2f} rad/s",
+            f"옆 칸 간격       : {self.lateral_gap:.3f} m (= pitch - 폭, 규칙과 무관한 바닥)"
+            f"   근접 경고선 {CONTACT_NEAR:.2f} m",
             f"정지 점유        : 실제 {a['rest_real']}  모델 {a['rest_model']}"
             f"   {'일치' if a['rest_matches'] else '★불일치'}",
             f"회전 스윙        : {'모델이 덮음' if a['turn_covered'] else '★모델 밖 ' + str(a['turn_extra'])}",
@@ -508,6 +675,37 @@ class Action:
     to: State
     cells: frozenset[Cell]        # 동작 내내 잡고 있는 칸 (실제 스윕)
     uid: int = -1
+    # [patch_axle] 코만 스치고 몸은 안 들어가는 칸 — 회전에만, pitch 의존.
+    #   `cells` 는 **건드리지 않는다.** 이 필드는 `build_adg` 의 간선 조건
+    #   하나에만 쓰인다. `can_start`(장애물)·`released`(완료 판정)·`_check`
+    #   (겹침 감시)는 지금도 `cells` 전체를 본다 — 그게 이 변경의 안전 논거
+    #   절반이다. 설계서 `docs/2026-09-14_ADG_축규칙_구조변경_설계.md` §1-3.
+    #
+    #   스위치가 꺼져 있으면 항상 빈 집합이고, 그러면 `hard == cells` 라
+    #   간선이 오늘과 비트 단위로 같다 (§7 항목 1, tools/adg_fingerprint.py).
+    soft: frozenset[Cell] = frozenset()
+    # [patch_axle] `front_cells()` 가 돌려준 **교집합 이전** 집합.
+    #   `soft` 와 갈라 두는 이유: 규칙이 내놓는 칸 중 일부는 **실제 스윕
+    #   바깥**이다. pitch 1.0 에서 섞임 대각 mA·mB 가 그렇다 (0/8 — 0.80
+    #   에서야 7/8 로 들어온다). `soft = guard & cells` 로만 두면 4칸 규칙이
+    #   ADG 안에서 조용히 **2칸으로 퇴화**한다.
+    #
+    #     guard   규칙 ② 조회용. 계획기가 보는 집합과 **같다.**
+    #     soft    `hard = cells - soft` 계산용. 실제 스윕 안쪽만.
+    #
+    #   교집합을 soft 에 두는 건 맞다 — 스윕 밖 칸은 애초에 hard 가 아니라
+    #   빼낼 것이 없다. 잘못된 건 그걸 **간선 조회에도** 썼던 것이다.
+    guard: frozenset[Cell] = frozenset()
+
+    @property
+    def hard(self) -> frozenset[Cell]:
+        """몸이 실제로 차지하는 칸 — 상대 **몸**이 못 들어온다."""
+        return self.cells - self.soft
+
+    @property
+    def axle(self) -> frozenset[Cell]:
+        """구동축이 지나는 칸. 전진은 두 칸, 제자리 회전은 한 칸."""
+        return frozenset({self.frm[:2], self.to[:2]})
 
     @property
     def rest(self) -> frozenset[Cell]:
@@ -561,11 +759,70 @@ def extract_actions(history: list[dict[int, State]], geom: RobotGeom,
             if kind == WAIT:
                 continue
             i = index[a]
-            chains[i].append(Action(
+            cells = geom.swept_cells(s0, s1)
+            # [patch_axle] 코만 스치는 앞 칸은 회전에만 있다. 전진·후진은 코가
+            #   목표 칸을 안 벗어난다 (앞길이 0.390 < 반칸). 스위치가 꺼져 있으면
+            #   `front_cells()` 가 빈 집합이라 여기도 빈 집합이다.
+            guard = geom.front_cells(s0, s1) if kind == TURN else frozenset()
+            act = Action(
                 agent=a, idx=len(chains[i]), kind=kind, tick=t, frm=s0, to=s1,
-                cells=geom.swept_cells(s0, s1), uid=uid))
+                cells=cells, soft=guard & cells, guard=guard, uid=uid)
+            _check_soft(act)
+            chains[i].append(act)
             uid += 1
     return chains, agents, stats
+
+
+def _check_soft(a: Action) -> None:
+    """`soft` 분리가 몸 칸을 훔쳐 가지 않았는지 — **실패할 수 있는** 검사.
+
+    ★ `hard | soft == cells` 를 검사하면 안 된다. `hard = cells - soft` 로
+      정의했으니 **항진명제**라 절대 실패하지 않는다 (설계서 §2-4).
+
+    무엇을 막는가: `front_cells()` 가 자기 칸을 안 빼면 그 칸이 `soft` 로 가고
+    `hard` 에서 빠진다. 그러면 **로봇이 자기 바퀴가 있는 칸을 예약하지 않는다.**
+    오류도 경고도 없이 간선이 사라지고 다른 로봇이 들어온다.
+
+    `assert` 가 아니라 실제 검사인 이유: `python -O` 로 조용히 사라지면
+    안 되는 종류다. 계획당 한 번, 액션 수천 개라 비용은 무시할 수준이다.
+
+    ★ `SystemExit` 이 아니라 `RuntimeError` 다. 같은 시점/같은 성격의 실패인
+      순환 검사가 `RuntimeError` 를 쓰고, 호출자(`plan_and_build*`)가 하나로
+      다룬다. `SystemExit` 은 `BaseException` 이라 `except Exception` 을 뚫고
+      나가 **Isaac 안에서는 Kit 이 통째로 내려간다.**
+    """
+    if not a.guard:
+        return                                   # 스위치 꺼짐 — 볼 것이 없다
+
+    # (1) 자기 축이 자기 앞 칸에 들어가면 자기 바퀴 칸을 안 잡는다.
+    #     `soft` 가 아니라 `guard` 로 본다 — 규칙이 내놓은 것 자체를 봐야 한다.
+    if a.axle & a.guard:
+        raise RuntimeError(f"★ 축 칸이 앞 칸 규칙에 들어갔다: {a} "
+                         f"축 {sorted(a.axle)} guard {sorted(a.guard)}")
+
+    # (2) ★ 몸이 지나가는 칸이 guard 에 있으면 규칙이 틀린 것이다.
+    #
+    #   `soft` 는 "상대 **몸**은 와도 되고 **축**만 못 오는 칸" 이다. 우리
+    #   몸이 쓸고 가는 칸을 거기 넣으면 `hard = cells - soft` 가 그 칸을
+    #   몸 금지에서 **빼 버린다.** 2026-09-14 에 우리가 FMS 에 제안한 6칸
+    #   (앞2+대각4)의 「뒤 대각」이 정확히 이 경우였다 — 8개 회전 전부에서
+    #   모델 스윕 안이고, 그대로 켰으면 pitch 1.0 에서 접촉 96건이 났다.
+    #
+    #   (1) 은 이걸 못 잡는다. 자기 **축**((5,5))과 뒤 대각((4,4))은 다른
+    #   칸이라 `axle & guard` 를 통과한다. 검사가 따로 필요하다.
+    body = (set(occupied(a.frm)) | set(occupied(a.to))
+            | set(swing_cells(a.frm[0], a.frm[1], a.frm[2], a.to[2])))
+    stolen = a.guard & body
+    if stolen:
+        raise RuntimeError(
+            f"""★ 앞 칸 규칙에 **몸 칸**이 들어왔다: {a}
+  겹친 칸 {sorted(stolen)}  guard {sorted(a.guard)}
+  soft 는 코만 스치는 칸이어야 한다. 몸이 지나는 칸을 넣으면
+  hard 에서 빠져 상대 몸이 들어온다 — front_cells() 규칙 확인.""")
+
+    if a.frm[:2] not in a.hard:
+        raise RuntimeError(f"★ 출발 칸이 hard 에 없다: {a} "
+                         f"출발 {a.frm[:2]} hard {sorted(a.hard)}")
 
 
 # ===========================================================================
@@ -621,8 +878,107 @@ def _key(action: Action, cell: Cell) -> tuple[int, int, int]:
     return (action.tick, 0 if cell in occupied(action.frm) else 1, action.agent)
 
 
-def build_adg(chains: list[list[Action]]) -> ADG:
+def _check_front_swing(actions: list[Action], geom: "RobotGeom") -> None:
+    """앞 칸 규칙이 계획기와 ADG **양쪽에서** 같은 상태인지 (설계서 §0-1).
+
+    네 검사를 한다.
+
+      (1) 설정 일치 — 스위치가 양쪽에서 같은가.
+          위임 설계라 ADG 쪽에 규칙 정의가 없으므로, 비교할 것은 **스위치
+          상태**다. 이게 임시형이 아니라 최종형이다.
+
+      (1b) 대각 스위치 일치 — `front_diag` 까지 본다.
+          -79 부터 계획기 상태가 **둘**이다. `front_swing=True` 하나만으로는
+          2칸인지 4칸인지 구별되지 않는다.
+
+              front_swing=True, front_diag=False   -> 2칸
+              front_swing=True, front_diag=True    -> 4칸
+
+          규칙 집합 자체는 위임이라 자동으로 따라가지만, 지문·셀프테스트의
+          기대값이 달라지므로 어느 상태인지는 기록으로 알아야 한다.
+
+      (2) **pitch 게이팅이 실제로 작동하는가.**
+          `configure(front_swing=True)` 를 `robot_dims` 없이 부르면 계획기가
+          게이팅을 **통째로 건너뛴다** (-79 의 `configure` 본문:
+          `if front_swing and robot_dims is not None:`). 그러면 1.2 에서도
+          규칙이 켜진다. 여기서 직접 물어 잡는다 — 코가 칸을 안 벗어나는
+          pitch 인데 규칙이 칸을 내놓으면 게이팅이 안 걸린 것이다.
+
+      (3) 결과 정합 — 켰고 코가 칸을 벗어나는 pitch 인데 `guard` 가 전부
+          비었으면 `front_cells()` 기하나 벤더 폴백이 고장난 것이다.
+          **pitch 조건이 있어야** 1.2 에서 안 걸리고 1.0 에서만 걸린다.
+    """
+    try:
+        import pibt.geometry as geo
+        planner_on = bool(geo.front_swing_on())
+    except (ImportError, AttributeError) as e:
+        # 벤더 폴백에는 앞 칸 개념이 없다. 끈 상태로 도는 것은 정상이므로
+        # 켜려 할 때만 막는다.
+        if geom.front_swing:
+            raise RuntimeError(
+                f"★ 계획기에서 앞 칸 규칙을 확인할 수 없다 ({e!r}).\n"
+                f"  원인 둘 중 하나다 — 증상이 같으니 둘 다 본다:\n"
+                f"    (a) 브랜치의 3_FMS 가 -203 이전이다. geometry.py 에\n"
+                f"        configure / front_cells / front_swing_on 이 아직 없다\n"
+                f"    (b) pibt_core_v2 가 벤더 사본으로 떨어졌다 — 저장소 경로\n"
+                f"  그 상태로 front_swing=True 를 켜면 계획기는 앞 칸을 모르는 "
+                f"채로 ADG 만 켜진다.") from e
+        return
+
+    if planner_on != geom.front_swing:                      # (1)
+        raise RuntimeError(
+            f"★ 앞 칸 스위치가 어긋났다 — 계획기 {planner_on} / "
+            f"ADG {geom.front_swing}.\n"
+            f"  한쪽만 켜지면 계획에 위험한 배치가 남고 ADG 는 그걸 못 잡는다 "
+            f"(주차한 로봇은 간선의 대상이 아니다).")
+
+    # (1b) 대각 스위치. 계획기에 없으면(-79 이전) ADG 쪽도 꺼져 있어야 한다.
+    planner_diag = bool(getattr(geo, "front_diag_on", lambda: False)())
+    if planner_diag != geom.front_diag:
+        raise RuntimeError(
+            f"★ 대각 스위치가 어긋났다 — 계획기 {planner_diag} / "
+            f"ADG {geom.front_diag}.\n"
+            f"  규칙 집합은 위임이라 따라가지만, 지문과 셀프테스트의 기대값이 "
+            f"달라진다. 어느 상태로 돌렸는지 기록에 남아야 한다.")
+
+    # (2) pitch 게이팅이 정말 걸려 있나 — `robot_dims` 를 안 준 경우를 잡는다.
+    if geom.front_swing and geom.pitch >= geom.nose_clears_cell_pitch:
+        probe = geo.front_cells(5, 5, 1, 0)
+        if probe:
+            raise RuntimeError(
+                f"★ pitch {geom.pitch:.2f} 는 코가 칸을 안 벗어나는 격자인데"
+                f"(한계 {geom.nose_clears_cell_pitch:.4f}) 계획기가 앞 칸을 "
+                f"{sorted(probe)} 로 내놓는다.\n"
+                f"  configure(front_swing=True) 를 **robot_dims 없이** 불렀을 "
+                f"때 생긴다 — 그러면 계획기가 게이팅을 통째로 건너뛴다.\n"
+                f"  configure(..., robot_dims=(front_len, rear_len, width), "
+                f"pitch=...) 로 부를 것.")
+
+    if (geom.front_swing                                     # (3)
+            and geom.pitch < geom.nose_clears_cell_pitch
+            and not any(a.guard for a in actions)):
+        raise RuntimeError(
+            f"★ pitch {geom.pitch:.2f} 는 코가 칸을 벗어나는 격자인데"
+            f"(한계 {geom.nose_clears_cell_pitch:.4f}) guard 가 전부 비었다 — "
+            f"front_cells() 기하 또는 벤더 폴백을 확인하라.")
+
+
+def build_adg(chains: list[list[Action]], geom: "RobotGeom | None" = None) -> ADG:
     actions = [a for ch in chains for a in ch]
+
+    # [patch_axle] 앞 칸 규칙이 **한쪽만 켜진 상태**로 못 돌게 한다 (설계서 §0-1).
+    #
+    #   왜 위험한가: 계획기가 앞 칸을 모르면 계획 안에 "A 가 도는 동안 B 가
+    #   A 의 앞 칸에 주차해 있는" 배치가 남는다. 그런데 ADG 간선은 **액션 사이의
+    #   순서**만 강제하므로, 주차해서 아무 액션도 안 하는 로봇은 간선의 대상이
+    #   아니다. 지금 pitch 1.0 의 ADG 순환이 그걸 알려 주는 **유일한 방어선**
+    #   인데, 축 규칙을 켜면 그 순환이 풀린다. 안전망이 먼저 사라진다.
+    #
+    #   ★ 비교 대상은 **스위치 상태 하나**다. 규칙 자체(몇 칸인지)는
+    #     `front_cells()` 가 FMS 로 위임하므로 ADG 쪽에 별도 정의가 없다.
+    if geom is not None:
+        _check_front_swing(actions, geom)
+
     preds: dict[int, set[int]] = {a.uid: set() for a in actions}
     succs: dict[int, set[int]] = {a.uid: set() for a in actions}
     t1 = t2 = 0
@@ -633,18 +989,48 @@ def build_adg(chains: list[list[Action]]) -> ADG:
             succs[p.uid].add(n.uid)
             t1 += 1
 
-    by_cell: dict[Cell, list[Action]] = {}             # type 2
+    # [patch_axle] `_key` 가 칸마다 전순서이려면 같은 tick 에 같은 로봇의
+    #   액션이 둘 있으면 안 된다. `extract_actions` 구조상 참이지만, 비순환
+    #   논거(설계서 §2-3-1)가 여기 걸려 있으므로 못 박아 둔다.
+    if len({(a.agent, a.tick) for a in actions}) != len(actions):
+        raise RuntimeError("★ 같은 tick 에 같은 로봇의 액션이 둘 이상이다 — "
+                         "_key 가 전순서가 아니게 되어 비순환 보장이 깨진다")
+
+    def _link(p: Action, n: Action) -> bool:
+        if p.agent == n.agent or n.uid in succs[p.uid]:
+            return False
+        preds[n.uid].add(p.uid)
+        succs[p.uid].add(n.uid)
+        return True
+
+    # type 2 ①  몸끼리 — 지금과 같다. 스위치가 꺼져 있으면 hard == cells 라
+    #            `by_hard` 가 옛 `by_cell` 과 완전히 같다.
+    by_hard: dict[Cell, list[Action]] = {}
+    by_axle: dict[Cell, list[Action]] = {}
     for a in actions:
-        for c in a.cells:
-            by_cell.setdefault(c, []).append(a)
-    for cell, users in by_cell.items():
+        for c in a.hard:
+            by_hard.setdefault(c, []).append(a)
+        for c in a.axle:
+            by_axle.setdefault(c, []).append(a)
+    for cell, users in by_hard.items():
         users.sort(key=lambda a: _key(a, cell))
         for p, n in zip(users, users[1:]):
-            if p.agent == n.agent or n.uid in succs[p.uid]:
-                continue
-            preds[n.uid].add(p.uid)
-            succs[p.uid].add(n.uid)
-            t2 += 1
+            t2 += _link(p, n)
+
+    # type 2 ②  상대의 **축**이 내 앞 칸(soft)에 있을 때만.
+    #   `soft(p) & hard(q)` 는 간선을 만들지 않는다 — q 의 뒤 칸이 p 의 앞 칸에
+    #   걸치는 배치(열 대기 줄)이고, 172 배치 전부 접촉 0 이었다.
+    #   스위치가 꺼져 있으면 `guard` 가 전부 비어 이 루프가 **한 번도 안 돈다.**
+    #
+    #   ★ `soft` 가 아니라 `guard` 를 본다. `soft = guard & cells` 는 실제
+    #     스윕 밖 칸을 떨어뜨리는데 pitch 1.0 에서 섞임 대각이 거기 해당해
+    #     규칙이 4칸 -> 2칸으로 퇴화한다. 간선은 계획기가 보는 집합 그대로
+    #     걸어야 계획기와 ADG 가 같은 규칙을 집행한다.
+    for p in actions:
+        for s in p.guard:
+            for q in by_axle.get(s, ()):
+                lo, hi = sorted((p, q), key=lambda a: _key(a, s))
+                t2 += _link(lo, hi)
 
     return ADG(chains=chains, actions=actions, preds=preds, succs=succs,
                type1=t1, type2=t2)
@@ -674,8 +1060,64 @@ class AdgRuntime:
         self.tick_s = tick_s        # None 이면 예전 동작 (시각 무시)
         self.clock = 0.0
 
+        # [patch_adg_why] 왜 멈췄나 — ①장애물 ②릴리스바닥 ③ADG선행 귀속
+        #   `blocking()` 이 이미 셋을 구분한다. 여기서 세기만 한다.
+        #   ★ release_time 의 최댓값 = 마지막틱 x tick_s. 그 이후로는 ② 가
+        #     원리적으로 안 걸리므로, 전후를 갈라야 ③ 의 크기가 보인다.
+        import os as _os
+        self._why_on = _os.environ.get("ADG_WHY", "1") not in ("0", "", "false", "False")
+        self._why_every = float(_os.environ.get("ADG_WHY_EVERY", "120"))
+        self._why_next = self._why_every if self._why_on else float("inf")
+        self._why = {}                      # agent -> [obstacle, release, adg]
+        self._why_late = {}                 # 같은 것, release 지평 이후만
+        self._why_horizon = (max((a.tick for a in adg.actions), default=0)
+                             * (tick_s or 0.0))
+
     def advance(self, dt: float) -> None:
         self.clock += float(dt)
+        # [patch_adg_why]
+        if self.clock >= self._why_next:
+            self._why_next += self._why_every
+            self.why_report()
+
+    # [patch_adg_why]
+    def why_report(self) -> None:
+        """막힌 프레임을 원인별로 찍는다. 비율만 의미가 있다."""
+        if not self._why_on or not self._why:
+            return
+        try:
+            import carb
+            say = carb.log_warn
+        except Exception:
+            say = print
+        NM = ("장애물", "릴리스", "ADG선행")
+
+        def block(tbl, title):
+            tot = [0, 0, 0]
+            for v in tbl.values():
+                for i in range(3):
+                    tot[i] += v[i]
+            n = sum(tot)
+            if not n:
+                say(f"[adg-why] {title}: 막힌 프레임 없음")
+                return
+            say(f"[adg-why] {title}  막힘 {n:,} 프레임")
+            say(f"[adg-why]   {'로봇':>4} {'장애물':>8} {'릴리스':>8} "
+                f"{'ADG선행':>8} {'합':>10}")
+            for a in sorted(tbl):
+                v = tbl[a]
+                s = sum(v) or 1
+                say(f"[adg-why]   {a:>4} {v[0]/s*100:7.1f}% {v[1]/s*100:7.1f}% "
+                    f"{v[2]/s*100:7.1f}% {sum(v):>10,}")
+            say(f"[adg-why]   {'전체':>4} {tot[0]/n*100:7.1f}% "
+                f"{tot[1]/n*100:7.1f}% {tot[2]/n*100:7.1f}% {n:>10,}")
+
+        say(f"[adg-why] ── t={self.clock:.0f}s  "
+            f"릴리스 지평 {self._why_horizon:.0f}s ──")
+        block(self._why, "전체 구간")
+        if self.clock > self._why_horizon:
+            block(self._why_late,
+                  f"지평 이후 (t>{self._why_horizon:.0f}s — ② 가 안 걸리는 구간)")
 
     def release_time(self, action: Action) -> float:
         return 0.0 if self.tick_s is None else action.tick * self.tick_s
@@ -685,12 +1127,52 @@ class AdgRuntime:
         ch = self.adg.chains[i]
         return ch[k] if k < len(ch) else None
 
+    # [patch_carry] 이어달리기 — 다음 액션 엿보기 -----------------------------
+    def after(self, i: int) -> "Action | None":
+        """**지금 돌고 있는** 액션의 다음 액션. `pending` 과 다르다.
+
+        `next_idx` 는 `complete()` 에서만 오른다. 그래서 액션이 도는 동안
+        `pending(i)` 은 **그 액션 자신**을 돌려준다. 하나 더 봐야 한다.
+        """
+        k = self.next_idx[i] + 1
+        ch = self.adg.chains[i]
+        return ch[k] if k < len(ch) else None
+
+    def can_follow(self, running: "Action", nxt: "Action") -> bool:
+        """현재 액션이 끝나는 **즉시** 다음 액션을 시작할 수 있는가.
+
+        ★ `can_start(nxt)` 를 쓰면 안 된다. `nxt` 의 선행에는 지금 돌고 있는
+          액션이 type 1 엣지로 들어 있고, 그건 아직 `done` 이 아니다. 그래서
+          항상 False 가 나온다 — 이어달리기가 영영 안 걸린다.
+          그 하나만 이미 끝난 것으로 보고 나머지를 본다.
+        """
+        if nxt.cells & self.blocked_cells:
+            return False
+        if self.clock + 1e-9 < self.release_time(nxt):
+            return False
+        return all(u in self.done or u == running.uid
+                   for u in self.adg.preds[nxt.uid])
+
+    # [patch_adg_why]
+    def _why_hit(self, action, k: int) -> None:
+        a = getattr(action, "agent", -1)
+        self._why.setdefault(a, [0, 0, 0])[k] += 1
+        if self.clock > self._why_horizon:
+            self._why_late.setdefault(a, [0, 0, 0])[k] += 1
+
     def can_start(self, action: Action) -> bool:
         if action.cells & self.blocked_cells:
+            if self._why_on:
+                self._why_hit(action, 0)
             return False                               # 장애물이 경로 위
         if self.clock + 1e-9 < self.release_time(action):
+            if self._why_on:
+                self._why_hit(action, 1)
             return False                               # 아직 주문이 안 왔다
-        return all(u in self.done for u in self.adg.preds[action.uid])
+        ok = all(u in self.done for u in self.adg.preds[action.uid])
+        if not ok and self._why_on:
+            self._why_hit(action, 2)                   # ADG 선행 대기
+        return ok
 
     def blocking(self, action: Action) -> list[int]:
         """왜 못 시작하는지 — 진단용. 하한 대기 중이면 [-1] 을 앞에 붙인다."""
@@ -847,15 +1329,45 @@ class MotionController:
     방향이 이미 맞으므로, 추종은 횡오차와 방향오차를 죽이는 것으로 충분하다.
     """
 
-    def __init__(self, geom: RobotGeom, tol: Tolerance | None = None):
+    def __init__(self, geom: RobotGeom, tol: Tolerance | None = None,
+                 v_exec: float | None = None, a_exec: float | None = None):
         self.g = geom
         self.tol = tol or Tolerance()
         self.action: Action | None = None
         self._v = 0.0
+        # [patch_vexec] **실행 속도는 계획 속도와 다른 값이다** (2026-09-14).
+        #   `geom.v_max`(= config.SPEED_PLAN 0.9)는 계획의 틱 길이
+        #   `pitch / v_max` 와 ADG 릴리스 일정을 정한다. 그걸 올리면 계획이
+        #   통째로 바뀐다. 그래서 실행 상한을 따로 둔다.
+        #
+        #   ★ 실행만 빠르게 하는 것은 **안전한 방향**이다. ADG 는 시간표가
+        #     아니라 순서로 돌기 때문에, 일찍 도착하면 선행을 기다릴 뿐이다.
+        #     위험한 것은 반대(계획보다 느림)이고, 그래서 SPEED_PLAN 을
+        #     1.2 -> 0.9 로 내렸었다 (config.py:49). 그 근거는 시간표 기반
+        #     드라이버 것이라 ADG 에는 그대로 적용되지 않는다.
+        #
+        #   이어달리기가 없을 때는 올려도 거의 소용이 없었다 — 1.2 m 칸
+        #   안에서 정지->정지면 램프가 84%라 속도를 쓸 구간이 없다
+        #   (0.9 -> 무한대가 칸당 9 ms). 이어달리기가 들어간 지금은 직진
+        #   구간(중앙값 7칸 = 8.4 m)을 연속으로 가므로 쓸 구간이 생긴다:
+        #     v 0.9 -> 1.2  -18.7%    v 0.9 -> 1.6  -30.7%   (8.4 m 기준)
+        self.v_exec = float(v_exec) if v_exec else geom.v_max
+        self.a_exec = float(a_exec) if a_exec else geom.a_lin
+        # [patch_carry] 이어달리기 종단속도. 0 이면 목표에서 완전히 선다.
+        #   FleetController 가 매 스텝 정해 준다 — 다음 액션이 같은 방향
+        #   직진이고 곧바로 시작 가능할 때만 0 보다 크다.
+        self.exit_v = 0.0
 
-    def begin(self, action: Action) -> None:
+    def begin(self, action: Action, keep_speed: bool = False) -> None:
+        """`keep_speed` 면 현재 속도를 물려받는다 (이어달리기).
+
+        회전으로 넘어갈 때는 반드시 False 다 — 제자리 선회에 선속도를 들고
+        들어가면 칸을 벗어난다.
+        """
         self.action = action
-        self._v = 0.0
+        if not keep_speed:
+            self._v = 0.0
+        self.exit_v = 0.0
         self.tx, self.ty, self.tyaw = self.g.state_pose(action.to)
         sx, sy, _ = self.g.state_pose(action.frm)
         self.sx, self.sy = sx, sy
@@ -894,11 +1406,17 @@ class MotionController:
 
         # 속도는 대칭으로: 지나쳤으면(along < 0) 되돌아올 수 있어야 한다.
         # 감속 계수는 **물리적** 후진에 붙인다 (센서가 없는 방향이므로).
-        v_cap = g.v_max * (1.0 if sign > 0 else 1.0 / REVERSE_FACTOR)
-        brake = math.sqrt(2.0 * g.a_lin * abs(along)) if along else 0.0
+        v_cap = self.v_exec * (1.0 if sign > 0 else 1.0 / REVERSE_FACTOR)
+        # [patch_carry] 종단속도를 0 이 아니게 둘 수 있다 (이어달리기).
+        #   sqrt(2a|d|) 는 "목표에서 정확히 0" 이 되는 곡선이다. 칸마다 이걸
+        #   쓰면 칸마다 선다. exit_v 를 실으면 그 속도로 목표를 통과한다.
+        brake = (math.sqrt(self.exit_v ** 2 + 2.0 * self.a_exec * abs(along))
+                 if along else self.exit_v)
         lim = min(v_cap, max(brake, 0.05))
         want = clamp(1.6 * along, -lim, lim)
-        self._v += clamp(want - self._v, -g.a_lin * dt, g.a_lin * dt)
+        if self.exit_v > 0.0 and along > 0.0:
+            want = max(want, min(lim, self.exit_v))   # 목표 근처에서 0 으로 안 죽게
+        self._v += clamp(want - self._v, -self.a_exec * dt, self.a_exec * dt)
         return (sign * self._v, w)
 
     def at_target(self, pose: tuple[float, float, float]) -> bool:
@@ -944,14 +1462,53 @@ class FleetStats:
     started: int = 0
     completed: int = 0
     overlap_events: int = 0
+    carried: int = 0           # [patch_carry] 정지 없이 다음 칸으로 이어간 횟수
     overlap_pairs: set[tuple[int, int]] = field(default_factory=set)
     worst_overlap: int = 0
+    # 겹침 중 관측된 **차체 사이 최소 거리** [m]. 겹침이 없으면 inf.
+    #   ★ `worst_overlap`(공유 칸 수)만으로는 심각도를 못 잰다. 1.2 m 칸을
+    #     공유 단위로 쓰면 **57 cm 떨어진 두 대도 "겹침"** 이 된다 — 2026-09-14
+    #     실측: 대각선 이웃이 칸 하나를 각각 5.1 mm · 2.7 mm 씩 스쳤는데
+    #     차체 간격은 0.568 m 였다. 심각도를 가르는 것은 이 거리다.
+    worst_gap: float = float("inf")
+    # **실제로 차체가 닿은** 스텝 수. `overlap_events`(칸 공유)와 구별된다.
+    #   판정을 칸에서 거리로 옮긴 이유 (2026-09-14):
+    #   ADG 는 **이상적 칸 중심 자세**로 `swept_cells` 를 계산하는데 실행은
+    #   그만큼 정확하지 않다. 실측에서 회전 중인 로봇이 칸 중심에서 0.051 m
+    #   어긋나 있었고, 그 때문에 차체 모서리가 옆 칸으로 **2.7 mm** 밀려
+    #   칸 공유가 떴다. 그때 두 차체 사이는 **0.568 m** 였다.
+    #   즉 칸 공유는 "모델과 실행이 어긋났다" 는 신호이지 충돌이 아니다.
+    #   구조적으로 계속 나므로, 주행의 합불은 이 값으로 가른다.
+    contact_events: int = 0
     stall_steps: int = 0
     sim_time: float = 0.0
 
     @property
     def clean(self) -> bool:
+        """**차체가 닿지 않았는가.** 칸 공유는 합불에 넣지 않는다 (위 주석)."""
+        return self.contact_events == 0
+
+    @property
+    def cells_clean(self) -> bool:
+        """칸 공유조차 없었는가 — 모델과 실행이 완전히 일치했다는 뜻."""
         return self.overlap_events == 0
+
+    @property
+    def contact(self) -> bool:
+        """차체가 **실제로 닿았는가.** 칸 공유(보수적 감시선)와 구별된다."""
+        return self.worst_gap <= 0.0
+
+    def overlap_grade(self) -> str:
+        """겹침 심각도 한 줄. 거리로 가른다."""
+        if self.overlap_events == 0:
+            return "겹침 없음"
+        g = self.worst_gap
+        if g <= 0.0:
+            return f"★★ 실제 접촉 (차체 간격 {g:.3f} m) — 브리지 버그"
+        if g < CONTACT_NEAR:
+            return f"★ 근접 (차체 간격 {g:.3f} m) — 확인 필요"
+        return (f"⚠ 칸 공유만 (차체 간격 {g:.3f} m) — 접촉 아님. "
+                f"감시선이 보수적으로 운 것")
 
 
 class FleetController:
@@ -963,18 +1520,28 @@ class FleetController:
         while app.is_running():
             world.step(render=True)
             fleet.step(world.get_physics_dt())
-            if fleet.stats.overlap_events:
-                break                      # 브리지 버그 — 조용히 넘기지 말 것
+            if fleet.stats.contact_events:
+                break             # 차체 접촉 — 브리지 버그. 조용히 넘기지 말 것
+                                  # (칸 공유는 stats.overlap_events 로 따로 본다)
     """
 
     def __init__(self, geom: RobotGeom, adg: ADG, drivers: dict[int, RobotDriver],
                  order: Sequence[int] | None = None, tol: Tolerance | None = None,
                  safety_check: bool = True, action_timeout: float = 60.0,
                  starts: dict[int, State] | None = None,
-                 release: bool = False):
+                 release: bool = False, carry: bool = True,
+                 v_exec: float | None = None, a_exec: float | None = None):
         self.g = geom
         # release=True 면 계획의 출발 시각을 지킨다 (lifelong 에서 필수).
         # one-shot 은 도착 시각이라는 개념이 없으니 기본값 False 로 둔다.
+        # [patch_ticks] 계획 틱 -> 초. 우리 경로(step_h)에서 **전진은 1틱**
+        #   이므로 `pitch / v_max` 가 맞다. `MOVE_TICKS` 로 나누면 안 된다 —
+        #   그건 FmsKernel 경로의 상수다 (위 주석).
+        #
+        #   ☹ 다만 회전은 TURN_TICKS(5) 틱을 쓰는데 물리적으로는 ~0.9초다.
+        #     그래서 회전이 많은 계획에서는 릴리스 하한이 늦게 잡힌다. 틱이
+        #     더는 균일한 시간 단위가 아니라 상수 하나로는 못 맞춘다.
+        #     `release` 는 lifelong 에서만 켜므로 지금은 감수한다.
         self.rt = AdgRuntime(adg, tick_s=(geom.pitch / geom.v_max) if release
                              else None)
         self.drivers = drivers
@@ -984,7 +1551,23 @@ class FleetController:
             raise ValueError(f"order {len(self.order)}개 != chains {len(adg.chains)}개")
         self.agents = [a for a in self.order if a in drivers]
         self.slot = {a: i for i, a in enumerate(self.order)}
-        self.ctrl = {a: MotionController(geom, tol) for a in self.agents}
+        # [patch_vexec] 실행 속도·가속. 환경변수 > 인자 > 계획값 순.
+        #   `geom.v_max` 는 계획이 쓰는 값이라 건드리지 않는다 (tick_s, 릴리스).
+        self.v_exec = float(os.environ.get("PIBT_V_EXEC", "") or v_exec or geom.v_max)
+        self.a_exec = float(os.environ.get("PIBT_A_EXEC", "") or a_exec or geom.a_lin)
+        # ★ 도착 판정이 속도를 못 따라가면 안 된다. 한 스텝에 움직이는 거리가
+        #   허용오차 지름(2 * tol.pos)보다 크면 `at_target` 창을 건너뛰어
+        #   완료가 영영 안 뜬다 — 오버슈트하고 되돌아오기를 반복한다.
+        #   60 Hz · tol.pos 0.05 -> 안전 상한 6.0 m/s. 여유를 보고 절반에서 경고.
+        _hz = 60.0
+        _lim = 2.0 * (tol or Tolerance()).pos * _hz
+        if self.v_exec > 0.5 * _lim:
+            print(f"★ 실행 속도 {self.v_exec:.2f} m/s 가 도착 판정 한계 "
+                  f"{_lim:.2f} m/s 의 절반을 넘습니다 (tol.pos="
+                  f"{(tol or Tolerance()).pos} m @ {_hz:.0f} Hz). "
+                  f"완료를 놓칠 수 있으니 tol.pos 를 키우세요.")
+        self.ctrl = {a: MotionController(geom, tol, self.v_exec, self.a_exec)
+                     for a in self.agents}
         self.running: dict[int, Action | None] = {a: None for a in self.agents}
         self.elapsed: dict[int, float] = {a: 0.0 for a in self.agents}
         self.safety_check = safety_check
@@ -997,6 +1580,52 @@ class FleetController:
         self._frozen: dict[int, int] = {a: 0 for a in self.agents}
         self.open_loop: list[str] = []
         self.stats = FleetStats()
+        self._reported: set[tuple[int, int]] = set()   # 겹침 상세를 찍은 쌍
+        # [patch_carry] 이어달리기 ------------------------------------------
+        #   칸마다 정지하면 1.2 m 의 84%가 가감속 램프다. 0.9 m/s 를 쓰는 시간이
+        #   한 칸당 0.21 s(8.5%)뿐이다 (2026-09-14 실측 2.367 s/칸).
+        #
+        #   ★ 안전 근거는 기하다. 구동축이 목표 칸 중심에 있을 때 차체 앞끝은
+        #     front_len(0.390 m) 앞이고, 칸 반폭은 0.600 m 다. 즉 축이 중심을
+        #     **0.210 m** 지나야 몸이 다음 칸에 들어간다. 그 거리 안에 설 수
+        #     있는 속도까지만 싣는다 — 다음 칸을 못 잡아도 칸 밖에서 멈춘다.
+        #
+        #   `can_start` 의 세 조건 중 선행 완료·릴리스 시각은 **단조**다
+        #   (done 은 줄지 않고 clock 은 는다). 단조가 아닌 것은 `blocked_cells`
+        #   하나뿐이다 — 장애물이 새로 생길 수 있다.
+        #
+        #   그래서 상한을 **두 개** 둔다 (2026-09-14 수정).
+        #
+        #     장애물이 있을 때  sqrt(2 * a_lin * margin) = 0.580 m/s
+        #        `can_follow` 가 참이었다가 뒤집힐 수 있으므로, 다음 칸을 못
+        #        잡아도 **칸 밖에서** 설 수 있는 속도까지만 싣는다.
+        #
+        #     장애물이 없을 때  v_max = 0.900 m/s
+        #        세 조건이 모두 단조 -> 한 번 참이면 계속 참 -> 감속할 이유가
+        #        없다. 목표 칸을 **순항 속도 그대로** 통과한다.
+        #
+        #   ★ 왜 나누나: 0.580 으로 묶으면 칸 경계마다 0.9 -> 0.58 -> 0.9 로
+        #     오르내린다. 멈추지는 않지만 순항이 아니다 — 영상에서 바로 보인다.
+        #     그리고 `blocked_cells` 를 채우는 코드가 지금 아무 데도 없다
+        #     (`block()` 을 부르는 곳이 없고, [adg-why] 의 장애물 열도 전 판
+        #     0.0% 였다). 즉 0.580 상한은 **일어나지 않는 경우**를 막고 있었다.
+        #     장애물 보고가 들어오면 자동으로 안전한 쪽으로 내려간다.
+        margin = 0.5 * geom.pitch - geom.front_len
+        # ★ `margin <= 0` 이면 이어달리기가 **통째로 꺼지는데 로그에 표시가
+        #   없었다.** 처리량이 40% 떨어지고 원인을 알 수 없다. pitch 1.0 에서는
+        #   0.110 이라 아직 켜지지만 **pitch 0.78 이하에서 0 이 된다**
+        #   (0.5 * pitch = front_len 0.390). 조용히 꺼지면 안 된다.
+        if carry and margin <= 0.0:
+            print(f"★ 이어달리기가 꺼졌다 — 칸 반폭 {0.5 * geom.pitch:.3f} 이 "
+                  f"앞길이 {geom.front_len:.3f} 이하다 (여유 {margin:+.3f} m).\n"
+                  f"  pitch 를 {2.0 * geom.front_len:.3f} m 보다 크게 하거나 "
+                  f"차체 앞길이를 줄여야 한다. 지금은 매 칸 정지로 돈다.")
+        self.carry_safe = (min(self.v_exec, math.sqrt(2.0 * self.a_exec * margin))
+                           if carry and margin > 0.0 else 0.0)
+        self.carry_free = self.v_exec if carry and margin > 0.0 else 0.0
+        # 시험용 고정 상한. 비워 두면 위 규칙을 쓴다.
+        _cv = os.environ.get("PIBT_CARRY_V", "")
+        self.carry_fixed = float(_cv) if _cv else None
         if starts is not None:
             self.verify_start()
 
@@ -1063,12 +1692,71 @@ class FleetController:
 
     # ---- 루프 --------------------------------------------------------------
 
+    # [patch_carry]
+    @staticmethod
+    def _same_dir(p: Action, q: Action) -> bool:
+        """q 가 p 에 이어지는 **같은 방향 직진**인가."""
+        if q.kind != MOVE or p.kind != MOVE:
+            return False
+        if q.frm[2] != p.to[2]:                          # 헤딩이 바뀐다
+            return False
+        return ((p.to[0] - p.frm[0], p.to[1] - p.frm[1])
+                == (q.to[0] - q.frm[0], q.to[1] - q.frm[1]))
+
+    def _straight_run(self, a: int, act: Action) -> int:
+        """`act` **다음**으로 이어지는 같은 방향 직진이 몇 칸인가.
+
+        ★ 왜 필요한가 (2026-09-14). 예전에는 **다음 한 칸만** 봤다. 그러면
+          회전 직전 칸에서 exit_v 가 0 이 되는데, 그 시점 속도에서 1.2 m 안에
+          못 서면 오버슈트한다. 정지 거리 v^2/(2a) 는
+
+              v 0.9 -> 0.51 m    v 1.2 -> 0.90 m    (칸 1.2 m 안, OK)
+              v 1.6 -> 1.60 m    v 2.2 -> 3.03 m    (칸의 1.3~2.5배, 불가)
+
+          이라, v_exec 를 1.6 이상으로 올리면 회전 앞에서 못 서고 되돌아오기를
+          반복한다. 실측: v=2.2 에서 완주 0/2, 칸공유 400,262건,
+          차체 최소거리 0.014 m. 도착 판정 경고로는 이걸 못 잡는다 —
+          문제는 판정이 아니라 **제동 거리**다.
+        """
+        chain = self.rt.adg.chains[self.slot[a]]
+        k, n = act.idx + 1, 0
+        prev = act
+        while k < len(chain) and self._same_dir(prev, chain[k]):
+            n += 1
+            prev = chain[k]
+            k += 1
+        return n
+
+    def _carry(self, a: int, act: Action) -> float:
+        """이 액션의 종단속도. 0 이면 목표 칸에서 완전히 선다.
+
+        같은 방향 직진이 곧바로 이어질 때만 속도를 싣고, **다음 회전까지
+        남은 거리 안에 설 수 있는 속도**로 제한한다. 회전 앞에서는 반드시
+        0 이다 — 제자리 선회에 선속도를 들고 들어가면 칸을 벗어난다.
+        """
+        if self.carry_free <= 0.0 or act.kind != MOVE:
+            return 0.0
+        nxt = self.rt.after(self.slot[a])
+        if nxt is None or not self._same_dir(act, nxt):
+            return 0.0
+        if not self.rt.can_follow(act, nxt):             # 아직 못 들어간다
+            return 0.0
+        if self.carry_fixed is not None:
+            return self.carry_fixed
+        # 장애물 보고가 있으면 `can_follow` 가 뒤집힐 수 있다 -> 안전한 상한.
+        # 없으면 세 조건이 모두 단조라 뒤집히지 않는다 -> 순항 속도.
+        cap = self.carry_safe if self.rt.blocked_cells else self.carry_free
+        # 다음 회전까지 남은 직진 거리 안에 설 수 있어야 한다.
+        run = self._straight_run(a, act) * self.g.pitch
+        return min(cap, math.sqrt(2.0 * self.a_exec * run)) if run > 0.0 else 0.0
+
     def step(self, dt: float) -> None:
         self.stats.steps += 1
         self.stats.sim_time += dt
         self.rt.advance(dt)
         moved = False
         occ: dict[int, frozenset[Cell]] = {}
+        poses: dict[int, tuple[float, float, float]] = {}
 
         for a in self.agents:
             drv = self.drivers[a]
@@ -1076,6 +1764,7 @@ class FleetController:
             self._watch_open_loop(a, pose, dt)
             body = self.g.footprint_cells(*pose)         # 스텝당 로봇당 딱 한 번
             occ[a] = body
+            poses[a] = pose
             act = self.running[a]
 
             if act is not None:
@@ -1086,14 +1775,30 @@ class FleetController:
                     self.running[a] = None
                     self.elapsed[a] = 0.0
                     self.stats.completed += 1
-                    drv.command(0.0, 0.0)
-                    self._last_cmd[a] = (0.0, 0.0)
+                    # [patch_carry] 속도를 실은 채 끝났으면 **같은 스텝에**
+                    #   다음 액션을 시작한다. 예전에는 여기서 0 을 명령하고
+                    #   다음 스텝에 시작해서, 감속과 별개로 한 스텝을 더 버렸다.
+                    nxt = self.rt.pending(self.slot[a])
+                    if (c.exit_v > 0.0 and nxt is not None
+                            and self.rt.can_start(nxt)):
+                        c.begin(nxt, keep_speed=True)
+                        self.running[a] = nxt
+                        self.stats.started += 1
+                        self.stats.carried += 1
+                        c.exit_v = self._carry(a, nxt)
+                        cmd = c.update(pose, dt)
+                        drv.command(*cmd)
+                        self._last_cmd[a] = cmd
+                    else:
+                        drv.command(0.0, 0.0)
+                        self._last_cmd[a] = (0.0, 0.0)
                 else:
                     if self.elapsed[a] > self.action_timeout:
                         self.timeouts.append(
                             f"agent{a} {act} 가 {self.elapsed[a]:.0f}s 동안 완료되지 않음 "
                             f"(pose={pose[0]:.2f},{pose[1]:.2f},{math.degrees(pose[2]):.0f}deg)")
                         self.elapsed[a] = 0.0
+                    c.exit_v = self._carry(a, act)
                     cmd = c.update(pose, dt)
                     drv.command(*cmd)
                     self._last_cmd[a] = cmd
@@ -1110,6 +1815,7 @@ class FleetController:
                 self.running[a] = nxt
                 self.elapsed[a] = 0.0
                 self.stats.started += 1
+                self.ctrl[a].exit_v = self._carry(a, nxt)
                 cmd = self.ctrl[a].update(pose, dt)
                 drv.command(*cmd)
                 self._last_cmd[a] = cmd
@@ -1121,7 +1827,7 @@ class FleetController:
         if not moved:
             self.stats.stall_steps += 1
         if self.safety_check:
-            self._check(occ)
+            self._check(occ, poses)
 
     def _watch_open_loop(self, a: int, pose: tuple[float, float, float],
                          dt: float, hold: float = 1.0) -> None:
@@ -1161,11 +1867,18 @@ class FleetController:
                 f"{math.degrees(pose[2]):.0f}deg). 제어 루프가 끊겼다 — "
                 f"articulation root prim 과 물리 콜백에서의 pose 읽기를 확인하라.")
 
-    def _check(self, occ: dict[int, frozenset[Cell]]) -> None:
+    def _check(self, occ: dict[int, frozenset[Cell]],
+               poses: dict[int, tuple[float, float, float]] | None = None) -> None:
         """실제 차체 점유가 겹치는지 매 스텝 검사.
 
         ADG가 맞다면 절대 발동하지 않는다. 발동하면 브리지 버그이고, 물리
         시뮬에서 눈으로 찾는 것보다 여기서 잡는 게 훨씬 싸다.
+
+        ★ **칸 공유는 접촉이 아니다.** 이 검사는 일부러 보수적인 감시선이라
+          차체가 닿기 한참 전에 운다. 그래서 첫 건에 한해 자세와 **차체 사이
+          최소 거리**를 같이 남긴다 — 그 숫자가 있어야 "감시선이 보수적으로
+          운 것" 과 "진짜 접촉" 을 구별할 수 있다. 없으면 30분짜리 재현을
+          다시 돌려야 한다 (2026-09-13, 쌍 7-8 에서 실제로 그랬다).
         """
         ags = self.agents
         for i, a in enumerate(ags):
@@ -1176,6 +1889,37 @@ class FleetController:
                     self.stats.overlap_events += 1
                     self.stats.overlap_pairs.add((a, b))
                     self.stats.worst_overlap = max(self.stats.worst_overlap, len(shared))
+                    if poses:
+                        gap = self.g.body_gap(poses[a], poses[b])
+                        self.stats.worst_gap = min(self.stats.worst_gap, gap)
+                        if gap <= 0.0:                 # 실제 접촉만 합불에 넣는다
+                            self.stats.contact_events += 1
+                        # **쌍마다 첫 건만** 찍는다. 물리 60 Hz 라 매 스텝 찍으면
+                        # 로그가 수천 줄이 되고, 반대로 전체 첫 건만 찍으면
+                        # 뒤에 난 다른 쌍의 정보를 통째로 잃는다.
+                        if (a, b) not in self._reported:
+                            self._reported.add((a, b))
+                            self._report_overlap(a, b, shared, poses, gap)
+
+    def _report_overlap(self, a, b, shared, poses, gap) -> None:
+        """쌍마다 첫 겹침의 자세·거리·심각도. 이 숫자로 접촉 여부가 판정된다."""
+        try:
+            pa, pb = poses[a], poses[b]
+            say = getattr(self, "_say", print)
+            if gap <= 0.0:
+                tag = "★★ 실제 접촉 — 물리적으로 닿았다. 브리지 버그"
+            elif gap < CONTACT_NEAR:
+                tag = f"★ 근접 — {CONTACT_NEAR:.2f} m 안까지 붙었다. 확인 필요"
+            else:
+                tag = "⚠ 접촉 아님 — 칸만 공유했다 (감시선이 보수적)"
+            say(f"겹침 상세  쌍 ({a},{b})  공유칸 {sorted(shared)}  →  {tag}")
+            for who, p in ((a, pa), (b, pb)):
+                say(f"   agent{who} pose ({p[0]:.3f}, {p[1]:.3f}, "
+                    f"{math.degrees(p[2]):.1f}도)")
+            say(f"   차체 최소거리 {gap:.3f} m   축 사이 "
+                f"{math.hypot(pb[0] - pa[0], pb[1] - pa[1]):.3f} m")
+        except Exception as e:                     # 진단이 주행을 죽이면 안 된다
+            print(f"[adg] 겹침 상세 실패(주행은 계속): {e!r}")
 
     def diagnose(self) -> str:
         """정지했을 때 왜 멈췄는지."""
@@ -1299,7 +2043,7 @@ def sweep_audit(geom: RobotGeom, history, cells_hist) -> dict:
     return {"total": total, "short": short, "by_kind": missing, "examples": examples}
 
 
-def selftest(geom: RobotGeom, n_agents: int = 12, max_steps: int = 120,
+def selftest(geom: RobotGeom, n_agents: int = 12, max_steps: int = 240,
              dt: float = 1.0 / 60.0, seeds: int = 4, verbose: bool = True) -> bool:
     say = print if verbose else (lambda *a, **k: None)
     ok = True
@@ -1320,10 +2064,37 @@ def selftest(geom: RobotGeom, n_agents: int = 12, max_steps: int = 120,
     check(a["rest_matches"],
           "정지 점유가 pibt_core의 occupied(s)와 일치 "
           "(불일치면 heading_offset을 0/2로 바꿀 것 — 플랜이 무효해진다)")
-    check(a["short_stays_home"], "짧은 쪽이 자기 칸에 머묾 (swing 3칸 모델의 전제)")
-    check(a["in_window"],
-          f"pitch가 유효 구간 안 ({a['pitch_lo']:.2f} < {geom.pitch:.2f} < {a['pitch_hi']:.2f})")
-    check(a["turn_covered"], "회전 스윕이 pibt_core의 swing 모델 안에 들어감")
+    # [patch_axle] 아래 셋은 **swing 3칸 모델이 성립하는가**를 묻는다. 축 규칙은
+    #   그 모델을 의도적으로 확장하므로 켠 상태에서는 전부 실패한다 (pitch 1.0
+    #   에서 0.559 > 0.500, 1.1173 > 1.00, turn_extra 비어 있지 않음).
+    #   그래서 스위치로 분기한다. 끈 쪽이 **오늘 경로**이고 §7 항목 1 이 이걸
+    #   지킨다 — 한 줄도 바꾸지 않는다.
+    if not geom.front_swing:
+        check(a["short_stays_home"], "짧은 쪽이 자기 칸에 머묾 (swing 3칸 모델의 전제)")
+        check(a["in_window"],
+              f"pitch가 유효 구간 안 ({a['pitch_lo']:.2f} < {geom.pitch:.2f} < {a['pitch_hi']:.2f})")
+        check(a["turn_covered"], "회전 스윕이 pibt_core의 swing 모델 안에 들어감")
+    else:
+        # ★ **휴면 상태다.** `front_cells()` 본체가 없어 껍데기가 raise 하므로
+        #   이 분기는 지금 못 탄다 (켜면 build_adg 진입에서 먼저 죽는다).
+        #   본체가 들어오면 여기가 §7 항목 2 의 관문이 된다 — "soft 가 비었나"
+        #   가 아니라 **`front_cells()` 와 `swept_cells()` 가 같은 기하를 보는가**
+        #   를 직접 묻는 것이라 항목 2 보다 강하다.
+        turn = geom.swept_cells((5, 5, 1), (5, 5, 0))
+        guard = geom.front_cells((5, 5, 1), (5, 5, 0))
+        # ★ 비교 대상은 `guard` 전체가 아니라 `guard & turn` 이다.
+        #   규칙이 내놓는 칸 중 일부는 **실제 스윕 밖**이다 — pitch 1.0 에서
+        #   섞임 대각 mA/mB 가 0/8 로 스윕 밖이고, 0.80 에서야 7/8 로 들어온다.
+        #   `guard == turn_extra` 를 물으면 4칸 규칙에서 반드시 실패한다.
+        check(frozenset(a["turn_extra"]) == (guard & turn),
+              "모델 초과분이 정확히 front_cells & 실제스윕 과 같음 "
+              f"(초과 {sorted(a['turn_extra'])}  guard {sorted(guard)})")
+        # 스윕 밖 칸은 hard 에서 뺄 것이 없으니 안전엔 무해하지만, 규칙 ② 는
+        # 그 칸도 집행해야 한다. 그래서 `guard - turn` 이 비어도 안 비어도 통과다.
+        check(not (guard & (set(occupied((5, 5, 1))) | set(occupied((5, 5, 0)))
+                            | set(swing_cells(5, 5, 1, 0)))),
+              "front_cells 에 몸 칸이 없음 (뒤 대각이 들어오면 여기서 걸린다)")
+        check(a["rest_matches"], "축 규칙에서도 정지 점유는 2칸이어야 한다")
 
     free = demo_map()
     say("\n[2] 플랜 + ADG")
@@ -1355,7 +2126,9 @@ def selftest(geom: RobotGeom, n_agents: int = 12, max_steps: int = 120,
             clean = fleet.stats.clean and fleet.finished
             all_clean += clean
             if not clean:
-                say(f"    seed {sd}/{run_seed}: 충돌 {fleet.stats.overlap_events}건, "
+                say(f"    seed {sd}/{run_seed}: 접촉 {fleet.stats.contact_events}건 "
+                    f"(칸 공유 {fleet.stats.overlap_events}건 · 최소 간격 "
+                    f"{fleet.stats.worst_gap:.3f} m), "
                     f"완주 {fleet.finished}, 액션 {fleet.stats.completed}/"
                     f"{len(adg.actions)}")
                 if not fleet.finished:
@@ -1396,7 +2169,24 @@ def selftest(geom: RobotGeom, n_agents: int = 12, max_steps: int = 120,
     check(ctrl.complete(target, frozenset(act.rest)),
           "놓아줄 칸에서 빠져나오면 완료")
 
-    # 이 조건이 실제로 구속력을 갖는 pitch 구간 — 기하에 따라 다르다.
+    # [patch_axle] pitch 별 **표**. 검사가 아니라 기록이다.
+    #
+    #   축 규칙의 하한은 수식으로 안 닫힌다. "차체가 3×3 을 안 벗어나는" 조건
+    #   (2*hypot(rear, W/2) < 3*pitch) 과 "모델이 성립하는" 조건은 다른 양이다 —
+    #   `swing_cells` 는 3×3 이 아니라 **3칸**만 예약한다. 그래서 계산하지 말고
+    #   **재서** 구간을 얻는다.
+    #
+    #   ★ `in_window` 가 False 여도 `continue` 하지 않는다. 건너뛰면 pitch 1.0
+    #     행이 아예 안 나오는데, 그 행의 `turn_extra` 가 본체 도입 후
+    #     `front_cells` 와 대조할 **기준값**이다.
+    say("    pitch 별 모델 초과 칸 (turn_extra) — 축 규칙 하한의 측정 기준:")
+    for p in (0.80, 0.90, 1.00, 1.10, 1.20, 1.60, 2.00):
+        g2 = RobotGeom(pitch=p, rear_len=geom.rear_len, front_len=geom.front_len,
+                       width=geom.width, heading_offset=geom.heading_offset)
+        a2d = g2.audit()
+        say(f"      pitch {p:.2f} m : 구간안 {str(a2d['in_window']):<5} "
+            f"초과 {sorted(a2d['turn_extra'])}")
+
     say("    '꼬리 남음'이 전진에서 실제로 구속력을 갖는가:")
     for p in (0.90, 1.20, 1.60, 2.00):
         g2 = RobotGeom(pitch=p, rear_len=geom.rear_len, front_len=geom.front_len,
@@ -1465,7 +2255,7 @@ def selftest(geom: RobotGeom, n_agents: int = 12, max_steps: int = 120,
 
 
 def plan_and_build(free: np.ndarray, starts: dict[int, State], goals: dict[int, Cell],
-                   geom: RobotGeom, max_steps: int = 200, **run_kw
+                   geom: RobotGeom, max_steps: int = 400, **run_kw
                    ) -> tuple[ADG, list[int], list[dict[int, State]], dict]:
     """pibt_core로 계획하고 ADG까지 만든다. Isaac Sim 쪽에서 부를 함수.
 
@@ -1517,8 +2307,8 @@ fleet = FleetController(geom, adg, drivers, order=order)
 while simulation_app.is_running():
     world.step(render=True)
     fleet.step(world.get_physics_dt())
-    if fleet.stats.overlap_events:
-        print("★ 차체 겹침 — 브리지 버그. 조용히 넘기지 말 것")
+    if fleet.stats.contact_events:
+        print("★ 차체 접촉 — 브리지 버그. 조용히 넘기지 말 것")
         print(fleet.diagnose())
         break
     if fleet.finished:
@@ -1531,13 +2321,17 @@ def plan_and_build_lifelong(free: np.ndarray, starts: dict[int, State],
                             shifts=("in", "out", "out"),
                             battery: bool = False, docks=(),
                             battery_kw: dict | None = None,
-                            dispatch: str = "fms", **run_kw):
+                            dispatch: str = "fms", zone_cells=(),
+                            order_end=None, **run_kw):
     """`lifelong.run_lifelong` 으로 계획하고 ADG 까지 만든다.
 
     `plan_and_build` 과 **같은 것**을 돌려준다. one-shot 과 달리 "전원이
     동시에 목표에 있어야 성공" 조건이 없으므로 `GOOD_SEEDS` 가 필요 없다.
     `extract_actions`·`build_adg`·`sweep_audit` 은 한 줄도 안 고친다 —
     lifelong 의 `history` 형식이 `run_h` 와 같기 때문이다.
+
+    `zone_cells` 는 충전존 복귀 후보 칸이다 (`pibt_scene.charge_zone_cells`).
+    비우면 FREED 가 시작 칸으로 돌아가는 이전 동작 그대로다.
     """
     from lifelong import run_lifelong
 
@@ -1558,7 +2352,8 @@ def plan_and_build_lifelong(free: np.ndarray, starts: dict[int, State],
 
     history, cells_hist, li = run_lifelong(
         free, starts, cells_by_cat, horizon=horizon, seed=seed,
-        order_gap=order_gap, shifts=shifts, **kw)
+        order_gap=order_gap, shifts=shifts, zone_cells=zone_cells,
+        order_end=order_end, **kw)
 
     chains, order, stats = extract_actions(history, geom)
     adg = build_adg(chains)

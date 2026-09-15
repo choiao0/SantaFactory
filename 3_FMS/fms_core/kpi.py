@@ -7,7 +7,8 @@ from __future__ import annotations
 
 import numpy as np
 
-DT = 1.0                     # cli/common.DT = CELL_M / SPEED = 1 s (테스트가 대조)
+DT = 1.0                     # 기본 틱 길이 [초] (cli/common.DT). 실행 값은 KernelPlanner.dt (-116·-194)
+CELL_M = 1.0                 # 격자 1칸 [m] — map_loader.CELL_M 과 같은 값 (주행거리 환산용)
 
 
 def _mean(x) -> float:
@@ -18,14 +19,14 @@ def _p90(x) -> float:
     return float(np.percentile(x, 90)) if len(x) else 0.0
 
 
-def summary(kernel, stream, n_robots: int, t_end: int) -> dict:
-    """report() 의 SUMMARY 중 KPI 로 가는 키 (같은 반올림)."""
+def summary(kernel, stream, n_robots: int, t_end: int, dt: float = DT) -> dict:
+    """report() 의 SUMMARY 중 KPI 로 가는 키 (같은 반올림). dt = 틱 길이[초] (report 의 a.dt)."""
     t_end = max(int(t_end), 1)
     tasks_done = kernel.tasks_done
     n_tasks = len(tasks_done)
-    lat_total = np.array([tk["completed"] - tk["created"] for tk in tasks_done]) * DT
-    lat_queue = np.array([tk["assigned"] - tk["created"] for tk in tasks_done]) * DT
-    sim_hours = t_end * DT / 3600
+    lat_total = np.array([tk["completed"] - tk["created"] for tk in tasks_done]) * dt
+    lat_queue = np.array([tk["assigned"] - tk["created"] for tk in tasks_done]) * dt
+    sim_hours = t_end * dt / 3600
     tot = kernel.totals()
     busy_v1 = tot["drive"] + 2 * tot["wait"]
     util_incl = (tot["drive"] + tot["wait"] + tot["svc"] + tot["rot"]) / (n_robots * t_end)
@@ -40,15 +41,17 @@ def summary(kernel, stream, n_robots: int, t_end: int) -> dict:
                 lead_mean_s=round(_mean(lat_total), 1), lead_p90_s=round(_p90(lat_total), 1),
                 queue_mean_s=round(_mean(lat_queue), 1),
                 util_incl_service=round(float(util_incl), 3), conflict_wait=round(float(conflict_wait), 4),
-                distance_m=int(tot["drive"]), charging_steps=int(charging))
+                # 주행거리는 **밟은 칸**이다. drive 는 주행 틱이라 전진이 여러 틱이 된 뒤로
+                # 칸 수와 다르다 (-194) — 예전엔 1칸 = 1틱이라 같은 값이었다. cli/report.py 와 같은 산식.
+                distance_m=int(tot["cells"] * CELL_M), charging_steps=int(charging))
 
 
-def des_block(s: dict) -> dict:
-    """SUMMARY → 견적 워커 to_kpi 와 같은 키 (infra/worker/estimate_worker.py:118)."""
+def des_block(s: dict, dt: float = DT) -> dict:
+    """SUMMARY → 견적 워커 to_kpi 와 같은 키 (infra/worker/estimate_worker.py to_kpi). dt = 워커의 SUMMARY dt_s."""
     return dict(orders_total=s["n_orders"], orders_completed=s["orders_done"],
                 inbound_total=s["inbound_total"], inbound_completed=s["tasks_in"],
-                makespan_s=int(round(s["makespan_steps"] * DT)),
+                makespan_s=int(round(s["makespan_steps"] * dt)),
                 lead_time_mean_s=s["lead_mean_s"], lead_time_p90_s=s["lead_p90_s"], queue_time_mean_s=s["queue_mean_s"],
                 throughput_orders_per_h=s["orders_per_h"], throughput_tasks_per_h=s["tasks_per_h"],
                 amr_utilization=s["util_incl_service"], conflict_wait_ratio=s["conflict_wait"],
-                distance_total_m=s["distance_m"], charge_downtime_s=int(round(s["charging_steps"] * DT)))
+                distance_total_m=s["distance_m"], charge_downtime_s=int(round(s["charging_steps"] * dt)))

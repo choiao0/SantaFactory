@@ -21,6 +21,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.util.List;
 
+import static com.ssafy.santafactory.support.TestPrincipals.ADMIN;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -55,6 +56,12 @@ class EstimateFlowIT extends PostgresSupport {
     void seedWarehouse() {
         scenarioRepository.deleteAllInBatch();
         estimateRepository.deleteAllInBatch();
+        // 자식부터: products → rack/stores → zones → facility/warehouses (FK 순서)
+        jdbc.update("DELETE FROM products");
+        jdbc.update("DELETE FROM rack");
+        jdbc.update("DELETE FROM stores");
+        jdbc.update("DELETE FROM zones");
+        jdbc.update("DELETE FROM facility");
         jdbc.update("DELETE FROM warehouses");
         // 창고 시드(품고)와 같은 값 — 목표 처리율 95 %, 가동률 80 %, 예산 3억
         warehouseId = jdbc.queryForObject("""
@@ -69,12 +76,36 @@ class EstimateFlowIT extends PostgresSupport {
                         600, 800, 95.0, 95.0, 80.0, 300000000)
                 RETURNING warehouse_id
                 """, Long.class);
+        seedProductMaster(warehouseId);
+    }
+
+    /**
+     * {@code OutboundOrderGenerator}가 출고 주문을 뽑아낼 최소한의 상품 마스터.
+     * 실제 견적 흐름(주문 생성 → DES 발행)이 상품·랙 데이터 없이는 못 돈다.
+     */
+    private void seedProductMaster(long warehouseId) {
+        Long facilityId = jdbc.queryForObject(
+                "INSERT INTO facility (type, x, y) VALUES ('SHELF', 0, 0) RETURNING facility_id", Long.class);
+        Long zoneId = jdbc.queryForObject(
+                "INSERT INTO zones (warehouse_id, facility_id, zone_code, rack_count) VALUES (?, ?, 'Z1', 2) "
+                        + "RETURNING zone_id",
+                Long.class, warehouseId, facilityId);
+        Long rackId = jdbc.queryForObject(
+                "INSERT INTO rack (zone_id, field) VALUES (?, 'A1') RETURNING rack_id", Long.class, zoneId);
+        Long storeId = jdbc.queryForObject(
+                "INSERT INTO stores (zone_id, name, category, outbound_count) VALUES (?, 'DemoStore', 'shoes', 500) "
+                        + "RETURNING store_id",
+                Long.class, zoneId);
+        for (int i = 0; i < 20; i++) {
+            jdbc.update("INSERT INTO products (store_id, rack_id, name, price, count, count_init) "
+                    + "VALUES (?, ?, ?, 10000, 100, 100)", storeId, rackId, "item" + i);
+        }
     }
 
     @Test
     void runs_the_whole_sweep_and_lands_on_a_recommendation() {
         EstimateCreateResponse created = estimateService.create(
-                new EstimateCreateRequest(warehouseId, null, null, null, null, null, null));
+new EstimateCreateRequest(warehouseId, null, null, null, null, null, null), ADMIN);
 
         // 예산 3억 ÷ 대당 1,550만 = 19대 + 여유 1 = 20대. 충전 존 상한 28 보다 작아 예산이 먼저 걸린다
         assertThat(created.maxAmrCount()).isEqualTo(MAX_AMR);
@@ -90,7 +121,7 @@ class EstimateFlowIT extends PostgresSupport {
             estimateService.applyResult(done(created.estimateId(), amrCount));
         }
 
-        EstimateDetailResponse detail = estimateService.detail(created.estimateId());
+        EstimateDetailResponse detail = estimateService.detail(created.estimateId(), ADMIN);
         assertThat(detail.status()).isEqualTo(EstimateStatus.DONE);
         // 12대가 처음으로 세 조건을 만족한다: 처리율 96 % ≥ 95, 가동률 82 % ≥ 80, 1.86억 ≤ 3억.
         // 11대는 처리율 88 % 로 모자라고 14대부터는 가동률이 79 % 로 떨어진다
@@ -107,7 +138,7 @@ class EstimateFlowIT extends PostgresSupport {
     @Test
     void one_failed_run_does_not_stop_the_rest() {
         EstimateCreateResponse created = estimateService.create(
-                new EstimateCreateRequest(warehouseId, null, null, null, null, null, null));
+new EstimateCreateRequest(warehouseId, null, null, null, null, null, null), ADMIN);
 
         for (int amrCount = 1; amrCount <= MAX_AMR; amrCount++) {
             if (amrCount != 12) {
@@ -115,9 +146,9 @@ class EstimateFlowIT extends PostgresSupport {
             }
         }
         estimateService.applyResult(new SimulationResponse(
-                "est_%d_n12".formatted(created.estimateId()), "failed", "시뮬 정체 감지", null));
+                "est_%d_n12".formatted(created.estimateId()), "failed", "시뮬 정체 감지", null, null));
 
-        EstimateDetailResponse detail = estimateService.detail(created.estimateId());
+        EstimateDetailResponse detail = estimateService.detail(created.estimateId(), ADMIN);
         assertThat(detail.status()).isEqualTo(EstimateStatus.PARTIAL);
         // 권장 후보였던 12대가 빠져도 13대가 세 조건을 만족한다 (처리율 100 %, 가동률 80.5 %, 2.02억)
         assertThat(detail.recommendedCount()).isEqualTo(13);
@@ -128,13 +159,13 @@ class EstimateFlowIT extends PostgresSupport {
     @Test
     void a_redelivered_result_does_not_overwrite_the_first_one() {
         EstimateCreateResponse created = estimateService.create(
-                new EstimateCreateRequest(warehouseId, null, null, null, null, null, null));
+new EstimateCreateRequest(warehouseId, null, null, null, null, null, null), ADMIN);
         String runId = "est_%d_n3".formatted(created.estimateId());
 
         estimateService.applyResult(done(created.estimateId(), 3));
         estimateService.applyResult(new SimulationResponse(runId, "done", null,
                 new SimulationResponse.Kpi(100, 1, null, null, null, null, null, null,
-                        null, null, 0.01, null, null, null)));
+                        null, null, 0.01, null, null, null), null));
 
         SimScenario run = scenarioRepository.findByRunId(runId).orElseThrow();
         assertThat(run.getThroughput()).isEqualTo(24.0);   // 3대 첫 결과가 유지된다
@@ -144,7 +175,7 @@ class EstimateFlowIT extends PostgresSupport {
     @Test
     void a_stuck_run_is_recovered_by_the_timeout_sweep() {
         EstimateCreateResponse created = estimateService.create(
-                new EstimateCreateRequest(warehouseId, null, null, null, null, null, null));
+new EstimateCreateRequest(warehouseId, null, null, null, null, null, null), ADMIN);
         for (int amrCount = 1; amrCount < MAX_AMR; amrCount++) {
             estimateService.applyResult(done(created.estimateId(), amrCount));
         }
@@ -153,7 +184,7 @@ class EstimateFlowIT extends PostgresSupport {
 
         assertThat(estimateService.sweepTimeouts()).isEqualTo(1);
 
-        EstimateDetailResponse detail = estimateService.detail(created.estimateId());
+        EstimateDetailResponse detail = estimateService.detail(created.estimateId(), ADMIN);
         assertThat(detail.runs().get(MAX_AMR - 1).status()).isEqualTo(RunStatus.TIMEOUT);
         assertThat(detail.status()).isEqualTo(EstimateStatus.PARTIAL);
         assertThat(detail.recommendedCount()).isEqualTo(12);   // 남은 결과로 판정은 그대로
@@ -169,6 +200,6 @@ class EstimateFlowIT extends PostgresSupport {
                 null, null, null, null,
                 null, null,
                 (100 - amrCount * 1.5) / 100.0, null, null, null);
-        return new SimulationResponse("est_%d_n%d".formatted(estimateId, amrCount), "done", null, kpi);
+        return new SimulationResponse("est_%d_n%d".formatted(estimateId, amrCount), "done", null, kpi, null);
     }
 }

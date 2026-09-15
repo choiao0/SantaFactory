@@ -12,9 +12,15 @@
 # 접속 URL 은 compose 가 넣어주는 OPTUNA_STORAGE 환경변수에서 읽는다. 자격증명을
 # 인자나 소스에 적지 않는다 (.env 로 관리 — infra/.env.example 참고).
 #
-# 시뮬 호출 규약은 contracts/SIM_RUN_CONTRACT.md v2 가 단일 출처다. 기본값은
-# 그 문서 §5 "θ 탐색 권장 조건"(헤딩 = v2 기본 · order_gap 15 · aisle_block 1)에
-# 맞춰 두었다 — 조건을 매번 손으로 적다가 빠뜨리면 기준선과 비교가 안 된다.
+# 시뮬 호출 규약은 contracts/SIM_RUN_CONTRACT.md 가 단일 출처다. 기본값은
+# 그 문서 §5 "θ 탐색 권장 조건"(헤딩 기본 · aisle_block 1)에 맞춰 두었다 —
+# 조건을 매번 손으로 적다가 빠뜨리면 기준선과 비교가 안 된다.
+#
+# **부하는 초로 받는다** (--arrival-s, S15P21A106-194). 시뮬의 --order-gap 은 틱이고
+# 틱 길이는 속도·틱 모델이 정한다. 계약 v3.6 에서 1칸이 4틱이 되며 같은 "15" 가 15초에서
+# 3.75초로 바뀌었다 — 틱으로 받으면 이런 변경 때마다 의도한 부하가 조용히 어긋난다.
+# 계약 §5-1 도 "틱 단위 인자는 환산하지 않는다, 초를 가진 호출자가 초/dt 로 넘길 것"
+# 이라고 그 책임을 호출자(= 이 워커)에 둔다.
 #
 # 사용 (컨테이너 안, /work 마운트 기준):
 #   python /opt/worker/run_study.py --study wallA_r24_g15 \
@@ -26,6 +32,10 @@
 # 갈리지 않는다 (θ 는 막힐 때 일하는 규칙, 감도 실험 §0). 권장 대수는 map/synth/README.md 표.
 #   python /opt/worker/run_study.py --study r11p6l21_r20_g15 \
 #       --map-dir /work/map/synth/r11p6l21 --robots 20 --orders 120 ...
+#
+# 적재량은 --capacity 로 운영 조건과 맞춘다 (S15P21A106-192). 기본 1 로 두면 운영이
+# 6 토트여도 탐색은 1 토트로 돌아 다른 θ 가 나온다 — 실측 455.1 vs 824.9 tasks_per_h.
+#   python /opt/worker/run_study.py --study r11p6l21_r20_c6 --capacity 6 ...
 # ============================================================
 import argparse
 import json
@@ -38,7 +48,7 @@ _WORKER_DIR = os.path.dirname(os.path.abspath(__file__))
 if _WORKER_DIR not in sys.path:
     sys.path.insert(0, _WORKER_DIR)
 
-from objective import SimFailed, evaluate  # noqa: E402
+from objective import SimFailed, evaluate, tick_seconds  # noqa: E402
 
 DEFAULT_SIM_ENGINE = "/work/sim_engine"
 DEFAULT_FMS_ROOT = "/work"
@@ -52,6 +62,8 @@ FLOW = "main"
 # 합성 창고는 존 크기가 창고마다 달라(24~42대) 이 상수를 못 쓴다 — --map-dir 이 있으면
 # 그 맵의 존에서 직접 센다 (charge_zone_capacity, S15P21A106-183).
 MAX_ROBOTS = 28
+
+DEFAULT_SPEED = 1.0            # --speed 를 안 줬을 때 meta 에 적을 값 (시뮬 기본과 같다)
 
 
 def _relative_to(path, root):
@@ -173,11 +185,19 @@ def dump_best(study, args, schema_version, neutral_names):
         # 그대로 복원할 수 있어야 한다.
         # map_dir 은 어느 창고에서 뽑은 θ 인지다. 빠지면 그 θ 는 재현도 해석도 안 된다
         # (합성 창고 도입, S15P21A106-183). 공식 맵이면 키가 안 붙어 기존 meta 와 같다.
+        # capacity 는 기본값(1)이면 키가 안 붙는다 — 기존 meta 와 같은 모양이 된다.
+        # order_gap(틱)만 남기면 틱 길이를 모르는 사람이 부하를 못 읽는다. 틱 모델이
+        # 바뀌면 같은 숫자가 다른 부하를 뜻하기 때문이다 (-194). speed·dt_s·arrival_s·
+        # orders_per_h 를 같이 적어 이 dict 하나로 부하가 확정되게 한다.
         "condition": {"robots": args.robots, "orders": args.orders,
                       "seeds": args.seeds, "aisle_block": args.aisle_block,
                       "flow": FLOW, "cell": args.cell,
-                      "order_gap": args.order_gap,
-                      **({"map_dir": args.map_ref} if args.map_ref else {})},
+                      "order_gap": round(args.order_gap, 4),
+                      "speed": args.speed, "dt_s": round(args.dt, 6),
+                      "arrival_s": round(args.arrival_s, 4),
+                      "orders_per_h": round(args.orders_per_h, 1),
+                      **({"map_dir": args.map_ref} if args.map_ref else {}),
+                      **({"capacity": args.capacity} if args.capacity != 1 else {})},
         # 어떤 축을 탐색했는지 남긴다. 고정한 θ 도 값은 theta json 에 들어가므로
         # 이 목록이 없으면 "탐색해서 중립이 나온 것"과 구분되지 않는다.
         "search_space": {"pinned_neutral": sorted(args.pinned),
@@ -221,9 +241,22 @@ def parse_args(argv=None):
     p.add_argument("--exclude", default="aisle_alt_gain,aisle_alt_boost,"
                                         "aisle_period,aisle_phase",
                    help="탐색에서 빼고 중립값으로 고정할 θ 이름(쉼표). 빈 문자열이면 전부 탐색")
-    p.add_argument("--order-gap", type=float, default=15.0, dest="order_gap",
-                   help="주문 도착 간격 평균[틱]. 기본 15(고부하) — "
-                        "50은 수요 제약이라 θ 효과가 seed 산포에 묻힌다")
+    # 부하는 **초**로 받는다. 시뮬의 --order-gap 은 틱이고 틱 길이는 속도·틱 모델에 따라
+    # 달라지므로(계약 v3.6 에서 1칸이 4틱이 되며 같은 "15" 가 15초 → 3.75초로 바뀌었다),
+    # 틱으로 받으면 조건을 바꿀 때마다 의도한 부하가 조용히 어긋난다.
+    p.add_argument("--arrival-s", type=float, default=15.0, dest="arrival_s",
+                   help="주문 도착 간격 평균[초, 실시간]. 기본 15(= 240건/h). "
+                        "시뮬에는 초/dt 로 환산한 틱을 넘긴다")
+    # 구 study 재현용 원시 통로. 주면 --arrival-s 를 무시하고 이 틱 값을 그대로 넘긴다.
+    p.add_argument("--order-gap", type=float, default=None, dest="order_gap",
+                   help="[구 study 재현용] 시뮬에 넘길 틱 값을 직접 지정. "
+                        "쓰면 --arrival-s 가 무시된다")
+    # 속도 (계약 v3.3·v4). 견적 워커가 쓰는 값과 맞춰야 같은 세계에서 θ 를 찾는다.
+    # v4 부터 이 값은 **가감속을 포함한 실효 속도**다 — 물리 실측 기준 0.518 m/s.
+    # 기본값을 None 으로 두는 것은 **인자를 줬는지**를 값 비교 없이 알기 위해서다.
+    # 1.0 과 float 로 비교하면 미세 오차로 분기가 뒤집힐 수 있다.
+    p.add_argument("--speed", type=float, default=None,
+                   help=f"로봇 속도[m/s]. 운영과 같게 줄 것. 생략하면 {DEFAULT_SPEED:g}")
     p.add_argument("--timeout", type=int, default=300, help="시뮬 1회 상한(초)")
     p.add_argument("--noise-warn-ratio", type=float, default=0.05,
                    dest="noise_warn_ratio",
@@ -237,6 +270,15 @@ def parse_args(argv=None):
     p.add_argument("--map-dir", default=None, dest="map_dir",
                    help="맵 세트 폴더. 합성 창고는 map/synth/<이름> "
                         "(권장 대수는 map/synth/README.md 표)")
+    # 토트 적재 (계약 v2.6, S15P21A106-192). 기본값 1 이면 v2.5 이전과 같은 실행이다.
+    # 운영 조건이 6토트인데 탐색을 1토트로 하면 다른 세계에서 θ 를 찾는 것이다 —
+    # 실측(20대·250건·gap 4): 1토트 455.1 vs 6토트 824.9 tasks_per_h.
+    p.add_argument("--capacity", type=int, default=1,
+                   help="출고 왕복당 함께 싣는 토트 수 1~6. 운영 조건과 같게 줄 것")
+    # 적재량별 '속도'는 여기 없다. 시뮬에 아직 손잡이가 없어서다 — --svc-per-tote 는 그걸
+    # 서비스 시간으로 흡수하는 근사인데 채택 안 됐다. 속도 모델이 정해지면 그때 붙인다.
+    # --tote-units 도 뺐다 — 명시 주문(--orders-file)의 qty 로 토트 수를 세는 인자라
+    # 간격 모드인 θ 탐색에서는 시뮬이 경고를 내고 무시한다.
     p.add_argument("--sim-engine", default=DEFAULT_SIM_ENGINE, dest="sim_engine")
     p.add_argument("--fms-root", default=DEFAULT_FMS_ROOT, dest="fms_root")
     p.add_argument("--out", default="", help="최적 θ·메타 저장 디렉토리")
@@ -244,7 +286,25 @@ def parse_args(argv=None):
     args.seeds = [int(s) for s in args.seeds.split(",") if s.strip()]
     if not args.seeds:
         p.error("--seeds 가 비었다. 시뮬은 확률적이라 시드 3개 이상을 권장한다")
-    args.extra_args = ()
+    if not 1 <= args.capacity <= 6:
+        p.error(f"--capacity {args.capacity} — 계약 v2.6 은 1~6 만 받는다")
+    speed_given = args.speed is not None
+    if not speed_given:
+        args.speed = DEFAULT_SPEED
+    if not 0.1 <= args.speed <= 5.0:
+        p.error(f"--speed {args.speed} — 계약은 0.1~5.0 m/s 만 받는다")
+    if args.arrival_s <= 0:
+        p.error(f"--arrival-s 는 양수: {args.arrival_s}")
+    # 초 → 틱. 틱 길이는 시뮬과 같은 상수로 구한다 (tick_seconds).
+    args.dt = tick_seconds(args.speed, args.sim_engine)
+    if args.order_gap is None:
+        args.order_gap = args.arrival_s / args.dt
+    else:
+        args.arrival_s = args.order_gap * args.dt        # meta 에 실시간 부하도 남긴다
+    args.orders_per_h = 3600.0 / args.arrival_s
+    # 기본값이면 인자를 아예 안 붙인다. 공식 맵 기본 실행이 -183 이전과 글자 단위로 같아야
+    # 기준값(docs/README.md)을 다시 안 재도 된다.
+    extra = []
     args.map_ref = None
     if args.map_dir is None:
         cap, where = MAX_ROBOTS, "공식 맵 (계약 §1)"
@@ -252,11 +312,16 @@ def parse_args(argv=None):
         args.map_dir = os.path.abspath(args.map_dir)
         if not os.path.isdir(args.map_dir):
             p.error(f"--map-dir 폴더가 없다: {args.map_dir}")
-        args.extra_args = (f"--map-dir={args.map_dir}",)
+        extra.append(f"--map-dir={args.map_dir}")
         # meta 에는 fms_root 기준 상대 경로를 적는다. 절대 경로를 박으면 다른 머신·컨테이너에서
         # 그 dict 로 호출을 복원할 수 없다 — meta 의 존재 이유가 그거다.
         args.map_ref = _relative_to(args.map_dir, args.fms_root)
         cap, where = charge_zone_capacity(args.map_dir, args.sim_engine), os.path.basename(args.map_dir)
+    if args.capacity != 1:
+        extra.append(f"--capacity={args.capacity}")
+    if speed_given:                      # 안 주면 인자를 안 붙인다 = 시뮬 기본과 글자 단위로 같다
+        extra.append(f"--speed={args.speed:g}")
+    args.extra_args = tuple(extra)
     if args.robots > cap:
         p.error(f"--robots {args.robots} > 충전 존 용량 {cap} — {where}")
     args.exclude = [n.strip() for n in args.exclude.split(",") if n.strip()]
@@ -277,6 +342,10 @@ def main(argv=None):
               f"{', '.join(sorted(args.pinned))}")
     print(f"study {args.study} / 로봇 {args.robots} · 주문 {args.orders} · "
           f"seed {args.seeds} / 목적 {args.direction} {args.metric}")
+    # 부하를 **실시간**으로 찍는다. 틱 값만 보면 틱 길이가 바뀌었을 때 같은 숫자가
+    # 다른 부하를 뜻하는 걸 못 알아챈다 (-194 에서 틱이 4배 잘아졌다).
+    print(f"부하 {args.orders_per_h:.0f}건/h (간격 {args.arrival_s:g}s = {args.order_gap:g}틱) · "
+          f"속도 {args.speed:g} m/s (틱 {args.dt:g}s) · 적재 {args.capacity}토트")
     print(f"조건 flow={FLOW} · aisle_block={args.aisle_block} · "
           f"{'칸' if args.cell else '헤딩'} 모델 · order_gap={args.order_gap} "
           f"(SIM_RUN_CONTRACT v2)")

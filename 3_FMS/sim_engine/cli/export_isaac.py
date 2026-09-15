@@ -9,7 +9,7 @@ from map_loader import (CELL_M, MAP_DIR, OFFSET_M, load_charge_zone,
                         load_map)
 from pibt_core import DIRS, TURN_TICKS
 
-from .common import DT, OUT, SPEED
+from .common import OUT
 
 
 def _grow_rect(m, r, c):
@@ -75,7 +75,7 @@ def _grid_char(free0, zmask, free, r, c):
 
 
 def _grid_rows(ctx):
-    """1 m 격자 행 문자열 (results/fleet_replay.html 범용 플레이어용, 추가 키 — isaac_replay.py 는 무시):
+    """1 m 격자 행 문자열 (results/fleet_replay.html 범용 플레이어용, 추가 키 — 구 2_Simulation/isaac_replay.py(-219 로 삭제)는 무시했다):
     '#' 장애물 · '.' 통행 가능 · 'a' 랙 사이 통로(aisle_block 으로 막힌 피커 전용 칸) · 'z' 충전 존 칸"""
     free0 = load_map(aisle_block=False)[0]
     zmask = load_charge_zone(ctx.free)
@@ -88,7 +88,8 @@ def _build_scene(a, ctx, model, zones):
     return {
         "meta": dict(variant=a.variant, source="sim_v2_tasks.py", model=model,
                      cell_fine_m=0.1, coordinate="crop-relative meters, z-up",
-                     robot_dim_m=[1.50, 0.92, 1.60], speed_mps=SPEED, dt_s=DT, turn_ticks=TURN_TICKS,
+                     robot_dim_m=[round(a.robot_dims[0] + a.robot_dims[1], 3), a.robot_dims[2], 1.65],   # 길이·폭(--robot-dims)·높이(선반 에셋 TOP_Z, 물리 팀 2026-09-14)
+                     footprint=a.footprint, speed_mps=a.speed, dt_s=a.dt, turn_ticks=TURN_TICKS,
                      pose_ref="front-axle cell center (drive axle is 0.39 m behind the front end)"),
         "obstacles": {
             "structure":      dict(height=4.0, rects=_rects_from_mask(grid01 == 1)),
@@ -104,19 +105,19 @@ def _build_scene(a, ctx, model, zones):
     }
 
 
-def _build_trajectories(kernel, model):
+def _build_trajectories(kernel, model, dt):
     trajs, heads, acts = {}, {}, {}
     for rid, log in kernel.export_log.items():
-        trajs[str(rid)] = [[round(tt * DT, 3), *_xy(r, c)] for tt, r, c, h, act in log]
-        heads[str(rid)] = [[round(tt * DT, 3), _yaw(h)] for tt, r, c, h, act in log]
-        acts[str(rid)] = [[round(tt * DT, 3), act] for tt, r, c, h, act in log if act != "move"]
-    return dict(dt_s=DT, model=model, robots=trajs, headings=heads, actions=acts,
+        trajs[str(rid)] = [[round(tt * dt, 3), *_xy(r, c)] for tt, r, c, h, act in log]
+        heads[str(rid)] = [[round(tt * dt, 3), _yaw(h)] for tt, r, c, h, act in log]
+        acts[str(rid)] = [[round(tt * dt, 3), act] for tt, r, c, h, act in log if act != "move"]
+    return dict(dt_s=dt, model=model, robots=trajs, headings=heads, actions=acts,
                 tasks=[{k: v for k, v in tk.items()} for tk in kernel.tasks_done])
 
 
 def export_isaac(a, kernel, ctx):
     """sim_v1 포맷(scene.json + trajectories.json, 크롭 기준 m, z-up) 유지 + headings(틱별 yaw)·actions(이동 외 틱)·
-    model·zones 추가 키. 2_Simulation/isaac_replay.py 는 robots 의 [t, x, y] 3원소만 읽으므로 그대로 재생되고,
+    model·zones 추가 키. 구 2_Simulation/isaac_replay.py(-219 로 삭제, 커밋 ac10c76)는 robots 의 [t, x, y] 3원소만 읽었으므로 그대로 재생됐고,
     yaw 사용은 Isaac 파트가 headings 를 읽도록 한 줄 추가. 좌표: x = (c+0.5)·CELL_M − OFFSET_M, y = (r+0.5)·CELL_M.
     헤딩 모델의 pos 는 앞축 칸 → x, y 는 앞축 중심 (구동축까지 0.39 m — 리플레이 쪽 오프셋 선택)."""
     exp_dir = os.path.join(OUT, f"isaac_export_{a.variant}")
@@ -126,7 +127,7 @@ def export_isaac(a, kernel, ctx):
     scene = _build_scene(a, ctx, model, zones)
     with open(os.path.join(exp_dir, "scene.json"), "w", encoding="utf-8") as f:
         json.dump(scene, f, indent=1)
-    traj = _build_trajectories(kernel, model)
+    traj = _build_trajectories(kernel, model, a.dt)
     with open(os.path.join(exp_dir, "trajectories.json"), "w", encoding="utf-8") as f:
         json.dump(traj, f, indent=1)
     n_rect = sum(len(v["rects"]) for v in scene["obstacles"].values())

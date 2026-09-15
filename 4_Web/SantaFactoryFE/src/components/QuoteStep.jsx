@@ -1,4 +1,4 @@
-import { formatDateTime, formatEok, formatWon } from '../utils/format.js'
+import { formatDateTime, formatEok, formatPercent, formatWon } from '../utils/format.js'
 
 const MONO = 'DM Mono, Pretendard Variable, Pretendard, monospace'
 const GRID_LINE = '#e0ded9'
@@ -248,8 +248,8 @@ export default function QuoteStep({ estimateId, estimate, verdict, model, form }
                 </div>
                 <div>
                   <span className="k-label">THROUGHPUT</span>
-                  <strong>{rec.throughput.toFixed(1)}<span>%</span></strong>
-                  <em>목표 {estimate.target_throughput}% 대비 +{(rec.throughput - estimate.target_throughput).toFixed(1)}p</em>
+                  <strong>{formatPercent(rec.throughput)}<span>%</span></strong>
+                  <em>목표 {estimate.target_throughput}% 대비 +{formatPercent(rec.throughput - estimate.target_throughput)}p</em>
                 </div>
                 <div>
                   <span className="k-label">EST. CAPEX</span>
@@ -258,7 +258,7 @@ export default function QuoteStep({ estimateId, estimate, verdict, model, form }
                 </div>
                 <div>
                   <span className="k-label">UTILIZATION</span>
-                  <strong>{Math.round(rec.utilization)}<span>%</span></strong>
+                  <strong>{formatPercent(rec.utilization)}<span>%</span></strong>
                   <em>목표 가동률 {estimate.target_utilization}%</em>
                 </div>
               </div>
@@ -326,9 +326,9 @@ export default function QuoteStep({ estimateId, estimate, verdict, model, form }
                         <tr key={r.run_id} className={r.amr_count === recommended ? 'hl' : ''}>
                           <td>{r.amr_count}대{r.amr_count === recommended && <span className="rec-chip">권장</span>}</td>
                           <td>완료</td>
-                          <td>{r.throughput.toFixed(1)}%</td>
+                          <td>{formatPercent(r.throughput)}%</td>
                           <td>{r.throughput >= estimate.target_throughput ? '충족' : <span>미달</span>}</td>
-                          <td>{Math.round(r.utilization)}%</td>
+                          <td>{formatPercent(r.utilization)}%</td>
                           <td>{r.outbound != null ? r.outbound.toLocaleString() : '—'}</td>
                           <td>{formatWon(r.total_cost)}</td>
                           <td>{inBudget ? '이내' : <span>초과</span>}</td>
@@ -348,12 +348,12 @@ export default function QuoteStep({ estimateId, estimate, verdict, model, form }
                 <summary>입력 조건과 고정값</summary>
                 <ul>
                   <li>목표 출고 처리율 {estimate.target_throughput}% · 목표 가동률 {estimate.target_utilization}% · 예산 {formatWon(estimate.budget_limit)}</li>
-                  <li>작업자 {form.workerCount}명 · 입고 {form.inboundStart}–{form.inboundEnd} ({form.inboundAvg}건/일) · 출고 {form.outboundStart}–{form.outboundEnd} ({form.outboundAvg}건/일)</li>
+                  <li>입고 {form.inboundStart}–{form.inboundEnd} ({form.inboundAvg}건/일) · 출고 {form.outboundStart}–{form.outboundEnd} ({form.outboundAvg}건/일)</li>
                   {model && (
                     <li>AMR {model.model} · 속도 {model.speed} m/s · 적재 {model.capacity} · 대당 단가 {formatWon(model.price)} + 설치비 {formatWon(model.cost)}</li>
                   )}
                   <li>구축비용 = (단가 + 설치비) × 대수 + 충전기(4대당 1기). 유지보수·자재 관리비 제외</li>
-                  <li>시뮬레이션 고정 시간 6시간(입고 2h + 출고 4h) · 시드 101 · 재고 항상 충분 가정</li>
+                  <li>시뮬레이션 고정 시간 6시간(출고 전용) · 시드 101 · 재고 항상 충분 가정 · 낱개 피킹 주문만 산정(한 줄 최대 10개)</li>
                   <li>경로 계획 PIBT + 가중 다익스트라 · 1칸 = 1 m · 고정 창고 레이아웃</li>
                 </ul>
               </details>

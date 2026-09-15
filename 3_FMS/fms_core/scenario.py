@@ -18,15 +18,15 @@ MAX_SCENARIO_BYTES = 512 * 1024
 # 적재 기본값은 견적 워커(infra/worker/estimate_worker.py::_orders_flags)와 같은 값이어야 한다 — 검증 KPI 는 견적 KPI 와
 # 비교하려고 내는 값이다. 워커와 대조하는 테스트: fms_core/tests/test_des_parity.py::test_worker_defaults.
 DEFAULT_CAPACITY = 1          # 왕복당 토트 수 (요청에 amr.capacity 가 없으면 sim_v2 기본 1)
-DEFAULT_TOTE_UNITS = 8        # 토트당 상품 수 (백엔드가 amr.tote_units 를 null 로 보낼 때 — 신발 상자 기준)
-SVC_PER_TOTE = 5              # 픽업·하역 각각 토트당 추가 틱
+DEFAULT_TOTE_UNITS = 10       # 토트당 상품 수 (백엔드가 amr.tote_units 를 null 로 보낼 때). 2026-09-15 결정: 개인 주문 상한 10개·토트 10개들이 → 주문 1건 = 토트 1개 (계약 v3.9; v2.6~v3.8 은 8)
+SVC_PER_TOTE_S = 5.0          # 픽업·하역 각각 토트당 서비스 [초] (워커 SVC_PER_TOTE_S, -177) — 틱은 kernel_planner 가 dt 로 환산
 DEFAULT_ORDER_GAP = 50.0      # 주문 도착 간격 [틱] (sim_v2 --order-gap 기본) — 명시 주문 모드에선 입고 간격 기본값
 MAX_TOTES_PER_TRIP = 6        # 선반형 AMR 3단 × 2 (sim_engine kernel.core.MAX_TOTES_PER_TRIP, -177)
 DEFAULT_MANUFACTURER, DEFAULT_MODEL = "idealworks", "iw_hub"
 
 
 def canonical_json(obj: Any) -> bytes:
-    """sha 정규형 — sim_runner.procs · host_orch.orchestrator 와 같은 규칙."""
+    """sha 정규형 — host_orch.orchestrator.canonical_json(기준)과 같은 규칙."""
     return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
 
@@ -164,7 +164,7 @@ def stream_options(scenario: dict) -> dict:
     기본값은 견적 워커와 같아야 한다(위 상수) — 다르면 같은 요청이 견적과 검증에서 다른 KPI 를 낸다.
     """
     opts: dict = {"seed": 42, "capacity": DEFAULT_CAPACITY, "tote_units": DEFAULT_TOTE_UNITS,
-                  "svc_per_tote": SVC_PER_TOTE, "order_gap": DEFAULT_ORDER_GAP, "inbound_gap": None,
+                  "svc_per_tote_s": SVC_PER_TOTE_S, "order_gap": DEFAULT_ORDER_GAP, "inbound_gap": None,
                   "shifts": ("out",)}
     seed = scenario.get("seed")
     if seed is not None:

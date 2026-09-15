@@ -90,6 +90,21 @@ public class Estimate {
     @Column(name = "verify_video_url", length = 500)
     private String verifyVideoUrl;
 
+    /**
+     * 이 견적의 대수 스윕 전체가 공유하는 출고 주문 목록(JSON 직렬화, {@code SimulationRequest.Outbound[]}).
+     * 대수마다 다시 생성하지 않고 여기 저장된 걸 재사용한다 — 그래야 "같은 주문량을 몇 대가 처리하는가"를
+     * 대수별로 비교하는 게 의미 있다.
+     */
+    @Column(name = "outbound_orders_json")
+    private String outboundOrdersJson;
+
+    /**
+     * 리플레이 맵 — 격자·장애물·존·스테이션 (S15P21A106-205). run 마다 함께 오지만 대수와 무관하게
+     * 같은 값이라 견적당 한 벌만 둔다. run 쪽에 두면 143 KB 짜리가 대수만큼(최대 28번) 중복된다.
+     */
+    @Column(name = "replay_scene_json")
+    private String replaySceneJson;
+
     private Estimate(Warehouse warehouse, String amrModel,
                      double targetThroughput, double targetUtilization, long budgetLimit) {
         this.warehouse = warehouse;
@@ -146,6 +161,21 @@ public class Estimate {
     /** 물리 검증 결과로 받은 리플레이 영상 URL을 반영한다. */
     public void applyVerifyVideo(String url) {
         this.verifyVideoUrl = url;
+    }
+
+    /**
+     * 리플레이 맵을 붙인다. 먼저 도착한 run 것만 쓰고 이후는 버린다 — 어차피 같은 값이라
+     * 매번 덮어쓰면 같은 143 KB 를 run 수만큼 다시 쓰는 UPDATE 가 된다.
+     */
+    public void applyReplayScene(String sceneJson) {
+        if (sceneJson != null && this.replaySceneJson == null) {
+            this.replaySceneJson = sceneJson;
+        }
+    }
+
+    /** 대수 스윕 발행 전, 백엔드가 생성한 출고 주문 목록(JSON)을 붙인다. */
+    public void applyOutboundOrders(String outboundOrdersJson) {
+        this.outboundOrdersJson = outboundOrdersJson;
     }
 
     /** 견적 소요시간(초). 아직 완료 전이면 null — 90초 목표 측정에 쓴다. */

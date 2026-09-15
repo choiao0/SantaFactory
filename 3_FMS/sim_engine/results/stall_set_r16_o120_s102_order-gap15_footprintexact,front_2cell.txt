@@ -1,0 +1,62 @@
+C:\Users\SSAFY\AppData\Local\Programs\Python\Python314\python.exe C:\Users\SSAFY\Desktop\S15P21A106\3_FMS\sim_engine\sim_v2_tasks.py exp 16 120 102 1 --order-gap=15 --footprint=exact,front_2cell
+
+[WARN] 헤딩 모델: 목표 칸 간격 <3인 쌍 1개 (차체 겹침 가능) 예: [((53, 105), (55, 105))]
+[STALL] t=5974, done=335/337, waiting=0
+  robot0 pos=(54, 105) h=3 state=IDLE goal=(54, 105) busy=0 stag=0
+  robot1 pos=(54, 103) h=1 state=IDLE goal=(54, 103) busy=0 stag=0
+  robot2 pos=(48, 107) h=0 state=IDLE goal=(48, 107) busy=0 stag=0
+  robot3 pos=(46, 103) h=0 state=TO_HOME goal=(59, 103) busy=0 stag=1440
+  robot4 pos=(54, 107) h=3 state=IDLE goal=(54, 107) busy=0 stag=0
+  robot5 pos=(52, 107) h=1 state=IDLE goal=(52, 107) busy=0 stag=0
+  robot6 pos=(52, 105) h=1 state=IDLE goal=(52, 105) busy=0 stag=0
+  robot7 pos=(40, 27) h=3 state=TO_PICK goal=(69, 41) busy=0 stag=108
+  robot8 pos=(40, 26) h=1 state=TO_DROP goal=(40, 76) busy=0 stag=2005
+  robot9 pos=(57, 103) h=1 state=IDLE goal=(57, 103) busy=0 stag=0
+  robot10 pos=(48, 103) h=3 state=IDLE goal=(48, 103) busy=0 stag=0
+  robot11 pos=(50, 103) h=3 state=IDLE goal=(50, 103) busy=0 stag=0
+  robot12 pos=(66, 103) h=1 state=IDLE goal=(66, 103) busy=0 stag=0
+  robot13 pos=(50, 105) h=3 state=IDLE goal=(50, 105) busy=0 stag=0
+  robot14 pos=(48, 105) h=0 state=IDLE goal=(48, 105) busy=0 stag=0
+  robot15 pos=(50, 107) h=0 state=IDLE goal=(50, 107) busy=0 stag=0
+  robot3 (46, 103, 0) goal=(59, 103) dist=18.0 bias=20
+     fwd  -> (47, 103, 0) dist=17.0 blocked_by={}
+     turn -> (46, 103, 3) dist=17.0 blocked_by={}
+     wait -> (46, 103, 0) dist=18.0 blocked_by={}
+     turn -> (46, 103, 1) dist=19.0 blocked_by={}
+     rev  -> (45, 103, 0) dist=19.0 blocked_by={}
+  robot7 (40, 27, 3) goal=(69, 41) dist=52.0 bias=20
+     turn -> (40, 27, 2) dist=51.0 blocked_by={(40, 26): 8}
+     wait -> (40, 27, 3) dist=52.0 blocked_by={}
+     fwd  -> (40, 26, 3) dist=53.0 blocked_by={(40, 26): 8}
+     rev  -> (40, 28, 3) dist=51.0 blocked_by={}
+  robot8 (40, 26, 1) goal=(40, 76) dist=50.0 bias=20
+     fwd  -> (40, 27, 1) dist=49.0 blocked_by={(40, 27): 7}
+     wait -> (40, 26, 1) dist=50.0 blocked_by={}
+     turn -> (40, 26, 2) dist=51.0 blocked_by={(40, 27): 7}
+     rev  -> (40, 25, 1) dist=51.0 blocked_by={}
+  [최근 12틱 이력, 미도달 로봇 [3, 7, 8]]
+   t=5962 r3:(46, 103, 0) fwd  r7:(40, 27, 3) fwd  r8:(40, 26, 1) rev
+   t=5963 r3:(47, 103, 0) rev  r7:(40, 26, 3) rev  r8:(40, 25, 1) fwd
+   t=5964 r3:(46, 103, 0) fwd  r7:(40, 27, 3) fwd  r8:(40, 26, 1) rev
+   t=5965 r3:(47, 103, 0) rev  r7:(40, 26, 3) rev  r8:(40, 25, 1) fwd
+   t=5966 r3:(46, 103, 0) fwd  r7:(40, 27, 3) fwd  r8:(40, 26, 1) rev
+   t=5967 r3:(47, 103, 0) rev  r7:(40, 26, 3) rev  r8:(40, 25, 1) fwd
+   t=5968 r3:(46, 103, 0) fwd  r7:(40, 27, 3) fwd  r8:(40, 26, 1) rev
+   t=5969 r3:(47, 103, 0) rev  r7:(40, 26, 3) rev  r8:(40, 25, 1) fwd
+   t=5970 r3:(46, 103, 0) fwd  r7:(40, 27, 3) fwd  r8:(40, 26, 1) rev
+   t=5971 r3:(47, 103, 0) rev  r7:(40, 26, 3) rev  r8:(40, 25, 1) fwd
+   t=5972 r3:(46, 103, 0) fwd  r7:(40, 27, 3) fwd  r8:(40, 26, 1) rev
+   t=5973 r3:(47, 103, 0) rev  r7:(40, 26, 3) rev  r8:(40, 25, 1) fwd
+  [YIELD] {'t': 5753, 'yielder': 7, 'peer': 8, 'action': 'sidestep', 'target': (39, 31)}
+  [YIELD] {'t': 5773, 'yielder': 7, 'peer': 8, 'action': 'sidestep', 'target': (39, 31)}
+  [YIELD] {'t': 5793, 'yielder': 7, 'peer': 8, 'action': 'sidestep', 'target': (39, 31)}
+  [YIELD] {'t': 5813, 'yielder': 7, 'peer': 8, 'action': 'sidestep', 'target': (39, 31)}
+  [YIELD] {'t': 5833, 'yielder': 7, 'peer': 8, 'action': 'sidestep', 'target': (39, 31)}
+  [YIELD] {'t': 5853, 'yielder': 7, 'peer': 8, 'action': 'sidestep', 'target': (39, 31)}
+  [YIELD] {'t': 5873, 'yielder': 7, 'peer': 8, 'action': 'sidestep', 'target': (39, 31)}
+  [YIELD] {'t': 5893, 'yielder': 7, 'peer': 8, 'action': 'sidestep', 'target': (39, 31)}
+  [YIELD] {'t': 5913, 'yielder': 7, 'peer': 8, 'action': 'sidestep', 'target': (39, 31)}
+  [YIELD] {'t': 5933, 'yielder': 7, 'peer': 8, 'action': 'sidestep', 'target': (39, 31)}
+  [YIELD] {'t': 5953, 'yielder': 7, 'peer': 8, 'action': 'sidestep', 'target': (39, 31)}
+  [YIELD] {'t': 5973, 'yielder': 7, 'peer': 8, 'action': 'sidestep', 'target': (39, 31)}
+시뮬 정체 감지

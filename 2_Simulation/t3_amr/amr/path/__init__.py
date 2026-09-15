@@ -54,30 +54,30 @@ def get(name):
 
 
 def default_map():
-    """기본 맵. `$MAP` 이 있으면 그것, 없으면 `2_Simulation/t3_warehouse_map/map`.
+    """기본 맵 = `t3_amr/warehouse/map`. **이것이 단일 소스다.**
 
-    맵은 `t3_warehouse_map/` 이 **단일 소스**다 — `scene_builder` 도, ROS SIL
-    스택(`sil_ros/gridmap.py`)도, Nav2 위치추정(`t3_warehouse/ros2/loc.launch.py`)
-    도 같은 폴더를 본다. 그래서 여기서 사본을 들고 있지 않는다.
+    1061×1151 · 0.1 m/셀. pitch 1.2 로 풀링하면 격자 88×95 · 통행칸 5,889 ·
+    스테이션 성분 1,298 이 나와야 맞는다 (이관 검증 기준값).
 
-    ★ 계획 좌표를 3_FMS 와 맞추려면 `map_fms` 를 써야 한다. 두 맵은 `aisle_buf`
-      남쪽 줄이 y 46.0 vs 46.2, 작업 라인이 y 33.8 vs 40.4 로 다르고, 그 0.2 m
-      때문에 랙→버퍼 매핑(`3_FMS/map/build_rack_map.py`)이 성립하지 않는다.
-      `paths.sh` 가 `$MAP_FMS` 를 잡아 두므로 이렇게 쓴다.
+        occupancy_grid.npy  sha256 563e6aeb…
+        stations.json       sha256 f8edcf71…   ← `handoff` 가 들어 있다
 
-          MAP=$MAP_FMS python amr/main.py plan --planner pibt_h
+    ★ `t3_warehouse_map/map` 을 쓰지 않는다. 팀 기본 맵(v6.0)은 격자가
+      **다르고**(sha 3f9548db…) `stations.json` 에 `handoff` 가 없다.
+      `handoff` 는 `GOAL_CATS` 다섯 중 하나라, 그 맵으로 계획하면 목표
+      카테고리가 조용히 하나 빠진다. 씬을 v6.0 격자로 다시 지은 뒤에
+      단일 소스를 그쪽으로 옮긴다.
 
-      기본값을 map_fms 로 두지 않는 이유는, 그 맵으로 계획하고 **현행 씬**에서
-      주행하면 로봇이 작업대가 없는 빈 바닥으로 가기 때문이다. 씬을 그 격자로
-      다시 지은 뒤에 기본값을 옮긴다.
+    ★ 판정은 `occupancy_grid.npy` 로 한다. `obstacle_mask.npy` 로 보면
+      격자가 없는 폴더(map_fms 계열)까지 "맵 있음"으로 통과한다.
     """
     env = os.environ.get("MAP", "")
     cands = [env] if env else []
-    cands += [os.path.join(ROOT, "..", "t3_warehouse_map", "map")]
+    cands += [os.path.join(ROOT, "warehouse", "map")]
     for d in cands:
         if d and os.path.isfile(os.path.join(d, "occupancy_grid.npy")):
             return os.path.abspath(d)
     raise SystemExit(
-        "★ 맵을 찾을 수 없습니다.\n"
-        "  $MAP 을 지정하거나 2_Simulation/t3_warehouse_map/map/ 을 확인하세요.\n"
-        "  (source 2_Simulation/t3_amr/paths.sh 가 $MAP·$MAP_FMS 를 잡아줍니다)")
+        "★ 맵을 찾을 수 없습니다 (occupancy_grid.npy 기준).\n"
+        "  $MAP 을 지정하거나 2_Simulation/t3_amr/warehouse/map/ 을 확인하세요.\n"
+        "  (source 2_Simulation/t3_amr/paths.sh 가 $MAP 을 잡아줍니다)")
