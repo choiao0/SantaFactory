@@ -84,6 +84,25 @@ for _d in (os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__
         import config as _CFG                                  # noqa: E402
         break
 
+# ★ 못 찾으면 **조용히 다른 격자가 만들어진다** — 아래 `build_free` 가
+#   `apply_aisle_block` 을 건너뛰어 랙 사이 통로가 열린다. 계획이 달라지는데
+#   아무 표시가 없다.
+#
+#   실제로 당했다 (2026-09-15). FMS 가 우리 도구를 재현하려고 `path/` ·
+#   `warehouse/map` · `tools/` 만 꺼내 가고 이 파일을 빠뜨렸다. 통로가 열린
+#   격자(9425칸 vs 8919칸)에서 계획이 돌아 시드별 틱 수가 전부 달랐고, 그것을
+#   플랫폼 차이(Windows · Python 3.14 · numpy 2.5)로 의심하며 하루를 썼다.
+#   파일을 넣자 우리 표가 **틱 수까지** 재현됐다.
+#
+#   그래서 조용히 넘어가지 않는다. stderr 로 낸다 — stdout 을 비교하는
+#   도구들(지문·측정표)의 출력은 건드리지 않기 위해서다.
+if _CFG is None:
+    print("★ pibt_scene: amr/make_path/config.py 를 못 찾았습니다.\n"
+          "  랙 사이 통로 차단(AISLE_BLOCK)이 꺼진 채로 격자가 만들어집니다 —\n"
+          "  통로가 열려 **계획이 조용히 달라집니다** (실측 8919 -> 9425칸).\n"
+          "  저장소 일부만 복사해 쓰는 경우 이 파일을 반드시 같이 가져오세요.",
+          file=sys.stderr)
+
 from isaac_drive import RobotGeom                      # noqa: E402
 from pibt_core_v2 import valid_state, dist_map_h       # noqa: E402
 
