@@ -117,7 +117,7 @@ class KernelPlanner:
         mask = turn_mask(None, robot_dims, FOOTPRINT_MARGIN_M) if footprint != "legacy" else None
         cfg = KernelConfig(heading=True, zone=zone, theta=bool(theta_file or lanes), service_steps=round(SERVICE_TIME_S / self.dt),
                            capacity=so["capacity"], svc_per_tote=max(1, int(so["svc_per_tote_s"] / self.dt + 0.5)),   # 워커 _orders_flags 와 같은 반올림
-                           yield_rule=yield_rule,
+                           yield_rule=yield_rule, standoff=footprint != "legacy",   # 계약 v3.9: 견적(sim_v2 기본)과 같이 대치 상태기계 V2
                            turn_ticks=TURN_TICKS, stall_warn_only=True, footprint=footprint, robot_dims=robot_dims)
         self.kernel = FmsKernel(free, st_cell, edge_cost, wait_cost, list(spec.homes), spec.n_robots, cfg,
                                 zone_mask=zone_mask, on_task_completed=self.stream.on_completed, lane_dir=lane_dir,

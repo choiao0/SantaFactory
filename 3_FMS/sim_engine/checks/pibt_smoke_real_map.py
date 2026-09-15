@@ -133,7 +133,7 @@ def scenario_heading_stress(n_agents=30, seed=42):
     starts, taken = _sample_heading_starts(order, cells, ref_h, n_agents)
     goals = _sample_heading_goals(order, cells, taken, starts, n_agents)
     t0 = time.perf_counter()
-    history, cells_hist = run_h(FREE, starts, goals, max_steps=1500)
+    history, cells_hist = run_h(FREE, starts, goals, max_steps=6000)
     elapsed = time.perf_counter() - t0
     check_collisions_h(history, cells_hist, FREE)
     for a, g in goals.items():
@@ -187,7 +187,7 @@ def scenario_zone_heading(n_agents=20, seed=42):
     order = rng.permutation(len(cells))
     goals = _sample_heading_goals(order, cells, taken, starts, n_agents)
     t0 = time.perf_counter()
-    hist1, cells1 = run_h(FREE, starts, goals, max_steps=1500)
+    hist1, cells1 = run_h(FREE, starts, goals, max_steps=6000)
     e1 = time.perf_counter() - t0
     check_collisions_h(hist1, cells1, FREE)
     for a, g in goals.items():
@@ -197,7 +197,7 @@ def scenario_zone_heading(n_agents=20, seed=42):
     states2 = dict(hist1[-1])
     goals2 = _zone_return_goals(states2, zcells)
     t0 = time.perf_counter()
-    hist2, cells2 = run_h(FREE, states2, goals2, max_steps=1500)
+    hist2, cells2 = run_h(FREE, states2, goals2, max_steps=6000)
     e2 = time.perf_counter() - t0
     check_collisions_h(hist2, cells2, FREE)
     for a, g in goals2.items():

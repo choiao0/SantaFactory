@@ -353,7 +353,7 @@ export default function QuoteStep({ estimateId, estimate, verdict, model, form }
                     <li>AMR {model.model} · 속도 {model.speed} m/s · 적재 {model.capacity} · 대당 단가 {formatWon(model.price)} + 설치비 {formatWon(model.cost)}</li>
                   )}
                   <li>구축비용 = (단가 + 설치비) × 대수 + 충전기(4대당 1기). 유지보수·자재 관리비 제외</li>
-                  <li>시뮬레이션 고정 시간 6시간(출고 전용) · 시드 101 · 재고 항상 충분 가정</li>
+                  <li>시뮬레이션 고정 시간 6시간(출고 전용) · 시드 101 · 재고 항상 충분 가정 · 낱개 피킹 주문만 산정(한 줄 최대 10개)</li>
                   <li>경로 계획 PIBT + 가중 다익스트라 · 1칸 = 1 m · 고정 창고 레이아웃</li>
                 </ul>
               </details>

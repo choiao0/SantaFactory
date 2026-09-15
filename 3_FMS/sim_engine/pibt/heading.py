@@ -302,7 +302,9 @@ def _default_costs_h(free, edge_cost, wait_cost, turn_cost, turn_ticks):
     if wait_cost is None:
         wait_cost = np.ones((H, W), dtype=np.float64)
     if turn_cost is None:
-        turn_cost = float(turn_ticks)
+        # 거리장 가중은 '전진 1칸 대비 배율'(geometry.TURN_COST = TURN_TICKS / MOVE_TICKS). 예전엔 float(turn_ticks)=5.0 을 써
+        # 커널(1.25)과 거리장이 갈려 같은 시드에서 다른 계획이 나왔다 (물리 팀 제안 2026-09-15, 틱 모델 정합).
+        turn_cost = float(TURN_COST)
     return edge_cost, wait_cost, turn_cost
 
 
@@ -323,13 +325,19 @@ def _dists_now_h(agents, states, goals, dists, busy, replan, stag, extra, t, fre
     return d_now
 
 
-def _after_step_h(agents, states, new, goals, dists, busy, swing, stag, age, turn_ticks):
-    """회전 시작/진행 부기, 정체 카운터, 우선순위 age 갱신."""
+def _after_step_h(agents, states, new, goals, dists, busy, swing, stag, age, turn_ticks, move_ticks=MOVE_TICKS):
+    """회전·이동 시작/진행 부기, 정체 카운터, 우선순위 age 갱신.
+    커널(`kernel/core.py` `_advance`)과 같은 틱 모델: 회전은 turn_ticks 틱(스윙 칸 점유), 전진·후진은 move_ticks 틱
+    (칸은 첫 틱에 옮기고 나머지는 busy 로 제자리 — 몸 2칸이 새 칸 + 떠난 칸을 그대로 쥔다). 예전 run_h 는 전진 1틱이라
+    커널과 거리장·점유 시간이 갈렸다 (틱 모델 정합, 2026-09-15)."""
     for a in agents:
         s0, s1 = states[a], new[a]
         if s1[:2] == s0[:2] and s1[2] != s0[2]:          # 회전 시작
             busy[a] = turn_ticks - 1
             swing[a] = swing_cells(s0[0], s0[1], s0[2], s1[2])
+        elif s1[:2] != s0[:2]:                            # 전진·후진 시작
+            busy[a] = move_ticks - 1
+            swing[a] = set()
         elif busy[a] > 0:
             busy[a] -= 1
             if busy[a] == 0:
@@ -355,11 +363,12 @@ def _raise_stuck_h(agents, states, goals, stag, busy, history, d_now, extra, bia
 
 
 def run_h(free, starts, goals, edge_cost=None, wait_cost=None, max_steps=200,
-          turn_cost=None, turn_ticks=TURN_TICKS):
-    """starts: {a: (r,c,h)}, goals: {a: (r,c)}. 회전은 turn_ticks 틱 소모
-    (첫 틱에 방향 전환, 나머지는 스윙 칸을 점유한 채 대기).
+          turn_cost=None, turn_ticks=TURN_TICKS, move_ticks=MOVE_TICKS):
+    """starts: {a: (r,c,h)}, goals: {a: (r,c)}. 커널과 같은 틱 모델(-194·틱 모델 정합 2026-09-15):
+    회전은 turn_ticks 틱(첫 틱에 방향 전환, 나머지는 스윙 칸을 점유한 채 대기), 전진·후진은 move_ticks 틱
+    (첫 틱에 칸을 옮기고 나머지는 제자리). 거리장 turn_cost 기본 = TURN_COST(전진 1칸 대비 배율).
     반환 (history, cells_hist): history[t] = {a: 상태}, cells_hist[t] = {a: t→t+1
-    동안 점유·예약한 칸}. 전원 도달 못 하면 SystemExit."""
+    동안 점유·예약한 칸}. 전원 도달 못 하면 SystemExit. max_steps 는 틱 — 전진 1칸이 move_ticks 틱임에 맞춰 잡을 것."""
     edge_cost, wait_cost, turn_cost = _default_costs_h(free, edge_cost, wait_cost, turn_cost, turn_ticks)
     agents = list(starts)
     states = dict(starts)
@@ -389,7 +398,7 @@ def run_h(free, starts, goals, edge_cost=None, wait_cost=None, max_steps=200,
         bias = {a: wait_bias(stag.get(a)) for a in agents}
         new, cells, _ = step_h(states, d_now, edge_cost, wait_cost, free, prio,
                                turn_cost, extra, bias)
-        _after_step_h(agents, states, new, goals, dists, busy, swing, stag, age, turn_ticks)
+        _after_step_h(agents, states, new, goals, dists, busy, swing, stag, age, turn_ticks, move_ticks)
         states = new
         history.append(dict(states))
         cells_hist.append(cells)
