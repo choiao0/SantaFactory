@@ -7,3 +7,5 @@ logs/
 v2/
 deploy/data/
 *.mp4
+# iw.hub 에셋(robots/)은 Dockerfile 이 COPY 앞 레이어에서 받는다 — 호스트 사본을 덮어 넣지 않는다
+robots/
