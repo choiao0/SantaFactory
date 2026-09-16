@@ -561,6 +561,11 @@ def _rec_setup(drivers, arts):
                #   2026-09-16 agent6 회전 교착에서 실제로 여기서 막혔다 —
                #   궤적으로 옆미끄러짐까지는 확인했는데 명령값이 없었다.
                "t": [], "pose": [], "alt": [], "cmd": [], "off": False,
+               # ★ 관절 속도 (-224). 명령과 pose 사이의 **가운데 층**이다.
+               #   명령 != 관절 이면 드라이브가 못 따라온 것이고,
+               #   관절 != pose 이면 바퀴가 미끄러진 것이다. 둘은 다른 문제다.
+               #   이름은 첫 샘플에서 한 번만 잡는다 (`initialize()` 뒤여야 한다).
+               "joint": [], "dof": None, "joint_off": False,
                "flush": flush, "flush_next": flush if flush > 0 else float("inf"),
                "nflush": 0}
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
@@ -599,6 +604,16 @@ def _rec_setup(drivers, arts):
         return None
 
 
+def _jkw(rec, _np):
+    """관절 배열을 저장 인자로 — 길이가 `t` 와 맞을 때만."""
+    j = rec.get("joint") or []
+    if not j or len(j) != len(rec["t"]):
+        return {}
+    return {"joint": _np.asarray(j, dtype=_np.float32),
+            # 유니코드 배열로 둔다 — object dtype 은 저장·적재에 pickle 이 든다.
+            "dof_names": _np.array([str(s) for s in (rec.get("dof") or [])])}
+
+
 # [patch_pibt_record_flush] 원자적 쓰기 — .tmp 에 쓰고 replace. 쓰는 중에 죽어도 이전 파일이 온전하다.
 def _rec_write(rec, tag):
     import numpy as _np
@@ -610,10 +625,42 @@ def _rec_write(rec, tag):
         pose_alt=_np.asarray(rec["alt"], dtype=_np.float32),
         # (N, R, 2) = 그 프레임에 나간 명령 (v m/s, w rad/s). -224.
         cmd=_np.asarray(rec["cmd"], dtype=_np.float32),
+        # (N, R, D) = 관절 속도. 중간에 꺼졌으면 길이가 안 맞으므로 **빼고**
+        #   쓴다 — 길이가 어긋난 배열을 남기면 읽는 쪽이 조용히 틀린다.
+        **_jkw(rec, _np),
         stage=_np.array(str(rec.get("stage", ""))))
     os.replace(tmp + ".npz", rec["path"])          # savez 가 .npz 를 붙인다
     carb.log_warn(f"[pibt] 자세 기록 {tag}: {len(rec['t'])} 프레임 · "
                   f"{rec['t'][-1]:.1f} s → {rec['path']}")
+
+
+def _rec_joints(rec):
+    """관절 속도 한 줄 — 로봇마다 전 DOF. 실패하면 **관절만** 끈다.
+
+    자세 기록 전체를 끄지 않는다. 관절은 덤이고 pose 가 본체다. 그리고
+    articulation 종류에 따라 없을 수 있는 API 라 조용히 빠지는 편이 낫다.
+    """
+    if rec["joint_off"]:
+        return None
+    try:
+        rows = []
+        for a in rec["keys"]:
+            v = rec["arts"][a].get_joint_velocities()
+            rows.append([float(u) for u in v])
+        n = len(rows[0]) if rows else 0
+        if n == 0 or any(len(r) != n for r in rows):
+            raise ValueError(f"DOF 수가 로봇마다 다르다: {[len(r) for r in rows]}")
+        if rec["dof"] is None:
+            names = list(getattr(rec["arts"][rec["keys"][0]], "dof_names", None)
+                         or [f"dof{i}" for i in range(n)])
+            rec["dof"] = names
+            carb.log_warn(f"[pibt] 관절 기록 ON: DOF {n}개 {names}")
+        return rows
+    except Exception as e:
+        rec["joint_off"] = True
+        rec["joint"] = []
+        carb.log_warn(f"[pibt] 관절 기록 끔 (자세 기록은 계속): {e!r}")
+        return None
 
 
 def _rec_sample(rec, t_sim, fleet=None):
@@ -632,6 +679,7 @@ def _rec_sample(rec, t_sim, fleet=None):
         last = getattr(fleet, "_last_cmd", None) or {}
         row_c = [(float(last.get(a, (0.0, 0.0))[0]),
                   float(last.get(a, (0.0, 0.0))[1])) for a in rec["keys"]]
+        row_j = _rec_joints(rec)
         for a in rec["keys"]:
             # 1순위 — 링크 프레임. 렌더러가 쓰는 prim op 에 가장 가깝다.
             pos, quat = rec["arts"][a].get_world_pose()
@@ -647,6 +695,8 @@ def _rec_sample(rec, t_sim, fleet=None):
         rec["pose"].append(row_p)
         rec["alt"].append(row_a)
         rec["cmd"].append(row_c)
+        if row_j is not None:
+            rec["joint"].append(row_j)
     except Exception as e:
         rec["off"] = True
         carb.log_error(f"[pibt] ★ 자세 기록 중단 (주행은 계속): {e!r}")

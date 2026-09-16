@@ -71,6 +71,14 @@ def main():
         c = np.asarray(z["cmd"], dtype=np.float64)
         if c.ndim == 3 and c.shape[0] == len(t) and AGENT < c.shape[1]:
             cmd = c[:, AGENT, :]
+    # 관절 속도 — 명령과 pose 사이의 가운데 층.
+    jnt, dof = None, []
+    if "joint" in getattr(z, "files", []):
+        jj = np.asarray(z["joint"], dtype=np.float64)
+        if jj.ndim == 3 and jj.shape[0] == len(t) and AGENT < jj.shape[1]:
+            jnt = jj[:, AGENT, :]
+            dof = [str(s) for s in np.asarray(z["dof_names"]).tolist()] \
+                if "dof_names" in z.files else []
 
     lo = float(os.environ.get("T0", t[0]))
     hi = float(os.environ.get("T1", t[-1]))
@@ -149,6 +157,30 @@ def main():
         print(f"   {t[k]:>8.2f}{x[k]:>9.3f}{y[k]:>9.3f}"
               f"{math.degrees(yaw[k]):>9.1f}{mid}"
               f"{math.hypot(cx - x[k], cy - y[k]) * 1000:>10.0f}mm{mark}")
+
+    # ── 가운데 층 — 바퀴가 명령대로 돌았나, 차체가 바퀴대로 갔나 ─────────
+    if jnt is not None and cmd is not None:
+        R = float(os.environ.get("WHEEL_RADIUS", "0.08"))
+        L = float(os.environ.get("WHEEL_BASE", "0.5796"))
+        print(f"\n── 세 층 대조 (R={R} · L={L}) ──")
+        print(f"   DOF {len(dof)}개: {dof or '이름 없음'}")
+        print(f"   {'t':>8}{'명령v':>8}{'명령w':>8}"
+              f"{'좌바퀴':>9}{'우바퀴':>9}{'바퀴v':>8}{'바퀴w':>8}"
+              f"{'실측v':>8}{'실측w':>8}")
+        for k in range(k0, k1 + 1, span):
+            if k + 1 >= len(t):
+                break
+            d = t[k + 1] - t[k]
+            v = math.hypot(x[k + 1] - x[k], y[k + 1] - y[k]) / d if d > 0 else 0.0
+            wv = wrap(yaw[k + 1] - yaw[k]) / d if d > 0 else 0.0
+            lw, rw = jnt[k, 0], jnt[k, 1]
+            print(f"   {t[k]:>8.2f}{cmd[k, 0]:>8.3f}{cmd[k, 1]:>8.3f}"
+                  f"{lw:>9.3f}{rw:>9.3f}"
+                  f"{R * (lw + rw) / 2:>8.3f}{R * (rw - lw) / L:>8.3f}"
+                  f"{v:>8.3f}{wv:>8.3f}")
+        print(f"\n   ★ 명령 != 바퀴  -> 드라이브가 명령을 못 따라온 것 (토크·마찰)")
+        print(f"     바퀴 != 실측  -> 바퀴는 도는데 차체가 다르게 간 것 (미끄러짐)")
+        print(f"     ※ 좌·우 인덱스는 DOF 이름으로 확인할 것. 뒤바뀌면 w 부호가 뒤집힌다.")
 
     print(f"\n   읽는 법")
     print(f"    · (a) 가 크면 **직진이 지나쳐 끝난 것**이다. 회전은 피해자다.")
