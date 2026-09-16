@@ -188,9 +188,14 @@ def _main():
     pitch = float(os.environ.get("PITCH", os.environ.get("PIBT_PITCH", "1.0")))
     n = int(os.environ.get("N", "24"))
     horizon = int(os.environ.get("HORIZON", "77760"))
+    # ★ 이름을 `FMS_ASSIGN` 으로 바꿨다 (2026-09-17). 옛 이름 `ASSIGN` 은
+    #   `pibt_scene.py --orders` 의 기본값이기도 해서, 여기서 한 번 export 하고
+    #   같은 셸에서 `run_record.sh` 를 돌리면 **계획만** 배정표로 서고 주행은
+    #   난수 스트림으로 돌았다 (주행은 `live_pibt` 가 다시 계획한다).
+    #   그 기본값은 없앴고, 이 이름도 겹치지 않게 옮긴다.
     csv_path = os.environ.get(
-        "ASSIGN", os.path.join(os.environ["W"], "tools", "_orders",
-                               f"packing_assign_s{sd}.csv"))
+        "FMS_ASSIGN", os.path.join(os.environ["W"], "tools", "_orders",
+                                   f"packing_assign_s{sd}.csv"))
 
     geom, free, _starts, _goals = PS.setup_lifelong(
         os.environ["MAP"], n, pitch, int(sd), verbose=False)

@@ -107,9 +107,25 @@ def plan(n=12, seed=None, seconds=None, map_dir=None, extra=None):
     #   1.0 으로 두므로, 여기서 안 보면 `REPLAN=1` 이 1.2 로 계획해 놓고 주행은
     #   1.0 으로 도는 어긋남이 조용히 생긴다.
     pitch = float(os.environ.get("PIBT_PITCH", str(PITCH)))
+    # ★ 시드도 셸을 먼저 본다 (2026-09-17). pitch·horizon 은 이미 그러는데
+    #   **시드만 빠져 있었다.** 같은 이유가 그대로 적용된다 — 주행은 계획
+    #   파일을 읽지 않고 `live_pibt` 가 in-process 로 다시 세우고, 그쪽은
+    #   `PIBT_SEED` 를 쓴다 (`live_pibt.py:164`, 기본 9).
+    #
+    #       PIBT_SEED=2 REPLAN=1 bash run_record.sh
+    #         계획   시드 1 (모듈 상수)  -> starts.json · 무대 스폰
+    #         주행   시드 2 (PIBT_SEED)  -> 다른 시작 칸
+    #
+    #   스폰이 계획 시작점과 어긋나면 추종기가 자기 경로를 영영 못 잡는다
+    #   (실측: robot 0 이 88.2 m 떨어져 추종오차 76 m, 420초 제자리 —
+    #   `runners/build_amr_scene_v2.py` 주석). 오류는 안 난다.
+    #
+    #   `--seed` 인자가 오면 그게 이긴다 (명시가 환경변수보다 강하다).
+    _seed = seed if seed is not None else int(
+        os.environ.get("PIBT_SEED", str(SEED)))
     argv = ["pibt_scene.py", "--n", str(n),
             "--pitch", str(pitch),
-            "--seed", str(SEED if seed is None else seed),
+            "--seed", str(_seed),
             "--map", map_dir or default_map(), "--out", rel(OUT), "--plan"]
     if MODE == "lifelong":
         argv += ["--lifelong"]
@@ -139,8 +155,10 @@ def plan(n=12, seed=None, seconds=None, map_dir=None, extra=None):
     mt = _move_ticks()
     plan_s = horizon * pitch / (0.90 * mt)           # 0.90 = 계획 속도 v_plan
     return {"out": os.path.join(rel(OUT), f"fleet_{n:02d}"), "log": out,
-            "note": f"{MODE} · {horizon}틱 x (pitch {pitch}/0.90/{mt}) "
-                    f"= 계획 {plan_s:.0f} s "
+            # ★ 시드를 찍는다. 주행이 in-process 로 다시 계획하므로 **어느
+            #   시드로 세운 계획인지**가 로그에 없으면 어긋나도 못 알아챈다.
+            "note": f"{MODE} · seed {_seed} · {horizon}틱 x "
+                    f"(pitch {pitch}/0.90/{mt}) = 계획 {plan_s:.0f} s "
                     f"(Isaac 벽시계는 stretch 를 곱한다 — metrics.STRETCH_MEASURED)"}
 
 
