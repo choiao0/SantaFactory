@@ -216,6 +216,12 @@ class Kernel(object):
         self._soft_clash = 0     # soft 칸이 두 대에 겹친 횟수. 0 이어야 정상
         self.age = {a: 0 for a in starts}
         self.stag = Stagnation()
+        # ★ 로봇별 **판 전체 최대** 정체 (-224). `Stagnation` 은 개선하면
+        #   0 으로 리셋되므로 끝 시점 값만 보면 **중간에 400틱 정체했다
+        #   풀린 로봇이 안 잡힌다.** 실제로 시드 14 에서 「100틱+ 2대」로
+        #   보고했는데 겪은 로봇은 8대였다 (FMS 답신 15 §3).
+        #   「끝까지 막혀 있던 수」가 아니라 **「겪은 수」**를 세야 한다.
+        self.stag_peak = {a: 0 for a in starts}
         self.replan = Replanner(free, self.edge_cost, self.turn_cost)
         self.done = 0
         self.unreachable = 0
@@ -576,6 +582,8 @@ class Kernel(object):
                     self._service_done(a)
             elif r["goal"] is not None:
                 self.stag.update(a, r["goal"], self.dm(r["goal"])[s1])
+                if self.stag.get(a) > self.stag_peak[a]:
+                    self.stag_peak[a] = self.stag.get(a)
                 self.age[a] = 0 if s1[:2] == r["goal"] else self.age[a] + 1
                 if s1[:2] == r["goal"]:
                     self._arrive(a)
@@ -665,10 +673,14 @@ def run_lifelong(free, starts, cells_by_cat, horizon=600, seed=0, order_gap=15,
             #   정한다 — 저밀도에서도 난다. 그래서 반드시 같이 본다.
             #   (`tools/adg_cycles.py` 로는 못 본다. 그쪽은 `run_h` 라
             #    `lifelong` 을 안 탄다.)
-            "stag_max": max(K.stag.stag.values(), default=0),
-            "stag_mean": (sum(K.stag.stag.values()) / len(K.stag.stag)
-                          if K.stag.stag else 0.0),
-            "stag_stuck": sum(1 for v in K.stag.stag.values() if v >= 100)}
+            # ★ 판 **전체**에서 겪은 최대 정체 (-224). 아래 `_end` 붙은 것이
+            #   옛 정의(끝 시점)다 — 둘은 다른 양이라 이름을 갈라 둔다.
+            "stag_max": max(K.stag_peak.values(), default=0),
+            "stag_mean": (sum(K.stag_peak.values()) / len(K.stag_peak)
+                          if K.stag_peak else 0.0),
+            "stag_stuck": sum(1 for v in K.stag_peak.values() if v >= 100),
+            # 끝 시점 값 — 「지금도 막혀 있나」. 판정에 쓰려면 이쪽이 맞다
+            "stag_stuck_end": sum(1 for v in K.stag.stag.values() if v >= 100)}
     if hasattr(K, "report"):
         info.update(K.report())
     if verbose:
