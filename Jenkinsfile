@@ -15,6 +15,7 @@ pipeline {
         COMPOSE     = 'docker compose -f 4_Web/docker-compose.yml'
         COMPOSE_FMS  = 'docker compose -f 3_FMS/infra/compose.estimate.yml --env-file 3_FMS/infra/.env.estimate'
         COMPOSE_EMQX = 'docker compose -f 3_FMS/infra/emqx/compose.yml'
+        COMPOSE_CORE = 'docker compose -f 3_FMS/infra/compose.fms-core.yml'
         KEEP_COUNT  = '3'
     }
 
@@ -71,7 +72,7 @@ pipeline {
                     env.BUILD_EMQX = (fullBuild || common ||
                         changedList.any { it.startsWith('3_FMS/infra/emqx/') }) ? 'true' : 'false'
 
-                    echo "배포 대상: backend=${env.BUILD_BE}, frontend=${env.BUILD_FE}, fms=${env.BUILD_FMS}, emqx=${env.BUILD_EMQX}"
+                    echo "배포 대상: backend=${env.BUILD_BE}, frontend=${env.BUILD_FE}, fms=${env.BUILD_FMS}(워커+core), emqx=${env.BUILD_EMQX}"
 
                     // 표시는 BE/FE 와 같은 레벨로 맞춘다 — EMQX 는 FMS 도메인의 일부라 별도 항목으로 안 보이고 FMS 에 흡수.
                     def fmsShown = (env.BUILD_FMS == 'true' || env.BUILD_EMQX == 'true')
@@ -200,11 +201,54 @@ pipeline {
             }
         }
 
+        stage('fms-core 빌드·배포') {
+            // EMQX 뒤에 온다 — compose.fms-core.yml 의 backbone 네트워크가 external(backbone_default)이라 EMQX 스택이 먼저 있어야 한다.
+            // 자격증명은 EMQX 와 같은 파일(infra/emqx/.env, MQTT_PW_FMS_CORE)이라 여기서도 쓴다 — EMQX 스테이지는 안 돌 수 있다(BUILD_EMQX=false).
+            when { expression { env.SKIP_ALL != 'true' && env.BUILD_FMS == 'true' } }
+            steps {
+                withCredentials([file(credentialsId: 'emqx-env', variable: 'EMQX_ENV_FILE')]) {
+                    sh '''
+                        tr -d '\\r' < "$EMQX_ENV_FILE" > 3_FMS/infra/emqx/.env
+                        $COMPOSE_CORE build
+                        docker tag fms-core:latest fms-core:$BUILD_NUMBER
+                        $COMPOSE_CORE up -d
+                    '''
+                }
+                sh '''
+                    # 이 컨테이너는 HTTP 포트가 없어 running 으로만 본다. 다만 restart: unless-stopped 라
+                    # **기동 직후 한 번 running 을 보는 것으로는 부족하다** — import 오류(-234 의 numba 누락이 그랬다)는
+                    # 재시작 루프로 나타나므로, 자리 잡을 시간을 준 뒤 RestartCount 까지 확인한다.
+                    cid=""
+                    for i in $(seq 1 30); do
+                        cid=$($COMPOSE_CORE ps -q fms-core)
+                        if [ -n "$cid" ] && [ "$(docker inspect -f '{{.State.Status}}' "$cid" 2>/dev/null)" = "running" ]; then
+                            break
+                        fi
+                        sleep 2
+                    done
+                    if [ -z "$cid" ]; then
+                        echo "fms-core 컨테이너가 60초 안에 뜨지 않음"
+                        $COMPOSE_CORE logs --tail 100 || true
+                        exit 1
+                    fi
+                    sleep 10
+                    status=$(docker inspect -f '{{.State.Status}}' "$cid")
+                    restarts=$(docker inspect -f '{{.RestartCount}}' "$cid")
+                    if [ "$status" != "running" ] || [ "$restarts" -gt 0 ]; then
+                        echo "fms-core 가 안정적으로 뜨지 않음 (status=$status, 재시작 $restarts 회)"
+                        $COMPOSE_CORE logs --tail 100 || true
+                        exit 1
+                    fi
+                    echo "fms-core 기동 확인 (재시작 0회)"
+                '''
+            }
+        }
+
         stage('이미지 정리') {
             when { expression { env.SKIP_ALL != 'true' } }
             steps {
                 sh '''
-                    for img in santafactory-be santafactory-fe fms-estimate-worker; do
+                    for img in santafactory-be santafactory-fe fms-estimate-worker fms-core; do
                         docker images "$img" --format '{{.Tag}}' \
                             | grep -E '^[0-9]+$' | sort -n | head -n -"$KEEP_COUNT" \
                             | xargs -r -I{} docker rmi "$img:{}"

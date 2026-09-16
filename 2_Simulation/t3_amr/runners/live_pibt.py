@@ -556,7 +556,16 @@ def _rec_setup(drivers, arts):
             keys = sorted(drivers, key=str)
         rec = {"path": path, "hz": hz, "next": 0.0, "keys": keys,
                "drivers": drivers, "arts": arts,
-               "t": [], "pose": [], "alt": [], "off": False,
+               # ★ 명령 (v, w) 도 같이 남긴다 (-224). pose 만 있으면 「명령은
+               #   정상인데 안 따라왔나, 명령 자체가 이상했나」를 못 가른다.
+               #   2026-09-16 agent6 회전 교착에서 실제로 여기서 막혔다 —
+               #   궤적으로 옆미끄러짐까지는 확인했는데 명령값이 없었다.
+               "t": [], "pose": [], "alt": [], "cmd": [], "off": False,
+               # ★ 관절 속도 (-224). 명령과 pose 사이의 **가운데 층**이다.
+               #   명령 != 관절 이면 드라이브가 못 따라온 것이고,
+               #   관절 != pose 이면 바퀴가 미끄러진 것이다. 둘은 다른 문제다.
+               #   이름은 첫 샘플에서 한 번만 잡는다 (`initialize()` 뒤여야 한다).
+               "joint": [], "dof": None, "joint_off": False,
                "flush": flush, "flush_next": flush if flush > 0 else float("inf"),
                "nflush": 0}
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
@@ -595,6 +604,16 @@ def _rec_setup(drivers, arts):
         return None
 
 
+def _jkw(rec, _np):
+    """관절 배열을 저장 인자로 — 길이가 `t` 와 맞을 때만."""
+    j = rec.get("joint") or []
+    if not j or len(j) != len(rec["t"]):
+        return {}
+    return {"joint": _np.asarray(j, dtype=_np.float32),
+            # 유니코드 배열로 둔다 — object dtype 은 저장·적재에 pickle 이 든다.
+            "dof_names": _np.array([str(s) for s in (rec.get("dof") or [])])}
+
+
 # [patch_pibt_record_flush] 원자적 쓰기 — .tmp 에 쓰고 replace. 쓰는 중에 죽어도 이전 파일이 온전하다.
 def _rec_write(rec, tag):
     import numpy as _np
@@ -604,20 +623,63 @@ def _rec_write(rec, tag):
         t=_np.asarray(rec["t"], dtype=_np.float32),
         pose=_np.asarray(rec["pose"], dtype=_np.float32),
         pose_alt=_np.asarray(rec["alt"], dtype=_np.float32),
+        # (N, R, 2) = 그 프레임에 나간 명령 (v m/s, w rad/s). -224.
+        cmd=_np.asarray(rec["cmd"], dtype=_np.float32),
+        # (N, R, D) = 관절 속도. 중간에 꺼졌으면 길이가 안 맞으므로 **빼고**
+        #   쓴다 — 길이가 어긋난 배열을 남기면 읽는 쪽이 조용히 틀린다.
+        **_jkw(rec, _np),
         stage=_np.array(str(rec.get("stage", ""))))
     os.replace(tmp + ".npz", rec["path"])          # savez 가 .npz 를 붙인다
     carb.log_warn(f"[pibt] 자세 기록 {tag}: {len(rec['t'])} 프레임 · "
                   f"{rec['t'][-1]:.1f} s → {rec['path']}")
 
 
-def _rec_sample(rec, t_sim):
-    """시뮬 시각 기준으로 샘플한다. 실패하면 스스로 꺼진다."""
+def _rec_joints(rec):
+    """관절 속도 한 줄 — 로봇마다 전 DOF. 실패하면 **관절만** 끈다.
+
+    자세 기록 전체를 끄지 않는다. 관절은 덤이고 pose 가 본체다. 그리고
+    articulation 종류에 따라 없을 수 있는 API 라 조용히 빠지는 편이 낫다.
+    """
+    if rec["joint_off"]:
+        return None
+    try:
+        rows = []
+        for a in rec["keys"]:
+            v = rec["arts"][a].get_joint_velocities()
+            rows.append([float(u) for u in v])
+        n = len(rows[0]) if rows else 0
+        if n == 0 or any(len(r) != n for r in rows):
+            raise ValueError(f"DOF 수가 로봇마다 다르다: {[len(r) for r in rows]}")
+        if rec["dof"] is None:
+            names = list(getattr(rec["arts"][rec["keys"][0]], "dof_names", None)
+                         or [f"dof{i}" for i in range(n)])
+            rec["dof"] = names
+            carb.log_warn(f"[pibt] 관절 기록 ON: DOF {n}개 {names}")
+        return rows
+    except Exception as e:
+        rec["joint_off"] = True
+        rec["joint"] = []
+        carb.log_warn(f"[pibt] 관절 기록 끔 (자세 기록은 계속): {e!r}")
+        return None
+
+
+def _rec_sample(rec, t_sim, fleet=None):
+    """시뮬 시각 기준으로 샘플한다. 실패하면 스스로 꺼진다.
+
+    `fleet` 을 주면 그 스텝에 나간 명령 `(v, w)` 도 같이 남긴다 (-224).
+    """
     if rec is None or rec["off"] or t_sim < rec["next"]:
         return
     rec["next"] += 1.0 / rec["hz"]
     try:
         import math as _m
         row_p, row_a = [], []
+        # 붙이는 것은 아래에서 t·pose 와 **같이** 한다 — 중간에 예외가 나면
+        # 배열 길이가 어긋나고, 그러면 뒤에 읽는 도구가 조용히 틀린다.
+        last = getattr(fleet, "_last_cmd", None) or {}
+        row_c = [(float(last.get(a, (0.0, 0.0))[0]),
+                  float(last.get(a, (0.0, 0.0))[1])) for a in rec["keys"]]
+        row_j = _rec_joints(rec)
         for a in rec["keys"]:
             # 1순위 — 링크 프레임. 렌더러가 쓰는 prim op 에 가장 가깝다.
             pos, quat = rec["arts"][a].get_world_pose()
@@ -632,6 +694,9 @@ def _rec_sample(rec, t_sim):
         rec["t"].append(float(t_sim))
         rec["pose"].append(row_p)
         rec["alt"].append(row_a)
+        rec["cmd"].append(row_c)
+        if row_j is not None:
+            rec["joint"].append(row_j)
     except Exception as e:
         rec["off"] = True
         carb.log_error(f"[pibt] ★ 자세 기록 중단 (주행은 계속): {e!r}")
@@ -707,7 +772,7 @@ def _tick(f, dt):
 
     # [patch_pibt_record] 자세 기록 — 스크린샷과 같은 이유로 f.step 뒤에 둔다.
     #   스텝 수가 아니라 **시뮬 시각**으로 샘플한다 (physics dt 와 무관하게 Hz 유지).
-    _rec_sample(state.get("rec"), state["t"])
+    _rec_sample(state.get("rec"), state["t"], f)
 
     # 개루프 — 명령은 나가는데 pose 가 안 변한다. probe 를 통과했는데도 나오면
     # 주행 중에 pose 소스가 끊긴 것이다 (타임라인 정지, prim 재로드 등).
@@ -734,6 +799,21 @@ def _tick(f, dt):
     #     2.7 mm 스침 때문에. ADG 는 **이상적 칸 중심 자세**로 스윕을 계산하는데
     #     실행은 그만큼 정확하지 않으므로(실측 어긋남 0.051 m) 칸 공유는
     #     구조적으로 계속 난다. 멈추는 기준은 **접촉**이다.
+    # ★ 회전 교착 (-224). 원인을 몰라도 **끊는다** — `complete()` 가 영영
+    #   참이 될 수 없는 상태여서 두면 20분을 통째로 날린다 (2026-09-16 실제).
+    if getattr(f, "stall", None):
+        carb.log_error("[pibt] ★★ 회전 교착 — 각도 오차가 줄지 않는다. 중단한다")
+        for line in str(f.stall).splitlines():
+            carb.log_error("   " + line)
+        try:
+            for line in str(f.diagnose()).splitlines()[:25]:
+                carb.log_error("   " + line)
+        except Exception as e:
+            carb.log_error(f"   diagnose 실패: {e}")
+        _shot_report()
+        state["done"] = True
+        return
+
     if f.stats.contact_events:
         carb.log_error(f"[pibt] ★★ 차체 접촉 {f.stats.contact_events}건  "
                        f"쌍 {sorted(f.stats.overlap_pairs)}  "
@@ -882,6 +962,13 @@ async def _run():
                   f"quat_order={'O' if hasattr(_id, 'QUAT_ORDERS') else 'X'} "
                   f"verify_start={'O' if hasattr(_id.FleetController, 'verify_start') else 'X'} "
                   f"open_loop={'O' if hasattr(_id.FleetController, '_watch_open_loop') else 'X'}")
+    # ★ 흔들 수 있는 값은 **실제 값을 찍는다** (-224). 환경변수를 줬는지 안
+    #   줬는지 로그만 보고 알 수 있어야 A/B 표가 어느 쪽인지 안 헷갈린다.
+    _tolv = _id.Tolerance()
+    carb.log_warn(f"[pibt] 주행 상수: K_CROSS={_id.K_CROSS} K_HEAD={_id.K_HEAD} "
+                  f"(비율 {_id.K_CROSS / _id.K_HEAD:.2f}) · "
+                  f"tol pos={_tolv.pos} yaw={_tolv.yaw} cross={_tolv.cross} · "
+                  f"stall_timeout={os.environ.get('PIBT_STALL_TIMEOUT', '') or 20.0}")
 
     carb.log_warn(f"[pibt] 계획 시작  n={N} pitch={PITCH} seed={SEED} mode={MODE}")
     if MODE == "lifelong":

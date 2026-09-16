@@ -48,6 +48,12 @@ public record EstimateDetailResponse(
             Double utilization,
             Long outbound,
             Long totalCost,
+            /**
+             * 주문 리드타임 p90(초) — 이 대수로 돌렸을 때 주문 10건 중 9건이 끝난 시간.
+             * 판정에는 쓰지 않는다({@code estimate.lead-time-p90-limit} 미설정). 무릎 이후 구간을
+             * 설명하는 유일한 지표라 화면에 내보낸다 — 처리율이 포화한 뒤에도 이 값은 계속 짧아진다.
+             */
+            Double leadTimeP90,
             String error
     ) {
 
@@ -60,6 +66,7 @@ public record EstimateDetailResponse(
                     scenario.getUtilization(),
                     scenario.getOutbound(),
                     scenario.getTotalCost(),
+                    scenario.getLeadTimeP90(),
                     scenario.getError());
         }
     }

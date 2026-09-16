@@ -52,7 +52,15 @@ COPY infra/worker/ /opt/worker/
 # /work/sim_engine 을 찾다 없으면 파일 기준 3단계 위로 폴백하는데,
 # /opt/worker 에서 그건 루트라 /sim_engine 을 가리킨다.
 ENV PYTHONPATH=/opt/worker \
-    SIM_ENGINE_DIR=/app/sim_engine \
-    THETA_PATH=/app/infra/out/theta_wallA_r24_g15.json
+    SIM_ENGINE_DIR=/app/sim_engine
+
+# THETA_PATH 는 **여기서 정하지 않는다** (S15P21A106-234). 전에는 이 줄에
+# theta_wallA_r24_g15.json 을 박아 두었는데, 그 뒤 코드 기본값이 v3.6 조건 θ
+# (theta_wallA_r20_c6_v36.json)로 옮겨졌는데도 여기가 안 따라와 **ENV 가 코드를 덮었다** —
+# estimate_worker.py:39 이 "구 조건(1토트·속도 1.0·1칸=1틱·마스크 없음)이라 지금 시뮬과
+# 다른 세계의 값"이라고 적어 둔 바로 그 파일로 배포 워커가 돌고 있었다(실측: 이미지 ENV 확인).
+# 값을 새 파일명으로 바꿔 적으면 같은 드리프트가 또 난다 — 기본값은 코드 한 곳에만 둔다.
+# FMS_DIR = dirname(SIM_ENGINE_DIR) = /app 이라 /app/infra/out/ 아래에서 풀린다(COPY infra/out/).
+# 다른 θ 로 돌리려면 compose/런타임에서 THETA_PATH 를 준다("" 이면 중립).
 
 CMD ["python", "/opt/worker/estimate_worker.py"]

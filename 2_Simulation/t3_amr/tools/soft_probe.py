@@ -42,6 +42,7 @@ def run(seed):
                 stag_max=li.get("stag_max", "-"),
                 stag_mean=li.get("stag_mean", "-"),
                 stuck=li.get("stag_stuck", "-"),
+                stuck_end=li.get("stag_stuck_end", "-"),
                 hits=ghits)
 
 
@@ -56,7 +57,7 @@ def main():
           f"  -> soft_hold {'켬' if _sh not in ('0', '', 'false') else '★ 꺼짐 (기준선)'}")
     print()
     print(f"  {'시드':>4}  {'위반':>5}  {'태스크':>6}  {'대기':>4}"
-          f"  {'soft_clash':>10}  {'정체최대':>8}  {'정체평균':>8}  {'100틱+':>7}")
+          f"  {'soft_clash':>10}  {'정체최대':>8}  {'정체평균':>8}  {'100틱+':>7}  {'끝막힘':>6}")
     rows = []
     for s in SEEDS:
         r = run(s)
@@ -66,7 +67,7 @@ def main():
               f"{r['waiting']:>4}  {str(r['clash']):>10}"
               f"  {str(r['stag_max']):>8}"
               f"  {sm if isinstance(sm, str) else format(sm, '.1f'):>8}"
-              f"  {str(r['stuck']):>7}")
+              f"  {str(r['stuck']):>7}  {str(r['stuck_end']):>6}")
     print(f"  {'합/평':>4}  {sum(r['ghits'] for r in rows):>5}"
           f"  {sum(r['tasks'] for r in rows):>6}"
           f"  {sum(r['waiting'] for r in rows):>4}")

@@ -28,7 +28,11 @@ import pibt_scene                        # noqa: E402
 
 MAP = os.environ["MAP"]
 N = int(os.environ.get("N", "12"))
-PITCH = float(os.environ.get("PIBT_PITCH", "1.2"))
+# ★ 1.2 -> 1.0 (-224). 기준선은 2026-09-15(`5bd83ef`)부터 pitch 1.0 인데
+#   기본값만 1.2 로 남아 있어, 맨손으로 돌리면 **설정 불일치로 죽는다.**
+#   그 커밋 본문도 「옛 기준은 pitch 1.2 판이라 설정 불일치로 비교 자체가 안
+#   됐다」고 적고 있다 — 기본값을 안 옮겨서 같은 함정이 남아 있었다.
+PITCH = float(os.environ.get("PIBT_PITCH", "1.0"))
 SEEDS = [int(x) for x in os.environ.get("SEEDS", "1,2,4").split(",")]
 MODE = os.environ.get("MODE", "lifelong")        # lifelong | oneshot
 # [patch_ticks] ★ 2026-09-15 (-211) 정정. 이 주석이 「우리 경로(step_h)에서
@@ -39,7 +43,15 @@ MODE = os.environ.get("MODE", "lifelong")        # lifelong | oneshot
 #   둘 다 안 바꾸면 이 도구가 **4배 짧은 구간**의 지문을 뜨게 된다.
 HORIZON = int(os.environ.get("HORIZON", "1260"))
 GAP = int(os.environ.get("GAP", "60"))
-OUT = os.path.join(os.environ["W"], "tools", "adg_fingerprint.json")
+# 기준 파일. 설정이 다르면 **다른 파일**에 떠야 한다 — 4칸 켠 기준과 끈 기준은
+# 간선 수가 달라 한 파일에 못 담는다 (-224).
+#
+#   ★ 기준선의 전제는 `PIBT_FRONT_RULE=4` 다. 이건 셸 환경변수라 여기서
+#     기본값을 못 준다 (`pibt_scene` 이 직접 읽는다). 안 주고 돌리면 4칸이
+#     꺼져 `guard` 가 비고, 그러면 ADG 규칙 ② 가 아예 안 돌아 **전혀 다른
+#     간선 수**가 나온다. 아래 `_collect` 가 머리말에 그 값을 찍는다.
+OUT = os.environ.get("FP_OUT") or os.path.join(
+    os.environ["W"], "tools", "adg_fingerprint.json")
 
 
 def _sha(items) -> str:
@@ -81,6 +93,17 @@ def fingerprint(adg) -> dict:
         "acyclic": adg.topological_order() is not None,
         "actions_sig": _sha(acts),
         "edges_sig": _sha(edges),
+        # ★ 간선을 바꾸는 스위치는 **지문에 같이 적는다** (-224).
+        #   `PIBT_ADG_SLIM` 은 규칙 ② 를 인접 쌍만 걸게 해서 간선을 84~90 %
+        #   줄인다 (도달 관계·실행 시각은 동일, `tools/adg_edge_audit.py`).
+        #   적어 두지 않으면 나중에 `edges_sig` 가 달라졌을 때 「규칙이
+        #   깨졌나」와 「스위치가 달랐나」를 못 가른다.
+        # ★ 기본값을 `build_adg` 와 **같게** 둬야 한다 (거기가 "1" 이다).
+        #   "0" 으로 두면 환경변수를 안 줬을 때 실제로는 slim 으로 지었는데
+        #   기록은 「안 썼다」가 되어, 지문이 거짓말을 한다. 2026-09-16 에
+        #   실제로 그렇게 적혔다.
+        "slim": os.environ.get("PIBT_ADG_SLIM", "1"),
+        "front_rule": os.environ.get("PIBT_FRONT_RULE", ""),
     }
 
 
@@ -94,6 +117,14 @@ EXIT_OK, EXIT_DIFF, EXIT_USAGE = 0, 1, 2
 def _collect():
     """시드를 전부 돌려 지문을 찍고 (지문표, 설정) 을 돌려준다."""
     print(f"모드 {MODE}  대수 {N}  pitch {PITCH}  시드 {SEEDS}")
+    # ★ 간선을 바꾸는 둘은 **머리말에 찍는다.** 표만 보고 「왜 값이 다르지」를
+    #   묻게 두면 안 된다 — 2026-09-16 에 설정이 다른 기준선을 덮었다.
+    _fr = os.environ.get("PIBT_FRONT_RULE", "")
+    print(f"PIBT_FRONT_RULE={_fr or '(안 줌 — 4칸 꺼짐)'}  "
+          f"PIBT_ADG_SLIM={os.environ.get('PIBT_ADG_SLIM', '1')}")
+    if not _fr:
+        print("★ 4칸이 꺼져 있다. 기준선이 4칸 켠 것이면 값이 안 맞는다 —\n"
+              "  `PIBT_FRONT_RULE=4` 를 주고 다시 돌릴 것.")
     print(f"지평 {HORIZON}틱 · 주기 {GAP}틱   "
           f"(전진 {MOVE_TICKS}틱 · 회전 {TURN_TICKS}틱)\n")
     print(f"{'시드':>5}{'액션':>8}{'type1':>8}{'type2':>8}{'비순환':>8}"
@@ -112,7 +143,23 @@ def _save(meta):
     with open(OUT, "w", encoding="utf-8") as f:
         json.dump(meta, f, ensure_ascii=False, indent=1, sort_keys=True)
     print(f"\n기준 저장: {OUT}")
-    print("★ 이 파일은 **코드를 고치기 전** 상태다. 커밋해 둘 것.")
+    print("  ☠ **덮어썼다면 되돌릴 수 있는지 먼저 보라** — `git diff` 에서")
+    print("    `actions` 나 `actions_sig` 가 달라졌으면 그 기준선은 **다른")
+    print("    설정**에서 뜬 것이라 덮으면 안 되는 파일이었다는 뜻이다.")
+    print("    (2026-09-16 에 pitch 1.0·4칸 켠 기준선을 1.2·꺼짐으로 덮었다.")
+    print("     `git checkout` 으로 되돌리고 `FP_OUT` 으로 새 파일에 떴다.)")
+    print(f"★ 지금 **설정도 같이 저장됐다** — slim={os.environ.get('PIBT_ADG_SLIM', '1')} · "
+          f"front_rule={os.environ.get('PIBT_FRONT_RULE', '') or '(꺼짐)'}")
+    print("  기준은 「코드를 고치기 전」이 아니라 **이 설정에서의 값**이다.")
+    print("  `git diff` 로 무엇이 달라졌는지 보고 커밋할 것.")
+    if not os.environ.get("PIBT_FRONT_RULE"):
+        print("\n  ※ 4칸 규칙이 꺼져 있어 `guard` 가 전부 비고, 그러면 ADG")
+        print("    규칙 ② 가 한 번도 안 돈다 — `PIBT_ADG_SLIM` 이 이 기준선에")
+        print("    **영향을 줄 수 없다.** slim 을 지키려면 4칸을 켠 기준이 따로")
+        print("    필요하다:")
+        print("      PIBT_FRONT_RULE=4 PIBT_PITCH=1.0 \\")
+        print("        FP_OUT=$W/tools/adg_fingerprint_front4.json \\")
+        print("        python tools/adg_fingerprint.py --save")
     return EXIT_OK
 
 

@@ -124,9 +124,10 @@ new EstimateCreateRequest(warehouseId, null, null, null, null, null, null), ADMI
 
         EstimateDetailResponse detail = estimateService.detail(created.estimateId(), ADMIN);
         assertThat(detail.status()).isEqualTo(EstimateStatus.DONE);
-        // 12대가 처음으로 세 조건을 만족한다: 처리율 96 % ≥ 95, 가동률 82 % ≥ 80, 1.86억 ≤ 3억.
-        // 11대는 처리율 88 % 로 모자라고 14대부터는 가동률이 79 % 로 떨어진다
-        assertThat(detail.recommendedCount()).isEqualTo(12);
+        // 조건을 만족하는 건 12·13대뿐이다 — 11대는 처리율 88 % 로 모자라고 14대부터는 가동률이 79 % 로
+        // 목표에 못 미친다. 그 둘 중 효율 점수가 높은 13대가 권장이다
+        // (12대 96 × 82 = 78.7, 13대 100 × 80.5 = 80.5)
+        assertThat(detail.recommendedCount()).isEqualTo(13);
         assertThat(detail.reasonCode()).isNull();
         assertThat(detail.elapsedSeconds()).isNotNull();
         assertThat(detail.runs()).hasSize(MAX_AMR);
@@ -190,7 +191,7 @@ new EstimateCreateRequest(warehouseId, null, null, null, null, null, null), ADMI
         EstimateDetailResponse detail = estimateService.detail(created.estimateId(), ADMIN);
         assertThat(detail.runs().get(MAX_AMR - 1).status()).isEqualTo(RunStatus.TIMEOUT);
         assertThat(detail.status()).isEqualTo(EstimateStatus.PARTIAL);
-        assertThat(detail.recommendedCount()).isEqualTo(12);   // 남은 결과로 판정은 그대로
+        assertThat(detail.recommendedCount()).isEqualTo(13);   // 남은 결과로 판정은 그대로
     }
 
     /**

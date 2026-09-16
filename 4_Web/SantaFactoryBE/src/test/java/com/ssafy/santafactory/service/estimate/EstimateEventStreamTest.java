@@ -68,6 +68,6 @@ class EstimateEventStreamTest {
 
     private static EstimateDetailResponse.Run run(int amrCount, RunStatus status) {
         return new EstimateDetailResponse.Run("est_77_n" + amrCount, amrCount, status,
-                null, null, null, 15_500_000L * amrCount, null);
+                null, null, null, 15_500_000L * amrCount, null, null);
     }
 }
