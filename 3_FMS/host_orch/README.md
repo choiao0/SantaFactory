@@ -64,7 +64,8 @@ Stop 둘 다 → sim-runner IDLE(Isaac 정리 21 s) + fms-core IDLE → `done`, 
 
 ## 남은 것
 
-- `artifacts.video` 는 러너의 `Runner/VideoUrl`(-215, t3_amr 엣지)에서 온다 — 값은 버킷 없는 객체 키 `<run_id>/<파일>` 이고 URL 이 아니다(-233, 백엔드 VerifyVideoPresigner 가 서명). host-orch 는 가공 없이 옮긴다. replay·heatmap 키는 아직 null. 새 러너는 fms-core 없이 자체 계획으로 도니 EC2 host-orch 는 `--fms-node` 를 빼고 띄운다(안 빼면 창이 안 열린다)
+- `artifacts.video` 는 러너의 `Runner/VideoUrl`(-215, t3_amr 엣지)에서 온다 — 값은 버킷 없는 객체 키 `<run_id>/<파일>` 이고 URL 이 아니다(-233, 백엔드 VerifyVideoPresigner 가 서명). host-orch 는 가공 없이 옮긴다. replay·heatmap 키는 아직 null.
+- (-235) 요청의 `scenario.orders.outbound` 는 창 `[t0, t0+window_s+60]` 밖을 잘라 러너에 보낸다(t0 = `window_start_s` 또는 첫 주문 시각, `orders.window` 에 기록). 파싱에 실패한 요청의 `failed` 결과에도 `estimate_id`·`source_run_id` 를 싣는다 — 둘 다 2026-09-16 첫 버튼(verify_2)에서 드러난 결함. 새 러너는 fms-core 없이 자체 계획으로 도니 EC2 host-orch 는 `--fms-node` 를 빼고 띄운다(안 빼면 창이 안 열린다)
 - sim-wms 파드 · k3s Job — 지금은 fms-core 도 compose 상시 데몬(`infra/compose.fms-core.yml`)
 - 러너가 여러 대면 NBIRTH `Runner/State` 가 IDLE 인 노드를 골라 보내고 prefetch 를 러너 수로 (지금은 `--node` 하나)
 - `uagv/v2/+/+/#` 관측 구독은 ACL 에 있지만 아직 안 쓴다 (`biz/v1/#` 은 kpi_summary 에 쓴다)
