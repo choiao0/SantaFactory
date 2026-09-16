@@ -68,6 +68,7 @@ class FileOrderStream(object):
 
         self._pts = PS.load_stations(map_dir)
         self._geom, self._free, self._PS = geom, free, PS
+        self._map = map_dir
         self._cache = {}
 
         self._by_tick = collections.defaultdict(list)
@@ -148,20 +149,34 @@ class FileOrderStream(object):
 
     # ── ★ 인덱스가 밀리지 않았나 ─────────────────────────────────────────
     def verify(self):
-        """`station_cells()` 로 인덱싱했다면 같은 칸이 나왔을지 본다.
+        """`cells_by_cat[cat][i]` 가 `stations.json` 의 i 번째와 같은 칸인가.
 
         다르면 **그 방식으로 읽던 코드가 조용히 틀린다**는 뜻이다. 우리는
         원본 인덱스를 쓰므로 영향은 없지만, 차이 자체를 알아야 한다.
+
+        ★ 길이만 비교하면 안 된다. `station_cells` 는 애초에 **점 두 개짜리
+          항목만** 본다 -- `charge_zone` 은 사각형 하나(`{id,x0,x1,y0,y1}`)라
+          당연히 빠지고, 충전존 칸은 `charge_zone_cells` 가 따로 만든다.
+          길이로 재면 그걸 매번 「인덱스가 밀린다」로 외친다. 한 번 울고 나면
+          다음에 진짜 밀렸을 때 아무도 안 읽는다.
+
+        그래서 **점 항목만 골라 인덱스별로 칸을 맞대 본다.**
         """
-        cells = self._PS.station_cells(self._free, self._geom,
-                                       os.environ["MAP"])
+        cells = self._PS.station_cells(self._free, self._geom, self._map)
         bad = []
         for cat, pts in self._pts.items():
             if not isinstance(pts, list):
                 continue
+            pts = [p for p in pts
+                   if isinstance(p, (list, tuple)) and len(p) == 2]
+            if not pts:
+                continue
             kept = cells.get(cat, [])
-            if len(kept) != len(pts):
-                bad.append((cat, len(pts), len(kept)))
+            for i, p in enumerate(pts):
+                mine = self._cell(p)
+                theirs = kept[i] if i < len(kept) else None
+                if mine != theirs:
+                    bad.append((cat, i, mine, theirs))
         return bad
 
 
@@ -184,12 +199,14 @@ def _main():
     print(f"\n── 인덱스 검사 ──")
     bad = st.verify()
     if bad:
-        print(f"   ★ `station_cells()` 가 항목을 버린 카테고리가 있다 —")
-        for cat, raw, kept in bad:
-            print(f"     {cat}: 원본 {raw} -> {kept}  (인덱스가 밀린다)")
+        print(f"   ★ `cells_by_cat[cat][i]` 가 원본 i 번째와 다른 데가 "
+              f"{len(bad)}곳 —")
+        for cat, i, mine, theirs in bad[:8]:
+            print(f"     {cat}[{i}]: 원본 {mine} vs station_cells {theirs}")
         print(f"   우리는 **원본 인덱스**에서 변환하므로 영향은 없다.")
+        print(f"   그러나 `cells_by_cat` 을 번호로 읽는 코드가 있다면 틀린다.")
     else:
-        print(f"   두 경로의 항목 수가 같다 — 인덱스가 안 밀린다")
+        print(f"   점 항목 전부가 인덱스별로 같은 칸을 낸다 — 안 밀린다")
 
     print(f"\n── 적재 결과 ──")
     ticks = sorted(st._by_tick)
