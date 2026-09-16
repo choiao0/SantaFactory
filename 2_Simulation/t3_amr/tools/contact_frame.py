@@ -43,8 +43,15 @@ from tail_yaw import (FRONT, PITCH, REAR, WIDTH, W_TURN,   # noqa: E402
                       closest_frames, corners, sat_gap)
 
 DIRS = ((-1, 0), (0, 1), (1, 0), (0, -1))    # pibt.geometry 와 같은 순서
-# isaac_drive.RobotGeom.heading_offset. 0 또는 2 만 유효하고 현행은 2 다.
-HEADING_OFFSET = int(os.environ.get("HEADING_OFFSET", "2"))
+# ★ `isaac_drive.YAW` 를 그대로 쓴다. yaw -> 헤딩을 DIRS 로 역산하면 틀린다
+#   (2026-09-16). DIRS 의 색인 순서와 YAW 의 색인 순서가 같지 않다.
+YAW = (np.pi / 2.0, 0.0, -np.pi / 2.0, np.pi)   # 물리 헤딩 인덱스 N,E,S,W
+
+# ★ 현행은 **0** 이다 (`pibt_scene.GEOM_KW`). `RobotGeom` 의 dataclass 기본값이
+#   2 라 그걸 보고 2 로 두었다가 헤딩을 전부 두 칸씩 돌려 찍었다 —
+#   a5 를 `h3` 으로 냈는데 ADG 로그는 `move(69,91,1)` 즉 `h1` 이었다.
+#   `GEOM_KW` 가 dataclass 기본값을 덮어쓰므로 그쪽이 진실이다.
+HEADING_OFFSET = int(os.environ.get("HEADING_OFFSET", "0"))
 
 
 def load_npz(path):
@@ -75,24 +82,29 @@ def cell_of(x, y, pitch):
 
 
 def heading_of(yaw):
-    """연속 yaw -> **물리** 헤딩 0..3 (`DIRS` 색인).
+    """연속 yaw -> **물리** 헤딩 0..3 (`isaac_drive.YAW` 색인).
 
-    `DIRS = ((-1,0), (0,1), (1,0), (0,-1))` 이므로 0=북 · 1=동 · 2=남 · 3=서.
-    world 에서 x 가 열, y 가 행이라 **yaw 0 = +x = 동 = h1** 이다.
-    그래서 `round(yaw / (pi/2))` 에 **+1** 을 해야 맞는다 — 안 하면 전부
-    한 칸씩 돌아간 헤딩이 나온다 (합성 검증에서 걸렀다).
+    `YAW` 에서 가장 가까운 항목을 고른다. 각도 차는 ±π 로 감아서 잰다.
+
+    ★ `DIRS` 로 역산하면 안 된다 (2026-09-16). 초판은
+      `round(yaw/(pi/2)) + 1` 로 `DIRS` 색인을 만들었는데, `DIRS` 와 `YAW` 의
+      색인 순서가 같지 않아 헤딩이 어긋난다. `state_pose` 가 쓰는 표가
+      `YAW` 이므로 그쪽이 진실이다.
     """
-    return (int(round(yaw / (np.pi / 2.0))) + 1) % 4
+    d = [abs((yaw - y + np.pi) % (2 * np.pi) - np.pi) for y in YAW]
+    return int(min(range(4), key=lambda i: d[i]))
 
 
 def to_plan(h_phys):
     """물리 헤딩 -> **계획기** 헤딩.
 
-    `isaac_drive.RobotGeom.heading_offset = 2` 라 `h_phys = (h_plan + 2) % 4`
-    다. 뒤집으면 `h_plan = (h_phys - 2) % 4` — 2 는 자기 역원이라 같은 식이다.
-    **테스트 초기 배치에 쓸 것은 이쪽**이다. `step_h` 는 계획기 헤딩을 받는다.
+    `RobotGeom.phys_heading(h) = (h + heading_offset) % 4` 를 뒤집는다.
+    현행 `heading_offset = 0` (`pibt_scene.GEOM_KW`) 이라 항등이다.
+
+    `step_h` 와 ADG 는 **계획기 헤딩**을 쓴다 — 테스트 초기 배치에 쓸 것도
+    이쪽이다.
     """
-    return (h_phys + HEADING_OFFSET) % 4
+    return (h_phys - HEADING_OFFSET) % 4
 
 
 def turning(w_row, k):
