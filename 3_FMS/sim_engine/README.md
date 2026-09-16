@@ -46,7 +46,7 @@ python checks/check_results_identity.py --quick                                 
 | `simpy_harness.py` | **SimPy 셸**(선택) — 같은 커널·스트림을 SimPy 시계로: 도착 프로세스(URGENT, 같은 시각 틱보다 먼저) + 틱 프로세스, 고정 시간 실행은 `env.run(until=T)`. `import simpy` 지연, 없으면 종료 코드 2. SUMMARY 가 CLI 와 동일해야 함 |
 | `sweeps/_common.py` | **스윕 공통 골격** (-149) — `run_sim`(서브프로세스 + SUMMARY 파싱 + STALL 행·덤프), CSV·시드 집계·plot 공통 함수. 계약 v2.3 호출만 의존 |
 | `sweeps/fleet_sweep_theta.py` | **B-5 θ 적용 스윕** (-149) — 중립 vs 대수별 θ(최근접, 동률은 큰 쪽) vs 24대 θ 고정. `SWEEP_PLOT_ONLY` 등 지원 |
-| `sweeps/fleet_sweep_b0z.py`, `sweeps/fleet_sweep_load.py` | **B0″ 기준선** / **고부하** 스윕. 이번 이동에서는 두 스크립트 구현을 `_common`으로 합치지 않음 |
+| `sweeps/fleet_sweep_b0z.py`, `sweeps/fleet_sweep_load.py` | **B0″ 기준선** / **고부하** 스윕. 이번 이동에서는 두 스크립트 구현을 `_common`으로 합치지 않음. `fleet_sweep_load.py` 는 기본 병렬(`--jobs`, -231) — θ 48행 4분 16초 → 36초, 행 순서·값은 순차와 같다 |
 | `from_theta.py` | B-2: wallA 토폴로지 추출 + θ→비용 변환, 스키마 v2 배타 조립 ([설계](../docs/θ_경로_기준선.md#from_theta-조립-규칙)) |
 | `checks/` | PIBT 데모 3종·`from_theta` 데모·거리/결과 동일성·고정 시간/배터리 불변 검사 |
 | [`results/`](results/) | 벤치마크·검증 산출물 (csv/png/npz) — 기존 결과 덮어쓰기 금지. 대체된 기준선·초기 산출물은 `results/archive/` |
