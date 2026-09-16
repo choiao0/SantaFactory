@@ -73,8 +73,20 @@ if [ -n "${PIBT_RECORD:-}" ] && [ "$REC" = "${PIBT_RECORD:-}" ]; then
     exit 1
 fi
 
+# ── ADG 앞 칸 규칙 · 격자 (S15P21A106-204) ──────────────────
+#   `run_record.sh` 와 **같은 기본값**을 여기서도 정한다. 이유는 둘이다.
+#     1. 아래 머리말에서 실제로 걸릴 값을 찍으려면 여기서 정해져 있어야 한다
+#     2. 여기서 export 해 두면 `exec run_record.sh` 가 그대로 물려받아,
+#        두 스크립트가 서로 다른 격자로 도는 일이 생기지 않는다
+#   ★ 규칙은 pitch 게이팅을 받는다 — 1.2 에서는 무엇을 넣든 꺼진다. 그래서
+#     기본 격자가 1.0 이다 (`run_record.sh` 의 같은 자리에 근거를 적어 두었다).
+#     1.2 로 한 판:  PIBT_PITCH=1.2 bash run_onboard.sh
+export PIBT_FRONT_RULE="${PIBT_FRONT_RULE:-4}"
+export PIBT_PITCH="${PIBT_PITCH:-1.0}"
+
 echo "════════════════════════════════════════════════════"
 echo " run_onboard   시점 $MODE   대수 $N"
+echo "  격자 pitch $PIBT_PITCH   앞 칸 규칙 $PIBT_FRONT_RULE"
 echo "════════════════════════════════════════════════════"
 
 [ -f "$STAGE_USD" ] || {

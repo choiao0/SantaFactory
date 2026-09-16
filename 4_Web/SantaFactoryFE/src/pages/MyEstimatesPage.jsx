@@ -18,8 +18,9 @@ const REASON_LABEL = {
   BUDGET_EXCEEDED: '예산 초과',
   THROUGHPUT_SHORT: '처리율 미달',
   UTILIZATION_SHORT: '가동률 미달',
+  LEAD_TIME_LONG: '리드타임 초과',
   ALL_FAILED: '전부 실패',
-  LOAD_TOO_LOW: '부하 부족',
+  LOAD_TOO_LOW: '부하 부족',   // 더 이상 만들어지지 않는다 — 옛 견적용
 }
 
 export default function MyEstimatesPage() {

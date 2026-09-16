@@ -56,7 +56,7 @@ import pibt_scene                        # noqa: E402
 MAP = os.environ["MAP"]
 PITCH = float(os.environ.get("PITCH", "1.0"))
 N = int(os.environ.get("N", "12"))
-STEPS = int(os.environ.get("STEPS", "2000"))
+STEPS = int(os.environ.get("STEPS", "8000"))   # -211: 전진이 MOVE_TICKS 틱이 되어 x4
 FIXLIVE = os.environ.get("FIXLIVE", "") not in ("", "0")
 DIAG = os.environ.get("DIAG", "1") not in ("", "0")     # 4칸(=1) / 2칸(=0)
 

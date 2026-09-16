@@ -4,13 +4,17 @@ const MONO = 'DM Mono, Pretendard Variable, Pretendard, monospace'
 const GRID_LINE = '#e0ded9'
 const MUTED = '#8a8983'
 const RED = '#e72d2d'
+/** 가동률 막대 기본색 — 권장 구성만 RED 로 덮어 칠한다 */
+const BAR = '#3f3f3d'
 const EOK = 100_000_000
 
 const REASON_TEXT = {
   BUDGET_EXCEEDED: '예산 안에 드는 대수가 없습니다. 예산을 올리거나 목표를 낮춰 다시 요청해 보세요.',
   THROUGHPUT_SHORT: '예산 안의 대수로는 목표 출고 처리율에 닿지 않습니다. 목표를 낮추거나 예산을 올려야 합니다.',
   UTILIZATION_SHORT: '목표 처리율은 채우지만 그 대수의 AMR 가동률이 목표에 못 미칩니다. 가동률 목표를 조정해 보세요.',
+  LEAD_TIME_LONG: '주문은 목표만큼 나가지만 한 건이 끝나기까지 걸리는 시간이 상한을 넘습니다. 대수를 늘리거나 리드타임 상한을 완화해야 합니다.',
   ALL_FAILED: '모든 대수의 시뮬레이션이 실패해 판정할 결과가 없습니다. 조건을 확인한 뒤 다시 요청해 주세요.',
+  // 더 이상 만들어지지 않는 사유 — 예전에 판정한 견적을 열었을 때를 위해 남겨 둔다
   LOAD_TOO_LOW: '모든 대수가 처리율 100%를 기록해 대수를 구분할 수 없습니다. 주문량이 너무 적거나 시뮬 실행 조건을 확인해야 합니다.',
 }
 
@@ -169,7 +173,7 @@ function UtilChart({ runs, target, recommended }) {
         const uh = (Math.min(100, r.utilization) / 100) * ih
         return (
           <g key={r.run_id}>
-            <rect x={cx - bw * 0.3} y={pad.t + ih - uh} width={bw * 0.6} height={uh} fill={hl ? RED : '#3f3f3d'} />
+            <rect x={cx - bw * 0.3} y={pad.t + ih - uh} width={bw * 0.6} height={uh} fill={hl ? RED : BAR} />
             {hl && (
               <text x={cx} y={pad.t + ih - uh - 6} textAnchor="middle" fontSize="8" fontWeight="600" fill="#b51616" fontFamily={MONO}>
                 {Math.round(r.utilization)}
@@ -179,7 +183,6 @@ function UtilChart({ runs, target, recommended }) {
           </g>
         )
       })}
-      <text x={pad.l} y={H - 4} fontSize="7.5" fill={MUTED} fontFamily={MONO}>검은 막대 가동률 · 빨간 막대 권장 구성 · 회색 막대 결과 없는 run</text>
     </svg>
   )
 }
@@ -199,12 +202,11 @@ function Placeholder({ estimateId, estimate }) {
   )
 }
 
-export default function QuoteStep({ estimateId, estimate, verdict, model, form }) {
+export default function QuoteStep({ estimateId, estimate, verdict }) {
   const ready = Boolean(estimate && verdict)
   const runs = estimate?.runs ?? []
   const recommended = verdict?.recommended_count ?? null
   const rec = runs.find((r) => r.amr_count === recommended) ?? null
-  const failed = runs.filter((r) => !isDone(r))
   const cancelled = verdict?.status === 'CANCELLED'
 
   return (
@@ -223,7 +225,7 @@ export default function QuoteStep({ estimateId, estimate, verdict, model, form }
           <div className="q-head">
             <h3>SANTA FACTORY · QUOTATION</h3>
             <span className="mono">
-              EST #{estimate.estimate_id} · {formatDateTime(estimate.created_at)} · {estimate.amr_model} · SEED 101
+              {formatDateTime(estimate.created_at)} · AMR : {estimate.amr_model}
             </span>
           </div>
 
@@ -290,7 +292,14 @@ export default function QuoteStep({ estimateId, estimate, verdict, model, form }
                 <div>
                   <h5>UTILIZATION</h5>
                   <UtilChart runs={runs} target={estimate.target_utilization} recommended={recommended} />
-                  <p className="chart-cap">대수가 많으면 x축 라벨은 일부만 표시됩니다</p>
+                  <p className="chart-cap">
+                    {/* 막대 색을 말로 적으면 어느 막대인지 짚기 어렵다 — 실제 칠하는 색을 그대로 보여준다 */}
+                    <i style={{ background: BAR }} />가동률
+                    <i style={{ background: RED }} />권장 구성
+                    <i style={{ background: GRID_LINE, border: '1px solid #c9c7c2' }} />측정값 없음
+                    <br />
+                    대수가 많으면 x축 라벨은 일부만 표시됩니다
+                  </p>
                 </div>
               </div>
 
@@ -303,7 +312,7 @@ export default function QuoteStep({ estimateId, estimate, verdict, model, form }
                       <th>처리율</th>
                       <th>목표</th>
                       <th>가동률</th>
-                      <th>출고 <span>건/일</span></th>
+                      <th>처리 완료 <span>건/일</span></th>
                       <th>구축비용</th>
                       <th>예산</th>
                     </tr>
@@ -343,32 +352,10 @@ export default function QuoteStep({ estimateId, estimate, verdict, model, form }
 
           <div className="q-two">
             <div>
-              <h4>가정 명세 — 이 숫자가 나온 조건 전부</h4>
-              <details className="assume">
-                <summary>입력 조건과 고정값</summary>
-                <ul>
-                  <li>목표 출고 처리율 {estimate.target_throughput}% · 목표 가동률 {estimate.target_utilization}% · 예산 {formatWon(estimate.budget_limit)}</li>
-                  <li>입고 {form.inboundStart}–{form.inboundEnd} ({form.inboundAvg}건/일) · 출고 {form.outboundStart}–{form.outboundEnd} ({form.outboundAvg}건/일)</li>
-                  {model && (
-                    <li>AMR {model.model} · 속도 {model.speed} m/s · 적재 {model.capacity} · 대당 단가 {formatWon(model.price)} + 설치비 {formatWon(model.cost)}</li>
-                  )}
-                  <li>구축비용 = (단가 + 설치비) × 대수 + 충전기(4대당 1기). 유지보수·자재 관리비 제외</li>
-                  <li>시뮬레이션 고정 시간 6시간(출고 전용) · 시드 101 · 재고 항상 충분 가정 · 낱개 피킹 주문만 산정(한 줄 최대 10개)</li>
-                  <li>경로 계획 PIBT + 가중 다익스트라 · 1칸 = 1 m · 고정 창고 레이아웃</li>
-                </ul>
-              </details>
-            </div>
-            <div>
-              <h4>읽는 법</h4>
+              <h4>구축비용</h4>
               <div className="notice">
-                확정 견적이 아닌 도입 전 검토 자료입니다. 피크 여유가 필요하면 한 단계 위 구성도 함께 보십시오.
-                {failed.length > 0 && (
-                  <>
-                    <br />
-                    <br />
-                    {failed.map((r) => `${r.amr_count}대`).join(', ')} run은 결과가 없어 곡선에서 빠져 있습니다.
-                  </>
-                )}
+                (단가 + 설치비) × 대수 + 충전기(4대당 1기)로 계산합니다.
+                유지보수비와 자재 관리비는 포함되지 않습니다.
               </div>
             </div>
           </div>

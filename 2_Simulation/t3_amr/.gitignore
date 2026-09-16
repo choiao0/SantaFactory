@@ -25,6 +25,10 @@ stage_old/
 # --- 실행 결과 ---
 out/
 logs/
+#   컨테이너 bind mount(/data): out · stage · logs · state — deploy/compose.yml. (gitignore 는 줄 안 주석을 못 쓴다 — 패턴 뒤에 # 를 붙이면 패턴의 일부가 된다)
+deploy/data/
+#   MinIO sim-runner 자격 — compose env_file (-233)
+deploy/.env
 *.mp4
 *.npz
 *.etli
@@ -54,3 +58,14 @@ venv/
 #    기준 해시는 warehouse/map/NOTE.md 참조.
 # ※ 계획 산출물(`plan/` · `v2/traj_*`)도 추적한다 — run_record.sh 가 디렉터리
 #    존재로 0초 검사를 하므로 새 체크아웃에서 바로 돌아야 한다.
+
+# --- 문서 (2026-09-15) ---
+#   t3_amr 의 .md 는 저장소에 올리지 않는다. 이 한 줄이 하위 폴더까지 전부
+#   덮는다 — docs/ 도 warehouse/ 안의 NOTE·README 도 포함이다.
+#   추적 중이던 7개는 `git rm --cached` 로 함께 뺐다. **로컬 파일은 그대로다.**
+#
+#   ★ .gitignore 는 **추적 중이 아닌** 파일에만 걸린다. `git add -f` 는 못
+#     막으므로 `.githooks/pre-commit` 이 한 겹 더 막는다 (이 저장소는
+#     core.hooksPath=.githooks 라 `.git/hooks/` 는 안 돈다).
+
+*.md

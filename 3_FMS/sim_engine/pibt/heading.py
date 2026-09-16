@@ -9,6 +9,23 @@ from .hgraph import dist_map_h
 from .liveness import Replanner, Stagnation, wait_bias
 
 
+# 계약 v3.11 (-223, 6h 병목 진단 2026-09-15): 대기 상승(bias)을 '거리가 줄지 않는 제자리 회전'에도 붙인다. 대기에만 붙으면
+# 포장대 앞 줄에서 대기(1+20+d) 보다 헛회전(1.25+d′)이 싸져 5틱 왕복을 반복한다(24대·103: 회전이 로봇 시간의 26~40 %, 그중 66 % 가 왕복).
+# 진전 없는 회전은 대기와 같은 값이 되고, 후진(×3, 상승 없음)이 상대적으로 싸져 진짜로 물러난다. six 6런 p90 74 → 53분.
+# 모듈 전역 — sim_v2(--no-turn-bias 로 끔)·kernel_planner 가 실행마다 세팅한다. legacy 는 v3.3 비트 동일이라 False. run_h 도 공유.
+NO_PROGRESS_TURN_BIAS = True
+# 계약 v3.12 (-90, 2026-09-15): 목표 상태(dist 0)의 대기 점수에서 θ wait_cost 도 면제 → 대기 = 0. -204 는 bias 만 면제했는데 θ 의
+# 기본 대기 비용이 TURN_COST(1.25) 를 넘으면(six θ r24_g15: 2.74) 목표에 도착한 로봇에게 회전(1.25+0) 이 대기(2.74) 보다 싸서
+# 홈에 주차한 유휴 로봇이 5틱마다 90° 씩 영원히 돈다(24대·103 6h: 비임무 회전 57,691회, 충전 존 회전 83k = 로봇 시간 22 %).
+# 중립 θ(wait_cost 1) 에서는 대기가 이미 1위라 기준값 불변. sim_v2 --no-goal-wait-free 로 끔. 모듈 전역 — run_h 도 공유.
+GOAL_WAIT_FREE = True
+# 계약 v3.13 (-160, 2026-09-16): 진전 없는 회전(d′ ≥ d)의 점수 하한을 대기 점수로 — tb 에 max(0, wait_cost − turn_cost) 를 더한다.
+# -223 은 bias 를 같게 했지만 θ 의 기본 대기 비용(six θ 2.74)과 TURN_COST(1.25) 의 차 1.49 가 남아 d′ − d < 1.49 면 거리가 늘어나는 회전도
+# 대기보다 쌌다(24대·103: 포장대 앞 회전 28k, 왕복 31 %; robot0 (44,83) t=446 turn 4.05 < wait 4.34). 중립 θ(1.0 < 1.25) 는 항이 0 → 기준값 불변.
+# sim_v2 --no-turn-floor 로 끔. legacy 는 v3.3 비트 동일이라 False. 모듈 전역 — run_h 도 공유(θ 없으면 무영향).
+TURN_FLOOR_WAIT = True
+
+
 def candidates_h(s, dist, edge_cost, wait_cost, free, turn_cost, bias=0.0):
     """s에서 가능한 다음 상태 후보를 score 오름차순으로: [(상태, 점유칸 집합, soft 칸 집합), ...].
     score = 액션 비용 + dist[결과 상태]. 대기 후보에는 bias(대기 상승)가 더해진다.
@@ -21,16 +38,25 @@ def candidates_h(s, dist, edge_cost, wait_cost, free, turn_cost, bias=0.0):
         # 목표 상태(dist 0)에는 대기 상승을 붙이지 않는다 (-204 물리 팀 보고 2026-09-14): bias 를 안고 도착하면 "나가기(1+d) < 대기(1+bias)"
         # 로 첫 틱에 목표를 떠나고, 뒤쪽 1칸은 후진 배율 3 으로 d=3 이라 "돌아오기(3) < 대기(1+bias+3)" 도 성립해 왕복이 굳는다.
         # Stagnation 은 2틱 연속 머물러야 리셋되므로(seed 11) 스스로 못 풀린다. kernel 은 도착 즉시 상태 전이라 무관(비트 동일).
-        b = 0.0 if dist[r, c, h] == 0 else bias
-        scored.append((wait_cost[r, c] + b + dist[r, c, h], 0, s, frozenset(occupied(s)), none))
+        if dist[r, c, h] == 0 and GOAL_WAIT_FREE:
+            wscore = 0.0                                    # 목표 도달: 머무는 데 비용 없음 (v3.12)
+        else:
+            b = 0.0 if dist[r, c, h] == 0 else bias
+            wscore = wait_cost[r, c] + b + dist[r, c, h]
+        scored.append((wscore, 0, s, frozenset(occupied(s)), none))
     dr, dc = DIRS[h]
     rr, cc = r + dr, c + dc
     if _inb(free, (rr, cc)) and dist[rr, cc, h] >= 0:
         scored.append((edge_cost[r, c, h] + dist[rr, cc, h], 1, (rr, cc, h),
                        frozenset(((rr, cc), (r, c))), none))
+    d0 = dist[r, c, h]
     for i, h2 in enumerate(((h + 1) % 4, (h - 1) % 4)):
         if dist[r, c, h2] >= 0 and turn_ok(free, r, c, h, h2):
-            scored.append((turn_cost + dist[r, c, h2], 2 + i, (r, c, h2),
+            if NO_PROGRESS_TURN_BIAS and d0 >= 0 and dist[r, c, h2] >= d0:                     # 진전 없는 회전 = 대기와 같은 상승 (v3.11)
+                tb = bias + (max(0.0, wait_cost[r, c] - turn_cost) if TURN_FLOOR_WAIT else 0.0)   # + 대기 점수 하한 (v3.13)
+            else:
+                tb = 0.0
+            scored.append((turn_cost + tb + dist[r, c, h2], 2 + i, (r, c, h2),
                            frozenset({(r, c)} | swing_cells(r, c, h, h2)), frozenset(front_cells(r, c, h, h2))))
     br, bc = r - dr, c - dc                            # 후진: pos→rear, rear→rear의 뒤
     if valid_state(free, (br, bc, h)) and dist[br, bc, h] >= 0:
@@ -72,6 +98,7 @@ class _PIBTStepH:
         self.pos_now = {s[:2]: a for a, s in states.items()}
         self.pos_next = {}      # cell -> 이번 틱 축이 놓일 agent
         self.soft_next = dict(soft_hold or {})   # cell -> soft 예약 agent. 회전 진행 중(-194 다틱) 로봇의 soft 칸은 미리 채워 온다 (-79)
+        self.soft_base = dict(soft_hold or {})   # 주입 원본 — _release 가 덮어쓴 칸을 되돌릴 때 (물리 팀 답신 11 §1, 2026-09-16)
         self.next_soft = {}     # agent -> soft 칸 집합
         # 구간 대수 제한 (S15P21A106-193). sec_map 은 칸 -> 구간번호(-1 = 구간 밖).
         self.sec_map = sec_map
@@ -150,7 +177,11 @@ class _PIBTStepH:
             del self.pos_next[pos]
         for cell in self.next_soft.pop(a):
             if self.soft_next.get(cell) == a:
-                del self.soft_next[cell]
+                base = self.soft_base.get(cell)
+                if base is None or base == a:
+                    del self.soft_next[cell]
+                else:
+                    self.soft_next[cell] = base    # 회전 중인 제3 로봇의 주입분 복원 — 옛 코드는 지워서 보호가 사라졌다(Isaac 접촉 2/5시드)
 
     def _soft_blocked(self, a, s2, soft):
         """soft 충돌: 내 앞 2칸에 다른 축이 있거나/들어오거나, 내 축이 놓일 칸을 다른 로봇이 soft 예약했다."""

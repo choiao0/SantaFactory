@@ -28,6 +28,12 @@
 #              처리량 −2~−15 %, 충전 존 매듭). --robot-dims 는 구동축 앞·뒤·폭 [m](기종 카드). SUMMARY footprint·robot_dims·turn_masked.
 #   --no-standoff: 대치 상태기계 V2(-79)를 끄고 양보 규칙 v1(v3.8 경로). v3.9 부터 헤딩 main exact·exact,front 기본 ON —
 #              6,000건/6h 에서 포장대 앞 회전 매듭을 풀어 완료 23~72 % → 99~100 %. SUMMARY standoff·standoffs·standoff_swaps.
+#   --no-turn-bias: 대기 상승을 대기에만(v3.10 경로). v3.11 부터 헤딩 main(legacy 외)은 '거리가 줄지 않는 제자리 회전'에도 붙여
+#              포장대 앞 헛회전(5틱 왕복)을 끊는다 — 6h 24대 p90 74 → 53분, 회전 36 → 20 %. --turn-bias 는 호환용 no-op.
+#   --no-goal-wait-free: 목표 상태(dist 0)의 대기 점수에 θ wait_cost 를 그대로(v3.11 경로). v3.12 부터 0 — θ wait_cost > 1.25 면
+#              도착한 유휴 로봇이 대기보다 싼 회전을 영원히 골랐다(6h 24대 비임무 회전 57,691회). 중립 θ 기준값은 불변.
+#   --no-turn-floor: 진전 없는 회전의 점수 하한(대기 점수)을 끔(v3.12 경로). v3.13 부터 θ wait_cost − TURN_COST 차(1.49)를 회전에도
+#              더해 d′ − d < 1.49 인 헛회전(포장대 앞 왕복 31 %)을 대기로 바꾼다. 중립 θ 기준값은 불변.
 #   기본 = 헤딩 모델 (상태 (r,c,h), 자기+뒤 칸 2칸 점유, 90° 회전 = TURN_TICKS 틱, 회전 중 스윙 칸
 #              예약, 라이브니스 장치 5종). docs/이동계층_PIBT.md#라이브니스-장치-5종
 #   --cell:    칸 모델(점로봇) opt-in — 기준선 CSV 재현·A/B 비교축. (--heading 은 호환용, 무시)
@@ -168,6 +174,12 @@ def _parse_model(a, argv):
     # 6,000건/6h 에서 exact 가 포장대 앞 회전 매듭으로 23~72 % 에 그쳤고 상태기계만 켜면 99~100 % (D3, 2026-09-15).
     # --no-standoff 로 v3.8 경로(양보 v1). legacy 는 v3.3 비트 동일이라 항상 끔. --standoff 는 호환용 no-op.
     a.standoff = ("--no-standoff" not in argv and a.heading and a.flow != "v1compat" and a.footprint != "legacy")
+    # 진전 없는 제자리 회전에도 대기 상승 (-223, 계약 v3.11 기본): --no-turn-bias 로 v3.10 경로. --turn-bias 는 호환용 no-op.
+    a.turn_bias = ("--no-turn-bias" not in argv and a.heading and a.flow != "v1compat" and a.footprint != "legacy")
+    # 목표 상태 대기 점수 0 (-90, 계약 v3.12 기본): θ wait_cost > TURN_COST 면 도착한 로봇이 영원히 도는 것을 막는다. --no-goal-wait-free 로 v3.11 경로.
+    a.goal_wait_free = "--no-goal-wait-free" not in argv and a.heading
+    # 진전 없는 회전 점수 하한 = 대기 점수 (-160, 계약 v3.13 기본): θ wait_cost − TURN_COST 차(1.49)를 회전에도. --no-turn-floor 로 v3.12 경로.
+    a.turn_floor = ("--no-turn-floor" not in argv and a.heading and a.flow != "v1compat" and a.footprint != "legacy")
     a.order_gap_arg = next((float(f.split("=", 1)[1]) for f in argv if f.startswith("--order-gap=")), None)
     if a.order_gap_arg is not None and a.flow == "v1compat":
         a.warnings.append("[WARN] --order-gap 은 v1compat 에서 무시 (패리티)")
@@ -347,6 +359,10 @@ def build(a):
     if a.footprint != "legacy":
         mask = turn_mask(map_dir, a.robot_dims, FOOTPRINT_MARGIN_M)
         turn_masked = masked_turn_ratio(free, mask)
+    import pibt.heading as _hd
+    _hd.NO_PROGRESS_TURN_BIAS = bool(getattr(a, "turn_bias", False))
+    _hd.GOAL_WAIT_FREE = bool(getattr(a, "goal_wait_free", True))
+    _hd.TURN_FLOOR_WAIT = bool(getattr(a, "turn_floor", False))
     cfg = KernelConfig(heading=a.heading, zone=a.zone, theta=bool(a.theta_path or a.lanes), check=a.check,
                        dock_prio=a.dock_prio, export=a.export, service_steps=round(SERVICE_TIME_S / a.dt),
                        capacity=a.capacity, svc_per_tote=a.svc_per_tote,

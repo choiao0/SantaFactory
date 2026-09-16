@@ -10,6 +10,8 @@
       --extra  모든 런에 덧붙일 인자(여러 번 가능). 예: --extra=--footprint=exact,front_2cell
     출력: CSV 한 줄 = 런 하나 (name, args, stall, makespan_steps, tasks_per_h, yield_events, conflict_wait, wall_s, + SUMMARY 키).
     표준 출력에 요약 표.  STALL 덤프는 results/stall_set_*.txt (sweeps/_common.run_sim).
+    요약 표의 sat/h·sd_tick 은 계약 §2 조건부 키 saturated_tph·standoff_ticks (-230) — 6h 세트(six)의 판정 지표다.
+    tasks/h 는 six 처럼 도착이 웨이브인 런에서 뒤 구간의 수요 제한이 섞여 용량을 못 나타낸다.
 """
 import csv
 import os
@@ -74,10 +76,12 @@ def main(argv):
         w = csv.DictWriter(f, fieldnames=allkeys)
         w.writeheader()
         w.writerows(recs)
-    print(f"{'name':<22}{'stall':>6}{'makespan':>10}{'tasks/h':>9}{'yield':>7}{'wall_s':>8}")
+    print(f"{'name':<22}{'stall':>6}{'makespan':>10}{'tasks/h':>9}{'sat/h':>8}{'sd_tick':>9}{'yield':>7}{'wall_s':>8}")
     for r in recs:
         print(f"{r['name']:<22}{r.get('stall', 0):>6}{str(r.get('makespan_steps', '')):>10}"
-              f"{str(r.get('tasks_per_h', '')):>9}{str(r.get('yield_events', '')):>7}{r.get('wall_s', ''):>8}")
+              f"{str(r.get('tasks_per_h', '')):>9}{str(r.get('saturated_tph', '-')):>8}"
+              f"{str(r.get('standoff_ticks', '-')):>9}"
+              f"{str(r.get('yield_events', '')):>7}{r.get('wall_s', ''):>8}")
     print(f"→ {out}")
 
 

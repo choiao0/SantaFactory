@@ -13,6 +13,21 @@ from .common import OUT, SPEED
 from .export_isaac import export_isaac
 
 
+# 포화 구간 [초] (-229). six 는 도착이 웨이브라(첫 30분에 38 %) 6h 평균 tasks_per_h 에 뒤 3h 의 수요 제한이
+# 섞여 용량 지표가 못 된다. 30~180분은 활동 태스크가 함대 상한(대수 × 동승)에 붙어 있는 완전 포화 구간이라
+# 라우팅 변경이 실제로 움직인 몫이 여기서 보인다 (docs/2026-09-15_6h병목진단_포장대_헛회전.md §8-3).
+SAT_FROM_S, SAT_TO_S = 1800.0, 10800.0
+
+
+def _saturated_tph(tasks_done, T_END, dt, lifelong):
+    """포화 구간 완료/h. 구간을 다 못 채운 런(고정 주문 수·짧은 horizon)에는 뜻이 없어 키를 안 붙인다."""
+    if not lifelong or T_END * dt < SAT_TO_S:
+        return {}
+    lo, hi = SAT_FROM_S / dt, SAT_TO_S / dt
+    n_sat = sum(1 for tk in tasks_done if lo <= tk["completed"] < hi)
+    return dict(saturated_tph=round(n_sat / ((SAT_TO_S - SAT_FROM_S) / 3600), 1))
+
+
 def _mean(x):
     return float(x.mean()) if len(x) else 0.0
 
@@ -169,9 +184,12 @@ def report(a, kernel, stream, ctx):
         # -79 (조건부, exact,front 만): 대치 상태기계 계수
         # -79 대치 상태기계: v3.9 부터 헤딩 main 기본(standoff=1). 계수 두 키는 상태기계가 켜진 런에만
         standoff=int(bool(getattr(a, "standoff", False)) or "front" in a.footprint),
-        **({"standoffs": int(kernel.standoffs), "standoff_swaps": int(kernel.standoff_swaps)}
+        # standoff_ticks (-229): 건수는 짧은 대치 100건과 긴 대치 1건을 구분 못 한다 — 묶인 로봇·틱이 처리량에 닿는 몫
+        **({"standoffs": int(kernel.standoffs), "standoff_swaps": int(kernel.standoff_swaps),
+            "standoff_ticks": int(kernel.standoff_ticks)}
            if "front" in a.footprint or getattr(a, "standoff", False) else {}),
         tasks_per_h=round(n_tasks / sim_hours, 1),
+        **_saturated_tph(tasks_done, T_END, dt, lifelong),
         orders_per_h=round(orders_ph, 1),
         lead_mean_s=round(_mean(lat_total), 1),
         lead_p90_s=round(_p90(lat_total), 1),

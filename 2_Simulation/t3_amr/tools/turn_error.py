@@ -49,6 +49,13 @@ import numpy as np
 
 PITCH = float(os.environ.get("PITCH", os.environ.get("PIBT_PITCH", "1.2")))
 WIDTH = 0.800
+FRONT_LEN = 0.390
+# 코 반경 — 축에서 앞쪽 모서리까지. 회전하면 이 반경으로 쓸고 간다.
+NOSE_R = (FRONT_LEN ** 2 + (WIDTH / 2) ** 2) ** 0.5      # 0.559 m
+# 두 규칙이 남기는 설계 여유. **둘 다 격자에 딸린다** — 예전엔 41.4 / 200.0 이
+# 박혀 있었는데 그건 pitch 1.0 의 값이라 다른 격자에서 조용히 틀렸다.
+GAP_FRONT2 = (PITCH - WIDTH / 2 - NOSE_R) * 1000.0       # 앞2: 코가 이웃 칸에 들어간다
+GAP_FULL = (PITCH - WIDTH) * 1000.0                      # 4칸/5칸: 이웃 칸을 통째로 비운다
 W_MIN = float(os.environ.get("W_MIN", "0.15"))     # rad/s — 회전 판정
 MIN_DEG = float(os.environ.get("MIN_DEG", "45"))   # 이보다 작게 돌면 회전 아님
 SETTLE = float(os.environ.get("SETTLE", "0.20"))   # s — 멈춘 뒤 이만큼 기다려 잰다
@@ -194,6 +201,16 @@ def print_lat_hist(lat):
     print(f"   ★ 예산에 쓰는 것은 꼬리다. 가로 p95 {np.percentile(lat, 95):.1f} ·"
           f" 최대 {lat.max():.1f} mm.")
     print("     중앙값이 작다고 안심하면 안 된다 — 접촉은 꼬리에서 난다.")
+    # 옆 칸 여유를 실제로 먹는 것은 **가로 성분뿐**이다. 위 「두 대가 마주 볼
+    # 때」는 종료 오차/구간 최대(크기 전체)를 두 배 하므로 세로까지 섞여
+    # 보수적이다. 두 판단이 갈릴 수 있어 둘 다 낸다.
+    print()
+    print("   규칙별 여유 — **가로 성분만** 두 배 (옆 칸 판정의 정확한 양)")
+    w2 = lat.max() * 2
+    for nm, gap in (("앞2", GAP_FRONT2), ("4칸/5칸", GAP_FULL)):
+        verdict = f"남는 여유 {gap - w2:6.1f} mm" if w2 < gap else "★ 초과"
+        print(f"     {nm:<8} 가로 최대x2 {w2:6.1f} mm  /  여유 {gap:6.1f} mm"
+              f"  ->  {verdict}")
 
 
 def split_report(path):
@@ -258,7 +275,14 @@ def report(path, t, rows):
     for nm, arr in (("종료 오차", end), ("구간 최대", mx)):
         print(f"     {nm}   p95x2 {np.percentile(arr, 95) * 2:6.1f} mm"
               f"   최대x2 {arr.max() * 2:6.1f} mm")
-    print(f"     -> 앞2 여유  41.4 mm   ·   4칸/5칸 여유 200.0 mm 와 비교")
+    worst2 = max(end.max(), mx.max()) * 2
+    print(f"     -> 앞2 여유 {GAP_FRONT2:6.1f} mm"
+          f"  ·  4칸/5칸 여유 {GAP_FULL:6.1f} mm  와 비교   (pitch {PITCH})")
+    for nm, gap in (("앞2", GAP_FRONT2), ("4칸/5칸", GAP_FULL)):
+        verdict = f"남는 여유 {gap - worst2:6.1f} mm" if worst2 < gap else "★ 초과"
+        print(f"        {nm:<8} 최악짝 {worst2:6.1f} mm  ->  {verdict}")
+    print("        (크기 전체를 두 배 한 보수적 값이다. 옆 칸 여유를 실제로")
+    print("         먹는 것은 가로 성분뿐 — 아래 「규칙별 여유」와 함께 볼 것)")
 
     print()
     worst_rows = sorted(rows, key=lambda r: -r[2])[:5]

@@ -25,6 +25,9 @@ services:
     container_name: a106-backend
     restart: unless-stopped
     environment:
+      # 엔티티가 LocalDateTime.now() 로 시각을 남기고 오프셋 없이 내려보낸다. 화면은 그걸 브라우저
+      # 지역시로 읽으므로, 서버 JVM 이 UTC 면 한국에서 9시간 어긋나 보인다 (S15P21A106-228).
+      TZ: Asia/Seoul
       DB_URL: jdbc:postgresql://db:5432/${DB_NAME}
       DB_USERNAME: ${DB_USERNAME}
       DB_PASSWORD: ${DB_PASSWORD}
@@ -33,6 +36,10 @@ services:
       RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
       REDIS_HOST: redis
       REDIS_PASSWORD: ${REDIS_PASSWORD}
+      # 영상 presigned URL 서명. 읽기 전용 계정(MINIO_BE_*)이 없으면 root 로 대신 서명한다
+      MINIO_PUBLIC_URL: ${MINIO_PUBLIC_URL:-https://j15a106.p.ssafy.io/media}
+      MINIO_ACCESS_KEY: ${MINIO_BE_ACCESS_KEY:-${MINIO_ROOT_USER}}
+      MINIO_SECRET_KEY: ${MINIO_BE_SECRET_KEY:-${MINIO_ROOT_PASSWORD}}
       JWT_SECRET: ${JWT_SECRET}
       ADMIN_EMAIL: ${ADMIN_EMAIL}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD}

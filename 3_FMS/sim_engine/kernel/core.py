@@ -133,6 +133,7 @@ class FmsKernel(BatteryMixin, MetricsMixin):
         self.trips = 0                            # 완료된 출고 왕복 수
         self.yield_events = []                    # 정면 조우 진단 이벤트 (양보 v2 legacy / -79 대치 "standoff")
         self.standoffs = self.standoff_swaps = 0  # -79 대치 수·역할 교대 수 (SUMMARY, exact,front 만)
+        self.standoff_ticks = 0                   # -229 대치에 묶인 로봇·틱 합 (건수와 달리 "얼마나 오래"를 잰다)
         self.n_submitted = 0
         self._progress = [0, 0]                 # (완료 수, 그때 t) — 워치독
         self.export_log = {}
@@ -442,7 +443,8 @@ class FmsKernel(BatteryMixin, MetricsMixin):
         standoff = front_swing_on() or cfg.standoff   # -79: 대치 상태기계 V2 — v3.9 부터 exact 기본(cfg.standoff), exact,front 는 항상. legacy 는 양보 v1
         extra = {rid: robots[rid]["swing"] for rid in rids if robots[rid]["busy"] > 0}
         # 회전 진행 중인 로봇의 soft 칸: 다른 로봇이 축을 들이지 못하게 이번 틱 예약으로 넘긴다 (-79, 다틱 회전)
-        soft_hold = {cell: rid for rid in rids if robots[rid]["busy"] > 0
+        # 두 회전 로봇의 soft 칸이 겹치면 낮은 rid 가 주인(결정적) — 제3자에게는 누구든 똑같이 막힌다 (답신 11 §4)
+        soft_hold = {cell: rid for rid in sorted(rids, reverse=True) if robots[rid]["busy"] > 0
                      for cell in robots[rid]["swing_soft"]}
         if cfg.yield_rule and not standoff:
             self._refresh_yields(t, states)
@@ -451,9 +453,12 @@ class FmsKernel(BatteryMixin, MetricsMixin):
         prio = self._priority_h(t)
         dists = self._dists_h(t, states, extra)
         if standoff:
-            if self._detect_standoffs(t, states, prio, dists, extra):
+            if self._detect_standoffs(t, states, prio, dists, extra, soft_hold):
                 prio = self._priority_h(t)
                 dists = self._dists_h(t, states, extra)         # 역할(L = 기본 거리장)이 이번 틱 바뀐 로봇
+            # -229: 이번 틱 대치에 묶인 로봇 수를 더한다(감지 뒤라 이번 틱 새 대치도 센다). standoffs 는 건수라
+            # 짧은 대치 100건과 긴 대치 1건을 구분 못 한다 — 묶인 시간이 처리량에 닿는 몫이다.
+            self.standoff_ticks += sum(1 for rid in rids if robots[rid]["hd_peer"] is not None)
         elif cfg.yield_rule and self._detect_headons(t, states, prio, dists):
             prio = self._priority_h(t)
             dists = self._dists_h(t, states, extra)
@@ -695,19 +700,28 @@ class FmsKernel(BatteryMixin, MetricsMixin):
                 body_now[cell] = rid
         return body_now, {s[:2]: rid for rid, s in states.items()}
 
-    def _detect_standoffs(self, t, states, priority, dists, extra):
+    def _detect_standoffs(self, t, states, priority, dists, extra, soft_hold=None):
         """같은 자리를 다투며 둘 다 hd_after 틱 이상 무진전인 두 로봇 → 대치. 걸었으면 True.
         정면(코 맞댐)뿐 아니라 같은 방향(앞차 후진·뒤차 전진)·회전을 막는 옆 축까지 같은 매듭으로 본다 (시드 7·101 실측).
-        상대는 회전 중(busy)이어도 된다 (R2 — 시드 42: 두 대가 5틱 회전을 번갈아 해 둘 다 non-busy 인 틱이 없었다)."""
+        상대는 회전 중(busy)이어도 된다 (R2 — 시드 42: 두 대가 5틱 회전을 번갈아 해 둘 다 non-busy 인 틱이 없었다).
+        R2′ (-159): 임시 예약(회전 중 스윙 extra·soft_hold)에만 막힌 wish 도 상대를 찾는다 — 단 stag ≥ 2×hd_after 부터.
+        처음엔 R1 인내가 기다리게 하고(임시 예약은 ≤ turn_ticks 뒤 풀린다), 상대가 회전을 되풀이해 오래 막혀 있으면 같은 매듭
+        (load_eval L1·16대·103 매듭 (A): r4 전진 wish 가 r5 스윙에 3,400틱 막힘, 대치 쌍 0)."""
         order = {rid: i for i, rid in enumerate(priority)}
         body_now, axle_now = self._owners(states, extra)
-        body_owner = {cell: rid for rid, s in states.items() for cell in occupied(s)}
+        body_perm = {cell: rid for rid, s in states.items() for cell in occupied(s)}     # 몸만 (영구)
+        soft_hold = soft_hold or {}
         changed = False
         for rid in priority:
             if not self._standoff_free(rid):
                 continue
             hard, soft = self._wish_cells(rid, states, dists)
-            peers = {body_owner[c] for c in hard if c in body_owner} | {axle_now[c] for c in soft if c in axle_now}
+            # 영구 예약(몸·축)에 막힌 상대는 hd_after 부터, 임시 예약(스윙·회전 중 soft)에만 막힌 상대는 2×hd_after 부터 (R2′).
+            # 회전 한 번은 ≤ turn_ticks 뒤 풀리므로 그 안은 R1 인내에 맡기고, 되풀이 막힘(매듭 (A): 3,400틱)만 대치로 —
+            # 문턱을 같이 두면 soft 4칸 고밀도에서 대치가 3배로 늘어 처리량 −10~−29 %(load_eval 28대, 2026-09-15 실측).
+            peers = {body_perm[c] for c in hard if c in body_perm} | {axle_now[c] for c in soft if c in axle_now}
+            if self._stag.get(rid) >= 2 * self.cfg.hd_after:
+                peers |= {body_now[c] for c in hard if c in body_now} | {soft_hold[c] for c in soft if c in soft_hold}
             peers.discard(rid)
             for peer in sorted(peers, key=order.get):
                 if self._standoff_free(peer, allow_busy=True):

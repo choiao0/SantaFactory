@@ -360,6 +360,30 @@ class TestScenario:
         v = job.result()["verify"]
         assert v["scenario_ack"] is True and v["scenario_sha256"] == req.scenario_sha256 and v["isaac_instances"] == 1
 
+    def test_video_url_from_runner_lands_in_artifacts(self):
+        """t3_amr 엣지(-215)는 IDLE 로 돌아가는 NDATA 에 Runner/VideoUrl 을 같이 싣는다 → artifacts.video."""
+        req = O.VerifyRequest.from_json(req_json(window_s=10))
+        job, cmd = O.Job(req, "sim-runner-gpu01", O.JobConfig(), 0.0), Cmd()
+        job.step(node("IDLE"), 0.0, cmd)
+        job.step(node("RUNNING", "verify-1", last_seen=1.0), 1.0, cmd)
+        job.step(node("RUNNING", "verify-1", last_seen=12.0), 12.0, cmd)
+        done = node("IDLE", "", last_seen=13.0)
+        done.metrics[O.VIDEO_URL] = "https://j15a106.p.ssafy.io/media/verify-videos/verify-1/demo_verify-1.mp4"
+        job.step(done, 13.0, cmd)
+
+        r = job.result()
+        assert r["status"] == "done"
+        assert r["artifacts"] == {"video": "https://j15a106.p.ssafy.io/media/verify-videos/verify-1/demo_verify-1.mp4"}
+
+    def test_artifacts_null_when_runner_gave_no_video(self):
+        req = O.VerifyRequest.from_json(req_json(window_s=10))
+        job, cmd = O.Job(req, "sim-runner-gpu01", O.JobConfig(), 0.0), Cmd()
+        job.step(node("IDLE"), 0.0, cmd)
+        job.step(node("RUNNING", "verify-1", last_seen=1.0), 1.0, cmd)
+        job.step(node("RUNNING", "verify-1", last_seen=12.0), 12.0, cmd)
+        job.step(node("IDLE", "", last_seen=13.0), 13.0, cmd)
+        assert job.result()["artifacts"] is None
+
     def test_scenario_ack_false_when_runner_did_not_echo(self):
         req = O.VerifyRequest.from_json(req_json(scenario=self.SCENARIO, window_s=10))
         job, cmd = O.Job(req, "sim-runner-gpu01", O.JobConfig(), 0.0), Cmd()

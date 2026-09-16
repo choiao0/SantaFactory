@@ -1,0 +1,6 @@
+# nvidia-container-toolkit 이 깔린 노드에서 k3s 가 자동으로 등록하는 런타임 이름과 맞춘다.
+apiVersion: node.k8s.io/v1
+kind: RuntimeClass
+metadata:
+  name: nvidia
+handler: nvidia

@@ -50,11 +50,15 @@ lifelong 은 일을 **시간에 걸쳐** 흘려보낸다. 한 번에 움직이�
 "가깝다"고 배정되는데 실제로는 180° 돌아야 한다. 그쪽 설계 §6 이 후속 이슈로 걸어둔
 항목이라 여기서도 같게 두었다. 고칠 때 양쪽을 같이 고쳐야 비교가 성립한다.
 """
+import os
+import sys
+
 import numpy as np
 
 import pibt_core_v2 as _pc
-from pibt_core_v2 import (Replanner, Stagnation, dist_map_h, occupied, stay_map_h,
-                          step_h, swing_cells, valid_state, wait_bias)
+from pibt_core_v2 import (Replanner, Stagnation, dist_map_h, front_cells,
+                          occupied, stay_map_h, step_h, swing_cells,
+                          valid_state, wait_bias)
 
 # 로봇 상태 — FMS fms_kernel.py:31 과 같은 어휘
 IDLE, TO_PICK, SVC_PICK, TO_DROP, SVC_DROP, TO_HOME, FREED = \
@@ -172,13 +176,26 @@ class Kernel(object):
     """재배차 + PIBT 1틱. `history` 는 run_h 와 같은 형식이라 ADG 를 그대로 지을 수 있다."""
 
     def __init__(self, free, starts, stream, edge_cost=None, wait_cost=None,
-                 turn_cost=None, turn_ticks=None, *, zone_cells=()):
+                 turn_cost=None, turn_ticks=None, *, move_ticks=None,
+                 zone_cells=()):
         self.free = free
         H, W = free.shape
         self.edge_cost = np.ones((H, W, 4)) if edge_cost is None else edge_cost
         self.wait_cost = np.ones((H, W)) if wait_cost is None else wait_cost
         self.turn_ticks = int(turn_ticks or _pc.TURN_TICKS)
-        self.turn_cost = float(self.turn_ticks if turn_cost is None else turn_cost)
+        # ★ 틱 모델 정합 (2026-09-15, S15P21A106-211).
+        #   FMS 가 `run_h` 의 전진을 MOVE_TICKS(4) 틱으로 맞췄다. `lifelong` 은
+        #   `_after_step_h` · `_default_costs_h` 를 안 타고 아래를 자체
+        #   구현하므로 그 머지가 **여기까지 안 온다.** 맞춰 주지 않으면
+        #   도구(run_h 경로)와 운영(lifelong)이 갈린 채 둘 다 에러 없이 돈다.
+        #
+        #   turn_cost 는 **틱 수가 아니라 전진 1칸 대비 배율**이다. 전진이
+        #   1틱이던 시절에는 turn_ticks(5.0)가 곧 배율이었지만, 전진이
+        #   move_ticks 틱이 된 뒤로는 TURN_COST = TURN_TICKS/MOVE_TICKS = 1.25 다.
+        #   5.0 을 그대로 두면 거리장이 회전을 커널보다 4배 비싸게 봐서
+        #   **경로 자체가 달라진다**.
+        self.move_ticks = int(move_ticks or _pc.MOVE_TICKS)
+        self.turn_cost = float(_pc.TURN_COST if turn_cost is None else turn_cost)
         self.stream = stream
         self.states = dict(starts)
         for a, s in self.states.items():
@@ -186,9 +203,17 @@ class Kernel(object):
         self.rb = {a: {"state": IDLE, "goal": None, "task": None,
                        "home": s[:2], "svc": 0} for a, s in starts.items()}
         self.waiting = []
+        # agent -> 태스크를 받은 틱들 (-211, 릴리스 바닥용. `step` 이 채운다)
+        self.task_start = {}
         self._dm = {}                       # 목표별 거리표 캐시 — 재배차가 잦아 필수
         self.busy = {a: 0 for a in starts}
         self.swing = {a: set() for a in starts}
+        # ★ 회전 중인 로봇의 soft 칸 (-211). `swing`(hard)과 갈라 둔다 —
+        #   의미가 다르기 때문이다: hard 는 상대의 **몸**을, soft 는 상대의
+        #   **축**만 막는다. 이걸 안 넘겨서 4칸 규칙이 회전 5틱 중 1틱만
+        #   걸렸고, pitch 1.0 주행 5판 중 2판이 차체 접촉으로 중단됐다.
+        self.swing_soft = {a: frozenset() for a in starts}
+        self._soft_clash = 0     # soft 칸이 두 대에 겹친 횟수. 0 이어야 정상
         self.age = {a: 0 for a in starts}
         self.stag = Stagnation()
         self.replan = Replanner(free, self.edge_cost, self.turn_cost)
@@ -404,7 +429,28 @@ class Kernel(object):
     def step(self, t):
         for task in self.stream.arrivals(t):
             self.waiting.append(task)
+
+        # ★ 태스크가 **배정된 틱**을 기록한다 (-211). ADG 실행기의 릴리스 바닥이
+        #   이걸 본다 — "주문이 오기 전에 출발하지 않는다" 는 태스크의 **첫
+        #   동작에만** 필요한 제약인데, 지금은 모든 동작에 걸려 로봇 시간의
+        #   21.8% 가 계획 시각 대기로 사라진다 (2026-09-15 실측).
+        #
+        #   ★ `dispatch` 안이 아니라 여기서 **전이를 감지**한다. 배차 정책이
+        #     둘(`fms` · `robot_first`)이고 `dispatch.py` 가 갈아끼우므로,
+        #     정책 안에 손을 대면 한쪽만 기록되거나 패리티가 깨진다.
+        _idle = [a for a, r in self.rb.items() if r["task"] is None]
         self.assign(t)
+        for a in _idle:
+            tk = self.rb[a]["task"]
+            if tk is not None:
+                # ★ (배정 틱, **주문 도착 틱**) 쌍이다 (-211, 2026-09-15).
+                #   앞은 실행기가 첫 동작을 **찾는** 데 쓰고, 뒤가 릴리스
+                #   바닥의 **값**이다. 전에는 배정 틱만 넘겼고 실행기가
+                #   `action.tick`(계획 시간표)으로 바닥을 매겼는데, 그건
+                #   「주문이 오기 전에 출발하지 않는다」가 아니라 「계획이
+                #   말한 시각에 출발한다」였다. 적체가 있으면 이미 온 주문을
+                #   두고 기다린다.
+                self.task_start.setdefault(a, []).append((t, tk["born"]))
 
         self._send_freed_home()          # 남은 FREED 는 홈으로
 
@@ -436,18 +482,93 @@ class Kernel(object):
         #   세 번째 값은 구간 대수 제한 **지표**일 뿐 이동 결정에 안 쓰인다
         #   (FMS 는 section_blocks 카운터로만 쓴다). 우리는 `sec_limit` 을 안
         #   넘기므로 장치가 꺼져 있고 항상 빈 집합이라, 이동 결과는 이전과 같다.
+        # ★ 회전 진행 중인 로봇의 soft 칸 — 다틱 회전의 2~5틱째를 지킨다 (-211).
+        #
+        #   `soft_next` 는 `_PIBTStepH` 인스턴스마다 새로 생기므로(heading.py:74)
+        #   넘겨주지 않으면 **회전을 시작하는 틱에만** 규칙이 걸린다. 나머지
+        #   4틱은 남의 축이 guard 칸에 들어와 앉아도 아무도 안 막는다.
+        #   실측(`tools/swing_overlap.py --guard`, pitch 1.0 · 1260틱):
+        #
+        #            1틱  2틱  3틱  4틱  5틱     총
+        #       s2     0    2   10   22   26     60건
+        #       s5     0    2    8   26   28     64건    ← 그 두 판이 접촉으로 중단
+        #
+        #   1틱째가 0 이라 계획기의 검사(`_soft_blocked`)는 멀쩡하다. 고칠 것은
+        #   검사가 아니라 **검사가 사는 기간**이다. 커널(core.py:445)은 이미 넘긴다.
+        #
+        #   커널의 dict 컴프리헨션은 두 대의 soft 칸이 겹치면 **조용히 뒤엣것만
+        #   남는다.** 여기서는 갈라 둔다 — 낮은 rid 가 이기고(sorted), 겹치면 센다.
+        #   ★ 킬스위치 (-224). `PIBT_SOFT_HOLD=0` 이면 안 넘긴다 — **재기준선
+        #     A/B 용**이다. 기본은 켜짐이라 안 주면 동작이 그대로다.
+        #
+        #     이게 없으면 기준선을 뜰 때마다 `lifelong.py` 를 develop 판으로
+        #     바꿔치기해야 하는데, 그러면 지표 계측(`stag_*`)도 같이 사라져
+        #     비교가 안 된다. 실제로 로컬에서 그 짓을 했고 실수하기 좋았다.
+        #     FMS 도 같은 이유로 `--no-zone`·`PIBT_BATTERY` 를 남겨 뒀다.
+        #
+        #     ★ 끄면 `soft_clash` 도 0 이 된다 (셀 자리가 없으니). 기준선의
+        #       `soft_clash` 0 을 「겹침이 없었다」로 읽으면 안 된다.
+        soft_on = os.environ.get("PIBT_SOFT_HOLD", "1") not in ("0", "", "false")
+        soft_hold = {}
+        for a in sorted(agents) if soft_on else ():
+            if self.busy[a] <= 0:
+                continue
+            for cell in self.swing_soft[a]:
+                prev = soft_hold.setdefault(cell, a)
+                if prev != a:
+                    # ★ 「안 나야 정상」이 아니다 (2026-09-16 실측 정정).
+                    #   작업서 초판은 「같은 틱에 A 가 먼저 soft 를 예약하면 B 의
+                    #   회전 후보가 거부된다」고 봤는데 **틀렸다.**
+                    #   `_soft_blocked` 가 보는 것은 둘뿐이다:
+                    #       (가) 내 **축**이 놓일 칸이 남에게 soft 예약됐나
+                    #       (나) 남의 **축**이 내 soft 칸에 있나
+                    #   「내 soft 가 남의 soft 와 겹치나」는 **안 본다.** 그리고
+                    #   회전은 축이 안 움직이므로 (가)에도 안 걸린다. 그래서 서로
+                    #   다른 틱에 시작한 두 회전의 guard 가 겹치는 일이 실제로
+                    #   난다 — 그 자체는 soft 의 정의상 **합법**이다 (서로의 축만
+                    #   안 들어오면 된다).
+                    #
+                    #   그래서 이 카운터는 **버그 신호가 아니라 노출 지표**다.
+                    #   0 을 단언하면 안 된다. 실측 1260틱 12대: 시드별 29~89
+                    #   (칸 x 틱 누적이라 동시 회전 **사건 수**는 그보다 훨씬 적다).
+                    #   위험은 이 겹침 자체가 아니라, 겹친 뒤 한쪽이 `_release`
+                    #   될 때 보호가 통째로 사라지는 상류 버그였다 (heading.py,
+                    #   `soft_base` 복원으로 수정).
+                    self._soft_clash += 1
+                    if self._soft_clash <= 5:
+                        print(f"[lifelong] ★ soft 칸 {cell} 충돌 — agent{prev} 유지, "
+                              f"agent{a} 무시. 동시 회전 두 대의 soft 가 겹쳤다.",
+                              file=sys.stderr)
+
+        # `forbid_axle`(뒤에서 둘째)은 넘기지 않는다 — FMS 답신 10 §4:
+        # 「`_make_room` 이 내부에서 쓴다. 밖에서 넣는 것은 대치 상태기계의
+        # 양보 제약뿐.」
         new, cells, _denied = step_h(self.states, d_now, self.edge_cost, self.wait_cost,
-                                     self.free, prio, self.turn_cost, extra, bias)
+                                     self.free, prio, self.turn_cost, extra, bias,
+                                     None, 0, (), None, None,
+                                     soft_hold if soft_on else None)
 
         for a in agents:
             s0, s1 = self.states[a], new[a]
-            if s1[:2] == s0[:2] and s1[2] != s0[2]:
+            if s1[:2] == s0[:2] and s1[2] != s0[2]:          # 회전 시작
                 self.busy[a] = self.turn_ticks - 1
                 self.swing[a] = swing_cells(s0[0], s0[1], s0[2], s1[2])
+                # ★ hard 와 같은 수명으로 soft 도 잡는다 (-211).
+                #   `front_cells` 는 규칙이 꺼져 있으면 빈 집합을 돌려주므로
+                #   스위치가 꺼진 판은 `soft_hold` 가 통째로 비어 비트 동일하다.
+                self.swing_soft[a] = frozenset(
+                    front_cells(s0[0], s0[1], s0[2], s1[2]))
+            elif s1[:2] != s0[:2]:                            # 전진·후진 시작
+                # 칸은 첫 틱에 옮기고 나머지는 busy 로 제자리 — 몸 2칸이 새 칸 +
+                # 떠난 칸을 그대로 쥔다. `pibt.heading._after_step_h` 와 같다.
+                self.busy[a] = self.move_ticks - 1
+                self.swing[a] = set()
+                self.swing_soft[a] = frozenset()
             elif self.busy[a] > 0:
                 self.busy[a] -= 1
                 if self.busy[a] == 0:
                     self.swing[a] = set()
+                    self.swing_soft[a] = frozenset()
             r = self.rb[a]
             if r["state"] in SERVICE:
                 r["svc"] -= 1
@@ -487,7 +608,7 @@ class Kernel(object):
 
 def run_lifelong(free, starts, cells_by_cat, horizon=600, seed=0, order_gap=15,
                  shifts=("in", "out", "out"), edge_cost=None, wait_cost=None,
-                 turn_cost=None, turn_ticks=None, verbose=True,
+                 turn_cost=None, turn_ticks=None, move_ticks=None, verbose=True,
                  kernel_cls=None, kernel_kw=None, zone_cells=(), order_end=None):
     """T틱까지 돌린다. **정체로 죽지 않는다** — 못 가는 로봇은 대기할 뿐이다.
 
@@ -510,6 +631,8 @@ def run_lifelong(free, starts, cells_by_cat, horizon=600, seed=0, order_gap=15,
     #   섞이지 않게 하려는 것이다.
     kkw = dict(kernel_kw or {})
     kkw.setdefault("zone_cells", tuple(zone_cells))
+    if move_ticks is not None:
+        kkw.setdefault("move_ticks", move_ticks)
     K = (kernel_cls or Kernel)(free, starts, stream, edge_cost, wait_cost,
                                turn_cost, turn_ticks, **kkw)
     history, cells_hist = [dict(K.states)], []
@@ -524,7 +647,28 @@ def run_lifelong(free, starts, cells_by_cat, horizon=600, seed=0, order_gap=15,
             "tasks_done": K.done, "waiting": len(K.waiting),
             "windows": stream.windows, "order_end": stream.order_end,
             "parked_end": parked,
-            "busy_robots": sum(1 for r in K.rb.values() if r["state"] != IDLE)}
+            # agent -> [(배정 틱, 주문 도착 틱)]. `isaac_drive` 가 릴리스
+            # 바닥에 쓴다 — 앞은 첫 동작을 찾는 데, 뒤가 바닥 값 (-211)
+            "task_start": {a: list(v) for a, v in K.task_start.items()},
+            "busy_robots": sum(1 for r in K.rb.values() if r["state"] != IDLE),
+            # soft 칸이 두 대에 겹쳐 한쪽을 무시한 횟수 (-224).
+            #   ★ 0 을 단언하면 안 된다 — 버그 신호가 아니라 **노출 지표**다
+            #     (겹친 채 도는 것 자체는 합법. FMS 답신 12 §1·§4 확인).
+            "soft_clash": getattr(K, "_soft_clash", 0),
+            # ★ 어느 쪽 판인지 결과에 남긴다 (-224). 표만 보고 기준선과
+            #   구현판을 헷갈리는 일이 실제로 있었다.
+            "soft_hold": os.environ.get("PIBT_SOFT_HOLD", "1")
+                         not in ("0", "", "false"),
+            # ★ 교착 지표 (-224). `soft_hold` 는 제약을 늘리므로 위험이 접촉이
+            #   아니라 **처리량·교착**이다. FMS 답신 12 §3: 위상 잠금은
+            #   6대·시드 42 에서 실측된 사후 기록이고, **밀도가 아니라 배치**가
+            #   정한다 — 저밀도에서도 난다. 그래서 반드시 같이 본다.
+            #   (`tools/adg_cycles.py` 로는 못 본다. 그쪽은 `run_h` 라
+            #    `lifelong` 을 안 탄다.)
+            "stag_max": max(K.stag.stag.values(), default=0),
+            "stag_mean": (sum(K.stag.stag.values()) / len(K.stag.stag)
+                          if K.stag.stag else 0.0),
+            "stag_stuck": sum(1 for v in K.stag.stag.values() if v >= 100)}
     if hasattr(K, "report"):
         info.update(K.report())
     if verbose:

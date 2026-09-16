@@ -115,6 +115,10 @@ class KernelPlanner:
         dims = opts.get("robot_dims", ROBOT_DIMS)
         robot_dims = tuple(float(x) for x in (dims.split(",") if isinstance(dims, str) else dims))
         mask = turn_mask(None, robot_dims, FOOTPRINT_MARGIN_M) if footprint != "legacy" else None
+        import pibt.heading as _hd
+        _hd.NO_PROGRESS_TURN_BIAS = footprint != "legacy"   # 계약 v3.11: 견적(sim_v2 기본)과 같은 값. 모듈 전역이라 호출마다 명시
+        _hd.GOAL_WAIT_FREE = True                            # 계약 v3.12: 목표 상태 대기 점수 0 (견적과 같은 값)
+        _hd.TURN_FLOOR_WAIT = footprint != "legacy"         # 계약 v3.13: 진전 없는 회전 점수 하한 = 대기 점수
         cfg = KernelConfig(heading=True, zone=zone, theta=bool(theta_file or lanes), service_steps=round(SERVICE_TIME_S / self.dt),
                            capacity=so["capacity"], svc_per_tote=max(1, int(so["svc_per_tote_s"] / self.dt + 0.5)),   # 워커 _orders_flags 와 같은 반올림
                            yield_rule=yield_rule, standoff=footprint != "legacy",   # 계약 v3.9: 견적(sim_v2 기본)과 같이 대치 상태기계 V2

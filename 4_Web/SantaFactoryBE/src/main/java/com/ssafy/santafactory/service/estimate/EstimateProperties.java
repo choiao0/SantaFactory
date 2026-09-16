@@ -37,6 +37,12 @@ import java.time.Duration;
  *                          로봇 시드의 capacity(200)는 단위가 달라 쓰지 않는다
  * @param exportReplay      run 마다 앞 구간 궤적을 함께 받을지 (S15P21A106-205). 워커 시간이 run 당 약
  *                          35 % 늘고 견적당 약 1 MB 를 저장한다. 끄면 대수별 재생 화면이 비어 보인다
+ * @param leadTimeP90Limit  주문 리드타임 p90 상한. 넘는 대수는 권장에서 제외한다 — "주문은 다 나가지만
+ *                          한 건이 오래 걸리는" 구성을 거른다 (명세 v0.4 "결과 판정에는 주문
+ *                          lead_time_p90_s 상한이 필요하다", S15P21A106-97).
+ *                          <b>기본값 없음(null)</b> — 설정하지 않으면 리드타임을 보지 않아 기존 동작과 같다.
+ *                          값을 정하려면 실측이 필요하다: 조건이 같은 대수들의 p90 이 어디에 모이는지 보고
+ *                          그보다 위에 둬야 정상 구성은 통과하고 병목 구성만 걸린다. θ 가 바뀌면 다시 본다
  */
 @ConfigurationProperties(prefix = "estimate")
 public record EstimateProperties(
@@ -53,8 +59,14 @@ public record EstimateProperties(
         @DefaultValue("true") boolean exportReplay,
         @DefaultValue("10m") Duration verifyWindow,
         @DefaultValue("10") int maxLineQty,
-        @DefaultValue("6") int amrCapacity
+        @DefaultValue("6") int amrCapacity,
+        Duration leadTimeP90Limit
 ) {
+
+    /** 리드타임 상한(초) — 미설정이면 null 이고 판정이 이 조건을 건너뛴다. */
+    public Double leadTimeP90LimitSeconds() {
+        return leadTimeP90Limit == null ? null : (double) leadTimeP90Limit.toSeconds();
+    }
 
     /** 대수에 비례하는 1대당 비용 — 단가 + 구축·설치비. 충전기는 대수의 계단 함수라 여기 넣지 않는다. */
     public long perUnitCost() {
