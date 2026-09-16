@@ -1427,6 +1427,20 @@ def _tol_env(name, default):
     return float(raw) if raw else default
 
 
+# ★ 직선 추종 이득 (-224). 기본값은 예전 하드코딩 그대로라 **비트 동일**이다.
+#
+#   w = K_CROSS*cross + K_HEAD*head 인데, 직진 중 두 항은 균형을 이룬다.
+#   `cross = along*sin(head) - q*cos(head)` 이므로 (q = 차선 이탈) w = 0 에서
+#
+#       head = K_CROSS*q / (K_HEAD + K_CROSS*along)
+#
+#   즉 **요잉 오차는 횡이탈을 죽이려고 유지되는 각도**다 (게 걸음). 비율
+#   K_CROSS/K_HEAD 가 그 crab 각의 크기를 정한다. 꼬리 이탈이 예산 100 mm 를
+#   넘는 것이 이것 때문인지 `tools/gain_balance.py` 로 먼저 확인하고 흔든다.
+K_CROSS = _tol_env("PIBT_K_CROSS", 1.8)
+K_HEAD = _tol_env("PIBT_K_HEAD", 2.2)
+
+
 @dataclass
 class Tolerance:
     # ★ pitch 1.0 에서는 0.05 가 기하 여유 41.3 mm 보다 크다 — 위 설명 참고.
@@ -1516,7 +1530,7 @@ class MotionController:
         # 차체를 +w로 돌리면 진행 방향 벡터도 같이 +w만큼 돈다 — 전진이든 후진이든.
         # 여기에 sign을 한 번 더 곱하면 후진에서 조향이 반대로 걸려 횡오차가
         # 발산하고, 방향 항과 싸우다가 목표 반경에 영영 못 든다.
-        w = clamp(1.8 * cross + 2.2 * head, -g.w_max, g.w_max)
+        w = clamp(K_CROSS * cross + K_HEAD * head, -g.w_max, g.w_max)
 
         # 속도는 대칭으로: 지나쳤으면(along < 0) 되돌아올 수 있어야 한다.
         # 감속 계수는 **물리적** 후진에 붙인다 (센서가 없는 방향이므로).

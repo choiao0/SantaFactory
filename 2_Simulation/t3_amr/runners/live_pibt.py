@@ -897,6 +897,13 @@ async def _run():
                   f"quat_order={'O' if hasattr(_id, 'QUAT_ORDERS') else 'X'} "
                   f"verify_start={'O' if hasattr(_id.FleetController, 'verify_start') else 'X'} "
                   f"open_loop={'O' if hasattr(_id.FleetController, '_watch_open_loop') else 'X'}")
+    # ★ 흔들 수 있는 값은 **실제 값을 찍는다** (-224). 환경변수를 줬는지 안
+    #   줬는지 로그만 보고 알 수 있어야 A/B 표가 어느 쪽인지 안 헷갈린다.
+    _tolv = _id.Tolerance()
+    carb.log_warn(f"[pibt] 주행 상수: K_CROSS={_id.K_CROSS} K_HEAD={_id.K_HEAD} "
+                  f"(비율 {_id.K_CROSS / _id.K_HEAD:.2f}) · "
+                  f"tol pos={_tolv.pos} yaw={_tolv.yaw} cross={_tolv.cross} · "
+                  f"stall_timeout={os.environ.get('PIBT_STALL_TIMEOUT', '') or 20.0}")
 
     carb.log_warn(f"[pibt] 계획 시작  n={N} pitch={PITCH} seed={SEED} mode={MODE}")
     if MODE == "lifelong":
