@@ -80,8 +80,9 @@ DES 요청의 `horizon_s · shifts · inbound_gap_s · outbound_gap_s · warehou
            "lead_time_mean_s": 61.2, "lead_time_p90_s": 90.0, "queue_time_mean_s": 3.1, "throughput_orders_per_h": 274.6,
            "throughput_tasks_per_h": 335.6, "amr_utilization": 0.71, "conflict_wait_ratio": 0.02, "distance_total_m": 140,
            "charge_downtime_s": 0 },       // fms-core 의 kpi_summary(MQTT_CONTRACT §4.4) — DES 견적 워커 to_kpi 와 같은 14개 키. 분모(makespan_s) = 실제로 돈 커널 틱 수. fms-core 가 없거나 플래너 전에 끝났으면 null
-  "artifacts": { "video": "https://j15a106.p.ssafy.io/media/verify-videos/verify_77_n3/demo_verify_77_n3.mp4" },
-                                        // (-215) 러너가 Runner/VideoUrl 로 준 mp4 공개 URL. 영상이 없으면 artifacts 는 null. replay·heatmap 키는 예정
+  "artifacts": { "video": "verify_77_n3/demo_verify_77_n3.mp4" },
+                                        // (-215/-233) 러너가 Runner/VideoUrl 로 준 mp4 의 **객체 키** `<run_id>/<파일>` — URL 이 아니고 버킷 이름도 안 붙는다(버킷은 양쪽 설정).
+                                        // 버킷은 비공개, 화면용 서명 URL 은 BE 가 조회 시 만든다(§7). 영상이 없으면 artifacts 는 null. replay·heatmap 키는 예정
   "source_run_id": "est_77_n3", "estimate_id": 77
 }
 ```
@@ -114,3 +115,27 @@ DES 요청의 `horizon_s · shifts · inbound_gap_s · outbound_gap_s · warehou
 ① 창 길이 — DES 6 h 대비 Isaac 10~20 분 창, 같은 창의 DES KPI 와 비교하는 정의. 지금은 요청의 `window_s` 로 열어 둔다. 실측(2026-09-09, 명세 예시 조건 seed 42): DES 창의 첫 10 분에는 주문 2건, 10~20 분에 124건(wave) — "첫 W 분" 은 쓸 수 없고 `scenario.window_start_s` 로 안정 구간을 잘라야 한다(제안: 출고 시작 + 90 분, 600 s). 실 로봇 1 칸 ≈ 2.2 s · 90° ≈ 2.5 s 라 커널 틱(1 s)보다 느리다 — `verify.fms.ticks` 가 그 창에서 돈 DES 초이고 KPI 분모다.
 ② 20 분 초과 창과 `consumer_timeout` — 큐 정책(`consumer_timeout`)을 늘릴지, 꺼내자마자 ack 하고 BE 의 TIMEOUT 재시도로 갈지.
 ③ `VERIFYING` 상태값. ④ 주문 스크립트 전달 — **해소(2026-09-14, -197)**: 백엔드 `OutboundOrderGenerator` 가 견적 생성 시 1회 만들어 저장하고 DES 요청 `outbound[]` 와 여기 `scenario.orders` 에 같은 목록을 싣는다. 워커 자체 생성(-158)·3_FMS `order_gen` 은 제거. 남은 제안: 워커가 `sim.result` 에 `orders_sha256` 에코(저장본 대조). ⑤ `kpi` 산출 주체 — **해소(2026-09-09)**: fms-core 가 DES 와 같은 산식(`fms_core/kpi.py` = `sim_engine/cli/report.py`)으로 계산해 `kpi_summary` 로 내고 host-orch 는 그대로 싣는다.
+
+
+## 7. `artifacts.video` 를 화면 URL 로 (백엔드, -233)
+
+러너가 주는 값은 URL 이 아니라 **객체 키** `<run_id>/<파일>` 이다 — 버킷 이름은 안 붙는다(버킷 `verify-videos` 는 양쪽 설정 `MINIO_BUCKET`). 버킷은 비공개라 키만으로는 아무도 못 연다.
+백엔드는 `estimates.verify_video_url` 에 키를 그대로 저장하고, 견적 조회·검증 SSE 에서 **그때그때** 짧은 만료의 presigned GET 을 만들어
+`video_url` 로 준다. 화면(`<video src>`)은 무변경. 견적 번호만 바꿔 남의 영상을 여는 일은 API 의 소유권 검사가 막는다.
+구현: 4_Web `VerifyVideoPresigner`(-89, 2026-09-16 develop) — `objectKey()` 가 URL 이 아닌 값을 통째로 키로 보고, 215 시절 공개 URL 형식은 `/verify-videos/` 뒤를 키로 뽑아 재서명한다. TTL 30 분, 만료 뒤 구간 이동 403 은 FE 가 상세를 다시 불러 새 URL 로 이어 간다.
+
+| 항목 | 값 |
+|---|---|
+| 계정 | `santa-be` — 읽기 전용(정책 `santa-be-read`: `verify-videos/*` GetObject + GetBucketLocation). 비밀은 EC2 `~/minio-keys/santa-be.env`, 환경변수로 주입, git 밖 |
+| 서명 엔드포인트 | `https://j15a106.p.ssafy.io` (secure), region `us-east-1`, 경로 `/verify-videos/<키>` |
+| 브라우저에 주는 URL | 서명한 뒤 경로 **앞에 `/media` 를 끼운다** → `https://j15a106.p.ssafy.io/media/verify-videos/<키>?X-Amz-…` |
+| 만료 | 짧게(예 10 분). 조회마다 새로 만든다 — DB 에는 키만 둔다 |
+
+왜 `/media` 를 서명 뒤에 끼우나: nginx 가 `location /media/ { proxy_pass http://127.0.0.1:9002/; proxy_set_header Host $host; }` 라
+`/media` 를 떼고 Host 는 그대로 넘긴다. SigV4 는 Host 와 경로를 서명하므로 MinIO 가 실제로 보는 조합(`j15a106.p.ssafy.io` + `/verify-videos/…`)으로
+서명해야 맞는다. 내부 주소(`http://minio:9000`)나 `/media` 를 포함한 경로로 서명하면 브라우저 요청에서 403 이다.
+서명은 네트워크 없이 계산된다 — minio-java 는 `MinioClient.builder().endpoint("https://j15a106.p.ssafy.io").region("us-east-1").credentials(…)` 뒤
+`getPresignedObjectUrl(GetPresignedObjectUrlArgs … method(GET).bucket("verify-videos").object(키).expiry(10, MINUTES))`. region 을 명시하면
+GetBucketLocation 호출도 없어 BE 컨테이너가 MinIO 에 닿을 필요가 없다.
+
+실측 2026-09-16(minio-py 로 같은 절차): 서명 URL(`/media` 삽입) → **200**, video/mp4 2.5 MB · 서명 없이 → **403** · `/media` 없이 → FE 의 index.html(200, text/html — MinIO 가 아니다).

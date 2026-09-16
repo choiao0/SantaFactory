@@ -1,6 +1,7 @@
 package com.ssafy.santafactory.service.estimate;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.ssafy.santafactory.entity.estimate.Estimate;
@@ -19,6 +20,9 @@ class VerifyEventStreamTest {
 
     @Mock
     EstimateRepository estimateRepository;
+
+    @Mock
+    VerifyVideoPresigner videoPresigner;
 
     @InjectMocks
     VerifyEventStream stream;
@@ -39,12 +43,13 @@ class VerifyEventStreamTest {
     @Test
     void an_estimate_that_already_has_a_video_is_closed_right_after_the_snapshot() {
         Estimate estimate = Estimate.open(null, "iw.hub", 95.0, 80.0, 300_000_000L);
-        estimate.applyVerifyVideo("https://minio/videos/78.mp4");
+        estimate.applyVerifyVideo("verify_78/demo.mp4");
         when(estimateRepository.findById(78L)).thenReturn(Optional.of(estimate));
 
         stream.subscribe(78L);
 
         assertThat(stream.subscriberCount(78L)).isZero();
+        verify(videoPresigner).sign("verify_78/demo.mp4");
     }
 
     @Test

@@ -82,6 +82,7 @@ public class EstimateService {
     private final ApplicationEventPublisher eventPublisher;
     private final OutboundOrderGenerator outboundOrderGenerator;
     private final ObjectMapper objectMapper;
+    private final VerifyVideoPresigner videoPresigner;
 
     // ── 생성 ─────────────────────────────────────────────────────────────────
 
@@ -237,7 +238,8 @@ public class EstimateService {
         Estimate estimate = estimateRepository.findById(estimateId)
                 .orElseThrow(() -> new GlobalException(ErrorCode.ESTIMATE_NOT_FOUND));
         ownershipGuard.checkEstimate(estimate, me);
-        return EstimateDetailResponse.of(estimate, scenarioRepository.findByEstimateIdOrderByAmrCountAsc(estimateId));
+        return EstimateDetailResponse.of(estimate, scenarioRepository.findByEstimateIdOrderByAmrCountAsc(estimateId),
+                videoPresigner.sign(estimate.getVerifyVideoUrl()));
     }
 
     /**
@@ -280,7 +282,8 @@ public class EstimateService {
     public EstimateDetailResponse snapshot(Long estimateId) {
         Estimate estimate = estimateRepository.findById(estimateId)
                 .orElseThrow(() -> new GlobalException(ErrorCode.ESTIMATE_NOT_FOUND));
-        return EstimateDetailResponse.of(estimate, scenarioRepository.findByEstimateIdOrderByAmrCountAsc(estimateId));
+        return EstimateDetailResponse.of(estimate, scenarioRepository.findByEstimateIdOrderByAmrCountAsc(estimateId),
+                videoPresigner.sign(estimate.getVerifyVideoUrl()));
     }
 
     @Transactional(readOnly = true)
@@ -401,7 +404,10 @@ public class EstimateService {
     // ── 물리 검증 결과 반영 ──────────────────────────────────────────────────
 
     /**
-     * 물리 검증(Isaac) 결과를 반영한다. 영상 URL 이 있으면 저장하고, 성패와 무관하게 SSE 로 알린다.
+     * 물리 검증(Isaac) 결과를 반영한다. 영상 위치가 있으면 저장하고, 성패와 무관하게 SSE 로 알린다.
+     *
+     * <p>DB 에는 받은 값(과도기엔 공개 URL, 계약 정정 뒤엔 객체 키)을 그대로 두고, 브라우저로 나가는
+     * 이벤트에만 서명 URL 을 싣는다 — 서명 URL 은 만료가 있어 저장하면 안 된다.
      *
      * <p>모르는 견적 id 는 무시한다. 같은 결과가 두 번 와도(명세 §1-3과 동일한 중복 허용) 같은 값을
      * 다시 쓸 뿐이라 별도 처리 없이 안전하다 — DES 의 run 처럼 상태를 갖는 하위 엔티티가 없어서다.
@@ -418,14 +424,14 @@ public class EstimateService {
                     response.estimateId(), response.runId());
             return;
         }
-        String videoUrl = response.artifacts() != null ? response.artifacts().video() : null;
-        if (videoUrl != null) {
-            estimate.applyVerifyVideo(videoUrl);
+        String video = response.artifacts() != null ? response.artifacts().video() : null;
+        if (video != null) {
+            estimate.applyVerifyVideo(video);
         }
         log.info("물리 검증 결과 반영: estimateId={}, status={}, video={}",
-                estimate.getId(), response.status(), videoUrl);
-        eventPublisher.publishEvent(
-                new EstimateVerified(estimate.getId(), response.status(), videoUrl, response.error()));
+                estimate.getId(), response.status(), video);
+        eventPublisher.publishEvent(new EstimateVerified(
+                estimate.getId(), response.status(), videoPresigner.sign(video), response.error()));
     }
 
     /**

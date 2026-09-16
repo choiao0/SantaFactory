@@ -12,13 +12,11 @@ services:
     command: ["edge"]                 # 한 번 녹화만 보려면: ["record", "3"]
     env_file:
       - ../../../3_FMS/infra/emqx/.env      # MQTT_HOST · MQTT_PORT · MQTT_PW_SIM_RUNNER (gitignored)
+      - .env                                # MINIO_ACCESS_KEY · MINIO_SECRET_KEY = EC2 ~/minio-keys/sim-runner.env (쓰기 전용 계정, gitignored, -233)
     environment:
       NODE_ID: sim-runner-gpu01       # host-orch --node 와 같아야 한다
-      MINIO_ENDPOINT: ${MINIO_ENDPOINT:-100.100.149.68:9002}
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT:-100.100.149.68:9002}     # tailnet 직결(http). 업로드만 하므로 공개 주소가 필요 없다
       MINIO_BUCKET: ${MINIO_BUCKET:-verify-videos}
-      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:?}
-      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?}
-      PUBLIC_MEDIA_BASE: ${PUBLIC_MEDIA_BASE:-https://j15a106.p.ssafy.io/media}
     volumes:
       - ov-cache:/cache/ov            # Kit 셰이더 캐시 — 첫 기동 수 분, 이후 재사용
       - ./data:/data                  # out(mp4·프레임) · state(bdSeq · 런 로그)
@@ -33,3 +31,4 @@ services:
     restart: unless-stopped
 volumes:
   ov-cache:
+    name: t3amr-ov-cache            # 고정 이름 — compose 프로젝트명(폴더명)에 안 묶여 단독 docker run(deploy/README §1)과 셰이더 캐시를 공유한다

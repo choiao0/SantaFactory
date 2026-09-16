@@ -239,7 +239,7 @@ v2.6부터 도착 틱 = `ordered_at_s`(1틱 = 1초), `rack_id` → `map/rack_buf
 
   ```bash
   cd 3_FMS/sim_engine
-  SWEEP_ENGINES=heading SWEEP_SEEDS=101,102,103,104     SWEEP_EXTRA=--theta=../infra/out/theta_wallA_r24_g15.json     SWEEP_OUT=load_sweep_eval_theta_<태그>.csv python sweeps/fleet_sweep_load.py   # 48행
+  SWEEP_ENGINES=heading SWEEP_SEEDS=101,102,103,104     SWEEP_EXTRA=--theta=../infra/out/theta_wallA_r24_g15.json     SWEEP_OUT=load_sweep_eval_theta_<태그>.csv python sweeps/fleet_sweep_load.py   # 48행, 병렬 기본 ~36 s (-231; --jobs=1 순차는 4분 16초)
   python sweeps/compare_csv.py results/load_sweep_eval_theta_v313.csv results/load_sweep_eval_theta_<태그>.csv --rows
   ```
 

@@ -50,6 +50,9 @@ dependencies {
     runtimeOnly 'io.jsonwebtoken:jjwt-impl:0.12.7'
     runtimeOnly 'io.jsonwebtoken:jjwt-jackson:0.12.7'
 
+    // 검증 영상의 presigned GET URL 발급. 서명만 하고 MinIO 에 요청은 보내지 않는다 (VerifyVideoPresigner).
+    implementation 'io.minio:minio:8.5.17'
+
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
     testImplementation 'org.springframework.security:spring-security-test'
     testCompileOnly 'org.projectlombok:lombok'
