@@ -72,6 +72,9 @@ class _PIBTStepH:
         self.pos_now = {s[:2]: a for a, s in states.items()}
         self.pos_next = {}      # cell -> 이번 틱 축이 놓일 agent
         self.soft_next = dict(soft_hold or {})   # cell -> soft 예약 agent. 회전 진행 중(-194 다틱) 로봇의 soft 칸은 미리 채워 온다 (-79)
+        # 사전 주입분 원본. `_release` 가 복원에 쓴다 (-211): 다른 로봇이 같은 칸을 soft 로
+        # 예약했다 풀면 `soft_next` 에서 **통째로 지워져** 회전 중 로봇의 보호가 사라진다.
+        self.soft_base = dict(soft_hold or {})
         self.next_soft = {}     # agent -> soft 칸 집합
         # 구간 대수 제한 (S15P21A106-193). sec_map 은 칸 -> 구간번호(-1 = 구간 밖).
         self.sec_map = sec_map
@@ -150,7 +153,15 @@ class _PIBTStepH:
             del self.pos_next[pos]
         for cell in self.next_soft.pop(a):
             if self.soft_next.get(cell) == a:
-                del self.soft_next[cell]
+                base = self.soft_base.get(cell)
+                if base is None or base == a:
+                    del self.soft_next[cell]
+                else:
+                    # ★ 사전 주입분 복원 (-211). 지우면 **회전 중인 다른 로봇의**
+                    #   보호가 같이 날아간다 — a 가 자기 soft 로 덮어썼다가 밀기에
+                    #   실패해 푸는 경로다. 그다음 a 의 이동 후보가 그 칸을 무방비로
+                    #   통과한다 (실측 seed 5 t=1048: agent11 이 agent1 의 mB 로 진입).
+                    self.soft_next[cell] = base
 
     def _soft_blocked(self, a, s2, soft):
         """soft 충돌: 내 앞 2칸에 다른 축이 있거나/들어오거나, 내 축이 놓일 칸을 다른 로봇이 soft 예약했다."""
