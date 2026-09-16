@@ -22,13 +22,17 @@
 
 왜 「물리 전진 비율」을 같이 내나
 --------------------------------
-`heading_offset = 2` 라 **pibt 의 '전진'이 물리적 후진**이다 (isaac_drive.py
-§PIBT_NOTE). 그래서 `REVERSE_FACTOR` 는 물리적 **전진**에 벌점을 물리고 있고,
-주행 거리의 94.7 % 가 센서 없는 방향으로 간다. RF 를 내리면 180° 만 주는 게
-아니라 이 비율도 같이 움직인다 — 어느 쪽이 더 큰 효과인지 한 표에서 봐야 한다.
+센서가 앞을 보므로 물리 후진으로 달린 거리는 **시야 없는 주행**이다. RF 를
+바꾸면 180° 횟수만이 아니라 이 비율도 같이 움직이니 한 표에서 봐야 한다.
 
-    pibt `move`     = 물리 **후진** 칸
-    pibt `reverse`  = 물리 **전진** 칸
+    pibt `move`     = 물리 **전진** 칸      (heading_offset = 0)
+    pibt `reverse`  = 물리 **후진** 칸
+
+★ 2026-09-16 정정. 초판은 `heading_offset = 2` 로 보고 **반대로** 적었다.
+  `pibt_scene.GEOM_KW` 가 0 으로 덮어쓰므로 그쪽이 진실이다. 그 탓에
+  「주행의 94.7 % 가 센서 없는 방향」이라는 정반대 결론을 냈고, 답신 11 의
+  `REVERSE_FACTOR` 3.0 -> 1.0 제안이 그 위에 서 있었다. 실제로는 **RF 3.0
+  에서 물리 전진이 92.4 %** 이고, 1.0 으로 내리면 41.8 % 로 **나빠진다.**
 
 왜 설정마다 별도 프로세스인가
 -----------------------------
@@ -151,14 +155,29 @@ def child(seed):
     #   단위는 **초**다 (틱이 아니다).
     makespan = float(metrics.critical_path(adg, geom))
 
-    fwd = kinds.get(D.REVERSE, 0)        # pibt 후진 = 물리 전진
-    bwd = kinds.get(D.MOVE, 0)           # pibt 전진 = 물리 후진
+    # ★ 2026-09-16 정정 — 라벨이 **뒤집혀 있었다.**
+    #   `pibt_scene.GEOM_KW` 의 `heading_offset` 은 **0** 이다
+    #   (`RobotGeom` 의 dataclass 기본값 2 를 덮어쓴다). 기하가 그걸
+    #   뒷받침한다: front_len 0.39 < rear_len 1.11 이라 **구동축이 앞**이고
+    #   차체가 뒤로 뻗는데, 그게 정확히 pibt 의
+    #   `occupied = {pos, pos - DIRS[h]}` 와 같은 모양이다.
+    #
+    #       heading_offset = 0  ->  pibt move    = 물리 **전진**
+    #                               pibt reverse = 물리 **후진**
+    #
+    #   초판은 `isaac_drive.py` §PIBT_NOTE(= offset 2 인 경우의 설명)를 보고
+    #   반대로 적었고, 그 탓에 「주행의 94.7 % 가 센서 없는 방향」이라는
+    #   정반대 결론이 나왔다. 실제로는 RF 3.0 에서 물리 전진이 92.4 % 다.
+    #   `contact_frame.py` 가 걸렸던 것과 **같은 덫**이다.
+    fwd = kinds.get(D.MOVE, 0)           # pibt 전진 = 물리 전진
+    bwd = kinds.get(D.REVERSE, 0)        # pibt 후진 = 물리 후진
     li = info.get("lifelong", {}) if isinstance(info, dict) else {}
     return {
         "seed": seed,
         "actions": len(adg.actions),
-        "move": bwd, "turn": kinds.get(D.TURN, 0),
-        "reverse": fwd, "wait": kinds.get(D.WAIT, 0),
+        # `move`/`reverse` 는 **pibt 어휘**다 (물리 방향이 아니다).
+        "move": fwd, "turn": kinds.get(D.TURN, 0),
+        "reverse": bwd, "wait": kinds.get(D.WAIT, 0),
         "n180": n180,
         "makespan": makespan,
         "phys_fwd_pct": (100.0 * fwd / (fwd + bwd)) if (fwd + bwd) else float("nan"),
@@ -227,7 +246,7 @@ def main():
 
     print()
     print(f"  {'RF':>5}{'성공':>6}{'순환':>6}{'180도':>7}{'회전':>7}{'물리전진':>10}"
-          f"{'후진칸':>8}{'전진칸':>8}{'임계경로':>10}{'태스크':>8}{'tasks/h':>9}")
+          f"{'전진칸':>8}{'후진칸':>8}{'임계경로':>10}{'태스크':>8}{'tasks/h':>9}")
     for rf in RFS:
         rows = table.get(rf) or []
         good = ok(rows)
@@ -241,7 +260,9 @@ def main():
               f"{mean(rows, 'reverse'):>8.0f}{mean(rows, 'makespan'):>9.1f}s"
               f"{mean(rows, 'tasks'):>8.1f}{mean(rows, 'tph'):>9.1f}")
     print(f"  (시드 {len(SEEDS)}개 중 **성공 판만** 평균 · 임계경로 초 ·")
-    print("   물리전진 = pibt reverse/(move+reverse), heading_offset=2 기준)")
+    print("   물리전진 = pibt move/(move+reverse), heading_offset=0 기준)")
+    print("   ★ 「후진칸」·「전진칸」 열은 **pibt 어휘**다 — heading_offset 0 에서")
+    print("     pibt move 가 물리 전진이므로 「전진칸」열이 물리 전진 칸수다.")
     print("  ★ 「순환」은 도구 실패가 아니라 관측값이다. RF 와 무관하게 전 열에서")
     print("    나면 원인은 RF 가 아니라 그 격자·지평 조합이다.")
 
@@ -262,7 +283,9 @@ def main():
                   f" tasks/h {dtp:+6.1f}")
     print()
     print("* 임계경로가 안 늘고 180도가 0 이면, 후진 전환의 대가는 틱이 아니라")
-    print("  **시야**뿐이다. 그런데 지금은 그 시야마저 물리 후진 94.7% 라 잃을 게 없다.")
+    print("  **시야**다 — 그리고 그 시야를 실제로 잃는다. RF 3.0 에서 물리 전진이")
+    print("  92.4 % 인데 1.0 으로 내리면 41.8 % 가 된다. 180도 감소(17->3)는")
+    print("  전체 로봇·틱의 0.76 % 뿐이라 이 손해를 못 갚는다. (2026-09-16 정정)")
     return 0
 
 
