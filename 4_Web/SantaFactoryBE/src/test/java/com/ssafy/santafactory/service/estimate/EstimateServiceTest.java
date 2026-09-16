@@ -71,6 +71,8 @@ class EstimateServiceTest {
     ApplicationEventPublisher eventPublisher;
     @Mock
     OutboundOrderGenerator outboundOrderGenerator;
+    @Mock
+    VerifyVideoPresigner videoPresigner;
 
     private final CostCalculator costCalculator = new CostCalculator(PROPS);
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -89,7 +91,8 @@ class EstimateServiceTest {
                 new OwnershipGuard(),
                 eventPublisher,
                 outboundOrderGenerator,
-                objectMapper
+                objectMapper,
+                videoPresigner
         );
     }
     return service;
@@ -489,15 +492,19 @@ class EstimateServiceTest {
     void stores_the_video_url_and_publishes_the_result() {
         Estimate estimate = withId(estimate(85.0, 90.0, 1_000_000_000L), 77L);
         when(estimateRepository.findById(77L)).thenReturn(Optional.of(estimate));
+        when(videoPresigner.sign("verify_77/v1.mp4"))
+                .thenReturn("https://host/media/verify-videos/verify_77/v1.mp4?X-Amz-Signature=s");
 
-        service().applyVerifyResult(verifyDone("v1", 77L, "https://minio/v1.mp4"));
+        service().applyVerifyResult(verifyDone("v1", 77L, "verify_77/v1.mp4"));
 
-        assertThat(estimate.getVerifyVideoUrl()).isEqualTo("https://minio/v1.mp4");
+        // DB 에는 받은 값 그대로, 브라우저로 나가는 이벤트에는 서명 URL
+        assertThat(estimate.getVerifyVideoUrl()).isEqualTo("verify_77/v1.mp4");
         ArgumentCaptor<EstimateEvents.EstimateVerified> event = ArgumentCaptor.captor();
         verify(eventPublisher).publishEvent(event.capture());
         assertThat(event.getValue().estimateId()).isEqualTo(77L);
         assertThat(event.getValue().status()).isEqualTo("done");
-        assertThat(event.getValue().videoUrl()).isEqualTo("https://minio/v1.mp4");
+        assertThat(event.getValue().videoUrl())
+                .isEqualTo("https://host/media/verify-videos/verify_77/v1.mp4?X-Amz-Signature=s");
     }
 
     @Test
