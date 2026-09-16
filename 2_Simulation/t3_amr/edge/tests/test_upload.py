@@ -39,7 +39,7 @@ def test_upload_puts_object_under_run_id_and_returns_the_object_key(tmp_path):
     key = u.upload(str(p), "verify_77_n3", client=c)
 
     assert c.put == [("verify-videos", "verify_77_n3/demo_verify_77_n3.mp4", str(p), "video/mp4")]
-    assert key == "verify-videos/verify_77_n3/demo_verify_77_n3.mp4"      # URL 이 아니다 — 백엔드가 서명한다(-233)
+    assert key == "verify_77_n3/demo_verify_77_n3.mp4"      # 버킷 없는 객체 키 — BE 서명기(-89)가 이대로 읽는다(-233)
 
 
 def test_upload_rejects_missing_or_empty_file(tmp_path):

@@ -80,8 +80,8 @@ DES 요청의 `horizon_s · shifts · inbound_gap_s · outbound_gap_s · warehou
            "lead_time_mean_s": 61.2, "lead_time_p90_s": 90.0, "queue_time_mean_s": 3.1, "throughput_orders_per_h": 274.6,
            "throughput_tasks_per_h": 335.6, "amr_utilization": 0.71, "conflict_wait_ratio": 0.02, "distance_total_m": 140,
            "charge_downtime_s": 0 },       // fms-core 의 kpi_summary(MQTT_CONTRACT §4.4) — DES 견적 워커 to_kpi 와 같은 14개 키. 분모(makespan_s) = 실제로 돈 커널 틱 수. fms-core 가 없거나 플래너 전에 끝났으면 null
-  "artifacts": { "video": "verify-videos/verify_77_n3/demo_verify_77_n3.mp4" },
-                                        // (-215/-233) 러너가 Runner/VideoUrl 로 준 mp4 의 **객체 키** `<bucket>/<run_id>/<파일>` — URL 이 아니다.
+  "artifacts": { "video": "verify_77_n3/demo_verify_77_n3.mp4" },
+                                        // (-215/-233) 러너가 Runner/VideoUrl 로 준 mp4 의 **객체 키** `<run_id>/<파일>` — URL 이 아니고 버킷 이름도 안 붙는다(버킷은 양쪽 설정).
                                         // 버킷은 비공개, 화면용 서명 URL 은 BE 가 조회 시 만든다(§7). 영상이 없으면 artifacts 는 null. replay·heatmap 키는 예정
   "source_run_id": "est_77_n3", "estimate_id": 77
 }
@@ -119,9 +119,10 @@ DES 요청의 `horizon_s · shifts · inbound_gap_s · outbound_gap_s · warehou
 
 ## 7. `artifacts.video` 를 화면 URL 로 (백엔드, -233)
 
-러너가 주는 값은 URL 이 아니라 **객체 키** `verify-videos/<run_id>/<파일>` 이다. 버킷은 비공개라 키만으로는 아무도 못 연다.
+러너가 주는 값은 URL 이 아니라 **객체 키** `<run_id>/<파일>` 이다 — 버킷 이름은 안 붙는다(버킷 `verify-videos` 는 양쪽 설정 `MINIO_BUCKET`). 버킷은 비공개라 키만으로는 아무도 못 연다.
 백엔드는 `estimates.verify_video_url` 에 키를 그대로 저장하고, 견적 조회·검증 SSE 에서 **그때그때** 짧은 만료의 presigned GET 을 만들어
 `video_url` 로 준다. 화면(`<video src>`)은 무변경. 견적 번호만 바꿔 남의 영상을 여는 일은 API 의 소유권 검사가 막는다.
+구현: 4_Web `VerifyVideoPresigner`(-89, 2026-09-16 develop) — `objectKey()` 가 URL 이 아닌 값을 통째로 키로 보고, 215 시절 공개 URL 형식은 `/verify-videos/` 뒤를 키로 뽑아 재서명한다. TTL 30 분, 만료 뒤 구간 이동 403 은 FE 가 상세를 다시 불러 새 URL 로 이어 간다.
 
 | 항목 | 값 |
 |---|---|

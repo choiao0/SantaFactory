@@ -84,7 +84,7 @@ numba ≥0.63 이 `coverage.types.Tracer`(7.5+)를 요구해 import 가 죽기 �
 | `edge/edge.py` | paho 연결, NDEATH 유언·NBIRTH, NCMD/STATE 구독, 틱 루프, `alive` 파일(livenessProbe) |
 | `edge/runner.py` | 상태기계 IDLE → STARTING(첫 프레임 대기) → RUNNING → STOPPING(SIGINT → mp4 조립 → 업로드) → IDLE/ERROR. `Runner/VideoUrl` 메트릭 |
 | `edge/recorder.py` | Start → `RUN_TAG`·`PIBT_N`·`PIBT_SEED`·`PIBT_HORIZON`·`REPLAN` 환경으로 `run_record.sh` 기동, 촬영 감지(`캡처 ON`·프레임), 정지 사다리 |
-| `edge/upload.py` | mp4 → MinIO(`MINIO_*`, 쓰기 전용 계정) → **객체 키** `<bucket>/<run_id>/<파일>` (-233). URL 은 백엔드가 조회 시 서명해서 만든다 |
+| `edge/upload.py` | mp4 → MinIO(`MINIO_*`, 쓰기 전용 계정) → **객체 키** `<run_id>/<파일>` (-233, 버킷 이름은 안 붙는다). URL 은 백엔드가 조회 시 서명해서 만든다 |
 | `edge/spec.py` | Start JSON 파싱. `window_s` 는 `timeout_s − 300` 에서 되돌린다 |
 
 host-orch 쪽(-215 같이): `Runner/VideoUrl` → `sim.verify.result.artifacts.video`. **EC2 host-orch 는 `--fms-node` 없이 띄운다** — t3_amr 이 자체 계획으로 돌아 fms-core 가 RUNNING 이 될 일이 없다.
@@ -112,7 +112,7 @@ cd 2_Simulation/t3_amr && python3 -m edge --env-file ../../3_FMS/infra/emqx/.env
 | 비밀 보관 | EC2 `~/minio-keys/{sim-runner,santa-be}.env`(600). GPU 박스는 `deploy/.env`(gitignored) 로 복사, k3s 는 Secret `t3amr-runner-env` |
 | 만든 방법 | `docker exec a106-minio mc …` (mb · anonymous set none · admin policy create · admin user add · admin policy attach). 멱등 스크립트는 MR -233 본문 |
 
-엣지가 `Runner/VideoUrl` 로 보내는 값은 객체 키 `verify-videos/<run_id>/<파일>` 이고, 화면용 서명 URL 은 백엔드 몫이다 —
+엣지가 `Runner/VideoUrl` 로 보내는 값은 버킷 없는 객체 키 `<run_id>/<파일>` 이고(버킷은 양쪽 `MINIO_BUCKET`), 화면용 서명 URL 은 백엔드 `VerifyVideoPresigner`(-89) 몫이다 —
 서명 방법과 nginx `/media/` 함정은 `3_FMS/contracts/SIM_VERIFY_CONTRACT.md` §7 에 적었다(2026-09-16 실측: 서명 있으면 200, 없으면 403).
 
 ## 4. 아직 안 정한 것

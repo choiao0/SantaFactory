@@ -103,7 +103,7 @@ class TestStopAndVideo:
         assert h.uploader.calls == [("/data/out/demo_verify_77_n3.mp4", "verify_77_n3")]
         named = h.pub.named_with("NDATA", R.VIDEO_URL)       # URL 과 IDLE 이 한 메시지에
         assert named[R.STATE] == "IDLE" and named[R.RUN_ID] == ""
-        assert named[R.VIDEO_URL] == "verify-videos/verify_77_n3/demo_verify_77_n3.mp4"      # 객체 키, URL 아님(-233)
+        assert named[R.VIDEO_URL] == "verify_77_n3/demo_verify_77_n3.mp4"      # 객체 키(버킷 없음), URL 아님(-233)
 
     def test_recorder_finishing_on_its_own_collects_video(self, h):
         h.connect()
@@ -180,7 +180,7 @@ class TestStopAndVideo:
         h.runner.tick(103.0)                       # 아직 안 끝남 → 그대로
         assert h.runner.state == R.STOPPING
 
-        ex.complete("verify-videos/verify_77_n3/demo_verify_77_n3.mp4")
+        ex.complete("verify_77_n3/demo_verify_77_n3.mp4")
         h.runner.tick(104.0)
         named = h.pub.named_with("NDATA", R.VIDEO_URL)
         assert h.runner.state == R.IDLE and named[R.STATE] == "IDLE" and named[R.VIDEO_URL].endswith(".mp4")

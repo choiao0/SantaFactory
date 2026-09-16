@@ -1,7 +1,9 @@
 """mp4 → MinIO(EC2) → **객체 키**. 클라이언트는 주입 가능(테스트). `minio` 는 여기서만, 늦게 import 한다.
 
-돌려주는 값은 URL 이 아니라 객체 키 `<bucket>/<run_id>/<파일명>` 이다 (-233). 버킷은 비공개라 키만 알아서는 못 열고,
-백엔드가 조회 시점에 읽기 전용 계정으로 서명 URL 을 만든다(3_FMS/contracts/SIM_VERIFY_CONTRACT.md §7).
+돌려주는 값은 URL 이 아니라 객체 키 `<run_id>/<파일명>` 이다 (-233). 버킷 이름은 붙이지 않는다 —
+버킷 `verify-videos` 는 양쪽 설정(MINIO_BUCKET)이고, BE 서명기(4_Web VerifyVideoPresigner, -89)가
+URL 아닌 값을 통째로 키로 읽기 때문이다. 버킷은 비공개라 키만 알아서는 못 열고, 백엔드가 조회 시점에
+읽기 전용 계정으로 서명 URL 을 만든다(3_FMS/contracts/SIM_VERIFY_CONTRACT.md §7).
 버킷과 계정은 EC2 에서 미리 만든다(deploy/README.md §3). 이 코드가 쓰는 `sim-runner` 계정은 PutObject 만 있어서
 bucket_exists(HEAD) 도 stat 도 403 이다 — 그래서 여기서는 올리기만 하고 아무것도 조회하지 않는다.
 """
@@ -39,8 +41,8 @@ class Uploader:
         return f"{run_id}/{os.path.basename(path)}"
 
     def object_key(self, run_id: str, path: str) -> str:
-        """Runner/VideoUrl 에 싣는 값. 백엔드는 이걸 `<bucket>` 과 `<키>` 로 나눠 서명한다."""
-        return f"{self.bucket}/{self.object_name(run_id, path)}"
+        """Runner/VideoUrl 에 싣는 값 = 버킷 없는 S3 객체 키. 백엔드는 자기 설정의 버킷과 이 키로 서명한다(-89)."""
+        return self.object_name(run_id, path)
 
     def client(self) -> Any:
         """타임아웃을 박은 MinIO 클라이언트 — 끝없이 매달리면 런이 STOPPING 에 갇힌다.

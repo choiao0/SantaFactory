@@ -141,7 +141,7 @@ FMS ↔ AMR 에이전트 ↔ sim-runner ↔ Host ↔ 시뮬 WMS 가 한 브로�
 | `Runner/RTF` · `IsaacInstances` · `RamMB` · `VramMB` | Double · Int32 | 5 s 샘플, 변화 시 |
 | `Runner/LastError` | String | ERROR 이유 |
 | `Runner/ScenarioSha` | String | 받은 scenario 의 sha256 (정규형). 런 없으면 `""`. Host 가 요청의 sha 와 대조 |
-| `Runner/VideoUrl` | String | (-215, 2026-09-15) 런이 끝나 IDLE 로 돌아가는 **같은 NDATA** 에 실리는 녹화 mp4 의 **객체 키** `<bucket>/<run_id>/<파일>`(-233, 2026-09-16 — 공개 URL 이 아니다. 버킷은 비공개, 화면용 서명 URL 은 백엔드가 만든다). 없으면 `""`. Host 가 `sim.verify.result.artifacts.video` 로 그대로 옮긴다 |
+| `Runner/VideoUrl` | String | (-215, 2026-09-15) 런이 끝나 IDLE 로 돌아가는 **같은 NDATA** 에 실리는 녹화 mp4 의 **객체 키** `<run_id>/<파일>`(-233, 2026-09-16 — 공개 URL 이 아니고 버킷 이름도 안 붙는다. 버킷 `verify-videos` 는 양쪽 설정이고 비공개. 화면용 서명 URL 은 백엔드 VerifyVideoPresigner(-89)가 만든다). 없으면 `""`. Host 가 `sim.verify.result.artifacts.video` 로 그대로 옮긴다 |
 | `Run Control/Start` · `Run Control/Stop` | Text(JSON) · Boolean | NCMD 용. NBIRTH 에 `""` · `false` 로 선언 |
 | **Device amr01… (state 거울)** | | |
 | `Robot/Model` · `Robot/Connection` · `Robot/LastNodeId` | String | factsheet seriesName / ONLINE · OFFLINE · CONNECTIONBROKEN / 틱 ack |

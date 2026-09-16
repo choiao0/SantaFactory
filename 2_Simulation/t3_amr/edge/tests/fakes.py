@@ -129,7 +129,7 @@ class FakeUploader:
         self.calls.append((path, run_id))
         if self.fail:
             raise self.fail
-        return f"verify-videos/{run_id}/{path.rsplit('/', 1)[-1]}"      # 객체 키 (-233)
+        return f"{run_id}/{path.rsplit('/', 1)[-1]}"      # 버킷 없는 객체 키 (-233)
 
 
 def start_payload(run_id="verify_77_n3", n=3, timeout_s=900, **over):
