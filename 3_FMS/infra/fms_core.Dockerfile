@@ -19,7 +19,12 @@ ENV OMP_NUM_THREADS=1 \
     PYTHONIOENCODING=utf-8
 
 WORKDIR /app
-RUN pip install --no-cache-dir numpy==2.4.6 paho-mqtt==2.1.0 protobuf==7.36.1
+# 의존성은 estimate.Dockerfile 과 **같은 파일**에서 온다 (S15P21A106-234). 전에는 여기에 numpy·paho-mqtt·protobuf 를
+# 인라인으로 박아 두었는데, -225 가 sim_engine/pibt/hgraph.py 최상단에 numba 를 넣었을 때 이 줄이 같이 안 바뀌어
+# **이미지가 기본 경로에서 죽었다** — `--planner` 기본이 kernel 이고 KernelPlanner 는 pibt_core → hgraph 를 타므로
+# `ModuleNotFoundError: numba` 가 난다(실측: 수정 전 이미지에서 재현). 인라인 핀은 requirements 와 말없이 어긋난다.
+COPY infra/requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
 COPY sim_engine/ /app/sim_engine/
 COPY map/        /app/map/
