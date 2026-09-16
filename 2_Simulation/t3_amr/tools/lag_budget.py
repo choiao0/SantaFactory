@@ -39,7 +39,8 @@ ADG 는 「시간표가 아니라 순서」라 액션이 늦게 시작하는 것
 -------
     source paths.sh
     PITCH=1.0 N=12 SEED=7 python tools/lag_budget.py
-    LAGS=0,10,20,30,40,60,80,120 python tools/lag_budget.py     # ms
+    LAGS=0,33,50,67,83,100,133,200 python tools/lag_budget.py    # ms
+    STOP_ON_BREAK=0   첫 깨짐 뒤에도 계속 돌린다
 
     SLIP/CLAG   구동기 쪽 미끄러짐·지연 (기본 0 — 지연만 보려고)
     SEEDS       시드 여러 개 "7,2,5"
@@ -58,6 +59,9 @@ sys.path.insert(0, os.path.join(os.environ["W"], "path"))
 #   더 나쁜 경우는 순환이 안 나고 **조용히 다른 계획**을 재는 것이다.
 #   실제로 그랬다 — 태스크 완료가 주행 13 개인데 도구는 15 개였다.
 os.environ.setdefault("PIBT_FRONT_RULE", "4")
+# 주기 진단은 끈다 — 판마다 수백 줄이 나와 결과 표를 덮는다. 여기서 볼 것은
+# 「지연이 얼마까지 안전한가」 한 줄이고, 원인 분해는 `why_blocked.py` 몫이다.
+os.environ.setdefault("ADG_WHY", "0")
 
 import pibt_scene                                            # noqa: E402
 import isaac_drive as idr                                    # noqa: E402
@@ -72,6 +76,7 @@ CLAG = float(os.environ.get("CLAG", "0.0"))
 LIMIT = int(os.environ.get("LIMIT", "400000"))
 # 4칸 규칙 합법쌍 최소 여유. 이 아래로 가면 설계가 깨진 것이다.
 DESIGN_GAP = float(os.environ.get("DESIGN_GAP", "0.0414"))
+STOP_ON_BREAK = os.environ.get("STOP_ON_BREAK", "1") not in ("0", "", "false")
 
 
 def build(seed):
@@ -92,6 +97,9 @@ def run(geom, starts, adg, order, history, seed, pose_lag):
     # `release=True` 는 lifelong 경로다 (live_pibt 과 같게 맞춘다).
     f = idr.FleetController(geom, adg, drivers, order=order, release=True)
     f.starts = history[0]
+    # 겹침 상세도 끈다 (쌍마다 첫 건이라도 판당 수십 줄이다). 판정에 쓰는
+    # `worst_gap` 과 `contact_events` 는 그대로 집계된다 — 출력만 막는다.
+    f._say = lambda *a, **k: None
     for _ in range(LIMIT):
         f.step(DT)
         for d in drivers.values():
@@ -107,7 +115,7 @@ def run(geom, starts, adg, order, history, seed, pose_lag):
 
 def main():
     lags = [float(v) / 1000.0
-            for v in os.environ.get("LAGS", "0,10,20,30,40,60,80,120").split(",")]
+            for v in os.environ.get("LAGS", "0,33,50,67,83,100,133,200").split(",")]
     seeds = [int(v) for v in os.environ.get(
         "SEEDS", os.environ.get("SEED", "7")).split(",")]
 
@@ -151,7 +159,13 @@ def main():
             print(f"   {lag * 1000:>6.0f}ms{real * 1000:>7.1f}ms"
                   f"{r['contact']:>7}{r['overlap']:>9}"
                   f"{r['gap'] * 1000:>10.1f}mm{'O' if r['done'] else 'X':>7}"
-                  f"{r['acted']:>7}/{r['total']:<5}{r['t']:>8.1f}s{mark}")
+                  f"{r['acted']:>7}/{r['total']:<5}{r['t']:>8.1f}s{mark}",
+                  flush=True)
+            # 첫 깨짐에서 멈춘다 — 판 하나가 수십 초라 뒤를 다 돌 이유가 없다.
+            # 더 보고 싶으면 `STOP_ON_BREAK=0`.
+            if not safe and STOP_ON_BREAK:
+                print(f"     (첫 깨짐에서 멈춘다. 뒤까지 보려면 STOP_ON_BREAK=0)")
+                break
         worst_ok[seed] = ok_upto
         print(f"   ★ 시드 {seed} 안전 상한 "
               + (f"{ok_upto * 1000:.0f} ms" if ok_upto is not None else "**0 ms 도 안 됨**"))
