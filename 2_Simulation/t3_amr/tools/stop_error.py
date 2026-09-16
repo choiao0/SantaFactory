@@ -57,6 +57,9 @@ V_MOVE = float(os.environ.get("V_MOVE", "0.05"))     # m/s — 이 위면 움직
 W_MOVE = float(os.environ.get("W_MOVE", "0.15"))     # rad/s — 이 위면 도는 중
 AXIS_TOL = float(os.environ.get("AXIS_TOL", "0.10"))  # rad — 격자축에서 6도
 MIN_HOLD = float(os.environ.get("MIN_HOLD", "0.30"))  # s — 이보다 짧은 정지는 버린다
+# ★ 감속 꼬리를 재는 문턱. 이 속도 아래로 떨어진 순간부터 정지까지를 잰다.
+#   `tol.pos` 를 줄이면 이 구간이 길어진다 — 그 대가가 여기 찍힌다.
+V_APPROACH = float(os.environ.get("V_APPROACH", "0.30"))  # m/s
 
 
 def load_npz(path):
@@ -129,9 +132,19 @@ def holds(t, x, y, yaw):
                 ey = y[i] - (o + round((y[i] - o) / PITCH) * PITCH)
                 # 접근 속도 — 멈추기 직전 프레임. 구간 첫 프레임은 이미 정지다.
                 v_in = float(v[i - 1]) if i > 0 else float("nan")
+                # ★ 감속 꼬리 — `tol.pos` 를 줄인 대가를 재는 지표 (2026-09-16).
+                #   완주 시간으로 재면 안 된다: 접촉으로 중단된 판(279 s)과
+                #   완주한 판(600 s)은 길이가 달라 직접 비교가 안 되고, 고친
+                #   판은 완주할 테니 애초에 짝이 안 맞는다. **정지 하나당**
+                #   순항에서 떨어져 멈출 때까지 걸린 시간을 재면 판 길이와
+                #   무관하게 비교된다.
+                k = i - 1
+                while k >= 0 and v[k] < V_APPROACH:
+                    k -= 1
+                settle = float(t[i] - t[k + 1]) if k + 1 < i else 0.0
                 out.append((lon0 * 1000, lon1 * 1000, lat0 * 1000,
                             float(t[j] - t[i]), i, j,
-                            math.hypot(ex, ey) * 1000, v_in))
+                            math.hypot(ex, ey) * 1000, v_in, settle))
         i = j + 1
     return out
 
@@ -213,6 +226,41 @@ def hist(v, edges, names, total=None):
         print(f"     {nm:>12}  {k:>5}회 ({100.0 * k / max(1, n):5.1f}%)  {bar}")
 
 
+def _bias_verdict(lon0, tol_mm):
+    """부호 분포가 **편향인가 게이트 서명인가**.
+
+    ★ 부호 쏠림만 보면 「편향」으로 오독한다 (2026-09-16 실측에서 그랬다).
+      갈라야 할 것은 **분포 모양**이다:
+
+        양 끝 두 봉우리 + 중간이 빈다  -> `hypot <= tol` **게이트의 서명**.
+           원에 들어가는 순간 멈추니 늘 가장자리에 서고, 부호는 접근 방향이
+           정한다. 편향이 아니라 경계 효과이고, tol 을 줄이면 같이 안으로 온다.
+        한 봉우리가 0 에서 벗어나 있다  -> 진짜 계통 편향. 따로 고쳐야 한다.
+
+    ★ 이 판정을 못 해도 **[h3]·[h4] 는 봐야 한다.** 그래서 `sec_hist` 에서
+      `return` 하지 않고 함수로 뺐다 (초판이 return 이라 뒤가 통째로 잘렸다).
+    """
+    if lon0.std() < 1.0:
+        print(f"     퍼짐이 {lon0.std():.2f} mm 뿐이다 — 이 표본으로는 편향을 못 본다.")
+        return
+    pos = 100.0 * (lon0 > 0).mean()
+    edge = float((np.abs(lon0) > 0.8 * tol_mm).mean()) * 100.0
+    mid = float((np.abs(lon0) < 0.6 * tol_mm).mean()) * 100.0
+    print(f"     양수 비율 {pos:.1f}%  ·  중앙 {np.median(lon0):+.1f} mm")
+    print(f"     가장자리(|·|>{0.8 * tol_mm:.0f}) {edge:.1f}%  ·"
+          f"  중간(|·|<{0.6 * tol_mm:.0f}) {mid:.1f}%")
+    if edge > 70.0 and mid < 25.0:
+        print("     -> **양 끝 두 봉우리 · 중간이 비었다.** 계통 편향이 아니라")
+        print("        `hypot <= tol` **게이트의 서명**이다 — 원에 들어가는 순간")
+        print("        멈추니 늘 가장자리에 서고 부호는 접근 방향이 정한다.")
+        print("        따로 고칠 편향이 없다. **tol 을 줄이면 같이 안으로 온다.**")
+    elif pos < 35 or pos > 65:
+        print("     -> 한쪽으로 쏠렸는데 가장자리 집중은 아니다. 게이트로 설명이")
+        print("        안 되는 몫이 있다 — **계통 편향**을 따로 봐야 한다.")
+    else:
+        print("     -> 부호가 갈린다. 크기(허용오차)가 지배한다.")
+
+
 def sec_hist(rows, tol_pos):
     """[h1] hypot 이 허용오차에서 깨끗이 끊기나 · [h2] 부호 편향 · [h3] 접근 속도."""
     hyp = np.array([r[6] for r in rows])
@@ -247,31 +295,7 @@ def sec_hist(rows, tol_pos):
     nm = [f"<-{tol_mm:.0f}", f"-{tol_mm:.0f}~-40", "-40~-20", "-20~0",
           "0~20", "20~40", f"40~{tol_mm:.0f}", f">{tol_mm:.0f}"]
     hist(lon0, e, nm)
-    pos = 100.0 * (lon0 > 0).mean()
-    if lon0.std() < 1.0:
-        print(f"     퍼짐이 {lon0.std():.2f} mm 뿐이다 — 이 표본으로는 편향을 못 본다.")
-        return
-    # ★ 부호 쏠림만 보면 「편향」으로 오독한다 (2026-09-16 실측에서 그랬다).
-    #   갈라야 할 것은 **분포 모양**이다:
-    #     양 끝 두 봉우리 + 중간이 빈다  -> `hypot <= tol` **게이트의 서명**.
-    #        원에 들어가는 순간 멈추니 늘 가장자리에 서고, 부호는 접근 방향이
-    #        정한다. 편향이 아니라 경계 효과이고, tol 을 줄이면 같이 안으로 온다.
-    #     한 봉우리가 0 에서 벗어나 있다   -> 진짜 계통 편향. 따로 고쳐야 한다.
-    edge = float((np.abs(lon0) > 0.8 * tol_mm).mean()) * 100.0
-    mid = float((np.abs(lon0) < 0.6 * tol_mm).mean()) * 100.0
-    print(f"     양수 비율 {pos:.1f}%  ·  중앙 {np.median(lon0):+.1f} mm")
-    print(f"     가장자리(|·|>{0.8 * tol_mm:.0f}) {edge:.1f}%  ·"
-          f"  중간(|·|<{0.6 * tol_mm:.0f}) {mid:.1f}%")
-    if edge > 70.0 and mid < 25.0:
-        print("     -> **양 끝 두 봉우리 · 중간이 비었다.** 계통 편향이 아니라")
-        print("        `hypot <= tol` **게이트의 서명**이다 — 원에 들어가는 순간")
-        print("        멈추니 늘 가장자리에 서고 부호는 접근 방향이 정한다.")
-        print("        따로 고칠 편향이 없다. **tol 을 줄이면 같이 안으로 온다.**")
-    elif pos < 35 or pos > 65:
-        print("     -> 한쪽으로 쏠렸는데 가장자리 집중은 아니다. 게이트로 설명이")
-        print("        안 되는 몫이 있다 — **계통 편향**을 따로 봐야 한다.")
-    else:
-        print("     -> 부호가 갈린다. 크기(허용오차)가 지배한다.")
+    _bias_verdict(lon0, tol_mm)
 
     # --- [h3] 접근 속도 vs 도착 판정 한계 --------------------------------
     print()
@@ -298,13 +322,26 @@ def sec_hist(rows, tol_pos):
     print("     (`_lim = 2 x tol.pos x 60Hz` · 경고선은 그 절반 —")
     print("      isaac_drive.py:1614. **순항 속도가 아니라 이 속도**가 기준이다)")
 
+    # --- [h4] 감속 꼬리 = tol.pos 를 줄인 **대가** -----------------------
+    #   완주 시간으로 재면 안 된다. 접촉으로 중단된 판(279 s)과 완주한 판
+    #   (600 s)은 길이가 달라 짝이 안 맞고, 고친 판은 완주할 테니 더 그렇다.
+    #   정지 하나당 「순항에서 떨어져 멈출 때까지」를 재면 길이와 무관하다.
+    st = np.array([r[8] for r in rows], dtype=float)
+    print()
+    print(f"   [h4] 감속 꼬리 — {V_APPROACH} m/s 아래로 떨어진 뒤 멈출 때까지")
+    print(f"     중앙 {np.median(st):.3f}  p90 {np.percentile(st, 90):.3f}"
+          f"  p99 {np.percentile(st, 99):.3f}  최대 {st.max():.3f} s")
+    print(f"     정지 {len(st)}회 x 중앙 = {np.median(st) * len(st):.1f} 로봇·초")
+    print("     (`tol.pos` 를 줄이면 이 값이 는다. **판 길이와 무관한 지표**라")
+    print("      고친 판과 그대로 비교된다 — 완주 시간은 길이가 달라 못 쓴다)")
+
 
 def trace(t, x, y, yaw, k, rows):
     """한 로봇의 정지 구간을 시간순으로 — [1] 을 눈으로 본다."""
     print(f"\n   [추적] agent{k} 의 정지 구간")
     print(f"     {'t0':>8}{'t1':>8}{'지속':>7}{'도착세로':>10}{'출발세로':>10}"
           f"{'밀림':>8}{'도착가로':>10}   mm")
-    for lon0, lon1, lat0, dur, i, j, _hyp, _v in rows:
+    for lon0, lon1, lat0, dur, i, j, _hyp, _v, _s in rows:
         print(f"     {t[i]:>8.2f}{t[j]:>8.2f}{dur:>7.2f}"
               f"{lon0:>+10.1f}{lon1:>+10.1f}{lon1 - lon0:>+8.1f}{lat0:>+10.1f}")
 
