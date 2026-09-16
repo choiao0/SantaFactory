@@ -1089,11 +1089,54 @@ def build_adg(chains: list[list[Action]], geom: "RobotGeom | None" = None) -> AD
     #     스윕 밖 칸을 떨어뜨리는데 pitch 1.0 에서 섞임 대각이 거기 해당해
     #     규칙이 4칸 -> 2칸으로 퇴화한다. 간선은 계획기가 보는 집합 그대로
     #     걸어야 계획기와 ADG 가 같은 규칙을 집행한다.
-    for p in actions:
-        for s in p.guard:
-            for q in by_axle.get(s, ()):
-                lo, hi = sorted((p, q), key=lambda a: _key(a, s))
-                t2 += _link(lo, hi)
+    # ★ [patch_adg_slim] (-224) `PIBT_ADG_SLIM=1` 이면 **인접 쌍만** 건다.
+    #
+    #   아래 기본 경로는 `p` 를 `by_axle[s]` 의 **모든** 액션에 잇는다. 6시간
+    #   판(77,760틱·24대)에서 한 칸을 수백~수천 번 지나므로 여기서 간선이
+    #   제곱으로 는다 — 실측 증가 지수 +2.54, 외삽 5.8억 간선 · 14.8 GB 로
+    #   **메모리에 안 들어간다** (`tools/plan_scale.py`).
+    #
+    #   그런데 그 간선 대부분은 **중복이다.** 축 칸은 `hard` 에도 들어가므로
+    #   (`hard = cells - soft`, `soft = guard & cells` 인데 자기 축은 자기
+    #   guard 에 없다 — guard 는 회전에만 있고 앞 칸이다) 규칙 ① 이 그 칸의
+    #   사용자를 `_key(·, s)` 순 사슬로 이미 묶는다.
+    #
+    #       q1 -> q2 -> q3      규칙 ①
+    #       p  -> q1            규칙 ②, 하나면 충분
+    #       p  ~> q2, q3        전이
+    #
+    #   그래서 `p` 의 자리를 이분 탐색해 **바로 앞·바로 뒤 하나씩만** 건다.
+    #   도달 관계는 그대로다. 실측 절감 89.1% -> 96.1% -> 98.1% (호라이즌이
+    #   클수록 더 준다), 전제 위반 0 (1,101 칸 전수, `tools/adg_edge_audit.py`).
+    #
+    #   ★ **기본은 꺼 둔다.** 안전 핵심이라 기본 경로가 비트 단위로 같아야
+    #     하고, 켠 판을 `adg_edge_audit --verify` 로 도달 관계까지 확인한 뒤에
+    #     기본값을 옮기는 것이 맞다.
+    if os.environ.get("PIBT_ADG_SLIM", "0") in ("1", "true", "True"):
+        import bisect as _bi
+        ax = {}
+        for s, qs in by_axle.items():
+            qs2 = sorted(qs, key=lambda a: _key(a, s))
+            ax[s] = (qs2, [_key(a, s) for a in qs2])
+        for p in actions:
+            for s in p.guard:
+                got = ax.get(s)
+                if not got:
+                    continue
+                qs2, ks = got
+                i = _bi.bisect_left(ks, _key(p, s))
+                # 동률은 없다 — `_key` 가 (tick, sub, agent) 전순서이고 서로
+                # 다른 액션은 (tick, agent) 가 다르다.
+                if i > 0:
+                    t2 += _link(qs2[i - 1], p)
+                if i < len(qs2):
+                    t2 += _link(p, qs2[i])
+    else:
+        for p in actions:
+            for s in p.guard:
+                for q in by_axle.get(s, ()):
+                    lo, hi = sorted((p, q), key=lambda a: _key(a, s))
+                    t2 += _link(lo, hi)
 
     return ADG(chains=chains, actions=actions, preds=preds, succs=succs,
                type1=t1, type2=t2)

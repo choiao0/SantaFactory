@@ -32,7 +32,8 @@
 이 도구는 그 전제를 **실제 데이터로** 확인한다. 전제가 깨지면(축 칸이 hard 에
 없거나, 사슬이 안 이어지거나) 최적화는 못 한다.
 
-    ★ `build_adg` 를 고치지 않는다. 재기만 한다.
+    ★ 기본 경로는 안 바뀐다. `build_adg` 에 `PIBT_ADG_SLIM` 스위치를 넣었고
+      **기본은 꺼져 있다** — 이 도구가 켠 판과 끈 판을 둘 다 지어 비교한다.
 
 쓰는 법
 -------
@@ -56,6 +57,8 @@ N = int(os.environ.get("N", "24"))
 SEED = int(os.environ.get("SEED", "103"))
 GAP = int(os.environ.get("GAP", "60"))
 SHIFTS = tuple(os.environ.get("SHIFTS", "out").split(","))
+# 도달 관계까지 실제로 확인한다 (두 ADG 를 지어 비교하므로 느리다).
+VERIFY = os.environ.get("VERIFY", "1") not in ("0", "", "false")
 
 
 def audit(horizon):
@@ -106,10 +109,61 @@ def audit(horizon):
             slim_pairs += (1 if i > 0 else 0) + (1 if i < len(qs2) else 0)
 
     tops = sorted(((len(v), s) for s, v in by_axle.items()), reverse=True)[:5]
-    return {"horizon": horizon, "actions": len(actions),
-            "now": now_pairs, "slim": slim_pairs,
-            "bad_cells": bad_cells, "bad_pairs": bad_pairs,
-            "cells": len(by_axle), "tops": tops}
+    out = {"horizon": horizon, "actions": len(actions),
+           "now": now_pairs, "slim": slim_pairs,
+           "bad_cells": bad_cells, "bad_pairs": bad_pairs,
+           "cells": len(by_axle), "tops": tops, "verify": None}
+    if VERIFY:
+        out["verify"] = verify(chains)
+    return out
+
+
+def verify(chains):
+    """★ **빠지는 간선이 전이로 성립하나** — 두 ADG 를 실제로 지어 확인한다.
+
+    느슨한 쪽(slim)이 빠뜨린 간선마다, 목적지가 slim 그래프에서 출발지로부터
+    **도달 가능한지** 본다. 전부 도달 가능하면 도달 관계가 같다는 뜻이고,
+    그러면 ADG 의 순서 보장이 그대로다.
+
+    slim ⊆ full 은 자명하므로 반대 방향만 보면 된다.
+    """
+    from collections import deque
+    os.environ["PIBT_ADG_SLIM"] = "0"
+    full = idr.build_adg(chains)
+    os.environ["PIBT_ADG_SLIM"] = "1"
+    slim = idr.build_adg(chains)
+    os.environ["PIBT_ADG_SLIM"] = "0"
+
+    ef = sum(len(v) for v in full.preds.values())
+    es = sum(len(v) for v in slim.preds.values())
+    # 빠진 간선 = full 에만 있는 (u -> v)
+    missing = [(u, v) for v, us in full.preds.items()
+               for u in us if u not in slim.preds[v]]
+
+    succ = slim.succs
+    bad = []
+    for u, v in missing:
+        seen = {u}
+        dq = deque([u])
+        ok = False
+        while dq:
+            x = dq.popleft()
+            if x == v:
+                ok = True
+                break
+            for y in succ.get(x, ()):
+                if y not in seen:
+                    seen.add(y)
+                    dq.append(y)
+        if not ok:
+            bad.append((u, v))
+            if len(bad) >= 5:
+                break
+    # 순환도 같이 본다 — slim 이 순서를 바꾸지 않았는지.
+    # `topological_order()` 는 순환이면 **None 을 돌려준다** (예외가 아니다).
+    acyclic = slim.topological_order() is not None
+    return {"full": ef, "slim": es, "missing": len(missing),
+            "unreachable": bad, "acyclic": acyclic}
 
 
 def main():
@@ -142,12 +196,28 @@ def main():
               f"({last['bad_cells']:,} 칸).")
         print(f"     -> 사슬이 안 이어지므로 **이 최적화는 못 한다.**")
 
+    v = last.get("verify")
+    if v:
+        print(f"\n── ★ 도달 관계 검증 (두 ADG 를 실제로 지어 비교) ──")
+        print(f"   간선  full {v['full']:,}  ->  slim {v['slim']:,}"
+              f"   ({(1 - v['slim'] / max(v['full'], 1)) * 100:.1f}% 감소)")
+        print(f"   빠진 간선 {v['missing']:,} 개")
+        if v["unreachable"]:
+            print(f"   ☠ 그중 **도달 불가 {len(v['unreachable'])}개 이상** — "
+                  f"최적화가 순서 보장을 깬다. 쓰면 안 된다.")
+            for u, w in v["unreachable"]:
+                print(f"      {u} -> {w}")
+        else:
+            print(f"   ★ **전부 전이로 도달한다** — 도달 관계가 같다.")
+        print(f"   비순환 {'O' if v['acyclic'] else '☠ X'}")
+
     print(f"\n── 한 칸을 가장 많이 쓴 곳 (마지막 사다리) ──")
     for cnt, s in last["tops"]:
         print(f"   {str(s):<14} {cnt:,} 개 액션의 축이 지나간다")
     print(f"\n   ※ 이 수가 호라이즌에 비례해 늘고, 규칙 ② 는 여기에 p 를")
     print(f"     곱한다. 그래서 제곱이 된다.")
-    print(f"\n   ★ `build_adg` 는 건드리지 않았다. 재기만 했다.")
+    print(f"\n   ★ 기본 경로는 안 바뀐다 — `PIBT_ADG_SLIM` 기본값은 0 이다.")
+    print(f"     위 검증이 깨끗하고 여러 시드에서 재현되면 그때 기본값을 옮긴다.")
     return 0
 
 
