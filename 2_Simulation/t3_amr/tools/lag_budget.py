@@ -44,10 +44,20 @@ ADG 는 「시간표가 아니라 순서」라 액션이 늦게 시작하는 것
     SLIP/CLAG   구동기 쪽 미끄러짐·지연 (기본 0 — 지연만 보려고)
     SEEDS       시드 여러 개 "7,2,5"
 """
+import math
 import os
 import sys
 
 sys.path.insert(0, os.path.join(os.environ["W"], "path"))
+
+# ★ 주행과 **같은 환경**을 스스로 맞춘다 (-224). `run_record.sh:187` 이
+#   `PIBT_FRONT_RULE=4` 를 기본으로 export 하는데, 도구에서 안 맞추면 4칸
+#   규칙 없이 계획이 서고 그러면 **ADG 에 순환이 생긴다** (12/12 시드).
+#   4칸 규칙의 남은 존재 이유가 바로 그 순환 방지다.
+#
+#   더 나쁜 경우는 순환이 안 나고 **조용히 다른 계획**을 재는 것이다.
+#   실제로 그랬다 — 태스크 완료가 주행 13 개인데 도구는 15 개였다.
+os.environ.setdefault("PIBT_FRONT_RULE", "4")
 
 import pibt_scene                                            # noqa: E402
 import isaac_drive as idr                                    # noqa: E402
@@ -103,11 +113,15 @@ def main():
 
     print(f"[lag_budget] pitch {PITCH} · {N}대 · dt {DT * 1000:.1f}ms · "
           f"slip {SLIP} · 명령지연 {CLAG}")
+    # ★ 어느 시스템을 잰 표인지 **표 자체로** 알 수 있어야 한다.
+    print(f"   PIBT_FRONT_RULE={os.environ.get('PIBT_FRONT_RULE')} · "
+          f"PIBT_SOFT_HOLD={os.environ.get('PIBT_SOFT_HOLD', '1')} · "
+          f"horizon {HORIZON} · order_gap {GAP}")
     print(f"   설계 여유 {DESIGN_GAP * 1000:.1f} mm "
           f"= v_max 0.9 m/s 로 {DESIGN_GAP / 0.9 * 1000:.0f} ms 이동")
     print("   ★ 물리가 없어 이 값은 **낙관적 상한**이다. 실제 예산은 더 작다.")
     print(f"   ※ 실제 지연은 표본 간격 {DT * 1000:.1f}ms 로 **올림** 양자화된다 "
-          f"(20 요청 -> 33.3 실현). 예산에는 보수적인 쪽이다.")
+          f"(20 요청 -> 33.3 실현). 표의 **실현** 열로 판정한다.")
 
     worst_ok = {}
     for seed in seeds:
@@ -116,19 +130,26 @@ def main():
             geom, starts, adg, order, history = build(seed)
         except Exception as e:
             print(f"   ★ 계획 실패: {e!r}")
+            if "순환" in str(e):
+                print(f"     -> `PIBT_FRONT_RULE` 이 {os.environ.get('PIBT_FRONT_RULE')} "
+                      f"이다. 4 가 아니면 그게 원인이다 — 4칸 규칙이 ADG")
+                print(f"        순환을 막는다 (없으면 12/12 시드가 순환한다).")
             continue
         print(f"   액션 {len(adg.actions)} · 로봇 {len(starts)}")
-        print(f"   {'지연':>7}{'접촉':>7}{'칸공유':>9}{'최소간격':>11}"
+        print(f"   {'요청':>7}{'실현':>8}{'접촉':>7}{'칸공유':>9}{'최소간격':>11}"
               f"{'완주':>7}{'액션':>13}{'시뮬':>9}")
         ok_upto = None
         for lag in lags:
+            # 실현 지연은 표본 간격으로 올림된다 — 판정은 **실현값**으로 한다.
+            real = 0.0 if lag <= 0 else math.ceil(lag / DT - 1e-9) * DT
             r = run(geom, starts, adg, order, history, seed, lag)
             safe = (r["contact"] == 0 and r["done"]
                     and r["gap"] >= DESIGN_GAP)
             if safe:
-                ok_upto = lag
+                ok_upto = real
             mark = "" if safe else "   <- 깨짐"
-            print(f"   {lag * 1000:>6.0f}ms{r['contact']:>7}{r['overlap']:>9}"
+            print(f"   {lag * 1000:>6.0f}ms{real * 1000:>7.1f}ms"
+                  f"{r['contact']:>7}{r['overlap']:>9}"
                   f"{r['gap'] * 1000:>10.1f}mm{'O' if r['done'] else 'X':>7}"
                   f"{r['acted']:>7}/{r['total']:<5}{r['t']:>8.1f}s{mark}")
         worst_ok[seed] = ok_upto
