@@ -28,7 +28,11 @@ import pibt_scene                        # noqa: E402
 
 MAP = os.environ["MAP"]
 N = int(os.environ.get("N", "12"))
-PITCH = float(os.environ.get("PIBT_PITCH", "1.2"))
+# ★ 1.2 -> 1.0 (-224). 기준선은 2026-09-15(`5bd83ef`)부터 pitch 1.0 인데
+#   기본값만 1.2 로 남아 있어, 맨손으로 돌리면 **설정 불일치로 죽는다.**
+#   그 커밋 본문도 「옛 기준은 pitch 1.2 판이라 설정 불일치로 비교 자체가 안
+#   됐다」고 적고 있다 — 기본값을 안 옮겨서 같은 함정이 남아 있었다.
+PITCH = float(os.environ.get("PIBT_PITCH", "1.0"))
 SEEDS = [int(x) for x in os.environ.get("SEEDS", "1,2,4").split(",")]
 MODE = os.environ.get("MODE", "lifelong")        # lifelong | oneshot
 # [patch_ticks] ★ 2026-09-15 (-211) 정정. 이 주석이 「우리 경로(step_h)에서
@@ -41,6 +45,11 @@ HORIZON = int(os.environ.get("HORIZON", "1260"))
 GAP = int(os.environ.get("GAP", "60"))
 # 기준 파일. 설정이 다르면 **다른 파일**에 떠야 한다 — 4칸 켠 기준과 끈 기준은
 # 간선 수가 달라 한 파일에 못 담는다 (-224).
+#
+#   ★ 기준선의 전제는 `PIBT_FRONT_RULE=4` 다. 이건 셸 환경변수라 여기서
+#     기본값을 못 준다 (`pibt_scene` 이 직접 읽는다). 안 주고 돌리면 4칸이
+#     꺼져 `guard` 가 비고, 그러면 ADG 규칙 ② 가 아예 안 돌아 **전혀 다른
+#     간선 수**가 나온다. 아래 `_collect` 가 머리말에 그 값을 찍는다.
 OUT = os.environ.get("FP_OUT") or os.path.join(
     os.environ["W"], "tools", "adg_fingerprint.json")
 
@@ -108,6 +117,14 @@ EXIT_OK, EXIT_DIFF, EXIT_USAGE = 0, 1, 2
 def _collect():
     """시드를 전부 돌려 지문을 찍고 (지문표, 설정) 을 돌려준다."""
     print(f"모드 {MODE}  대수 {N}  pitch {PITCH}  시드 {SEEDS}")
+    # ★ 간선을 바꾸는 둘은 **머리말에 찍는다.** 표만 보고 「왜 값이 다르지」를
+    #   묻게 두면 안 된다 — 2026-09-16 에 설정이 다른 기준선을 덮었다.
+    _fr = os.environ.get("PIBT_FRONT_RULE", "")
+    print(f"PIBT_FRONT_RULE={_fr or '(안 줌 — 4칸 꺼짐)'}  "
+          f"PIBT_ADG_SLIM={os.environ.get('PIBT_ADG_SLIM', '1')}")
+    if not _fr:
+        print("★ 4칸이 꺼져 있다. 기준선이 4칸 켠 것이면 값이 안 맞는다 —\n"
+              "  `PIBT_FRONT_RULE=4` 를 주고 다시 돌릴 것.")
     print(f"지평 {HORIZON}틱 · 주기 {GAP}틱   "
           f"(전진 {MOVE_TICKS}틱 · 회전 {TURN_TICKS}틱)\n")
     print(f"{'시드':>5}{'액션':>8}{'type1':>8}{'type2':>8}{'비순환':>8}"
