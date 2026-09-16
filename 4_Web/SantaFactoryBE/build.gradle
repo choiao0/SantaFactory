@@ -42,6 +42,9 @@ dependencies {
 
     implementation 'org.springframework.boot:spring-boot-starter-security'
 
+    // 가입 이메일 인증 코드 발송 (SMTP). spring.mail.host 가 있을 때만 JavaMailSender 가 만들어진다.
+    implementation 'org.springframework.boot:spring-boot-starter-mail'
+
     // refresh 토큰 저장소. TTL 로 만료가 자동 정리되고, 회전·폐기가 SET/DEL 두 줄이다.
     implementation 'org.springframework.boot:spring-boot-starter-data-redis'
 
