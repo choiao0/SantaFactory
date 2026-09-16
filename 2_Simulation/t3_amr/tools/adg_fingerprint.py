@@ -81,6 +81,13 @@ def fingerprint(adg) -> dict:
         "acyclic": adg.topological_order() is not None,
         "actions_sig": _sha(acts),
         "edges_sig": _sha(edges),
+        # ★ 간선을 바꾸는 스위치는 **지문에 같이 적는다** (-224).
+        #   `PIBT_ADG_SLIM` 은 규칙 ② 를 인접 쌍만 걸게 해서 간선을 84~90 %
+        #   줄인다 (도달 관계·실행 시각은 동일, `tools/adg_edge_audit.py`).
+        #   적어 두지 않으면 나중에 `edges_sig` 가 달라졌을 때 「규칙이
+        #   깨졌나」와 「스위치가 달랐나」를 못 가른다.
+        "slim": os.environ.get("PIBT_ADG_SLIM", "0"),
+        "front_rule": os.environ.get("PIBT_FRONT_RULE", ""),
     }
 
 
