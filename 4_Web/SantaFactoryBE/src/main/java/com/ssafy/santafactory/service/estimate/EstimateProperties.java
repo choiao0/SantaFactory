@@ -32,6 +32,10 @@ import java.time.Duration;
  * @param verifyWindow      물리 검증(Isaac) 창 길이. SIM_VERIFY_CONTRACT.md 기본값(600s)과 같다
  * @param maxLineQty        출고 주문 한 줄(상품 하나)의 수량 상한 — 개인 온라인몰 1회 구매 기준(S15P21A106-146).
  *                          참조 통계표의 도매 꼬리(12·24·36·48… 다스·케이스 봉우리)를 추첨 대상에서 뺀다
+ * @param maxOrderQty       출고 주문 하나의 <b>수량 합</b> 상한 — 넘으면 주문을 통째로 다시 뽑는다
+ *                          (시나리오 결정 2026-09-15 "개인 주문은 수량 합 10개 이하", S15P21A106-232).
+ *                          FMS 가 six 기준선·θ 를 뽑을 때 쓴 주문 규칙과 같은 값이라야 견적이 그 기준선과
+ *                          같은 주문 분포 위에서 나온다
  * @param amrCapacity       로봇이 한 왕복에 싣는 토트 수(1~6, 시뮬 {@code --capacity}). 안 보내면 시뮬 기본 1 로 돌아
  *                          처리율이 3~4배 비관적으로 나온다 — 6,000건/6h 20대: 1토트 283건/h vs 6토트 1,000건/h (S15P21A106-218).
  *                          로봇 시드의 capacity(200)는 단위가 달라 쓰지 않는다
@@ -59,6 +63,7 @@ public record EstimateProperties(
         @DefaultValue("true") boolean exportReplay,
         @DefaultValue("10m") Duration verifyWindow,
         @DefaultValue("10") int maxLineQty,
+        @DefaultValue("10") int maxOrderQty,
         @DefaultValue("6") int amrCapacity,
         Duration leadTimeP90Limit
 ) {
