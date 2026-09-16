@@ -26,6 +26,10 @@ public enum ErrorCode {
     INVALID_CREDENTIALS(HttpStatus.UNAUTHORIZED, "AUTH401_2", "이메일 또는 비밀번호가 올바르지 않습니다."),
     REFRESH_TOKEN_INVALID(HttpStatus.UNAUTHORIZED, "AUTH401_3", "다시 로그인해 주세요."),
     EMAIL_ALREADY_USED(HttpStatus.CONFLICT, "AUTH409_1", "이미 사용 중인 이메일입니다."),
+    EMAIL_CODE_INVALID(HttpStatus.BAD_REQUEST, "AUTH400_1", "인증 코드가 올바르지 않습니다."),
+    EMAIL_NOT_VERIFIED(HttpStatus.FORBIDDEN, "AUTH403_1", "이메일 인증을 먼저 완료해 주세요."),
+    EMAIL_CODE_EXPIRED(HttpStatus.GONE, "AUTH410_1", "인증 코드가 만료되었습니다. 다시 요청해 주세요."),
+    EMAIL_SEND_TOO_OFTEN(HttpStatus.TOO_MANY_REQUESTS, "AUTH429_1", "잠시 후 다시 요청해 주세요."),
     ;
 
     private final HttpStatus httpStatus;

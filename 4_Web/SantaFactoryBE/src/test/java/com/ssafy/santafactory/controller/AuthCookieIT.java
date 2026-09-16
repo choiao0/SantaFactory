@@ -8,6 +8,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.ssafy.santafactory.repository.MemberRepository;
 import com.ssafy.santafactory.repository.WarehouseRepository;
 import com.ssafy.santafactory.support.PostgresSupport;
+import com.ssafy.santafactory.support.RedisSupport;
 import jakarta.servlet.http.Cookie;
 import java.util.Arrays;
 import org.junit.jupiter.api.BeforeEach;
@@ -15,6 +16,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
@@ -29,6 +31,7 @@ import org.springframework.test.web.servlet.MvcResult;
  */
 @SpringBootTest
 @AutoConfigureMockMvc
+@Import(RedisSupport.class)
 class AuthCookieIT extends PostgresSupport {
 
     @Autowired
@@ -40,6 +43,9 @@ class AuthCookieIT extends PostgresSupport {
     @Autowired
     WarehouseRepository warehouseRepository;
 
+    @Autowired
+    RedisSupport redis;
+
     private static final String EMAIL = "cookie@pumgo.test";
     private static final String PASSWORD = "cookie-pass-1234";
 
@@ -50,8 +56,8 @@ class AuthCookieIT extends PostgresSupport {
         mvc.perform(post("/api/auth/signup").contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"email":"%s","password":"%s","name":"김담당",
-                                 "company":"품고물류","phone":"01012345678"}
-                                """.formatted(EMAIL, PASSWORD)))
+                                 "company":"품고물류","phone":"01012345678","email_token":"%s"}
+                                """.formatted(EMAIL, PASSWORD, redis.verifiedToken(EMAIL))))
                 .andExpect(status().isCreated());
     }
 

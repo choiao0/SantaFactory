@@ -1,5 +1,6 @@
 package com.ssafy.santafactory.service.auth;
 
+import com.ssafy.santafactory.dto.auth.EmailVerifyResponse;
 import com.ssafy.santafactory.dto.auth.LoginRequest;
 import com.ssafy.santafactory.dto.auth.MemberResponse;
 import com.ssafy.santafactory.dto.auth.SignUpRequest;
@@ -27,16 +28,32 @@ public class AuthService {
     private final PasswordEncoder passwordEncoder;
     private final JwtProvider jwtProvider;
     private final RefreshTokenBlacklist blacklist;
+    private final EmailVerificationService emailVerification;
 
     /** 발급된 토큰 한 벌. */
     public record Tokens(Member member, String accessToken, String refreshToken) {
     }
 
+    /** 가입 인증 코드 발송. 이미 회원인 이메일은 가입 API 와 같은 409 로 알린다. */
+    @Transactional(readOnly = true)
+    public void requestEmailCode(String email) {
+        if (memberRepository.existsByEmail(email)) {
+            throw new GlobalException(ErrorCode.EMAIL_ALREADY_USED);
+        }
+        emailVerification.issue(email);
+    }
+
+    public EmailVerifyResponse verifyEmailCode(String email, String code) {
+        return new EmailVerifyResponse(emailVerification.verify(email, code));
+    }
+
+    /** 가입. 이메일 인증 토큰을 먼저 소비하므로 코드를 맞힌 사람만 그 이메일로 가입할 수 있다. */
     @Transactional
     public MemberResponse signUp(SignUpRequest request) {
         if (memberRepository.existsByEmail(request.email())) {
             throw new GlobalException(ErrorCode.EMAIL_ALREADY_USED);
         }
+        emailVerification.consume(request.email(), request.emailToken());
         Member member = memberRepository.save(Member.signUp(
                 request.email(),
                 passwordEncoder.encode(request.password()),

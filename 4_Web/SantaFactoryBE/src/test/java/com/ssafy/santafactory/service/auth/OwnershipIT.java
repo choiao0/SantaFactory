@@ -12,11 +12,13 @@ import com.ssafy.santafactory.repository.MemberRepository;
 import com.ssafy.santafactory.repository.WarehouseRepository;
 import com.ssafy.santafactory.service.WarehouseService;
 import com.ssafy.santafactory.support.PostgresSupport;
+import com.ssafy.santafactory.support.RedisSupport;
 import java.time.LocalTime;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.context.annotation.Import;
 
 /**
  * 회원 사이의 격리 (S15P21A106-186).
@@ -25,6 +27,7 @@ import org.springframework.boot.test.context.SpringBootTest;
  * "그 id 의 리소스가 존재한다"가 새어나가 id 를 훑으며 남의 데이터 규모를 셀 수 있다.
  */
 @SpringBootTest
+@Import(RedisSupport.class)
 class OwnershipIT extends PostgresSupport {
 
     @Autowired
@@ -39,6 +42,9 @@ class OwnershipIT extends PostgresSupport {
     @Autowired
     WarehouseRepository warehouseRepository;
 
+    @Autowired
+    RedisSupport redis;
+
     private AuthenticatedMember alice;
     private AuthenticatedMember bob;
     private Long aliceWarehouseId;
@@ -48,10 +54,10 @@ class OwnershipIT extends PostgresSupport {
         warehouseRepository.deleteAllInBatch();
         memberRepository.deleteAllInBatch();
 
-        alice = principal(authService.signUp(
-                new SignUpRequest("alice@pumgo.test", "alice-pass-1234", "김담당", "품고물류", "01011112222")).memberId());
-        bob = principal(authService.signUp(
-                new SignUpRequest("bob@other.test", "bob-pass-1234", "박담당", "다른물류", "01033334444")).memberId());
+        alice = principal(authService.signUp(new SignUpRequest("alice@pumgo.test", "alice-pass-1234", "김담당", "품고물류",
+                "01011112222", redis.verifiedToken("alice@pumgo.test"))).memberId());
+        bob = principal(authService.signUp(new SignUpRequest("bob@other.test", "bob-pass-1234", "박담당", "다른물류",
+                "01033334444", redis.verifiedToken("bob@other.test"))).memberId());
 
         aliceWarehouseId = warehouseService.create(warehouse(), alice).warehouseId();
     }

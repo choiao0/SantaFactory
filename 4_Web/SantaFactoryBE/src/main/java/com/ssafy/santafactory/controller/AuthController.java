@@ -1,5 +1,8 @@
 package com.ssafy.santafactory.controller;
 
+import com.ssafy.santafactory.dto.auth.EmailCodeRequest;
+import com.ssafy.santafactory.dto.auth.EmailVerifyRequest;
+import com.ssafy.santafactory.dto.auth.EmailVerifyResponse;
 import com.ssafy.santafactory.dto.auth.LoginRequest;
 import com.ssafy.santafactory.dto.auth.MemberResponse;
 import com.ssafy.santafactory.dto.auth.SignUpRequest;
@@ -37,8 +40,25 @@ public class AuthController {
     private final AuthService authService;
     private final AuthCookies authCookies;
 
+    @Operation(summary = "가입 인증 코드 발송",
+            description = "이메일로 6자리 코드를 보낸다. 같은 이메일은 60초에 한 번만(429). 이미 가입된 이메일은 409.")
+    @PostMapping("/email/code")
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    public ApiResponse<Void> sendEmailCode(@Valid @RequestBody EmailCodeRequest request) {
+        authService.requestEmailCode(request.email());
+        return ApiResponse.onSuccess();
+    }
+
+    @Operation(summary = "가입 인증 코드 확인",
+            description = "맞으면 email_token 을 준다. 가입 요청에 실어 보내야 한다. 5회 틀리거나 5분이 지나면 코드부터 다시.")
+    @PostMapping("/email/verify")
+    public ApiResponse<EmailVerifyResponse> verifyEmailCode(@Valid @RequestBody EmailVerifyRequest request) {
+        return ApiResponse.onSuccess(authService.verifyEmailCode(request.email(), request.code()));
+    }
+
     @Operation(summary = "회원가입",
-            description = "역할은 요청에서 받지 않고 항상 USER 로 만든다. 관리자는 가입으로 만들 수 없다.")
+            description = "역할은 요청에서 받지 않고 항상 USER 로 만든다. 관리자는 가입으로 만들 수 없다. "
+                    + "email_token 은 코드 확인이 준 값이어야 한다(아니면 403).")
     @PostMapping("/signup")
     @ResponseStatus(HttpStatus.CREATED)
     public ApiResponse<MemberResponse> signUp(@Valid @RequestBody SignUpRequest request) {
