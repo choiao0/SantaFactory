@@ -285,7 +285,8 @@ section.step > p.desc { font-size: 18px; line-height: 1.7; max-width: 760px; mar
 }
 .run.playable.on .play-hint { color: #4fd18b; }
 .run.DONE { border-color: #2f7a52; border-top-color: #4fd18b; background: #0e1a13; }
-.run.RUNNING, .run.working { border-color: var(--red); border-top-color: var(--red); background: #1a0d0d; }
+/* 계산 중 — 완료(초록)·실패(앰버)·대기(회색)와 겹치지 않는 네 번째 색. 빨강은 실패로 읽힌다 */
+.run.RUNNING, .run.working { border-color: #2f6b7a; border-top-color: #4fc3d1; background: #0d1a1d; }
 .run.FAILED, .run.TIMEOUT { border-color: #a5730e; border-top-color: var(--warn); background: #1c150a; }
 .run .n { font: 800 32px/1 var(--font-head); letter-spacing: -.04em; color: #fff; }
 .run .n span { font: 500 14px var(--font-mono); color: #999; margin-left: 3px; }
