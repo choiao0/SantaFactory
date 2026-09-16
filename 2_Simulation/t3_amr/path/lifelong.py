@@ -50,11 +50,14 @@ lifelong 은 일을 **시간에 걸쳐** 흘려보낸다. 한 번에 움직이�
 "가깝다"고 배정되는데 실제로는 180° 돌아야 한다. 그쪽 설계 §6 이 후속 이슈로 걸어둔
 항목이라 여기서도 같게 두었다. 고칠 때 양쪽을 같이 고쳐야 비교가 성립한다.
 """
+import sys
+
 import numpy as np
 
 import pibt_core_v2 as _pc
-from pibt_core_v2 import (Replanner, Stagnation, dist_map_h, occupied, stay_map_h,
-                          step_h, swing_cells, valid_state, wait_bias)
+from pibt_core_v2 import (Replanner, Stagnation, dist_map_h, front_cells,
+                          occupied, stay_map_h, step_h, swing_cells,
+                          valid_state, wait_bias)
 
 # 로봇 상태 — FMS fms_kernel.py:31 과 같은 어휘
 IDLE, TO_PICK, SVC_PICK, TO_DROP, SVC_DROP, TO_HOME, FREED = \
@@ -204,6 +207,12 @@ class Kernel(object):
         self._dm = {}                       # 목표별 거리표 캐시 — 재배차가 잦아 필수
         self.busy = {a: 0 for a in starts}
         self.swing = {a: set() for a in starts}
+        # ★ 회전 중인 로봇의 soft 칸 (-211). `swing`(hard)과 갈라 둔다 —
+        #   의미가 다르기 때문이다: hard 는 상대의 **몸**을, soft 는 상대의
+        #   **축**만 막는다. 이걸 안 넘겨서 4칸 규칙이 회전 5틱 중 1틱만
+        #   걸렸고, pitch 1.0 주행 5판 중 2판이 차체 접촉으로 중단됐다.
+        self.swing_soft = {a: frozenset() for a in starts}
+        self._soft_clash = 0     # soft 칸이 두 대에 겹친 횟수. 0 이어야 정상
         self.age = {a: 0 for a in starts}
         self.stag = Stagnation()
         self.replan = Replanner(free, self.edge_cost, self.turn_cost)
@@ -464,23 +473,81 @@ class Kernel(object):
         #   세 번째 값은 구간 대수 제한 **지표**일 뿐 이동 결정에 안 쓰인다
         #   (FMS 는 section_blocks 카운터로만 쓴다). 우리는 `sec_limit` 을 안
         #   넘기므로 장치가 꺼져 있고 항상 빈 집합이라, 이동 결과는 이전과 같다.
+        # ★ 회전 진행 중인 로봇의 soft 칸 — 다틱 회전의 2~5틱째를 지킨다 (-211).
+        #
+        #   `soft_next` 는 `_PIBTStepH` 인스턴스마다 새로 생기므로(heading.py:74)
+        #   넘겨주지 않으면 **회전을 시작하는 틱에만** 규칙이 걸린다. 나머지
+        #   4틱은 남의 축이 guard 칸에 들어와 앉아도 아무도 안 막는다.
+        #   실측(`tools/swing_overlap.py --guard`, pitch 1.0 · 1260틱):
+        #
+        #            1틱  2틱  3틱  4틱  5틱     총
+        #       s2     0    2   10   22   26     60건
+        #       s5     0    2    8   26   28     64건    ← 그 두 판이 접촉으로 중단
+        #
+        #   1틱째가 0 이라 계획기의 검사(`_soft_blocked`)는 멀쩡하다. 고칠 것은
+        #   검사가 아니라 **검사가 사는 기간**이다. 커널(core.py:445)은 이미 넘긴다.
+        #
+        #   커널의 dict 컴프리헨션은 두 대의 soft 칸이 겹치면 **조용히 뒤엣것만
+        #   남는다.** 여기서는 갈라 둔다 — 낮은 rid 가 이기고(sorted), 겹치면 센다.
+        soft_hold = {}
+        for a in sorted(agents):
+            if self.busy[a] <= 0:
+                continue
+            for cell in self.swing_soft[a]:
+                prev = soft_hold.setdefault(cell, a)
+                if prev != a:
+                    # ★ 「안 나야 정상」이 아니다 (2026-09-16 실측 정정).
+                    #   작업서 초판은 「같은 틱에 A 가 먼저 soft 를 예약하면 B 의
+                    #   회전 후보가 거부된다」고 봤는데 **틀렸다.**
+                    #   `_soft_blocked` 가 보는 것은 둘뿐이다:
+                    #       (가) 내 **축**이 놓일 칸이 남에게 soft 예약됐나
+                    #       (나) 남의 **축**이 내 soft 칸에 있나
+                    #   「내 soft 가 남의 soft 와 겹치나」는 **안 본다.** 그리고
+                    #   회전은 축이 안 움직이므로 (가)에도 안 걸린다. 그래서 서로
+                    #   다른 틱에 시작한 두 회전의 guard 가 겹치는 일이 실제로
+                    #   난다 — 그 자체는 soft 의 정의상 **합법**이다 (서로의 축만
+                    #   안 들어오면 된다).
+                    #
+                    #   그래서 이 카운터는 **버그 신호가 아니라 노출 지표**다.
+                    #   0 을 단언하면 안 된다. 실측 1260틱 12대: 시드별 29~89
+                    #   (칸 x 틱 누적이라 동시 회전 **사건 수**는 그보다 훨씬 적다).
+                    #   위험은 이 겹침 자체가 아니라, 겹친 뒤 한쪽이 `_release`
+                    #   될 때 보호가 통째로 사라지는 상류 버그였다 (heading.py,
+                    #   `soft_base` 복원으로 수정).
+                    self._soft_clash += 1
+                    if self._soft_clash <= 5:
+                        print(f"[lifelong] ★ soft 칸 {cell} 충돌 — agent{prev} 유지, "
+                              f"agent{a} 무시. 동시 회전 두 대의 soft 가 겹쳤다.",
+                              file=sys.stderr)
+
+        # `forbid_axle`(뒤에서 둘째)은 넘기지 않는다 — FMS 답신 10 §4:
+        # 「`_make_room` 이 내부에서 쓴다. 밖에서 넣는 것은 대치 상태기계의
+        # 양보 제약뿐.」
         new, cells, _denied = step_h(self.states, d_now, self.edge_cost, self.wait_cost,
-                                     self.free, prio, self.turn_cost, extra, bias)
+                                     self.free, prio, self.turn_cost, extra, bias,
+                                     None, 0, (), None, None, soft_hold)
 
         for a in agents:
             s0, s1 = self.states[a], new[a]
             if s1[:2] == s0[:2] and s1[2] != s0[2]:          # 회전 시작
                 self.busy[a] = self.turn_ticks - 1
                 self.swing[a] = swing_cells(s0[0], s0[1], s0[2], s1[2])
+                # ★ hard 와 같은 수명으로 soft 도 잡는다 (-211).
+                #   `front_cells` 는 규칙이 꺼져 있으면 빈 집합을 돌려주므로
+                #   스위치가 꺼진 판은 `soft_hold` 가 통째로 비어 비트 동일하다.
+                self.swing_soft[a] = frozenset(
+                    front_cells(s0[0], s0[1], s0[2], s1[2]))
             elif s1[:2] != s0[:2]:                            # 전진·후진 시작
                 # 칸은 첫 틱에 옮기고 나머지는 busy 로 제자리 — 몸 2칸이 새 칸 +
                 # 떠난 칸을 그대로 쥔다. `pibt.heading._after_step_h` 와 같다.
                 self.busy[a] = self.move_ticks - 1
                 self.swing[a] = set()
+                self.swing_soft[a] = frozenset()
             elif self.busy[a] > 0:
                 self.busy[a] -= 1
                 if self.busy[a] == 0:
                     self.swing[a] = set()
+                    self.swing_soft[a] = frozenset()
             r = self.rb[a]
             if r["state"] in SERVICE:
                 r["svc"] -= 1
@@ -561,7 +628,9 @@ def run_lifelong(free, starts, cells_by_cat, horizon=600, seed=0, order_gap=15,
             "parked_end": parked,
             # agent -> 태스크를 받은 틱들. `isaac_drive` 가 릴리스 바닥에 쓴다 (-211)
             "task_start": {a: list(v) for a, v in K.task_start.items()},
-            "busy_robots": sum(1 for r in K.rb.values() if r["state"] != IDLE)}
+            "busy_robots": sum(1 for r in K.rb.values() if r["state"] != IDLE),
+            # soft 칸이 두 대에 겹쳐 한쪽을 무시한 횟수 (-211). 재기준선에서 0 인지 본다.
+            "soft_clash": getattr(K, "_soft_clash", 0)}
     if hasattr(K, "report"):
         info.update(K.report())
     if verbose:
