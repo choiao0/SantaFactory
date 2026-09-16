@@ -53,14 +53,17 @@ class AuthServiceTest extends PostgresSupport {
         redis.flush();
     }
 
+    private SignUpRequest signUpRequest(String email, String password) {
+        return new SignUpRequest(email, password, "김담당", "품고물류", "010-1234-5678", redis.verifiedToken(email));
+    }
+
     private void givenSignedUp() {
-        authService.signUp(new SignUpRequest(EMAIL, PASSWORD, "김담당", "품고물류", "010-1234-5678"));
+        authService.signUp(signUpRequest(EMAIL, PASSWORD));
     }
 
     @Test
     void sign_up_stores_a_hash_and_always_makes_a_user() {
-        var response = authService.signUp(
-                new SignUpRequest(EMAIL, PASSWORD, "김담당", "품고물류", "010-1234-5678"));
+        var response = authService.signUp(signUpRequest(EMAIL, PASSWORD));
 
         assertThat(response.role()).isEqualTo(Role.USER);
         // 하이픈을 뗀 숫자만 저장한다 — 같은 번호가 다른 값으로 남지 않게
@@ -74,10 +77,38 @@ class AuthServiceTest extends PostgresSupport {
     void duplicate_email_is_rejected() {
         givenSignedUp();
 
-        assertThatThrownBy(() -> authService.signUp(
-                new SignUpRequest(EMAIL, "another-pass", "박과장", "품고물류", "01099998888")))
+        assertThatThrownBy(() -> authService.signUp(signUpRequest(EMAIL, "another-pass")))
                 .isInstanceOf(GlobalException.class)
                 .hasFieldOrPropertyWithValue("errorCode", ErrorCode.EMAIL_ALREADY_USED);
+    }
+
+    /** 이메일 인증 없이는 가입할 수 없다 — 토큰이 없거나 다른 이메일 것이면 막는다. */
+    @Test
+    void sign_up_without_a_verified_email_is_rejected() {
+        assertThatThrownBy(() -> authService.signUp(
+                new SignUpRequest(EMAIL, PASSWORD, "김담당", "품고물류", "01012345678", "made-up")))
+                .isInstanceOf(GlobalException.class)
+                .hasFieldOrPropertyWithValue("errorCode", ErrorCode.EMAIL_NOT_VERIFIED);
+
+        String othersToken = redis.verifiedToken("someone-else@pumgo.test");
+        assertThatThrownBy(() -> authService.signUp(
+                new SignUpRequest(EMAIL, PASSWORD, "김담당", "품고물류", "01012345678", othersToken)))
+                .isInstanceOf(GlobalException.class)
+                .hasFieldOrPropertyWithValue("errorCode", ErrorCode.EMAIL_NOT_VERIFIED);
+        assertThat(memberRepository.existsByEmail(EMAIL)).isFalse();
+    }
+
+    /** 한 번 확인한 이메일로 두 번 가입할 수 없다 — 토큰은 가입에서 소비된다. */
+    @Test
+    void a_verification_token_is_consumed_by_sign_up() {
+        String token = redis.verifiedToken(EMAIL);
+        authService.signUp(new SignUpRequest(EMAIL, PASSWORD, "김담당", "품고물류", "01012345678", token));
+        memberRepository.deleteAllInBatch();
+
+        assertThatThrownBy(() -> authService.signUp(
+                new SignUpRequest(EMAIL, PASSWORD, "김담당", "품고물류", "01012345678", token)))
+                .isInstanceOf(GlobalException.class)
+                .hasFieldOrPropertyWithValue("errorCode", ErrorCode.EMAIL_NOT_VERIFIED);
     }
 
     /** 없는 이메일과 틀린 비밀번호가 같은 오류여야 한다 — 구분되면 가입 여부가 새어나간다. */

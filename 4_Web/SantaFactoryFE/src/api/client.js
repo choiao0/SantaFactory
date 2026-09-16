@@ -15,7 +15,7 @@ export class ApiError extends Error {
  * `/auth/refresh` 에 걸면 무한 루프가 되고, 로그인·가입 실패는 토큰이 없어서가 아니라
  * 자격 증명이 틀려서라 갱신해봐야 결과가 같다.
  */
-const NO_REFRESH = ['/auth/login', '/auth/signup', '/auth/refresh', '/auth/logout']
+const NO_REFRESH = ['/auth/login', '/auth/signup', '/auth/refresh', '/auth/logout', '/auth/email']
 
 let refreshing = null
 let onSessionLost = () => {}

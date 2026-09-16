@@ -34,6 +34,18 @@ spring:
     port: 5672
     username: ${RABBITMQ_USER:guest}
     password: ${RABBITMQ_PASSWORD:guest}
+  # 가입 인증 코드 발송 SMTP. 기본은 Gmail(587, STARTTLS) — 팀 공용 계정 + 앱 비밀번호 (S15P21A106-198)
+  mail:
+    host: ${MAIL_HOST:smtp.gmail.com}
+    port: ${MAIL_PORT:587}
+    username: ${MAIL_USERNAME:}
+    password: ${MAIL_PASSWORD:}
+    properties:
+      mail.smtp.auth: true
+      mail.smtp.starttls.enable: true
+      mail.smtp.connectiontimeout: 5000
+      mail.smtp.timeout: 10000
+      mail.smtp.writetimeout: 10000
 
 server:
   port: 8080
@@ -103,6 +115,15 @@ estimate:
   # 발행 후 결과가 이 시간 안에 안 오면 TIMEOUT (명세 §1-4 는 30분 — 시연 때는 줄여도 된다)
   run-timeout: 30m
   timeout-sweep-interval: 60   # 스윕 주기(초)
+
+# 이메일 인증. enabled 가 false 면(로컬 기본) 메일을 보내지 않고 코드를 백엔드 로그에 찍는다.
+mail:
+  enabled: ${MAIL_ENABLED:false}
+  from: ${MAIL_FROM:${MAIL_USERNAME:no-reply@santafactory.test}}
+  code-ttl: 5m
+  verified-ttl: 30m
+  resend-cooldown: 60s
+  max-attempts: 5
 
 auth:
   # HS256 이라 32바이트(256비트) 이상 필요하다 — openssl rand -base64 48
