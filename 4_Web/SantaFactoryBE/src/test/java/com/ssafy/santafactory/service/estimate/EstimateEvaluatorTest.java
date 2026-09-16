@@ -46,7 +46,7 @@ class EstimateEvaluatorTest {
 
     /** 단가 1,500만 · 대당 구축·설치비 50만 (robots 시드) · 충전기 500만(미정이라 테스트 가정). */
     private static final EstimateProperties PROPS =
-            new EstimateProperties(15_000_000L, 5_000_000L, 500_000L, 28, 6, 4, 1, Duration.ofMinutes(30), Duration.ofHours(6), "in,in,out,out,out,out", false, Duration.ofMinutes(10), 10, 6);
+            new EstimateProperties(15_000_000L, 5_000_000L, 500_000L, 28, 6, 4, 1, Duration.ofMinutes(30), Duration.ofHours(6), "in,in,out,out,out,out", false, Duration.ofMinutes(10), 10, 6, null);
 
     private final CostCalculator costCalculator = new CostCalculator(PROPS);
     private final EstimateEvaluator evaluator = new EstimateEvaluator();
@@ -56,7 +56,7 @@ class EstimateEvaluatorTest {
     @Test
     void recommends_smallest_fleet_meeting_all_three_conditions() {
         // 6대: 처리율 70.1 % · 가동률 93.4 % · 1.03억 — 4대는 처리율 51.9 % 로 모자란다
-        EstimateGoal goal = new EstimateGoal(70.0, 90.0, 1_000_000_000L);
+        EstimateGoal goal = new EstimateGoal(70.0, 90.0, 1_000_000_000L, null);
 
         EstimateVerdict verdict = evaluator.evaluate(runs, goal);
 
@@ -66,7 +66,7 @@ class EstimateEvaluatorTest {
 
     @Test
     void marks_knee_where_throughput_saturates() {
-        EstimateVerdict verdict = evaluator.evaluate(runs, new EstimateGoal(70.0, 90.0, 1_000_000_000L));
+        EstimateVerdict verdict = evaluator.evaluate(runs, new EstimateGoal(70.0, 90.0, 1_000_000_000L, null));
 
         // 8대 이후로는 대수를 늘려도 처리율이 85 % 에서 더 오르지 않는다
         assertThat(verdict.kneeCount()).isEqualTo(8);
@@ -74,7 +74,7 @@ class EstimateEvaluatorTest {
 
     @Test
     void reports_budget_exceeded_when_every_fleet_costs_too_much() {
-        EstimateGoal goal = new EstimateGoal(20.0, 50.0, 30_000_000L);   // 최소 구성(2대)도 3,600만
+        EstimateGoal goal = new EstimateGoal(20.0, 50.0, 30_000_000L, null);   // 최소 구성(2대)도 3,600만
 
         EstimateVerdict verdict = evaluator.evaluate(runs, goal);
 
@@ -86,7 +86,7 @@ class EstimateEvaluatorTest {
     void seeded_warehouse_target_of_95_percent_is_unreachable_within_eight_amrs() {
         // 창고 시드 값 그대로: 목표 처리율 95 % · 가동률 80 % · 예산 3억.
         // 8대까지의 최대 처리율이 85.6 % 라 어느 대수로도 못 채운다.
-        EstimateGoal goal = new EstimateGoal(95.0, 80.0, 300_000_000L);
+        EstimateGoal goal = new EstimateGoal(95.0, 80.0, 300_000_000L, null);
 
         EstimateVerdict verdict = evaluator.evaluate(runs, goal);
 
@@ -98,7 +98,7 @@ class EstimateEvaluatorTest {
     @Test
     void reports_utilization_short_when_the_fast_enough_fleet_idles_too_much() {
         // 처리율 85 % 는 8대 이상이라야 되는데, 8대 가동률은 89.8 % 로 95 % 에 못 미친다
-        EstimateGoal goal = new EstimateGoal(85.0, 95.0, 10_000_000_000L);
+        EstimateGoal goal = new EstimateGoal(85.0, 95.0, 10_000_000_000L, null);
 
         EstimateVerdict verdict = evaluator.evaluate(runs, goal);
 
@@ -107,26 +107,90 @@ class EstimateEvaluatorTest {
     }
 
     @Test
-    void refuses_to_recommend_when_throughput_cannot_tell_fleet_sizes_apart() {
-        // 유한 주문 모드로 돌리면 전 대수 완료율이 100 % 다. 그대로 판정하면 가동률이 가장 높은
-        // 최소 대수, 즉 "1대 권장" 이라는 틀린 답이 나온다.
-        List<RunResult> finiteMode = List.of(
-                new RunResult(1, 100.0, 99.0, costCalculator.cost(1)),
-                new RunResult(2, 100.0, 98.0, costCalculator.cost(2)),
-                new RunResult(4, 100.0, 95.0, costCalculator.cost(4)));
+    void recommends_the_smallest_fleet_even_when_every_fleet_hits_full_throughput() {
+        // 전 대수가 처리율 100 % 여도 판정을 거부하지 않는다 (S15P21A106-97). 예전에는 LOAD_TOO_LOW 로
+        // 답을 내지 않았는데, 그건 시뮬이 유한 주문 모드로 도는 오작동을 걸러내려던 것이었다. 지금은
+        // 요청이 horizon 을 명시하고 출고 주문 목록을 직접 실어서 그 상태가 될 수 없고(S15P21A106-214),
+        // 남겨 두면 대수 범위를 좁게 고른 정상적인 견적이 답을 못 받는다. 가동률 조건이 최소 대수를 고른다.
+        List<RunResult> allSaturated = List.of(
+                new RunResult(1, 100.0, 99.0, costCalculator.cost(1), null),
+                new RunResult(2, 100.0, 98.0, costCalculator.cost(2), null),
+                new RunResult(4, 100.0, 95.0, costCalculator.cost(4), null));
 
-        EstimateVerdict verdict = evaluator.evaluate(finiteMode, new EstimateGoal(95.0, 80.0, 300_000_000L));
+        EstimateVerdict verdict = evaluator.evaluate(allSaturated, new EstimateGoal(95.0, 80.0, 300_000_000L, null));
+
+        assertThat(verdict.recommendedCount()).isEqualTo(1);
+        assertThat(verdict.reasonCode()).isNull();
+    }
+
+    @Test
+    void finds_the_knee_even_when_the_selected_range_starts_flat() {
+        // 화면에서 대수 범위를 좁게 고르면(02 FLEET) 그 구간은 이미 포화 근처라 첫 구간 증가분이
+        // 0 이하가 될 수 있다. 기준을 첫 구간으로 잡던 시절에는 그 한 점 때문에 무릎이 null 이었다.
+        // 이제는 가장 가파른 구간(21→22대)을 기준으로 삼고 그 뒤에서 찾는다 (S15P21A106-97).
+        List<RunResult> narrow = List.of(
+                new RunResult(20, 97.2, 84.0, costCalculator.cost(20), null),
+                new RunResult(21, 97.1, 83.0, costCalculator.cost(21), null),
+                new RunResult(22, 97.6, 82.0, costCalculator.cost(22), null),
+                new RunResult(23, 98.0, 81.0, costCalculator.cost(23), null),
+                new RunResult(24, 97.9, 80.0, costCalculator.cost(24), null),
+                new RunResult(25, 97.9, 79.0, costCalculator.cost(25), null));
+
+        EstimateVerdict verdict = evaluator.evaluate(narrow, new EstimateGoal(95.0, 80.0, 10_000_000_000L, null));
+
+        assertThat(verdict.kneeCount()).isEqualTo(23);
+    }
+
+    @Test
+    void skips_the_lead_time_condition_when_the_simulation_did_not_report_it() {
+        // 픽스처에는 리드타임 열이 없다(null). 상한이 있어도 없는 값으로 대수를 떨어뜨리지 않는다
+        EstimateVerdict verdict = evaluator.evaluate(runs, new EstimateGoal(70.0, 90.0, 1_000_000_000L, 600.0));
+
+        assertThat(verdict.recommendedCount()).isEqualTo(6);
+        assertThat(verdict.reasonCode()).isNull();
+    }
+
+    @Test
+    void passes_over_a_fleet_whose_lead_time_exceeds_the_limit() {
+        // 4대는 처리율·가동률·예산을 다 채우지만 p90 이 900 초라 상한 600 초를 넘는다 → 6대가 답
+        List<RunResult> withLeadTime = leadTimeRuns();
+
+        EstimateVerdict verdict = evaluator.evaluate(withLeadTime, new EstimateGoal(85.0, 90.0, 10_000_000_000L, 600.0));
+
+        assertThat(verdict.recommendedCount()).isEqualTo(6);
+    }
+
+    @Test
+    void recommends_the_smallest_fleet_when_no_lead_time_limit_is_set() {
+        // 같은 데이터에 상한만 없애면 4대가 답이다 — 리드타임이 대수를 올린다는 것을 뒤집어 보인다
+        EstimateVerdict verdict = evaluator.evaluate(leadTimeRuns(), new EstimateGoal(85.0, 90.0, 10_000_000_000L, null));
+
+        assertThat(verdict.recommendedCount()).isEqualTo(4);
+    }
+
+    @Test
+    void reports_lead_time_long_when_no_fleet_gets_orders_out_fast_enough() {
+        // 나머지 세 조건은 통과하는 대수가 있는데 p90 만 전 대수가 상한(300 초)을 넘는 경우
+        EstimateVerdict verdict = evaluator.evaluate(leadTimeRuns(), new EstimateGoal(85.0, 90.0, 10_000_000_000L, 300.0));
 
         assertThat(verdict.recommendedCount()).isNull();
-        assertThat(verdict.reasonCode()).isEqualTo(ReasonCode.LOAD_TOO_LOW);
+        assertThat(verdict.reasonCode()).isEqualTo(ReasonCode.LEAD_TIME_LONG);
+    }
+
+    /** 처리율·가동률·예산은 4대부터 통과하고, 리드타임 p90 만 대수에 따라 줄어드는 데이터. */
+    private List<RunResult> leadTimeRuns() {
+        return List.of(
+                new RunResult(4, 90.0, 95.0, costCalculator.cost(4), 900.0),
+                new RunResult(6, 92.0, 93.0, costCalculator.cost(6), 500.0),
+                new RunResult(8, 93.0, 91.0, costCalculator.cost(8), 400.0));
     }
 
     @Test
     void a_single_run_at_full_throughput_is_still_a_valid_recommendation() {
         // 대수 하나만 남은 경우는 비교 대상이 없으니 구분 불가로 볼 수 없다
-        List<RunResult> only = List.of(new RunResult(1, 100.0, 99.0, costCalculator.cost(1)));
+        List<RunResult> only = List.of(new RunResult(1, 100.0, 99.0, costCalculator.cost(1), null));
 
-        EstimateVerdict verdict = evaluator.evaluate(only, new EstimateGoal(95.0, 80.0, 300_000_000L));
+        EstimateVerdict verdict = evaluator.evaluate(only, new EstimateGoal(95.0, 80.0, 300_000_000L, null));
 
         assertThat(verdict.recommendedCount()).isEqualTo(1);
         assertThat(verdict.reasonCode()).isNull();
@@ -134,7 +198,7 @@ class EstimateEvaluatorTest {
 
     @Test
     void reports_all_failed_when_no_run_produced_a_result() {
-        EstimateVerdict verdict = evaluator.evaluate(List.of(), new EstimateGoal(70.0, 90.0, 1_000_000_000L));
+        EstimateVerdict verdict = evaluator.evaluate(List.of(), new EstimateGoal(70.0, 90.0, 1_000_000_000L, null));
 
         assertThat(verdict.recommendedCount()).isNull();
         assertThat(verdict.kneeCount()).isNull();
@@ -143,7 +207,7 @@ class EstimateEvaluatorTest {
 
     @Test
     void treats_null_input_as_all_failed() {
-        EstimateVerdict verdict = evaluator.evaluate(null, new EstimateGoal(70.0, 90.0, 1_000_000_000L));
+        EstimateVerdict verdict = evaluator.evaluate(null, new EstimateGoal(70.0, 90.0, 1_000_000_000L, null));
 
         assertThat(verdict.reasonCode()).isEqualTo(ReasonCode.ALL_FAILED);
     }
@@ -154,7 +218,7 @@ class EstimateEvaluatorTest {
                 .filter(run -> List.of(2, 3, 8, 16).contains(run.amrCount()))
                 .toList();
 
-        EstimateVerdict verdict = evaluator.evaluate(partial, new EstimateGoal(70.0, 80.0, 1_000_000_000L));
+        EstimateVerdict verdict = evaluator.evaluate(partial, new EstimateGoal(70.0, 80.0, 1_000_000_000L, null));
 
         assertThat(verdict.recommendedCount()).isEqualTo(8);   // 4·6대가 없으니 8대가 최소
     }
@@ -163,7 +227,7 @@ class EstimateEvaluatorTest {
     void skips_knee_detection_with_two_or_fewer_points() {
         List<RunResult> twoPoints = runs.subList(0, 2);
 
-        EstimateVerdict verdict = evaluator.evaluate(twoPoints, new EstimateGoal(20.0, 90.0, 1_000_000_000L));
+        EstimateVerdict verdict = evaluator.evaluate(twoPoints, new EstimateGoal(20.0, 90.0, 1_000_000_000L, null));
 
         assertThat(verdict.kneeCount()).isNull();
         assertThat(verdict.recommendedCount()).isEqualTo(2);
@@ -174,7 +238,7 @@ class EstimateEvaluatorTest {
         List<RunResult> shuffled = new ArrayList<>(runs);
         Collections.reverse(shuffled);
 
-        EstimateVerdict verdict = evaluator.evaluate(shuffled, new EstimateGoal(70.0, 90.0, 1_000_000_000L));
+        EstimateVerdict verdict = evaluator.evaluate(shuffled, new EstimateGoal(70.0, 90.0, 1_000_000_000L, null));
 
         assertThat(verdict.recommendedCount()).isEqualTo(6);
         assertThat(verdict.kneeCount()).isEqualTo(8);
@@ -210,7 +274,9 @@ class EstimateEvaluatorTest {
                         amrCount,
                         Math.min(100.0, ordersPerHour / DEMAND_PER_HOUR * 100.0),
                         utilIncludingService * 100.0,
-                        costCalculator.cost(amrCount)));
+                        costCalculator.cost(amrCount),
+                        // b0z 스윕 CSV 에는 리드타임 p90 열이 없다 — 없으면 그 조건을 건너뛴다
+                        null));
             }
         } catch (IOException e) {
             throw new UncheckedIOException(e);

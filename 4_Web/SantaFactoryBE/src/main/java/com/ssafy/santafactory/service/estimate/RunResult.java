@@ -11,6 +11,9 @@ package com.ssafy.santafactory.service.estimate;
  * @param throughputPercent  출고 처리율 % — 접수 주문 중 완료 비율 ({@code SimScenarios.throughput})
  * @param utilizationPercent AMR 가동률 % ({@code SimScenarios.utilization})
  * @param cost               총 구축 비용, 원 ({@code SimScenarios.total_cost})
+ * @param leadTimeP90Seconds 주문 리드타임 p90, 초 ({@code SimScenarios.lead_time_p90}). 시뮬이 안 주면
+ *                           null 이고, 그 run 은 리드타임 조건을 건너뛴다 (S15P21A106-97)
  */
-public record RunResult(int amrCount, double throughputPercent, double utilizationPercent, long cost) {
+public record RunResult(int amrCount, double throughputPercent, double utilizationPercent, long cost,
+                        Double leadTimeP90Seconds) {
 }

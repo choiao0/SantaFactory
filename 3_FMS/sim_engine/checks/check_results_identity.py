@@ -2,7 +2,7 @@
 # ============================================================
 # 결과 동일성 검사 — 성능 최적화 회귀 (S15P21A106-136)
 #
-# results/b0z_sweep.csv(40주문 기준선)·load_sweep.csv(고부하)의 각 행을 같은 인자로 다시 돌려
+# results/b0z_sweep_v312.csv(40주문 기준선)·load_sweep_v312.csv(고부하)의 각 행을 같은 인자로 다시 돌려
 # [SUMMARY] 의 숫자 키가 **전부 같은지**(uniform cost 는 비트 동일이 기대값) 확인한다.
 # 최적화는 이 검사가 통과해야만 유효하다 (contracts/SIM_RUN_CONTRACT.md §5).
 #
@@ -28,8 +28,10 @@ PY = sys.executable
 ENV = dict(os.environ, SIM_NO_PLOT="1", PYTHONIOENCODING="utf-8")
 IGNORE = {"wall_s"}                                   # 실행 시간은 비교 대상 아님
 META = {"engine", "load"}                             # 스윕 스크립트가 붙인 열 — SUMMARY 에 없음
-B0Z_CSV = "b0z_sweep.csv"                             # 40주문 기준선 (fleet_sweep_b0z.py)
-LOAD_CSV = "load_sweep.csv"                           # 고부하 L1·L2 (fleet_sweep_load.py)
+# 기준선 세대 (-226, 2026-09-16): 계약 v3.12 기본값으로 뜬 CSV. -194(전진 4틱) 이후 옛 b0z_sweep.csv·load_sweep.csv 의 헤딩 행은
+# 재현되지 않았다(--quick 12행 중 8행 차이). 결과가 바뀌는 계약이 들어오면 SWEEP_OUT=<이름>_v<계약>.csv 로 다시 뜨고 여기만 바꾼다.
+B0Z_CSV = "b0z_sweep_v312.csv"                        # 40주문 기준선 (fleet_sweep_b0z.py, SWEEP_OUT=b0z_sweep_v312.csv)
+LOAD_CSV = "load_sweep_v312.csv"                      # 고부하 L1·L2 (fleet_sweep_load.py, SWEEP_OUT=load_sweep_v312.csv)
 DEFAULT_CSVS = [os.path.join("results", B0Z_CSV), os.path.join("results", LOAD_CSV)]
 # --quick 대표 8행: (계열, engine, n_robots, seed) — 칸·헤딩 × 소·대 × 두 계열.
 # 계열은 파일명 **접두사**로 본다. 계약이 바뀌면 기준선을 b0z_sweep_v4.csv 처럼 접미를 붙여
