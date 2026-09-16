@@ -133,6 +133,7 @@ class FmsKernel(BatteryMixin, MetricsMixin):
         self.trips = 0                            # 완료된 출고 왕복 수
         self.yield_events = []                    # 정면 조우 진단 이벤트 (양보 v2 legacy / -79 대치 "standoff")
         self.standoffs = self.standoff_swaps = 0  # -79 대치 수·역할 교대 수 (SUMMARY, exact,front 만)
+        self.standoff_ticks = 0                   # -229 대치에 묶인 로봇·틱 합 (건수와 달리 "얼마나 오래"를 잰다)
         self.n_submitted = 0
         self._progress = [0, 0]                 # (완료 수, 그때 t) — 워치독
         self.export_log = {}
@@ -455,6 +456,9 @@ class FmsKernel(BatteryMixin, MetricsMixin):
             if self._detect_standoffs(t, states, prio, dists, extra, soft_hold):
                 prio = self._priority_h(t)
                 dists = self._dists_h(t, states, extra)         # 역할(L = 기본 거리장)이 이번 틱 바뀐 로봇
+            # -229: 이번 틱 대치에 묶인 로봇 수를 더한다(감지 뒤라 이번 틱 새 대치도 센다). standoffs 는 건수라
+            # 짧은 대치 100건과 긴 대치 1건을 구분 못 한다 — 묶인 시간이 처리량에 닿는 몫이다.
+            self.standoff_ticks += sum(1 for rid in rids if robots[rid]["hd_peer"] is not None)
         elif cfg.yield_rule and self._detect_headons(t, states, prio, dists):
             prio = self._priority_h(t)
             dists = self._dists_h(t, states, extra)
