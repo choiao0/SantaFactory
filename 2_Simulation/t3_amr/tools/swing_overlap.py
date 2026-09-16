@@ -3,26 +3,29 @@
 
 왜
 --
-2026-09-15 주행에서 5판 중 2판이 차체 접촉으로 중단됐고, 세 사건(접촉 2 +
-시드 9 의 97 mm 근접) 모두 **상대가 회전하는 쪽의 「뒤 대각」에 있었다.**
+2026-09-15 주행에서 5판 중 2판이 차체 접촉으로 중단됐다. 주행 로그의 ADG
+진단이 접촉 순간을 그대로 준다:
 
-    s2  a0(70,90) h2->3   a5(69,91)   Δ(-1,+1)
-    s5  a1(41,64) h2->1   a7(40,63)   Δ(-1,-1)
-    s9  a9(45,87) h0->3   a6(46,88)   Δ(+1,+1)     <- 97 mm, 접촉은 안 남
+    agent0 실행중 A0#84  turn(70, 90, 2) -> (70, 90, 1) @t780
+    agent5 대기    A5#179 move(69, 91, 1) -> (69, 92, 1) @t783
+                                                선행 미완 -> agents [4]
 
-뒤 대각은 `soft` 가 아니라 **`hard`** 다 (`ADG_축규칙.md` §2-3: 「로봇 몸이
-실제로 쓸고 가는 칸」). `swing_cells` 에 들어 있으므로 계획기가 `now_cells`
-로 막아야 한다. 그런데 안 막혔다. **`soft_hold` 문제가 아니다** — soft 칸의
-유지 기간이 아니라 hard 칸이 뚫린 것이고, 층이 다르다.
+a0 회전의 guard 는 `{f0(71,90), f1(70,91), mA(71,89), mB(69,91)}` 이고
+**a5 의 축이 `mB` 안**이다. `soft` 의 뜻이 「상대의 **축**이 못 들어온다」
+이므로 규칙이 막아야 하는 배치인데 안 막혔다.
 
-그럼 어디서 뚫렸나. 두 갈래뿐이다:
+> ★ 초판은 이 칸을 「뒤 대각」이라 적고 `soft_hold` 를 기각했다. **틀렸다** —
+>   yaw 에서 헤딩을 역산하며 `heading_offset` 을 2 로 봤는데 실제는 0 이다
+>   (`GEOM_KW`). ADG 로그의 헤딩이 정답이고, 그걸로 다시 계산하면 `mB` 다.
 
-    계획에 이미 있었다   -> `step_h` 가 hard 충돌을 놓쳤다.  계획기 문제
-    계획은 깨끗하다      -> ADG 릴리스 타이밍.              실행 층 문제
+어디서 뚫렸나. 두 갈래다:
 
-이 도구가 앞쪽을 답한다. 겹치는 칸이 나오면 그 칸이 회전 기준으로 무엇인지
-(`f0`·`f1`·`mA`·`mB`·`코대각`·`뒤대각`·`축`) 분류해서 찍는다 — 「뒤 대각이
-계획에 있다」와 「엉뚱한 칸이 있다」는 고칠 곳이 다르기 때문이다.
+    계획에 이미 있었다   -> `_soft_blocked` 가 거부했어야 한다.  계획기 문제
+    계획은 깨끗하다      -> 회전 5틱 중 2~5틱이 무방비.          `soft_hold`
+
+`scan_guard` 가 앞쪽을 답한다 — 규칙의 문장 그대로 **`guard ∩ 남의 축`** 을
+회전의 **5틱 창 내내** 센다. `scan()`(=`swept ∩ body`)으로는 못 본다:
+`mA`·`mB` 는 pitch 1.0 에서 실제 스윕 밖(0/8)이라 `swept` 에 안 들어간다.
 
 ★ `test_lifelong_battery.py` 로는 이걸 못 본다. `main(n=12, pitch=1.2,
   horizon=315, seeds=(1,4,16,18,21))` 이 하드코딩이고 환경변수를 안 읽어서
@@ -44,6 +47,7 @@ sys.path.insert(0, os.path.join(os.environ["W"], "path"))
 
 import numpy as np                                      # noqa: E402
 import pibt_core_v2 as pc                               # noqa: E402
+from pibt_core import TURN_TICKS                        # noqa: E402
 import isaac_drive as D                                 # noqa: E402
 import pibt_scene                                       # noqa: E402
 
@@ -160,17 +164,34 @@ def scan_guard(geom, history):
             guard = frozenset(geom.front_cells(s0, s1))
             if not guard:                                # 규칙이 꺼져 있다
                 continue
-            for b in agents:
-                if b == a:
-                    continue
-                # 「축」은 상대의 **칸 좌표**다 (몸 전체가 아니라).
-                axle = {tuple(st0[b][:2]), tuple(st1[b][:2])}
-                for cell in guard & frozenset(axle):
-                    k = classify(s0, s1, cell)
-                    stay = tuple(st0[b][:2]) == tuple(st1[b][:2]) == tuple(cell)
-                    key = f"{k}{'(상주)' if stay else ''}"
-                    kinds[key] = kinds.get(key, 0) + 1
-                    hits.append((t, a, b, cell, k, True, stay))
+            # ★ 회전은 **5틱**이다. `lifelong` 이 회전 시작 틱에 헤딩을 바꾸고
+            #   `busy = turn_ticks - 1` 로 4틱 더 잡는다. 그러니 guard 도 그
+            #   창 내내 유효해야 한다.
+            #
+            #   초판은 헤딩이 바뀌는 **한 틱만** 봤다 — `soft_next` 가 1틱만
+            #   사는 것과 똑같은 맹점이라, 2~5틱째에 들어와 앉은 로봇을
+            #   구조적으로 못 봤다. 그 상태로 「0건 = 계획은 결백」을 찍을
+            #   뻔했다 (2026-09-16).
+            for dt in range(TURN_TICKS):
+                tt = t + dt
+                if tt + 1 >= len(history):
+                    break
+                q0, q1 = history[tt], history[tt + 1]
+                # 회전이 끝났으면(칸이나 헤딩이 또 바뀌었으면) 창을 닫는다.
+                if q0.get(a, s1)[:2] != s0[:2]:
+                    break
+                for b in agents:
+                    if b == a:
+                        continue
+                    # 「축」은 상대의 **칸 좌표**다 (몸 전체가 아니라).
+                    axle = {tuple(q0[b][:2]), tuple(q1[b][:2])}
+                    for cell in guard & frozenset(axle):
+                        k = classify(s0, s1, cell)
+                        stay = tuple(q0[b][:2]) == tuple(q1[b][:2]) == tuple(cell)
+                        key = (f"{k}{'(상주)' if stay else ''}"
+                               f"{'(1틱째)' if dt == 0 else f'({dt + 1}틱째)'}")
+                        kinds[key] = kinds.get(key, 0) + 1
+                        hits.append((tt, a, b, cell, k, dt, stay))
     return hits, kinds
 
 
@@ -251,9 +272,9 @@ def main():
         if r["ghits"]:
             print(f"      종류별: {r['gkinds']}")
             print(f"      {'틱':>6}{'A':>4}{'B':>4}  {'칸':>10}  종류")
-            for t, a, b, cell, k, _i, stay in r["ghits"][:TOP]:
+            for t, a, b, cell, k, dt, stay in r["ghits"][:TOP]:
                 print(f"      {t:>6}{a:>4}{b:>4}  {str(tuple(cell)):>10}  {k:<8}"
-                      f"{'  상주' if stay else '  통과중'}")
+                      f"{'  상주' if stay else '  통과중'}  {dt + 1}틱째")
             if len(r["ghits"]) > TOP:
                 print(f"      ... 외 {len(r['ghits']) - TOP}건")
             print("      -> ★ 계획이 규칙을 어긴 배치를 만들었다. `_soft_blocked` 가")
