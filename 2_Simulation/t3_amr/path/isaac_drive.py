@@ -1642,6 +1642,7 @@ class FleetController:
     def __init__(self, geom: RobotGeom, adg: ADG, drivers: dict[int, RobotDriver],
                  order: Sequence[int] | None = None, tol: Tolerance | None = None,
                  safety_check: bool = True, action_timeout: float = 60.0,
+                 stall_timeout: float = 20.0,
                  starts: dict[int, State] | None = None,
                  release: bool = False, carry: bool = True,
                  v_exec: float | None = None, a_exec: float | None = None):
@@ -1691,7 +1692,24 @@ class FleetController:
         self.elapsed: dict[int, float] = {a: 0.0 for a in self.agents}
         self.safety_check = safety_check
         self.action_timeout = action_timeout
+        #   회전이 이만큼 **한 번도 안 가까워지면** 교착으로 본다.
+        #   `action_timeout`(경고)보다 짧다 — 경고는 정상 대기에도 뜨지만
+        #   회전 정체는 그 자체가 이상이라 더 일찍 끊는 것이 맞다.
+        self.stall_timeout = float(
+            os.environ.get("PIBT_STALL_TIMEOUT", "") or stall_timeout)
         self.timeouts: list[str] = []
+        # ★ 회전 교착 워치독 (-224). 액션 단위로 본다.
+        #
+        #   함대 `completed` 가 안 는 것으로 판정하면 **저부하에서 오발동**한다
+        #   — `order_gap 60` 이면 정상 대기가 16.7초를 넘고, 여러 대가 같이
+        #   기다리면 더 길어진다. 전진도 「남이 비켜주기」라는 정상 대기가
+        #   있어 판정이 어렵다.
+        #
+        #   **회전은 다르다.** `w` 만 주면 되므로 각도 오차가 안 줄면
+        #   확실히 이상이다. 그래서 회전만 본다.
+        self.turn_best: dict[int, float] = {}    # 액션별 지금까지 최소 |err|
+        self.turn_idle: dict[int, float] = {}    # 그 최소가 안 갱신된 시간
+        self.stall: str | None = None            # 채워지면 호출자가 멈춘다
         self.starts = starts
         # 개루프 감지 — 명령은 나가는데 pose 가 안 변하는 상태
         self._last_cmd: dict[int, tuple[float, float]] = {a: (0.0, 0.0) for a in self.agents}
@@ -1822,6 +1840,43 @@ class FleetController:
         return ((p.to[0] - p.frm[0], p.to[1] - p.frm[1])
                 == (q.to[0] - q.frm[0], q.to[1] - q.frm[1]))
 
+    def _why_stuck(self, a, act, pose, c) -> str:
+        """왜 안 끝나는지 **한 번에 갈리도록** 찍는다 (-224).
+
+        2026-09-16 에 agent6 이 `turn(46,50,3)->(46,50,0)` 에서 영구 교착했는데
+        로그에 `pose` 하나뿐이라 원인을 좁히는 데 주행이 세 판 들었다. 그때
+        알고 싶었던 것을 전부 넣는다:
+
+            err       0 에 가까운데 안 끝나면 각도가 아니라 **몸이 안 빠진 것**
+            w         0 이면 컨트롤러가 손을 놓은 것. 나오는데 안 돌면 **물리**
+            축이탈    칸 중심에서 얼마나 벗어났나 (회전은 위치를 안 본다)
+            남은 몸   `complete()` 의 둘째 조건이 무엇에 걸렸나
+            선행      ADG 가 막고 있나 (-1 은 릴리스 바닥 대기)
+        """
+        x, y, yaw = pose
+        err = math.degrees(wrap(c.tyaw - yaw))
+        w = self._last_cmd.get(a, (float("nan"), float("nan")))[1]
+        dx, dy = c.tx - x, c.ty - y
+        try:
+            mine = frozenset(self.g.footprint_cells(x, y, yaw))
+        except Exception:
+            mine = frozenset()
+        rel = act.released or frozenset()
+        left = sorted(mine & rel)
+        try:
+            pend = self.rt.blocking(act)
+        except Exception:
+            pend = "?"
+        return (
+            f"agent{a} {act} 가 {self.elapsed[a]:.0f}s 동안 완료되지 않음\n"
+            f"       pose=({x:.3f}, {y:.3f}, {math.degrees(yaw):.1f}deg)"
+            f"   목표=({c.tx:.3f}, {c.ty:.3f}, {math.degrees(c.tyaw):.1f}deg)\n"
+            f"       err={err:+.1f}deg  w={w:+.3f}rad/s"
+            f"  축이탈=({dx * 1000:+.0f}, {dy * 1000:+.0f})mm\n"
+            f"       놓아줄 칸에 남은 몸={left or '없음'}"
+            f"  (released={sorted(rel) or '없음'})\n"
+            f"       선행 미완={pend}  (-1 = 릴리스 바닥 대기)")
+
     def _straight_run(self, a: int, act: Action) -> int:
         """`act` **다음**으로 이어지는 같은 방향 직진이 몇 칸인가.
 
@@ -1893,6 +1948,8 @@ class FleetController:
                     self.rt.complete(self.slot[a], act)
                     self.running[a] = None
                     self.elapsed[a] = 0.0
+                    self.turn_best.pop(a, None)
+                    self.turn_idle.pop(a, None)
                     self.stats.completed += 1
                     # [patch_carry] 속도를 실은 채 끝났으면 **같은 스텝에**
                     #   다음 액션을 시작한다. 예전에는 여기서 0 을 명령하고
@@ -1912,15 +1969,30 @@ class FleetController:
                         drv.command(0.0, 0.0)
                         self._last_cmd[a] = (0.0, 0.0)
                 else:
+                    if act.kind == TURN:
+                        # ★ 회전 정체 판정 (-224). |err| 가 줄고 있으면 느려도
+                        #   진행 중이다. **안 줄면** 이상이다.
+                        err = abs(wrap(c.tyaw - pose[2]))
+                        best = self.turn_best.get(a)
+                        if best is None or err < best - 1e-3:
+                            self.turn_best[a] = err
+                            self.turn_idle[a] = 0.0
+                        else:
+                            self.turn_idle[a] = self.turn_idle.get(a, 0.0) + dt
                     if self.elapsed[a] > self.action_timeout:
-                        self.timeouts.append(
-                            f"agent{a} {act} 가 {self.elapsed[a]:.0f}s 동안 완료되지 않음 "
-                            f"(pose={pose[0]:.2f},{pose[1]:.2f},{math.degrees(pose[2]):.0f}deg)")
+                        self.timeouts.append(self._why_stuck(a, act, pose, c))
                         self.elapsed[a] = 0.0
                     c.exit_v = self._carry(a, act)
                     cmd = c.update(pose, dt)
                     drv.command(*cmd)
                     self._last_cmd[a] = cmd
+                    # ★ 회전이 `stall_timeout` 동안 한 번도 안 가까워지면 중단한다.
+                    #   원인을 몰라도 여기서 끊어야 20분이 아니라 2분에 안다.
+                    #   `PIBT_STALL_TIMEOUT=0` 이면 안 끊는다 — 오발동했을 때
+                    #   코드를 안 고치고 주행을 살릴 구멍이다.
+                    if (act.kind == TURN and self.stall_timeout > 0
+                            and self.turn_idle.get(a, 0.0) > self.stall_timeout):
+                        self.stall = self._why_stuck(a, act, pose, c)
                 moved = True
                 continue
 

@@ -734,6 +734,21 @@ def _tick(f, dt):
     #     2.7 mm 스침 때문에. ADG 는 **이상적 칸 중심 자세**로 스윕을 계산하는데
     #     실행은 그만큼 정확하지 않으므로(실측 어긋남 0.051 m) 칸 공유는
     #     구조적으로 계속 난다. 멈추는 기준은 **접촉**이다.
+    # ★ 회전 교착 (-224). 원인을 몰라도 **끊는다** — `complete()` 가 영영
+    #   참이 될 수 없는 상태여서 두면 20분을 통째로 날린다 (2026-09-16 실제).
+    if getattr(f, "stall", None):
+        carb.log_error("[pibt] ★★ 회전 교착 — 각도 오차가 줄지 않는다. 중단한다")
+        for line in str(f.stall).splitlines():
+            carb.log_error("   " + line)
+        try:
+            for line in str(f.diagnose()).splitlines()[:25]:
+                carb.log_error("   " + line)
+        except Exception as e:
+            carb.log_error(f"   diagnose 실패: {e}")
+        _shot_report()
+        state["done"] = True
+        return
+
     if f.stats.contact_events:
         carb.log_error(f"[pibt] ★★ 차체 접촉 {f.stats.contact_events}건  "
                        f"쌍 {sorted(f.stats.overlap_pairs)}  "
