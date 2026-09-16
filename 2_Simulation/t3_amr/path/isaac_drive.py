@@ -710,11 +710,23 @@ class Action:
     #
     #   즉 이 시스템의 지배적 제약이 경합도 물리도 아니고 계획 시각표였다.
     #
-    #   True 인 동작만 바닥을 받고 나머지는 0 이다. 순서 안전은 그대로다 —
+    #   값이 있는 동작만 바닥을 받고 나머지는 0 이다. 순서 안전은 그대로다 —
     #   관문 ③(ADG 선행)이 손대지 않은 채 남는다. 바닥은 **시각**만 정한다.
-    #   lifelong 이 아닌 경로(one-shot)는 태스크 개념이 없어 전부 False 이고,
+    #   lifelong 이 아닌 경로(one-shot)는 태스크 개념이 없어 전부 None 이고,
     #   그때는 `tick_s=None` 이라 바닥 자체가 없다.
-    task_start: bool = False
+    #
+    # ★ 2026-09-15 (-211) 불리언 -> **틱**. 전에는 `task_start: bool` 이었고
+    #   `release_time` 이 `action.tick`(= 그 동작이 계획에서 몇 번째 틱인가)을
+    #   썼다. 그건 **주문 도착 시각이 아니라 계획 시간표**다. 세 틱이 다르다:
+    #
+    #       주문 도착   task["born"]     ← 바닥이 써야 할 값
+    #         <=  배정   assign(t)
+    #         <=  첫 동작 action.tick    ← 전에 쓰던 값
+    #
+    #   계획이 실제보다 느리면(옛 틱 모델이 회전을 3.7배 느리게 봤다) 첫 동작
+    #   틱이 뒤로 밀리고, 실행 로봇은 **이미 도착한 주문을 두고** 그 틱을
+    #   기다렸다. ADG 는 「시간표가 아니라 순서」인데 바닥만 시간표였던 셈이다.
+    release_tick: int | None = None
 
     @property
     def hard(self) -> frozenset[Cell]:
@@ -754,7 +766,7 @@ def classify(s0: State, s1: State) -> str:
 
 
 def extract_actions(history: list[dict[int, State]], geom: RobotGeom,
-                    task_start: dict[int, list[int]] | None = None,
+                    task_start: dict[int, list[tuple[int, int]]] | None = None,
                     ) -> tuple[list[list[Action]], list[int], dict]:
     """run_h의 history를 로봇별 액션 체인으로.
 
@@ -765,10 +777,14 @@ def extract_actions(history: list[dict[int, State]], geom: RobotGeom,
     스윙 칸을 물고 대기한다. 그 대기 틱들은 상태가 안 바뀌므로 자연히 건너뛰고,
     회전 액션 하나가 그 시간 전체를 대표한다.
 
-    `task_start` 는 `{agent: [태스크를 받은 틱, ...]}` 다 (lifelong 이 준다).
-    주면 각 틱 **이후 첫 동작**에 `Action.task_start=True` 를 단다 — ADG
-    실행기의 릴리스 바닥이 그것만 본다 (-211, `Action.task_start` 주석).
-    안 주면 전부 False 이고 바닥이 아예 안 걸린다.
+    `task_start` 는 `{agent: [(배정 틱, 주문 도착 틱), ...]}` 다 (lifelong 이
+    준다). **배정 틱으로 첫 동작을 찾고, 주문 도착 틱을 그 동작에 단다** —
+    ADG 실행기의 릴리스 바닥이 후자만 본다 (`Action.release_tick` 주석).
+    안 주면 전부 None 이고 바닥이 아예 안 걸린다.
+
+    ★ 2026-09-15 (-211) 에 평평한 `[틱, ...]` 에서 쌍으로 바꿨다. 전에는
+      바닥이 `action.tick`(계획 시간표)을 썼는데 그건 주문 도착 시각이
+      아니다. 옛 형식을 주면 여기서 죽는다 — 조용히 다른 뜻이 되느니 낫다.
     """
     agents = sorted(history[0])
     chains: list[list[Action]] = [[] for _ in agents]
@@ -776,7 +792,17 @@ def extract_actions(history: list[dict[int, State]], geom: RobotGeom,
     uid = 0
     stats = {MOVE: 0, TURN: 0, REVERSE: 0, WAIT: 0}
     # 아직 첫 동작을 못 찾은 태스크 시작 틱들 (오름차순으로 소비한다)
-    pending = {a: sorted(task_start.get(a, [])) for a in agents} if task_start \
+    def _pairs(a):
+        out = sorted(task_start.get(a, []))
+        for p in out:
+            if not (isinstance(p, tuple) and len(p) == 2):
+                raise TypeError(
+                    "task_start 는 {agent: [(배정틱, 주문도착틱), ...]} 다. "
+                    f"agent{a} 에서 {p!r} 를 받았다 — 평평한 틱 목록은 "
+                    "-211 이전 형식이고 바닥이 계획 시간표를 쓰게 된다.")
+        return out
+
+    pending = {a: _pairs(a) for a in agents} if task_start \
         else {a: [] for a in agents}
 
     for t in range(len(history) - 1):
@@ -792,16 +818,18 @@ def extract_actions(history: list[dict[int, State]], geom: RobotGeom,
             #   목표 칸을 안 벗어난다 (앞길이 0.390 < 반칸). 스위치가 꺼져 있으면
             #   `front_cells()` 가 빈 집합이라 여기도 빈 집합이다.
             guard = geom.front_cells(s0, s1) if kind == TURN else frozenset()
-            # 이 동작이 어느 태스크의 첫 동작인가 — 받은 틱 이하의 표시를
+            # 이 동작이 어느 태스크의 첫 동작인가 — **배정 틱** 이하의 표시를
             # 전부 소비한다 (배정 뒤 여러 틱 대기했다가 움직이는 경우 대비).
-            first = False
-            while pending[a] and pending[a][0] <= t:
-                pending[a].pop(0)
-                first = True
+            # 바닥에 다는 값은 그 태스크의 **주문 도착 틱**이다. 여러 개를
+            # 소비하면 가장 이른 도착 틱을 쓴다 — 더 늦게 걸 이유가 없다.
+            rel = None
+            while pending[a] and pending[a][0][0] <= t:
+                _assign, born = pending[a].pop(0)
+                rel = born if rel is None else min(rel, born)
             act = Action(
                 agent=a, idx=len(chains[i]), kind=kind, tick=t, frm=s0, to=s1,
                 cells=cells, soft=guard & cells, guard=guard, uid=uid,
-                task_start=first)
+                release_tick=rel)
             _check_soft(act)
             chains[i].append(act)
             uid += 1
@@ -1105,7 +1133,14 @@ class AdgRuntime:
         self._why_next = self._why_every if self._why_on else float("inf")
         self._why = {}                      # agent -> [obstacle, release, adg]
         self._why_late = {}                 # 같은 것, release 지평 이후만
-        self._why_horizon = (max((a.tick for a in adg.actions), default=0)
+        # 「이 시각 뒤로는 관문 ②가 아무도 못 막는다」 = 바닥의 최댓값.
+        # ★ 2026-09-15 (-211): 예전에는 `max(a.tick)`(= 마지막 **액션** 틱)을
+        #   썼다. 바닥이 `action.tick` 이던 시절엔 그게 맞았지만 이제 바닥은
+        #   `release_tick`(주문 도착 틱)이라 실제 지평이 더 이르다. 그대로
+        #   두면 「지평 이후」 구간에 ②가 이미 안 걸리던 프레임이 섞여
+        #   보고가 무뎌진다.
+        self._why_horizon = (max((a.release_tick for a in adg.actions
+                                  if a.release_tick is not None), default=0)
                              * (tick_s or 0.0))
 
     def advance(self, dt: float) -> None:
@@ -1159,14 +1194,19 @@ class AdgRuntime:
 
         주문 도착 제약이라 **태스크의 첫 동작에만** 건다. 중간 동작에 걸면
         로봇이 일찍 끝내도 계획 시각까지 서 있게 되고, 실측에서 그것이
-        막힘의 66.2%(로봇 시간의 21.8%)였다 — `Action.task_start` 주석 참조.
+        막힘의 66.2%(로봇 시간의 21.8%)였다 — `Action.release_tick` 주석 참조.
+
+        ★ 2026-09-15 (-211): `action.tick`(계획 시간표) -> `release_tick`
+          (주문 도착 틱). 첫 동작에만 걸어도 그 동작이 **계획에서 언제였나**를
+          쓰면 여전히 시간표를 따르는 것이다. 계획이 실제보다 느리면 실행
+          로봇이 이미 온 주문을 두고 기다린다.
 
         표시가 없는 동작(태스크 중간 · one-shot · 존 복귀)은 0 이다. 순서는
         관문 ③(ADG 선행)이 그대로 지킨다.
         """
-        if self.tick_s is None or not action.task_start:
+        if self.tick_s is None or action.release_tick is None:
             return 0.0
-        return action.tick * self.tick_s
+        return action.release_tick * self.tick_s
 
     def pending(self, i: int) -> Action | None:
         k = self.next_idx[i]
