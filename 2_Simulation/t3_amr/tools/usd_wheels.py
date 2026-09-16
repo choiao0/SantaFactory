@@ -257,13 +257,26 @@ def main():
         pth = p.GetPath().pathString
         if not any(k in pth.lower() for k in PART_KEYS):
             continue
-        m = p.GetAttribute("physics:mass").Get() if p.HasAttribute("physics:mass") else None
-        d = p.GetAttribute("physics:density").Get() if p.HasAttribute("physics:density") else None
+        def at(name):
+            return p.GetAttribute(name).Get() if p.HasAttribute(name) else None
+        m, d = at("physics:mass"), at("physics:density")
         if m is None and d is None:
             continue
         n_mass += 1
-        if n_mass <= 10:
-            print(f"   mass={m}  density={d}   {pth}")
+        if n_mass > 10:
+            continue
+        # ★ 무게중심이 하중 배분을 정한다. 이 로봇은 구동축이 **앞**이고 차체가
+        #   뒤로 1.11 m 매달린 구조라, 무게가 뒤로 쏠리면 그 하중이 **마찰 0인
+        #   캐스터**로 가고 구동 바퀴의 접지력이 그만큼 준다. 기하 중심으로
+        #   가정하면 안 되는 값이라 저작값을 그대로 찍는다.
+        com = at("physics:centerOfMass")
+        print(f"   mass={m}  density={d}   {pth}")
+        if com is not None:
+            print(f"      centerOfMass {fmt(com)}"
+                  + ("   ★ 저작됨" if any(abs(float(c)) > 1e-9 for c in com)
+                     else "   (0,0,0 — 기본값이거나 실제로 원점)"))
+        else:
+            print(f"      centerOfMass 없음 — 지오메트리에서 추정된다")
     if not n_mass:
         print(f"   바퀴·섀시 계통에 `physics:mass`/`density` 가 없다 "
               f"— 지오메트리에서 추정된다")
@@ -273,6 +286,9 @@ def main():
     print(f"      `dynamicFriction` 값을 본다 — 낮으면 회전에서 미끄러진다.")
     print(f"    · 마찰은 **쌍의 성질**이다. 바퀴만 보지 말고 바닥")
     print(f"      (`/World/Warehouse/ground`) 쪽도 같이 봐야 한다.")
+    print(f"    · ★ 캐스터 마찰이 0 이면 **접지력 전부가 구동 바퀴에만** 있다.")
+    print(f"      그때는 무게중심 위치가 바로 접지력이다 — 뒤로 쏠릴수록")
+    print(f"      구동축 하중이 줄어 회전에서 미끄러지기 쉬워진다.")
     print(f"    · `localPos0` 두 바퀴의 **가로 성분 차이**가 wheel_base 다.")
     print(f"      코드는 0.5796 (= 2 x 0.28963) 을 쓴다.")
     print(f"    · 반지름은 코드가 0.08 을 쓴다.")
