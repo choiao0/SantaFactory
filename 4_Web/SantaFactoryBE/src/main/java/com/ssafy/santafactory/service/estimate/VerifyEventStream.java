@@ -41,6 +41,7 @@ public class VerifyEventStream {
     private static final long EMITTER_TIMEOUT_MS = Duration.ofMinutes(35).toMillis();
 
     private final EstimateRepository estimateRepository;
+    private final VerifyVideoPresigner videoPresigner;
     private final Map<Long, List<SseEmitter>> emitters = new ConcurrentHashMap<>();
 
     @Transactional(readOnly = true)
@@ -48,12 +49,13 @@ public class VerifyEventStream {
         Estimate estimate = estimateRepository.findById(estimateId)
                 .orElseThrow(() -> new GlobalException(ErrorCode.ESTIMATE_NOT_FOUND));
         SseEmitter emitter = new SseEmitter(EMITTER_TIMEOUT_MS);
-        String videoUrl = estimate.getVerifyVideoUrl();
-        if (videoUrl == null) {
+        String video = estimate.getVerifyVideoUrl();
+        if (video == null) {
             register(estimateId, emitter);
             send(estimateId, emitter, EVENT_SNAPSHOT, new EstimateVerified(estimateId, "PENDING", null, null));
         } else {
-            send(estimateId, emitter, EVENT_DONE, new EstimateVerified(estimateId, "done", videoUrl, null));
+            send(estimateId, emitter, EVENT_DONE,
+                    new EstimateVerified(estimateId, "done", videoPresigner.sign(video), null));
             emitter.complete();
         }
         return emitter;

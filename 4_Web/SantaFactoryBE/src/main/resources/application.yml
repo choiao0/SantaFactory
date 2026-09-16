@@ -42,6 +42,18 @@ sim:
   request-queue: sim.request
   result-queue: sim.result
 
+# 검증 영상 저장소. 버킷은 비공개고 영상은 소유권 확인 뒤 발급하는 presigned GET URL 로만 본다 (결정 2026-09-15).
+# public-url 이 비면(로컬) 서명 없이 저장된 값을 그대로 내보낸다.
+# public-url 은 브라우저가 쓰는 주소(nginx /media/)여야 한다 — 서명에 Host 가 들어가서 내부 주소(minio:9000)로 서명하면 거절된다.
+minio:
+  public-url: ${MINIO_PUBLIC_URL:}
+  # 읽기 전용 계정. 읽기 전용 계정이 만들어지기 전까지는 compose 가 root 계정을 넣어 준다 (.env.example)
+  access-key: ${MINIO_ACCESS_KEY:}
+  secret-key: ${MINIO_SECRET_KEY:}
+  bucket: ${MINIO_BUCKET:verify-videos}
+  # 영상을 보는 동안 구간 이동이 되려면 시청 시간을 덮어야 한다. 만료되면 프론트가 상세를 다시 불러 새 URL 을 받는다
+  presign-ttl: 30m
+
 estimate:
   # amr-price / install-per-unit 은 robots 시드의 price(단가) / cost(구축·설치비)와 같은 값 — 둘 다 대당
   amr-price: 15000000
