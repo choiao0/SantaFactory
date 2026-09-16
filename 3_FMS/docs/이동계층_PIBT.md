@@ -239,6 +239,8 @@ v3.4 기본(회전 마스크)에서도 3건 완주 — 양보 2·4·2회, 340.9 
 
 코드 `kernel/core.py` `_detect_standoffs`·`_refresh_standoffs`·`_standoff_forbid`·`_patient`. 게이트는 `standoff = front_swing_on() or cfg.standoff` — v3.7·v3.8 에는 `exact,front` 전용이었고(기본 `exact` 10647 / 142.0 불변), **v3.9(2026-09-15)부터 `exact` 기본**(10567 / 143.1). `legacy` 는 양보 규칙 v1 그대로(v3.3 비트 동일). 같은 자리를 다투는 두 로봇을 **W(이기는 쪽)·L(지는 쪽)** 으로 고정하고 L 에만 제약을 준다.
 
+지표는 셋이다 — `standoffs`(대치 건수)·`standoff_swaps`(역할 교대)·**`standoff_ticks`**(대치에 묶인 로봇·틱, 계약 v3.14/-230). 앞의 둘만 보면 짧은 대치 100건과 긴 대치 1건이 같아 보이는데, 처리량에 닿는 것은 **묶인 시간**이다.
+
 **V1 (2026-09-14, 계약 v3.7)**
 
 - 감지: 내 wish(대기 아닌 최선 후보)의 hard 칸에 상대 몸, soft 칸에 상대 축이 있고 둘 다 `hd_after`(16) 틱 이상 무진전.
