@@ -134,6 +134,46 @@ def scan(geom, history, cells_hist):
     return hits, kinds
 
 
+def scan_guard(geom, history):
+    """★ 규칙 위반을 **정면으로** 센다 — `guard ∩ 남의 축`.
+
+    `scan()` 은 `swept[a] ∩ body[b]` 를 본다. 그런데 4칸 규칙의 `mA`·`mB` 는
+    pitch 1.0 에서 **실제 스윕 밖**이다 (`ADG_축규칙.md` §2-3 표: 0/8).
+    그래서 `swept[a]` 에 애초에 안 들어가고, **`scan()` 은 mA·mB 위반을
+    구조적으로 못 본다** — 실제로 세 시드 출력에 mA·mB 가 한 번도 안 나왔다.
+
+    규칙의 문장은 「`guard` 에 **상대의 축**이 들어오면 안 된다」다. 그러니
+    그대로 재야 한다. 2026-09-16 주행에서 a5 의 축이 a0 회전의 `mB` 에
+    있었는데 `scan()` 이 못 잡은 자리가 이것이다.
+
+    `guard` 는 계획기가 쓰는 것과 같은 함수에서 받는다 (`RobotGeom.front_cells`
+    -> `pibt.geometry.front_cells`). 여기서 다시 구현하면 정의가 두 벌이 된다.
+    """
+    hits, kinds = [], {}
+    for t in range(len(history) - 1):
+        st0, st1 = history[t], history[t + 1]
+        agents = sorted(st0)
+        for a in agents:
+            s0, s1 = st0[a], st1[a]
+            if s0[:2] != s1[:2] or s0[2] == s1[2]:      # 회전만
+                continue
+            guard = frozenset(geom.front_cells(s0, s1))
+            if not guard:                                # 규칙이 꺼져 있다
+                continue
+            for b in agents:
+                if b == a:
+                    continue
+                # 「축」은 상대의 **칸 좌표**다 (몸 전체가 아니라).
+                axle = {tuple(st0[b][:2]), tuple(st1[b][:2])}
+                for cell in guard & frozenset(axle):
+                    k = classify(s0, s1, cell)
+                    stay = tuple(st0[b][:2]) == tuple(st1[b][:2]) == tuple(cell)
+                    key = f"{k}{'(상주)' if stay else ''}"
+                    kinds[key] = kinds.get(key, 0) + 1
+                    hits.append((t, a, b, cell, k, True, stay))
+    return hits, kinds
+
+
 def run(seed):
     """`run_lifelong` 을 직접 불러 **`cells_hist` 까지** 받는다.
 
@@ -167,7 +207,9 @@ def run(seed):
     cyclic = adg.topological_order() is None
 
     hits, kinds = scan(geom, history, cells_hist)
-    return dict(seed=seed, hits=hits, kinds=kinds, sweep=sweep, cyclic=cyclic,
+    ghits, gkinds = scan_guard(geom, history)
+    return dict(seed=seed, hits=hits, kinds=kinds, ghits=ghits, gkinds=gkinds,
+                sweep=sweep, cyclic=cyclic,
                 tasks=li.get("tasks_done"), ticks=len(history) - 1)
 
 
@@ -203,6 +245,22 @@ def main():
         if back_in:
             print(f"   ★ 뒤 대각이 **예약 안에** 있는데 겹쳤다 {back_in}건 —")
             print("     계획기가 자기가 예약한 hard 칸에 남을 들였다는 뜻이다.")
+        # --- ★ 규칙 위반 정면 검사 -------------------------------------
+        print()
+        print(f"   ★ guard ∩ 남의 축 — **규칙이 금지하는 배치**: {len(r['ghits'])}건")
+        if r["ghits"]:
+            print(f"      종류별: {r['gkinds']}")
+            print(f"      {'틱':>6}{'A':>4}{'B':>4}  {'칸':>10}  종류")
+            for t, a, b, cell, k, _i, stay in r["ghits"][:TOP]:
+                print(f"      {t:>6}{a:>4}{b:>4}  {str(tuple(cell)):>10}  {k:<8}"
+                      f"{'  상주' if stay else '  통과중'}")
+            if len(r["ghits"]) > TOP:
+                print(f"      ... 외 {len(r['ghits']) - TOP}건")
+            print("      -> ★ 계획이 규칙을 어긴 배치를 만들었다. `_soft_blocked` 가")
+            print("         거부했어야 하는 자리다.")
+        else:
+            print("      -> 계획은 규칙을 지킨다. 위반은 **실행 층**에서 생긴 것이다.")
+
         print(f"\n   {'틱':>6}{'A':>4}{'B':>4}  {'칸':>10}  종류")
         for t, a, b, cell, k, inres, stay in r["hits"][:TOP]:
             print(f"   {t:>6}{a:>4}{b:>4}  {str(tuple(cell)):>10}  {k:<8}"
