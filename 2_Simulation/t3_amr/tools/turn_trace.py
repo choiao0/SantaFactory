@@ -162,8 +162,21 @@ def main():
     if jnt is not None and cmd is not None:
         R = float(os.environ.get("WHEEL_RADIUS", "0.08"))
         L = float(os.environ.get("WHEEL_BASE", "0.5796"))
+        # 좌·우 구동 바퀴는 **이름으로** 찾는다. 인덱스를 박으면 에셋이
+        # 바뀔 때 조용히 부호가 뒤집힌다.
+        def find(*keys, default=None):
+            for n, nm in enumerate(dof):
+                low = nm.lower()
+                if all(k in low for k in keys):
+                    return n
+            return default
+        li = find("left", "wheel", default=0)
+        ri = find("right", "wheel", default=1)
         print(f"\n── 세 층 대조 (R={R} · L={L}) ──")
         print(f"   DOF {len(dof)}개: {dof or '이름 없음'}")
+        print(f"   구동 바퀴 인덱스 L={li} R={ri}"
+              f"  ({dof[li] if li < len(dof) else '?'} / "
+              f"{dof[ri] if ri < len(dof) else '?'})")
         print(f"   {'t':>8}{'명령v':>8}{'명령w':>8}"
               f"{'좌바퀴':>9}{'우바퀴':>9}{'바퀴v':>8}{'바퀴w':>8}"
               f"{'실측v':>8}{'실측w':>8}")
@@ -173,14 +186,40 @@ def main():
             d = t[k + 1] - t[k]
             v = math.hypot(x[k + 1] - x[k], y[k + 1] - y[k]) / d if d > 0 else 0.0
             wv = wrap(yaw[k + 1] - yaw[k]) / d if d > 0 else 0.0
-            lw, rw = jnt[k, 0], jnt[k, 1]
+            lw, rw = jnt[k, li], jnt[k, ri]
             print(f"   {t[k]:>8.2f}{cmd[k, 0]:>8.3f}{cmd[k, 1]:>8.3f}"
                   f"{lw:>9.3f}{rw:>9.3f}"
                   f"{R * (lw + rw) / 2:>8.3f}{R * (rw - lw) / L:>8.3f}"
                   f"{v:>8.3f}{wv:>8.3f}")
         print(f"\n   ★ 명령 != 바퀴  -> 드라이브가 명령을 못 따라온 것 (토크·마찰)")
         print(f"     바퀴 != 실측  -> 바퀴는 도는데 차체가 다르게 간 것 (미끄러짐)")
-        print(f"     ※ 좌·우 인덱스는 DOF 이름으로 확인할 것. 뒤바뀌면 w 부호가 뒤집힌다.")
+
+        # ── ★ 비구동 관절 — 스위블이 안 돌면 뒤가 끌린다 ──────────────────
+        #   제자리 회전에서 스위블은 차체와 **같이** 돌아야 한다. 안 돌면
+        #   캐스터가 옛 방향으로만 굴러 차체를 그 선을 따라 끌고 간다.
+        #   속도만 기록하므로 각도는 적분해서 본다.
+        body = math.degrees(abs(wrap(yaw[j] - yaw[i])))
+        print(f"\n── 비구동 관절 — 회전 구간 {t[i]:.2f}~{t[j]:.2f}s "
+              f"(차체 {body:.1f}도 회전) ──")
+        print(f"   {'관절':<22}{'|속도| 최대':>12}{'적분 각도':>11}{'차체 대비':>10}")
+        for n, nm in enumerate(dof):
+            if n in (li, ri):
+                continue
+            seg_v = jnt[i:j + 1, n]
+            dtv = np.diff(t[i:j + 1])
+            turned = math.degrees(abs(np.sum(seg_v[:-1] * dtv)))
+            rel = turned / body if body > 1e-6 else float("nan")
+            flag = ""
+            if "swivel" in nm.lower():
+                flag = ("   <- ★ 거의 안 돌았다" if rel < 0.25 else
+                        "   <- 같이 돌았다" if rel > 0.6 else "   <- 부분적")
+            print(f"   {nm:<22}{np.abs(seg_v).max():>12.3f}"
+                  f"{turned:>10.1f}도{rel:>10.2f}{flag}")
+        print(f"\n     ★ 스위블 적분 각도가 차체 회전각의 **1 에 가까워야** 한다 —")
+        print(f"       제자리 회전에서 캐스터는 차체와 같이 방향을 틀어야 하기")
+        print(f"       때문이다. 0 에 가까우면 옛 방향으로 갇힌 것이고, 그러면")
+        print(f"       캐스터가 그 선을 따라서만 굴러 차체를 끌고 간다.")
+        print(f"     ※ 좌·우 인덱스는 DOF 이름으로 잡았다. 위 줄에서 확인할 것.")
 
     print(f"\n   읽는 법")
     print(f"    · (a) 가 크면 **직진이 지나쳐 끝난 것**이다. 회전은 피해자다.")
