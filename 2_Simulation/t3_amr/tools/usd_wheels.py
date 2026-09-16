@@ -81,12 +81,19 @@ def load_split(stage, mpu):
     if root is None:
         print(f"\n── 하중 배분 ──\n   `chassis` prim 을 못 찾았다")
         return
-    print(f"\n── ★ 하중 배분 ({root.GetPath().pathString}) ──")
+    # ★ 바퀴·캐스터는 `chassis` 의 **형제**다 (`/iw_hub/left_wheel`).
+    #   `chassis` 아래만 훑으면 섀시 30 kg 하나만 잡힌다 — 실제로 그랬다.
+    #   좌표 기준은 섀시로 두되, **순회는 로봇 루트**에서 한다.
+    body = root.GetParent()
+    if not body or not body.IsValid():
+        body = root
+    print(f"\n── ★ 하중 배분 (기준 {root.GetPath().pathString}"
+          f" · 순회 {body.GetPath().pathString}) ──")
 
     inv = UsdGeom.Xformable(root).ComputeLocalToWorldTransform(
         Usd.TimeCode.Default()).GetInverse()
     items = []
-    for p in Usd.PrimRange(root):
+    for p in Usd.PrimRange(body):
         a = p.GetAttribute("physics:mass")
         m = float(a.Get()) if a and a.Get() else 0.0
         if m <= 0.0:
@@ -127,6 +134,36 @@ def load_split(stage, mpu):
     if f_caster > 0.3:
         print(f"   ★ 무게가 뒤로 쏠려 있다 — 캐스터가 무마찰이면 그만큼")
         print(f"     접지력을 잃는다. 선반·적재물이 원인인지 위 표에서 볼 것.")
+
+    # ── ★ 선반이 물리에 참여하나 ─────────────────────────────────────────
+    #   무대에서 섀시 밑에 붙는 것들(적재 선반 등)이 하중을 바꾸는지 본다.
+    #   질량 표에 안 나왔다고 「없다」로 넘기면 안 된다 — 충돌체만 있고
+    #   `physics:mass` 가 없으면 PhysX 가 부모 강체에 **더할 수도** 있다.
+    extras = []
+    for p in Usd.PrimRange(body):
+        pth = p.GetPath().pathString.lower()
+        if not any(k in pth for k in ("shelf", "tablet", "payload", "load")):
+            continue
+        apis = [n for n, ok in (
+            ("RigidBody", p.HasAPI(UsdPhysics.RigidBodyAPI)),
+            ("Collision", p.HasAPI(UsdPhysics.CollisionAPI)),
+            ("Mass", p.HasAPI(UsdPhysics.MassAPI))) if ok]
+        if apis or p.IsA(UsdGeom.Gprim):
+            extras.append((p.GetPath().pathString, apis))
+    print(f"\n── 섀시에 얹힌 것 (선반·적재물) ──")
+    if not extras:
+        print(f"   없다")
+    else:
+        phys = [e for e in extras if e[1]]
+        for pth, apis in extras[:10]:
+            print(f"   {apis or '물리 API 없음 (시각만)':<34} {pth}")
+        if not phys:
+            print(f"\n   ★ **물리 API 가 하나도 없다 — 시각 전용이다.**")
+            print(f"     하중에 안 들어간다. 그리고 섀시의 `physics:mass` 와")
+            print(f"     `centerOfMass` 가 **저작돼 있어** 자식 충돌체가 있어도")
+            print(f"     그 값이 이긴다 — 선반은 무게중심을 못 옮긴다.")
+        else:
+            print(f"\n   ★ 물리에 참여한다 — 위 하중 표에 반영됐는지 확인할 것.")
 
 
 def main():
