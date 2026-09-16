@@ -389,7 +389,27 @@ ok = True
 # ★ numba 는 2026-09-16 에 필수가 됐다 (FMS -225 가 `pibt/hgraph.py` 의
 #   재계획 거리장을 Numba 커널로 바꾸면서 `from numba import njit` 을
 #   모듈 최상단에 넣었다). `pibt_core_v2` 가 그 파일을 직접 로드하므로
-#   **계획 층 도구가 전부 여기서 막힌다** — Isaac 이 필요 없는 도구까지.
+#   **계획 층 도구도 주행도 전부 여기서 막힌다** — `live_pibt` ->
+#   `isaac_drive` -> `pibt_core_v2` -> `hgraph` 라 별도 venv 로 못 피한다.
+#
+#   ★★ 버전을 반드시 박아서 설치할 것. `pip install numba` 로 최신을
+#      받으면 **Isaac 이 깨진다** (2026-09-16 실제로 깨뜨렸다):
+#
+#          isaacsim-core 6.0.1.0  requires  llvmlite==0.46.0
+#          numba 0.67             requires  llvmlite>=0.49
+#
+#      numba 와 llvmlite 는 한 칸씩 맞물린다. Isaac 핀에서 **역산**해서
+#      고른다 — llvmlite 0.46 의 짝은 numba 0.63 이다.
+#
+#          pip install "numba==0.63.*" "llvmlite==0.46.0" "numpy==2.3.1"
+#
+#      확인된 조합 (jupyter04, 2026-09-16):
+#          numba 0.63.1 · llvmlite 0.46.0 · numpy 2.3.1 · isaacsim 6.0.1.0
+#
+#      numba 0.67 은 `coverage.types.Tracer` 를 쓰는데 Isaac 이 핀한
+#      coverage 7.4.4 에는 그 API 가 없어 import 조차 안 된다.
+#      (남은 불일치 하나: coverage 7.16.1 vs isaacsim-kernel 의 ==7.4.4.
+#       coverage 는 테스트 도구라 런타임 영향이 없어 보이나 미검증이다.)
 for m in ("numpy", "numba", "pxr", "isaacsim"):
     try:
         __import__(m); print("  OK   %s" % m)
