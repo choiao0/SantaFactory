@@ -219,11 +219,11 @@ v2.6부터 도착 틱 = `ordered_at_s`(1틱 = 1초), `rack_id` → `map/rack_buf
   v3.3 값이 나오지는 않는다(틱 모델이 v3.6 에서 바뀌었기 때문).
 
   결과 비교 CSV 는 계약 세대별로 따로 둔다: v3.3 이전 `b0z_sweep.csv`·`load_sweep.csv`,
-  v3.4 `*_v34`, v3.5 `*_v35`, v3.6 `*_v36`. `check_results_identity.py` 는 **CSV 가 적어 둔**
+  v3.4 `*_v34`, v3.5 `*_v35`, v3.6 `*_v36`, **v3.12 `*_v312`(현재 기본, -226)**. `check_results_identity.py` 는 **CSV 가 적어 둔**
   `lanes`·`yield_rule`·`footprint` 를 읽어 재현하므로 어느 세대든 같은 명령으로 검사된다
   (열이 없는 옛 CSV 는 꺼짐·legacy 로 본다).
   **컨테이너 이미지에서 이 네 값이 같은지 먼저 확인**(numpy 버전이 다르면 float 누적이 달라 어긋날 수 있음).
-- 결과 비교 기준 CSV: `sim_engine/results/b0z_sweep.csv`(40주문), `load_sweep.csv`(고부하). 시뮬 코드 변경 시 B트랙이 이 CSV로 동일성 검사.
+- 결과 비교 기준 CSV: `sim_engine/results/b0z_sweep_v312.csv`(40주문 32행), `load_sweep_v312.csv`(고부하 48행) — 계약 v3.12 기본값(-226, 2026-09-16; 옛 `b0z_sweep.csv`·`load_sweep.csv` 는 v3.3 이전 이력). 시뮬 코드 변경 시 B트랙이 이 CSV로 동일성 검사.
 - 시뮬은 확률적(시드) — θ 비교는 시드 ≥ 3 평균. 40주문·간격 50에서는 시드 산포가 θ 효과를 덮는다(고부하 문서 §2). **θ 탐색 권장 조건:
   헤딩(기본) `--order-gap=15`(또는 25), 20~28대, aisle_block=1.**
 - **시드 역할 분리 (v2.3, 2026-09-07 합의).** 시드는 세 집합으로 나누고 역할을 넘나들지 않는다.
