@@ -50,6 +50,7 @@ lifelong 은 일을 **시간에 걸쳐** 흘려보낸다. 한 번에 움직이�
 "가깝다"고 배정되는데 실제로는 180° 돌아야 한다. 그쪽 설계 §6 이 후속 이슈로 걸어둔
 항목이라 여기서도 같게 두었다. 고칠 때 양쪽을 같이 고쳐야 비교가 성립한다.
 """
+import os
 import sys
 
 import numpy as np
@@ -489,8 +490,19 @@ class Kernel(object):
         #
         #   커널의 dict 컴프리헨션은 두 대의 soft 칸이 겹치면 **조용히 뒤엣것만
         #   남는다.** 여기서는 갈라 둔다 — 낮은 rid 가 이기고(sorted), 겹치면 센다.
+        #   ★ 킬스위치 (-224). `PIBT_SOFT_HOLD=0` 이면 안 넘긴다 — **재기준선
+        #     A/B 용**이다. 기본은 켜짐이라 안 주면 동작이 그대로다.
+        #
+        #     이게 없으면 기준선을 뜰 때마다 `lifelong.py` 를 develop 판으로
+        #     바꿔치기해야 하는데, 그러면 지표 계측(`stag_*`)도 같이 사라져
+        #     비교가 안 된다. 실제로 로컬에서 그 짓을 했고 실수하기 좋았다.
+        #     FMS 도 같은 이유로 `--no-zone`·`PIBT_BATTERY` 를 남겨 뒀다.
+        #
+        #     ★ 끄면 `soft_clash` 도 0 이 된다 (셀 자리가 없으니). 기준선의
+        #       `soft_clash` 0 을 「겹침이 없었다」로 읽으면 안 된다.
+        soft_on = os.environ.get("PIBT_SOFT_HOLD", "1") not in ("0", "", "false")
         soft_hold = {}
-        for a in sorted(agents):
+        for a in sorted(agents) if soft_on else ():
             if self.busy[a] <= 0:
                 continue
             for cell in self.swing_soft[a]:
@@ -525,7 +537,8 @@ class Kernel(object):
         # 양보 제약뿐.」
         new, cells, _denied = step_h(self.states, d_now, self.edge_cost, self.wait_cost,
                                      self.free, prio, self.turn_cost, extra, bias,
-                                     None, 0, (), None, None, soft_hold)
+                                     None, 0, (), None, None,
+                                     soft_hold if soft_on else None)
 
         for a in agents:
             s0, s1 = self.states[a], new[a]
@@ -633,6 +646,10 @@ def run_lifelong(free, starts, cells_by_cat, horizon=600, seed=0, order_gap=15,
             #   ★ 0 을 단언하면 안 된다 — 버그 신호가 아니라 **노출 지표**다
             #     (겹친 채 도는 것 자체는 합법. FMS 답신 12 §1·§4 확인).
             "soft_clash": getattr(K, "_soft_clash", 0),
+            # ★ 어느 쪽 판인지 결과에 남긴다 (-224). 표만 보고 기준선과
+            #   구현판을 헷갈리는 일이 실제로 있었다.
+            "soft_hold": os.environ.get("PIBT_SOFT_HOLD", "1")
+                         not in ("0", "", "false"),
             # ★ 교착 지표 (-224). `soft_hold` 는 제약을 늘리므로 위험이 접촉이
             #   아니라 **처리량·교착**이다. FMS 답신 12 §3: 위상 잠금은
             #   6대·시드 42 에서 실측된 사후 기록이고, **밀도가 아니라 배치**가
