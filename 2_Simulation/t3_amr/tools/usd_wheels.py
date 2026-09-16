@@ -44,8 +44,8 @@ except ImportError:
         "  (venv 에 usd-core 가 있으면 그냥 돌아갑니다: pip install usd-core)")
 
 KEYS = ("wheel", "caster", "swivel")
-# 스폰된 로봇이 사는 경로. 창고 쪽 스케일과 갈라 보려고 쓴다.
-ROBOT_ROOT = os.environ.get("ROBOT_ROOT", "/World/Robots")
+# 스케일을 물을 계통. 무대/원본에 따라 루트가 달라 **경로 조각**으로 본다.
+PART_KEYS = ("wheel", "caster", "swivel", "chassis")
 
 
 def fmt(v):
@@ -95,16 +95,22 @@ def main():
                 continue
             row = (p.GetPath().pathString, tuple(float(c) for c in s))
             scaled.append(row)
-            if ROBOT_ROOT in row[0]:
+            # ★ **경로**로 판단한다. 무대냐 원본 에셋이냐에 따라 루트가
+            #   `/World/Robots/amr_N` 이기도 `/iw_hub` 이기도 해서, 루트
+            #   이름으로 거르면 원본에서 「없다」고 잘못 말한다 (실제로 그랬다).
+            #   물어야 할 것은 「바퀴·섀시 계통에 스케일이 걸렸나」 하나다.
+            if any(k in row[0].lower() for k in PART_KEYS):
                 robot_scaled.append(row)
     print(f"\n── 스케일이 1 이 아닌 prim {len(scaled)}개 "
-          f"(그중 {ROBOT_ROOT} 아래 {len(robot_scaled)}개) ──")
+          f"(그중 바퀴·섀시 계통 {len(robot_scaled)}개) ──")
     if robot_scaled:
-        print(f"   ★ 로봇에 스케일이 걸려 있다 — 저작값 != 실제값이다")
+        print(f"   ★ 걸려 있다 — 아래 메시의 치수는 저작값 x 스케일이다")
         for pth, s in robot_scaled[:20]:
             print(f"   {s}  {pth}")
+        print(f"   ※ 조인트 `localPos` 는 **부모 강체 좌표**라 자식 메시의")
+        print(f"     스케일에 영향받지 않는다 — wheel_base 는 그대로 유효하다.")
     else:
-        print(f"   ★ **로봇 아래에는 없다** — 저작값이 곧 실제값이다")
+        print(f"   바퀴·섀시 계통에는 없다")
         for pth, s in scaled[:4]:
             print(f"   (참고) {s}  {pth}")
 
@@ -145,25 +151,36 @@ def main():
     seen = {}
     for p in stage.Traverse():
         nm = p.GetName()
-        if "wheel" not in nm.lower() or not p.IsA(UsdGeom.Gprim):
+        pth = p.GetPath().pathString
+        # ★ **경로**로 거른다. 프림 이름이 `Cylinder` 라서 이름으로 거르면
+        #   정작 구동 바퀴(`/iw_hub/left_wheel/Cylinder`)를 놓치고 캐스터의
+        #   `STR_Inner_*` 만 잡힌다 — 실제로 그렇게 놓쳤다.
+        if "wheel" not in pth.lower() or not p.IsA(UsdGeom.Gprim):
             continue
-        if nm in seen:
-            seen[nm][0] += 1
+        key = f"{nm}  <{pth.split('/')[-2] if '/' in pth else ''}>"
+        if key in seen:
+            seen[key][0] += 1
             continue
         if p.IsA(UsdGeom.Cylinder):
             c = UsdGeom.Cylinder(p)
-            desc = (f"Cylinder radius={c.GetRadiusAttr().Get()}"
-                    f"  height={c.GetHeightAttr().Get()}"
-                    f"  axis={c.GetAxisAttr().Get()}")
-            seen[nm] = [1, desc, p.GetPath().pathString]
+            r = c.GetRadiusAttr().Get()
+            # 부모 스케일이 걸려 있으면 저작 반지름 != 실제 반지름이다.
+            xf = UsdGeom.Xformable(p).ComputeLocalToWorldTransform(
+                Usd.TimeCode.Default())
+            sc = [Gf.Vec3d(xf.GetRow3(i)).GetLength() for i in range(3)]
+            desc = (f"Cylinder radius={r}  height={c.GetHeightAttr().Get()}"
+                    f"  axis={c.GetAxisAttr().Get()}\n"
+                    f"      누적 스케일 ({sc[0]:.4f}, {sc[1]:.4f}, {sc[2]:.4f})"
+                    f"  -> ★ 실제 반지름 {float(r) * max(sc[0], sc[1]) * mpu:.5f} m")
+            seen[key] = [1, desc, pth]
             continue
         rng = cache.ComputeWorldBound(p).ComputeAlignedRange()
         if rng.IsEmpty():
             continue
         sz = rng.GetSize()
         d = sorted(float(c) for c in sz)
-        seen[nm] = [1, f"bbox {fmt(sz)}  -> 반지름 추정 {d[-1] / 2.0 * mpu:.5f} m",
-                    p.GetPath().pathString]
+        seen[key] = [1, f"bbox {fmt(sz)}  -> 반지름 추정 {d[-1] / 2.0 * mpu:.5f} m",
+                     pth]
     if not seen:
         print("   없음")
     else:

@@ -112,12 +112,13 @@ def main():
         wl, wr = jnt[:-1, a, li], jnt[:-1, a, ri]
 
         # ── 직진: 두 바퀴가 같은 방향, 차체가 거의 안 돈다 ──────────────
-        st = ((np.abs(vb) > VMIN) & (np.abs(wb) < 0.05)
+        st = (win & (np.abs(vb) > VMIN) & (np.abs(wb) < 0.05)
               & (np.abs(wr - wl) < 0.3 * np.abs(wr + wl) + 1e-9))
         r_fit, n_st = slope((wl[st] + wr[st]) / 2.0, vb[st])
 
         # ── 회전: 두 바퀴가 반대 방향, 차체가 돈다 ──────────────────────
-        tn = (np.abs(wb) > WMIN) & (np.abs(wl + wr) < 0.3 * np.abs(wr - wl) + 1e-9)
+        tn = (win & (np.abs(wb) > WMIN)
+              & (np.abs(wl + wr) < 0.3 * np.abs(wr - wl) + 1e-9))
         # w_body = (R/L)(r - l)  ->  기울기가 R/L
         k_fit, n_tn = slope(wr[tn] - wl[tn], wb[tn])
         l_fit = (r_fit / k_fit) if (np.isfinite(k_fit) and abs(k_fit) > 1e-9
