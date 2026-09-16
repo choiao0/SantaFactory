@@ -1089,11 +1089,67 @@ def build_adg(chains: list[list[Action]], geom: "RobotGeom | None" = None) -> AD
     #     스윕 밖 칸을 떨어뜨리는데 pitch 1.0 에서 섞임 대각이 거기 해당해
     #     규칙이 4칸 -> 2칸으로 퇴화한다. 간선은 계획기가 보는 집합 그대로
     #     걸어야 계획기와 ADG 가 같은 규칙을 집행한다.
-    for p in actions:
-        for s in p.guard:
-            for q in by_axle.get(s, ()):
-                lo, hi = sorted((p, q), key=lambda a: _key(a, s))
-                t2 += _link(lo, hi)
+    # ★ [patch_adg_slim] (-224) `PIBT_ADG_SLIM=1` 이면 **인접 쌍만** 건다.
+    #
+    #   아래 기본 경로는 `p` 를 `by_axle[s]` 의 **모든** 액션에 잇는다. 6시간
+    #   판(77,760틱·24대)에서 한 칸을 수백~수천 번 지나므로 여기서 간선이
+    #   제곱으로 는다 — 실측 증가 지수 +2.54, 외삽 5.8억 간선 · 14.8 GB 로
+    #   **메모리에 안 들어간다** (`tools/plan_scale.py`).
+    #
+    #   그런데 그 간선 대부분은 **중복이다.** 축 칸은 `hard` 에도 들어가므로
+    #   (`hard = cells - soft`, `soft = guard & cells` 인데 자기 축은 자기
+    #   guard 에 없다 — guard 는 회전에만 있고 앞 칸이다) 규칙 ① 이 그 칸의
+    #   사용자를 `_key(·, s)` 순 사슬로 이미 묶는다.
+    #
+    #       q1 -> q2 -> q3      규칙 ①
+    #       p  -> q1            규칙 ②, 하나면 충분
+    #       p  ~> q2, q3        전이
+    #
+    #   그래서 `p` 의 자리를 이분 탐색해 **바로 앞·바로 뒤 하나씩만** 건다.
+    #   도달 관계는 그대로다. 실측 절감 89.1% -> 96.1% -> 98.1% (호라이즌이
+    #   클수록 더 준다), 전제 위반 0 (1,101 칸 전수, `tools/adg_edge_audit.py`).
+    #
+    #   ★ 2026-09-16 **기본값을 켬으로 옮겼다.** 근거 셋:
+    #
+    #     1. 전제 — 축 칸 사용자가 전부 hard 사용자다. 1,101 칸 전수 위반 0.
+    #     2. 도달 관계 — 24대 2,520틱 5시드(101~105)에서 빠진 간선 117k~222k 가
+    #        **전부 전이로 도달**하고 비순환도 유지된다.
+    #     3. 실행 동일 — 운동학 주행이 **비트 단위로 같다** (시드 103 12대:
+    #        액션 2,735 · 접촉 0 · 칸공유 391 · 최소간격 85.5 mm · 완주
+    #        2,735/2,735 · 시뮬 560.8 s 가 양쪽 일치).
+    #
+    #   3 이 되는 이유는 게이팅이 **논리적으로 동치**라서다 — `q3` 가 열리려면
+    #   `q2` 완료가 필요하고 `q2 완료 <= q1 완료 <= p 완료` 이므로, 빠진
+    #   `p -> q3` 간선이 있든 없든 같은 틱에 열린다.
+    #
+    #   되돌리려면 `PIBT_ADG_SLIM=0`. 간선 수가 달라지므로
+    #   `tools/adg_fingerprint.py` 의 `edges_sig` 도 달라진다 — 그래서 지문에
+    #   스위치 값을 같이 적는다.
+    if os.environ.get("PIBT_ADG_SLIM", "1") in ("1", "true", "True"):
+        import bisect as _bi
+        ax = {}
+        for s, qs in by_axle.items():
+            qs2 = sorted(qs, key=lambda a: _key(a, s))
+            ax[s] = (qs2, [_key(a, s) for a in qs2])
+        for p in actions:
+            for s in p.guard:
+                got = ax.get(s)
+                if not got:
+                    continue
+                qs2, ks = got
+                i = _bi.bisect_left(ks, _key(p, s))
+                # 동률은 없다 — `_key` 가 (tick, sub, agent) 전순서이고 서로
+                # 다른 액션은 (tick, agent) 가 다르다.
+                if i > 0:
+                    t2 += _link(qs2[i - 1], p)
+                if i < len(qs2):
+                    t2 += _link(p, qs2[i])
+    else:
+        for p in actions:
+            for s in p.guard:
+                for q in by_axle.get(s, ()):
+                    lo, hi = sorted((p, q), key=lambda a: _key(a, s))
+                    t2 += _link(lo, hi)
 
     return ADG(chains=chains, actions=actions, preds=preds, succs=succs,
                type1=t1, type2=t2)
@@ -1301,17 +1357,40 @@ class KinematicDriver:
     """
 
     def __init__(self, x: float, y: float, yaw: float, rng: random.Random,
-                 slip: float = 0.0, lag: float = 0.0):
+                 slip: float = 0.0, lag: float = 0.0, pose_lag: float = 0.0):
         self.x, self.y, self.yaw = x, y, yaw
         self.rng = rng
         self.slip = slip
         self.lag = lag
+        # ★ `lag` 은 **명령** 쪽 1차 지연(구동기 응답)이고, `pose_lag` 은
+        #   **관측** 쪽 지연이다 (-224). 둘은 위험이 다르다.
+        #
+        #   EMQX/ROS2 를 붙이면 실행기가 보는 pose 가 낡는다. 그런데
+        #   `complete()` 가 바로 그 pose 로 `body & released` 를 판정한다.
+        #   낡은 pose 로 「빠져나왔다」고 하면 아직 그 칸에 있는데 뒷차를
+        #   들여보낸다 — 순서 보장이 아니라 **기하 여유**가 깨진다.
+        #
+        #   여유가 얼마나 얇은지는 산수로 나온다:
+        #       4칸 규칙 설계 여유 41.4 mm / v_max 0.9 m/s = 46 ms
+        #       도착 허용오차     50.0 mm / 0.9           = 56 ms
+        #   설계 여유 전부가 로봇 이동 46 밀리초다. 브로커 왕복과 같은 크기라
+        #   붙이기 **전에** 재야 한다.
+        self.pose_lag = float(pose_lag)
+        self._t = 0.0
+        self._hist: list[tuple[float, float, float, float]] = [(0.0, x, y, yaw)]
         self._v = self._w = 0.0
         self._cv = self._cw = 0.0
         self.gain = 1.0 - slip * rng.random() if slip else 1.0
 
     def axle_pose(self) -> tuple[float, float, float]:
-        return (self.x, self.y, self.yaw)
+        if self.pose_lag <= 0.0:
+            return (self.x, self.y, self.yaw)
+        want = self._t - self.pose_lag
+        h = self._hist
+        # 앞에서부터 버린다 — h[0] 이 `want` 이하인 **가장 최근** 표본이 되게.
+        while len(h) > 1 and h[1][0] <= want:
+            h.pop(0)
+        return (h[0][1], h[0][2], h[0][3])
 
     def command(self, v: float, w: float) -> None:
         self._cv, self._cw = v, w
@@ -1324,6 +1403,9 @@ class KinematicDriver:
         self.yaw = wrap(self.yaw + w * dt)
         self.x += v * math.cos(self.yaw) * dt
         self.y += v * math.sin(self.yaw) * dt
+        self._t += dt
+        if self.pose_lag > 0.0:
+            self._hist.append((self._t, self.x, self.y, self.yaw))
 
 
 class DifferentialDriver:
@@ -1427,6 +1509,20 @@ def _tol_env(name, default):
     return float(raw) if raw else default
 
 
+# ★ 직선 추종 이득 (-224). 기본값은 예전 하드코딩 그대로라 **비트 동일**이다.
+#
+#   w = K_CROSS*cross + K_HEAD*head 인데, 직진 중 두 항은 균형을 이룬다.
+#   `cross = along*sin(head) - q*cos(head)` 이므로 (q = 차선 이탈) w = 0 에서
+#
+#       head = K_CROSS*q / (K_HEAD + K_CROSS*along)
+#
+#   즉 **요잉 오차는 횡이탈을 죽이려고 유지되는 각도**다 (게 걸음). 비율
+#   K_CROSS/K_HEAD 가 그 crab 각의 크기를 정한다. 꼬리 이탈이 예산 100 mm 를
+#   넘는 것이 이것 때문인지 `tools/gain_balance.py` 로 먼저 확인하고 흔든다.
+K_CROSS = _tol_env("PIBT_K_CROSS", 1.8)
+K_HEAD = _tol_env("PIBT_K_HEAD", 2.2)
+
+
 @dataclass
 class Tolerance:
     # ★ pitch 1.0 에서는 0.05 가 기하 여유 41.3 mm 보다 크다 — 위 설명 참고.
@@ -1516,7 +1612,7 @@ class MotionController:
         # 차체를 +w로 돌리면 진행 방향 벡터도 같이 +w만큼 돈다 — 전진이든 후진이든.
         # 여기에 sign을 한 번 더 곱하면 후진에서 조향이 반대로 걸려 횡오차가
         # 발산하고, 방향 항과 싸우다가 목표 반경에 영영 못 든다.
-        w = clamp(1.8 * cross + 2.2 * head, -g.w_max, g.w_max)
+        w = clamp(K_CROSS * cross + K_HEAD * head, -g.w_max, g.w_max)
 
         # 속도는 대칭으로: 지나쳤으면(along < 0) 되돌아올 수 있어야 한다.
         # 감속 계수는 **물리적** 후진에 붙인다 (센서가 없는 방향이므로).
@@ -1642,6 +1738,7 @@ class FleetController:
     def __init__(self, geom: RobotGeom, adg: ADG, drivers: dict[int, RobotDriver],
                  order: Sequence[int] | None = None, tol: Tolerance | None = None,
                  safety_check: bool = True, action_timeout: float = 60.0,
+                 stall_timeout: float = 20.0,
                  starts: dict[int, State] | None = None,
                  release: bool = False, carry: bool = True,
                  v_exec: float | None = None, a_exec: float | None = None):
@@ -1691,7 +1788,24 @@ class FleetController:
         self.elapsed: dict[int, float] = {a: 0.0 for a in self.agents}
         self.safety_check = safety_check
         self.action_timeout = action_timeout
+        #   회전이 이만큼 **한 번도 안 가까워지면** 교착으로 본다.
+        #   `action_timeout`(경고)보다 짧다 — 경고는 정상 대기에도 뜨지만
+        #   회전 정체는 그 자체가 이상이라 더 일찍 끊는 것이 맞다.
+        self.stall_timeout = float(
+            os.environ.get("PIBT_STALL_TIMEOUT", "") or stall_timeout)
         self.timeouts: list[str] = []
+        # ★ 회전 교착 워치독 (-224). 액션 단위로 본다.
+        #
+        #   함대 `completed` 가 안 는 것으로 판정하면 **저부하에서 오발동**한다
+        #   — `order_gap 60` 이면 정상 대기가 16.7초를 넘고, 여러 대가 같이
+        #   기다리면 더 길어진다. 전진도 「남이 비켜주기」라는 정상 대기가
+        #   있어 판정이 어렵다.
+        #
+        #   **회전은 다르다.** `w` 만 주면 되므로 각도 오차가 안 줄면
+        #   확실히 이상이다. 그래서 회전만 본다.
+        self.turn_best: dict[int, float] = {}    # 액션별 지금까지 최소 |err|
+        self.turn_idle: dict[int, float] = {}    # 그 최소가 안 갱신된 시간
+        self.stall: str | None = None            # 채워지면 호출자가 멈춘다
         self.starts = starts
         # 개루프 감지 — 명령은 나가는데 pose 가 안 변하는 상태
         self._last_cmd: dict[int, tuple[float, float]] = {a: (0.0, 0.0) for a in self.agents}
@@ -1822,6 +1936,43 @@ class FleetController:
         return ((p.to[0] - p.frm[0], p.to[1] - p.frm[1])
                 == (q.to[0] - q.frm[0], q.to[1] - q.frm[1]))
 
+    def _why_stuck(self, a, act, pose, c) -> str:
+        """왜 안 끝나는지 **한 번에 갈리도록** 찍는다 (-224).
+
+        2026-09-16 에 agent6 이 `turn(46,50,3)->(46,50,0)` 에서 영구 교착했는데
+        로그에 `pose` 하나뿐이라 원인을 좁히는 데 주행이 세 판 들었다. 그때
+        알고 싶었던 것을 전부 넣는다:
+
+            err       0 에 가까운데 안 끝나면 각도가 아니라 **몸이 안 빠진 것**
+            w         0 이면 컨트롤러가 손을 놓은 것. 나오는데 안 돌면 **물리**
+            축이탈    칸 중심에서 얼마나 벗어났나 (회전은 위치를 안 본다)
+            남은 몸   `complete()` 의 둘째 조건이 무엇에 걸렸나
+            선행      ADG 가 막고 있나 (-1 은 릴리스 바닥 대기)
+        """
+        x, y, yaw = pose
+        err = math.degrees(wrap(c.tyaw - yaw))
+        w = self._last_cmd.get(a, (float("nan"), float("nan")))[1]
+        dx, dy = c.tx - x, c.ty - y
+        try:
+            mine = frozenset(self.g.footprint_cells(x, y, yaw))
+        except Exception:
+            mine = frozenset()
+        rel = act.released or frozenset()
+        left = sorted(mine & rel)
+        try:
+            pend = self.rt.blocking(act)
+        except Exception:
+            pend = "?"
+        return (
+            f"agent{a} {act} 가 {self.elapsed[a]:.0f}s 동안 완료되지 않음\n"
+            f"       pose=({x:.3f}, {y:.3f}, {math.degrees(yaw):.1f}deg)"
+            f"   목표=({c.tx:.3f}, {c.ty:.3f}, {math.degrees(c.tyaw):.1f}deg)\n"
+            f"       err={err:+.1f}deg  w={w:+.3f}rad/s"
+            f"  축이탈=({dx * 1000:+.0f}, {dy * 1000:+.0f})mm\n"
+            f"       놓아줄 칸에 남은 몸={left or '없음'}"
+            f"  (released={sorted(rel) or '없음'})\n"
+            f"       선행 미완={pend}  (-1 = 릴리스 바닥 대기)")
+
     def _straight_run(self, a: int, act: Action) -> int:
         """`act` **다음**으로 이어지는 같은 방향 직진이 몇 칸인가.
 
@@ -1893,6 +2044,8 @@ class FleetController:
                     self.rt.complete(self.slot[a], act)
                     self.running[a] = None
                     self.elapsed[a] = 0.0
+                    self.turn_best.pop(a, None)
+                    self.turn_idle.pop(a, None)
                     self.stats.completed += 1
                     # [patch_carry] 속도를 실은 채 끝났으면 **같은 스텝에**
                     #   다음 액션을 시작한다. 예전에는 여기서 0 을 명령하고
@@ -1912,15 +2065,30 @@ class FleetController:
                         drv.command(0.0, 0.0)
                         self._last_cmd[a] = (0.0, 0.0)
                 else:
+                    if act.kind == TURN:
+                        # ★ 회전 정체 판정 (-224). |err| 가 줄고 있으면 느려도
+                        #   진행 중이다. **안 줄면** 이상이다.
+                        err = abs(wrap(c.tyaw - pose[2]))
+                        best = self.turn_best.get(a)
+                        if best is None or err < best - 1e-3:
+                            self.turn_best[a] = err
+                            self.turn_idle[a] = 0.0
+                        else:
+                            self.turn_idle[a] = self.turn_idle.get(a, 0.0) + dt
                     if self.elapsed[a] > self.action_timeout:
-                        self.timeouts.append(
-                            f"agent{a} {act} 가 {self.elapsed[a]:.0f}s 동안 완료되지 않음 "
-                            f"(pose={pose[0]:.2f},{pose[1]:.2f},{math.degrees(pose[2]):.0f}deg)")
+                        self.timeouts.append(self._why_stuck(a, act, pose, c))
                         self.elapsed[a] = 0.0
                     c.exit_v = self._carry(a, act)
                     cmd = c.update(pose, dt)
                     drv.command(*cmd)
                     self._last_cmd[a] = cmd
+                    # ★ 회전이 `stall_timeout` 동안 한 번도 안 가까워지면 중단한다.
+                    #   원인을 몰라도 여기서 끊어야 20분이 아니라 2분에 안다.
+                    #   `PIBT_STALL_TIMEOUT=0` 이면 안 끊는다 — 오발동했을 때
+                    #   코드를 안 고치고 주행을 살릴 구멍이다.
+                    if (act.kind == TURN and self.stall_timeout > 0
+                            and self.turn_idle.get(a, 0.0) > self.stall_timeout):
+                        self.stall = self._why_stuck(a, act, pose, c)
                 moved = True
                 continue
 
@@ -2064,13 +2232,14 @@ class FleetController:
 
 def make_kinematic_drivers(geom: RobotGeom, start: dict[int, State], seed: int = 0,
                            slip: float = 0.10, lag: float = 0.15,
+                           pose_lag: float = 0.0,
                            ) -> dict[int, KinematicDriver]:
     rng = random.Random(seed)
     out = {}
     for a, s in start.items():
         x, y, yaw = geom.state_pose(s)
         out[a] = KinematicDriver(x, y, yaw, random.Random(rng.random() * 1e9),
-                                 slip=slip, lag=lag)
+                                 slip=slip, lag=lag, pose_lag=pose_lag)
     return out
 
 
