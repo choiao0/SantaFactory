@@ -442,7 +442,8 @@ class FmsKernel(BatteryMixin, MetricsMixin):
         standoff = front_swing_on() or cfg.standoff   # -79: 대치 상태기계 V2 — v3.9 부터 exact 기본(cfg.standoff), exact,front 는 항상. legacy 는 양보 v1
         extra = {rid: robots[rid]["swing"] for rid in rids if robots[rid]["busy"] > 0}
         # 회전 진행 중인 로봇의 soft 칸: 다른 로봇이 축을 들이지 못하게 이번 틱 예약으로 넘긴다 (-79, 다틱 회전)
-        soft_hold = {cell: rid for rid in rids if robots[rid]["busy"] > 0
+        # 두 회전 로봇의 soft 칸이 겹치면 낮은 rid 가 주인(결정적) — 제3자에게는 누구든 똑같이 막힌다 (답신 11 §4)
+        soft_hold = {cell: rid for rid in sorted(rids, reverse=True) if robots[rid]["busy"] > 0
                      for cell in robots[rid]["swing_soft"]}
         if cfg.yield_rule and not standoff:
             self._refresh_yields(t, states)

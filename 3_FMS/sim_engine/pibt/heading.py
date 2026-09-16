@@ -19,6 +19,11 @@ NO_PROGRESS_TURN_BIAS = True
 # 홈에 주차한 유휴 로봇이 5틱마다 90° 씩 영원히 돈다(24대·103 6h: 비임무 회전 57,691회, 충전 존 회전 83k = 로봇 시간 22 %).
 # 중립 θ(wait_cost 1) 에서는 대기가 이미 1위라 기준값 불변. sim_v2 --no-goal-wait-free 로 끔. 모듈 전역 — run_h 도 공유.
 GOAL_WAIT_FREE = True
+# 계약 v3.13 (-160, 2026-09-16): 진전 없는 회전(d′ ≥ d)의 점수 하한을 대기 점수로 — tb 에 max(0, wait_cost − turn_cost) 를 더한다.
+# -223 은 bias 를 같게 했지만 θ 의 기본 대기 비용(six θ 2.74)과 TURN_COST(1.25) 의 차 1.49 가 남아 d′ − d < 1.49 면 거리가 늘어나는 회전도
+# 대기보다 쌌다(24대·103: 포장대 앞 회전 28k, 왕복 31 %; robot0 (44,83) t=446 turn 4.05 < wait 4.34). 중립 θ(1.0 < 1.25) 는 항이 0 → 기준값 불변.
+# sim_v2 --no-turn-floor 로 끔. legacy 는 v3.3 비트 동일이라 False. 모듈 전역 — run_h 도 공유(θ 없으면 무영향).
+TURN_FLOOR_WAIT = True
 
 
 def candidates_h(s, dist, edge_cost, wait_cost, free, turn_cost, bias=0.0):
@@ -47,7 +52,10 @@ def candidates_h(s, dist, edge_cost, wait_cost, free, turn_cost, bias=0.0):
     d0 = dist[r, c, h]
     for i, h2 in enumerate(((h + 1) % 4, (h - 1) % 4)):
         if dist[r, c, h2] >= 0 and turn_ok(free, r, c, h, h2):
-            tb = bias if (NO_PROGRESS_TURN_BIAS and d0 >= 0 and dist[r, c, h2] >= d0) else 0.0   # 진전 없는 회전 = 대기와 같은 상승
+            if NO_PROGRESS_TURN_BIAS and d0 >= 0 and dist[r, c, h2] >= d0:                     # 진전 없는 회전 = 대기와 같은 상승 (v3.11)
+                tb = bias + (max(0.0, wait_cost[r, c] - turn_cost) if TURN_FLOOR_WAIT else 0.0)   # + 대기 점수 하한 (v3.13)
+            else:
+                tb = 0.0
             scored.append((turn_cost + tb + dist[r, c, h2], 2 + i, (r, c, h2),
                            frozenset({(r, c)} | swing_cells(r, c, h, h2)), frozenset(front_cells(r, c, h, h2))))
     br, bc = r - dr, c - dc                            # 후진: pos→rear, rear→rear의 뒤
@@ -90,6 +98,7 @@ class _PIBTStepH:
         self.pos_now = {s[:2]: a for a, s in states.items()}
         self.pos_next = {}      # cell -> 이번 틱 축이 놓일 agent
         self.soft_next = dict(soft_hold or {})   # cell -> soft 예약 agent. 회전 진행 중(-194 다틱) 로봇의 soft 칸은 미리 채워 온다 (-79)
+        self.soft_base = dict(soft_hold or {})   # 주입 원본 — _release 가 덮어쓴 칸을 되돌릴 때 (물리 팀 답신 11 §1, 2026-09-16)
         self.next_soft = {}     # agent -> soft 칸 집합
         # 구간 대수 제한 (S15P21A106-193). sec_map 은 칸 -> 구간번호(-1 = 구간 밖).
         self.sec_map = sec_map
@@ -168,7 +177,11 @@ class _PIBTStepH:
             del self.pos_next[pos]
         for cell in self.next_soft.pop(a):
             if self.soft_next.get(cell) == a:
-                del self.soft_next[cell]
+                base = self.soft_base.get(cell)
+                if base is None or base == a:
+                    del self.soft_next[cell]
+                else:
+                    self.soft_next[cell] = base    # 회전 중인 제3 로봇의 주입분 복원 — 옛 코드는 지워서 보호가 사라졌다(Isaac 접촉 2/5시드)
 
     def _soft_blocked(self, a, s2, soft):
         """soft 충돌: 내 앞 2칸에 다른 축이 있거나/들어오거나, 내 축이 놓일 칸을 다른 로봇이 soft 예약했다."""
