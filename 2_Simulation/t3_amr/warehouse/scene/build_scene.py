@@ -758,7 +758,9 @@ print(f"[3] 렉 조립: 프레임 {n_frame} + 데크 {n_shelf}", flush=True)
 #     격자 사각형으로 접으면 **블록당 하나, 전부 24개**다 (실측). 이미 씬에
 #     들어 있는 벽 박스 3,620개에 비하면 없는 것과 같다.
 if os.environ.get("RACK_COLLIDER", "1") not in ("0", "false", "False"):
-    RACK_COL_Z = DECK_Z[-1] + 1.35      # 최상단 빔 + 파렛트 유닛로드 한 단
+    # 최상단 빔 + 파렛트 유닛로드 한 단. `round` 는 표시용이 아니라 **값**을
+    # 위한 것이다 — 2.7 + 1.35 가 4.050000000000001 로 찍혔다.
+    RACK_COL_Z = round(DECK_Z[-1] + 1.35, 3)
     n_rc = 0
     for i, (r0, c0, h, w) in enumerate(greedy_rects(grid == 2)):
         b = add_box(stage, f"/World/racks/solid_{i}", c0 * CELL, r0 * CELL,
