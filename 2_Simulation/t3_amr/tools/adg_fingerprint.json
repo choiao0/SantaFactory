@@ -1,28 +1,34 @@
 {
  "fp": {
   "1": {
-   "actions": 2681,
-   "actions_sig": "eeb359160b3f216f",
+   "actions": 2677,
+   "actions_sig": "15b380d30f92a579",
    "acyclic": true,
-   "edges_sig": "c9e39f612f0e3d48",
-   "type1": 2669,
-   "type2": 4345
+   "edges_sig": "050f88b98e69f8c7",
+   "front_rule": "4",
+   "slim": "1",
+   "type1": 2665,
+   "type2": 2154
   },
   "2": {
-   "actions": 2669,
-   "actions_sig": "dc6ae765a87dc7a6",
+   "actions": 2646,
+   "actions_sig": "a9286073c1843d44",
    "acyclic": true,
-   "edges_sig": "0eefc87ee3c303a0",
-   "type1": 2657,
-   "type2": 5596
+   "edges_sig": "bc7abe20be4668a2",
+   "front_rule": "4",
+   "slim": "1",
+   "type1": 2634,
+   "type2": 2311
   },
   "4": {
-   "actions": 2664,
-   "actions_sig": "b2210ae040330ff6",
+   "actions": 2701,
+   "actions_sig": "97bcc8fd758b5fd1",
    "acyclic": true,
-   "edges_sig": "0d32373987ccb22d",
-   "type1": 2652,
-   "type2": 5053
+   "edges_sig": "9459c5375dfb955a",
+   "front_rule": "4",
+   "slim": "1",
+   "type1": 2689,
+   "type2": 2241
   }
  },
  "gap": 60,

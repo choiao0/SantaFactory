@@ -13,7 +13,7 @@ import threading
 import time
 from typing import Any, Callable, Optional
 
-from .orchestrator import Busy, FailedRequest, run_id_of
+from .orchestrator import Busy, failed_request
 
 log = logging.getLogger("host_orch.amqp")
 
@@ -108,7 +108,7 @@ class Consumer:
             return None
         except Exception as e:  # noqa: BLE001 — 버그 하나가 유일 소비자를 죽이면 안 된다
             log.exception("submit failed")
-            return FailedRequest(run_id_of(body), f"internal error: {e}")
+            return failed_request(body, f"internal error: {e}")
         run_id = getattr(getattr(job, "req", None), "run_id", None) or getattr(job, "run_id", "?")
         log.info("request %s → %s", run_id, f"rejected: {getattr(job, 'error', None)}" if job.done else "accepted")
         return job

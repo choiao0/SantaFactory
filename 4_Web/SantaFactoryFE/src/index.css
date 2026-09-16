@@ -268,6 +268,9 @@ section.step > p.desc { font-size: 18px; line-height: 1.7; max-width: 760px; mar
   border: 1px solid #2c2c2c; border-top: 4px solid #555; background: #111;
   padding: 14px 16px 14px;
   display: flex; flex-direction: column; gap: 12px;
+  /* 완료 카드(대수 + KPI 두 줄 + 안내)의 높이. 바닥을 깔지 않으면 완료 카드가 없는 줄만 짧아져
+     줄마다 카드 크기가 달라 보이고, 계산 중 표식이 대수 숫자와 겹친다 */
+  min-height: 154px;
 }
 /* 완료된 run 은 눌러서 그 대수의 주행을 본다 (S15P21A106-205) */
 .run.playable {
@@ -282,15 +285,36 @@ section.step > p.desc { font-size: 18px; line-height: 1.7; max-width: 760px; mar
 }
 .run.playable.on .play-hint { color: #4fd18b; }
 .run.DONE { border-color: #2f7a52; border-top-color: #4fd18b; background: #0e1a13; }
-.run.RUNNING { border-color: var(--red); border-top-color: var(--red); background: #1a0d0d; }
+.run.RUNNING, .run.working { border-color: var(--red); border-top-color: var(--red); background: #1a0d0d; }
 .run.FAILED, .run.TIMEOUT { border-color: #a5730e; border-top-color: var(--warn); background: #1c150a; }
 .run .n { font: 800 32px/1 var(--font-head); letter-spacing: -.04em; color: #fff; }
 .run .n span { font: 500 14px var(--font-mono); color: #999; margin-left: 3px; }
 .run .metric { font: 500 14px var(--font-mono); color: #bbb; letter-spacing: .02em; line-height: 1.7; }
 .run .metric b { color: #fff; font-weight: 600; }
 .run .fail { font: 600 15px var(--font-head); color: #ffc14d; }
-.run .wait { font: 600 15px var(--font-head); color: #aaa; }
-.run.RUNNING .wait { color: #ff6b6b; animation: blink .9s step-start infinite; }
+/* 대기·계산 중 둘 다 대수 아래 남은 공간의 가운데에 — 왼쪽에 붙으면 카드가 비어 보인다 */
+.run .wait {
+  font: 600 15px var(--font-head); color: #aaa; flex: 1;
+  display: flex; align-items: center; justify-content: center;
+}
+/* 글자 없이 AMR 만 — 카드 테두리가 이미 "도는 중"을 말해 준다 */
+.run.working .wait { color: #fff; }
+/* 계산 중인 run — AMR 이 앞으로 나아간다. 정의도 없던 blink 애니메이션을 여기로 대체했다 */
+.run .amr-run { flex: none; display: inline-flex; line-height: 0; }
+.run .amr-run svg { animation: amr-forward 1.2s ease-in-out infinite; }
+/* 주행선은 차체와 반대로 흘러야 앞으로 가는 것처럼 보인다 */
+.run .amr-run .dash { animation: amr-dash .6s linear infinite; }
+@keyframes amr-forward {
+  0%, 100% { transform: translateX(-2px); }
+  55%      { transform: translateX(3px); }
+}
+@keyframes amr-dash {
+  from { opacity: .2; transform: translateX(2.5px); }
+  to   { opacity: 1;  transform: translateX(-2.5px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .run .amr-run svg, .run .amr-run .dash { animation: none; }
+}
 .run .ghost.sm { align-self: flex-start; border-color: #a5730e; color: #ffc14d; }
 .run .ghost.sm:hover { border-color: var(--warn); }
 .runs-legend { display: flex; align-items: center; gap: 16px; font: 500 13px var(--font-mono); color: #aaa; letter-spacing: .04em; }
@@ -377,9 +401,11 @@ section.step > p.desc { font-size: 18px; line-height: 1.7; max-width: 760px; mar
 .verify-video { display: block; width: 100%; max-height: 520px; background: #000; }
 
 .paper { background: var(--white); color: var(--ink); }
+/* 위 여백은 다른 섹션의 큰 제목(section.step h2)과 같은 18px — QUOTE 만 제목이 없어
+   eyebrow 에 바로 붙으면 섹션 사이 리듬이 깨진다 */
 .q-head {
   display: flex; justify-content: space-between; align-items: flex-end;
-  border-bottom: 2px solid var(--ink); padding-bottom: 14px; margin-bottom: 22px;
+  border-bottom: 2px solid var(--ink); padding-bottom: 14px; margin: 18px 0 22px;
   gap: 14px; flex-wrap: wrap;
 }
 .q-head h3 { font: 800 28px var(--font-head); letter-spacing: -.04em; margin: 0; }

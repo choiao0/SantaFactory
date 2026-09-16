@@ -6,7 +6,32 @@ import { useReplay } from '../hooks/useReplay.js'
 
 const FAIL_LABEL = { FAILED: '실패', TIMEOUT: '시간 초과' }
 
-function RunCard({ run, selected, onSelect }) {
+const isPending = (run) => run.status === 'QUEUED' || run.status === 'RUNNING'
+
+/**
+ * 계산 중 표식 — AMR 이 앞으로 나아가는 선화. 돌아가는 원보다 "시뮬이 주행을 돌리고 있다"는 뜻에 가깝다.
+ * 뒤쪽 세 줄은 주행선이고, 차체가 앞으로 밀리는 동안 반대로 흘러 속도감을 만든다.
+ */
+function AmrRunning() {
+  return (
+    <span className="amr-run" aria-hidden="true">
+      <svg viewBox="0 0 34 22" width="52" height="34" fill="none" stroke="currentColor"
+           strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+        {/* 주행선 — 차체 뒤쪽 */}
+        <path className="dash" d="M4.5 10.5h3M2 13h3.5M4.5 15.5h3" />
+        {/* 적재 상자 */}
+        <rect x="13" y="2" width="11" height="7" rx="1" />
+        <path d="M18.5 2v2.4" />
+        {/* 차체 · 바퀴 */}
+        <rect x="9" y="9" width="19" height="6.5" rx="2" />
+        <circle cx="14" cy="18.2" r="2.3" />
+        <circle cx="23" cy="18.2" r="2.3" />
+      </svg>
+    </span>
+  )
+}
+
+function RunCard({ run, selected, onSelect, working }) {
   const failed = run.status === 'FAILED' || run.status === 'TIMEOUT'
   const playable = run.status === 'DONE'
   // 완료된 run 만 누를 수 있다 — 나머지는 보여줄 궤적이 없다
@@ -14,7 +39,7 @@ function RunCard({ run, selected, onSelect }) {
   return (
     <Tag
       type={playable ? 'button' : undefined}
-      className={`run ${run.status}${playable ? ' playable' : ''}${selected ? ' on' : ''}`}
+      className={`run ${run.status}${working ? ' working' : ''}${playable ? ' playable' : ''}${selected ? ' on' : ''}`}
       onClick={playable ? () => onSelect(run.amr_count) : undefined}
       aria-pressed={playable ? selected : undefined}
     >
@@ -32,8 +57,10 @@ function RunCard({ run, selected, onSelect }) {
           <button type="button" className="ghost sm" disabled title="재실행 API 연동 예정">재실행</button>
         </>
       )}
-      {(run.status === 'QUEUED' || run.status === 'RUNNING') && (
-        <span className="wait">{RUN_STATUS_LABEL[run.status]}</span>
+      {isPending(run) && (
+        <span className="wait">
+          {working ? <AmrRunning /> : RUN_STATUS_LABEL[run.status]}
+        </span>
       )}
       {playable && <span className="play-hint">{selected ? '재생 중' : '주행 보기'}</span>}
     </Tag>
@@ -233,7 +260,17 @@ function ReplayBoard({ estimateId, amrCount }) {
 
 export default function RunsStep({ estimateId, estimate, connected, error }) {
   const runs = estimate?.runs ?? []
-  const finished = runs.filter((r) => r.status !== 'QUEUED' && r.status !== 'RUNNING').length
+  const finished = runs.filter((r) => !isPending(r)).length
+  /*
+   * 지금 계산 중인 run — 백엔드는 워커가 어느 run 을 집었는지 모른다(RunStatus.RUNNING 은 쓰이지 않고
+   * 워커는 결과만 보낸다). 대신 발행이 대수 오름차순이고 큐가 FIFO, 워커가 prefetch 1 로 하나씩 집으므로
+   * 결과가 안 온 것 중 가장 적은 대수가 도는 중이다. 워커가 둘이라 실제로는 둘이 동시에 도는데, 둘 다
+   * 칠하면 어느 쪽이 먼저 끝날지 모르는 채로 앞서 표시하는 셈이라 확실한 하나만 칠한다.
+   * 견적이 끝난 뒤에는 남은 run 이 있어도(실패·타임아웃) 도는 게 아니므로 켜지 않는다.
+   */
+  const workingCount = estimate?.status === 'RUNNING'
+    ? runs.filter(isPending)[0]?.amr_count ?? null
+    : null
   const [picked, setPicked] = useState(null)
 
   // 아무것도 고르지 않았으면 권장 대수를 보여준다 — 사용자가 제일 궁금해할 구성이다.
@@ -280,7 +317,8 @@ export default function RunsStep({ estimateId, estimate, connected, error }) {
           </div>
           <div className="runlist">
             {runs.map((r) => (
-              <RunCard key={r.run_id} run={r} selected={r.amr_count === shown} onSelect={setPicked} />
+              <RunCard key={r.run_id} run={r} selected={r.amr_count === shown} onSelect={setPicked}
+                       working={r.amr_count === workingCount} />
             ))}
           </div>
         </>

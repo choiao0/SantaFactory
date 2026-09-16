@@ -56,7 +56,7 @@ import static org.mockito.Mockito.when;
 class EstimateServiceTest {
 
     private static final EstimateProperties PROPS =
-            new EstimateProperties(15_000_000L, 5_000_000L, 500_000L, 28, 6, 4, 1, Duration.ofMinutes(30), Duration.ofHours(6), "out", false, Duration.ofMinutes(10), 10, 6, null);
+            new EstimateProperties(15_000_000L, 5_000_000L, 500_000L, 28, 6, 4, 1, Duration.ofMinutes(30), Duration.ofHours(6), "out", false, Duration.ofMinutes(10), 10, 10, 6, null);
 
     @Mock
     EstimateRepository estimateRepository;
@@ -340,8 +340,9 @@ class EstimateServiceTest {
 
         service().applyResult(done(sixAmr.getRunId(), 100, 95, 0.93));
 
-        // 4대가 처리율 85 % · 가동률 95 % 로 3조건을 처음 만족한다
-        assertThat(estimate.getRecommendedCount()).isEqualTo(4);
+        // 4·6대가 조건을 만족하고, 그중 효율 점수가 높은 6대가 권장이다
+        // (4대 85 × 95 = 80.8, 6대 100 × 93 = 93.0)
+        assertThat(estimate.getRecommendedCount()).isEqualTo(6);
         assertThat(estimate.getReasonCode()).isNull();
         assertThat(estimate.getStatus()).isEqualTo(EstimateStatus.DONE);
         assertThat(estimate.getCompletedAt()).isNotNull();

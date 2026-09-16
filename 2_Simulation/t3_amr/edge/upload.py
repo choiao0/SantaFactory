@@ -17,6 +17,9 @@ CONTENT_TYPE = "video/mp4"
 CONNECT_TIMEOUT_S = 10.0
 READ_TIMEOUT_S = 120.0                  # 100 MB 급 mp4 도 tailnet 에서 이 안에 올라간다
 RETRIES = 2
+# minio-py 는 멀티파트를 병렬(기본 3)로 올린다 — 풀이 1 이면 파트마다 "Connection pool is full, discarding
+# connection" 경고를 찍는다 (2026-09-16 verify_4, -237).
+POOL_SIZE = 8
 
 
 @dataclass(frozen=True)
@@ -49,7 +52,8 @@ class Uploader:
         컨테이너에만 있는 의존성이라 늦게 import 한다."""
         import urllib3
         from minio import Minio
-        http = urllib3.PoolManager(timeout=urllib3.Timeout(connect=CONNECT_TIMEOUT_S, read=READ_TIMEOUT_S),
+        http = urllib3.PoolManager(maxsize=POOL_SIZE,
+                                   timeout=urllib3.Timeout(connect=CONNECT_TIMEOUT_S, read=READ_TIMEOUT_S),
                                    retries=urllib3.Retry(total=RETRIES, backoff_factor=1.0))
         return Minio(self.endpoint, access_key=self.access_key, secret_key=self.secret_key, secure=self.secure,
                      http_client=http)

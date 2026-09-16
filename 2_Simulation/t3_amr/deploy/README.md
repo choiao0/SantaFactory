@@ -59,6 +59,9 @@ numba ≥0.63 이 `coverage.types.Tracer`(7.5+)를 요구해 import 가 죽기 �
 
 개발 중 코드 수정은 재빌드 없이도 된다 — compose 에서 작업 트리를 `/app/2_Simulation/t3_amr` 에 bind mount 하면 그대로 보인다(`out/`·`stage/`·`logs/` 심링크가 가려지니 그 셋은 따로 마운트).
 첫 실행은 셰이더 캐시(볼륨 `ov-cache`)를 만드느라 몇 분 더 걸린다.
+**GPU capability 에 `ngx` 가 있어야 한다**(-237). compose 는 `deploy.resources.reservations.devices.capabilities` 목록이 곧 마운트 범위라
+`ngx` 를 빼면 DLSS 디노이저 라이브러리가 안 들어와 프레임이 노이즈로 덮이고 mp4 가 100 Mbps 가 된다(2026-09-16 verify_4: 366 MB/30 s,
+`ngx` 넣은 뒤 같은 조건 2~3 MB). 확인: 컨테이너 안 `ls /usr/lib/x86_64-linux-gnu | grep -c ngx` → 2. `docker run --gpus all` 과 k8s(env `all`)는 해당 없음.
 컨테이너는 uid 1000 `runner` 로 돈다 — bind mount 하는 `deploy/data` 는 호스트 계정(uid 1000) 소유면 된다. 다른 uid 면 소유권을 1000 으로 맞춘다.
 
 첫 빌드·실행 기록(2026-09-16, 이 박스): 빌드 25 분·26.4 GB, `check` 통과(RTX 5080 · 595.91 · isaacsim 6.0.1.0). 첫 `record 2` 에서 드러난 것 셋과 그 수정(-220):
