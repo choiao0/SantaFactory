@@ -617,7 +617,8 @@ class Kernel(object):
 def run_lifelong(free, starts, cells_by_cat, horizon=600, seed=0, order_gap=15,
                  shifts=("in", "out", "out"), edge_cost=None, wait_cost=None,
                  turn_cost=None, turn_ticks=None, move_ticks=None, verbose=True,
-                 kernel_cls=None, kernel_kw=None, zone_cells=(), order_end=None):
+                 kernel_cls=None, kernel_kw=None, zone_cells=(), order_end=None,
+                 stream=None):
     """T틱까지 돌린다. **정체로 죽지 않는다** — 못 가는 로봇은 대기할 뿐이다.
 
     반환 (history, cells_hist, info). history 는 run_h 와 같은 형식이므로
@@ -630,10 +631,16 @@ def run_lifelong(free, starts, cells_by_cat, horizon=600, seed=0, order_gap=15,
     치우면 로봇이 충전존으로 복귀한다. 둘을 **같이 줘야** 복귀가 보인다:
     `zone_cells` 만 주면 갈 곳은 정해지는데 갈 틈이 안 나고, `order_end` 만
     주면 시작 칸으로 흩어져 돌아간다.
+
+    `stream` 을 주면 주문을 **그것이 낸다** — `arrivals(t)`·`n_task`·`windows`
+    ·`order_end` 넷만 있으면 된다 (`fms_stream.FileOrderStream` 이 그렇다).
+    그러면 `seed`·`order_gap`·`shifts`·`order_end` 는 주문에 안 쓰인다.
+    커널 훅과 같은 뜻이다 — 이 파일에 FMS 파일 형식이 섞이면 안 된다.
     """
     rng = np.random.default_rng(seed)
-    stream = OrderStream(rng, cells_by_cat, horizon, order_gap, shifts,
-                         order_end=order_end)
+    if stream is None:
+        stream = OrderStream(rng, cells_by_cat, horizon, order_gap, shifts,
+                             order_end=order_end)
     # ★ 커널을 갈아 끼울 자리. 기본값이면 동작은 이전과 **완전히 같다**.
     #   battery.BatteryKernel 이 이 훅으로 들어온다 — 이 파일에 배터리 코드가
     #   섞이지 않게 하려는 것이다.
