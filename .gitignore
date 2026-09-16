@@ -13,6 +13,9 @@ server-setup/
 # 공유가 필요한 IDE 설정은 4_Web/SantaFactoryBE/.idea 에 이미 추적돼 있다.
 /.idea/
 
+# Claude Code 개인 설정·세션 산출물 (dev 서버 기동용 launch.json, 권한 설정 등).
+/.claude/
+
 # sim_v2 Isaac 리플레이 내보내기 산출물 (SIM_EXPORT_ISAAC=1) — 재생성 가능, 커밋하지 않음
 3_FMS/sim_engine/isaac_export_*/
 # 테스트용 파이썬 주문 생성기 — -212 로 삭제된 원본의 로컬 복원, 저장소 원천은 백엔드 (-191)

@@ -7,7 +7,7 @@ const TICKS = [1, 4, 8, 12, 16, 20, 24, 28]
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v))
 
-export default function FleetStep({ fleet, onChange, model, requesting, error, estimateId, onRequest }) {
+export default function FleetStep({ fleet, onChange, model, requesting, error, onRequest }) {
   const trackRef = useRef(null)
   const dragging = useRef(null)
 
@@ -76,7 +76,7 @@ export default function FleetStep({ fleet, onChange, model, requesting, error, e
         02 — FLEET
       </div>
       <h2>Pick the range.</h2>
-      <p className="desc">비교할 AMR 대수 범위를 정합니다. 대수 하나가 시뮬레이션 run 하나입니다.</p>
+      <p className="desc">비교할 AMR 대수 범위를 정합니다.</p>
 
       <div className="fleetbox">
         <div className="mono dim">FLEET SIZE SWEEP · 최대 {MAX}대</div>
@@ -148,7 +148,7 @@ export default function FleetStep({ fleet, onChange, model, requesting, error, e
           <br />
           {model ? (
             <>
-              {model.model} 구축비용 <b>{formatWon(cost(fleet.min))}</b> ~ <b>{formatWon(cost(fleet.max))}</b>
+              구축비용 <b>{formatWon(cost(fleet.min))}</b> ~ <b>{formatWon(cost(fleet.max))}</b>
             </>
           ) : (
             '01 단계에서 AMR 모델을 먼저 선택하세요'
@@ -159,9 +159,6 @@ export default function FleetStep({ fleet, onChange, model, requesting, error, e
           <button type="button" className="button" disabled={!canRequest} onClick={onRequest}>
             {requesting ? '요청 중…' : `견적 요청 — ${counts.length} RUNS ↗`}
           </button>
-          {estimateId != null && !error && (
-            <span className="mono dim">ESTIMATE #{estimateId} 접수 · 아래에서 진행 상황을 확인하세요</span>
-          )}
           {error && <span className="form-error">요청 실패: {error}</span>}
         </div>
       </div>

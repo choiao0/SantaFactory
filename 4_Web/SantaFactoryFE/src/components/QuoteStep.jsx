@@ -4,6 +4,8 @@ const MONO = 'DM Mono, Pretendard Variable, Pretendard, monospace'
 const GRID_LINE = '#e0ded9'
 const MUTED = '#8a8983'
 const RED = '#e72d2d'
+/** 가동률 막대 기본색 — 권장 구성만 RED 로 덮어 칠한다 */
+const BAR = '#3f3f3d'
 const EOK = 100_000_000
 
 const REASON_TEXT = {
@@ -171,7 +173,7 @@ function UtilChart({ runs, target, recommended }) {
         const uh = (Math.min(100, r.utilization) / 100) * ih
         return (
           <g key={r.run_id}>
-            <rect x={cx - bw * 0.3} y={pad.t + ih - uh} width={bw * 0.6} height={uh} fill={hl ? RED : '#3f3f3d'} />
+            <rect x={cx - bw * 0.3} y={pad.t + ih - uh} width={bw * 0.6} height={uh} fill={hl ? RED : BAR} />
             {hl && (
               <text x={cx} y={pad.t + ih - uh - 6} textAnchor="middle" fontSize="8" fontWeight="600" fill="#b51616" fontFamily={MONO}>
                 {Math.round(r.utilization)}
@@ -181,7 +183,6 @@ function UtilChart({ runs, target, recommended }) {
           </g>
         )
       })}
-      <text x={pad.l} y={H - 4} fontSize="7.5" fill={MUTED} fontFamily={MONO}>검은 막대 가동률 · 빨간 막대 권장 구성 · 회색 막대 결과 없는 run</text>
     </svg>
   )
 }
@@ -201,12 +202,11 @@ function Placeholder({ estimateId, estimate }) {
   )
 }
 
-export default function QuoteStep({ estimateId, estimate, verdict, model, form }) {
+export default function QuoteStep({ estimateId, estimate, verdict }) {
   const ready = Boolean(estimate && verdict)
   const runs = estimate?.runs ?? []
   const recommended = verdict?.recommended_count ?? null
   const rec = runs.find((r) => r.amr_count === recommended) ?? null
-  const failed = runs.filter((r) => !isDone(r))
   const cancelled = verdict?.status === 'CANCELLED'
 
   return (
@@ -225,7 +225,7 @@ export default function QuoteStep({ estimateId, estimate, verdict, model, form }
           <div className="q-head">
             <h3>SANTA FACTORY · QUOTATION</h3>
             <span className="mono">
-              EST #{estimate.estimate_id} · {formatDateTime(estimate.created_at)} · {estimate.amr_model} · SEED 101
+              {formatDateTime(estimate.created_at)} · AMR : {estimate.amr_model}
             </span>
           </div>
 
@@ -292,7 +292,14 @@ export default function QuoteStep({ estimateId, estimate, verdict, model, form }
                 <div>
                   <h5>UTILIZATION</h5>
                   <UtilChart runs={runs} target={estimate.target_utilization} recommended={recommended} />
-                  <p className="chart-cap">대수가 많으면 x축 라벨은 일부만 표시됩니다</p>
+                  <p className="chart-cap">
+                    {/* 막대 색을 말로 적으면 어느 막대인지 짚기 어렵다 — 실제 칠하는 색을 그대로 보여준다 */}
+                    <i style={{ background: BAR }} />가동률
+                    <i style={{ background: RED }} />권장 구성
+                    <i style={{ background: GRID_LINE, border: '1px solid #c9c7c2' }} />측정값 없음
+                    <br />
+                    대수가 많으면 x축 라벨은 일부만 표시됩니다
+                  </p>
                 </div>
               </div>
 
@@ -345,32 +352,10 @@ export default function QuoteStep({ estimateId, estimate, verdict, model, form }
 
           <div className="q-two">
             <div>
-              <h4>가정 명세 — 이 숫자가 나온 조건 전부</h4>
-              <details className="assume">
-                <summary>입력 조건과 고정값</summary>
-                <ul>
-                  <li>목표 출고 처리율 {estimate.target_throughput}% · 목표 가동률 {estimate.target_utilization}% · 예산 {formatWon(estimate.budget_limit)}</li>
-                  <li>입고 {form.inboundStart}–{form.inboundEnd} ({form.inboundAvg}건/일) · 출고 {form.outboundStart}–{form.outboundEnd} ({form.outboundAvg}건/일)</li>
-                  {model && (
-                    <li>AMR {model.model} · 속도 {model.speed} m/s · 적재 {model.capacity} · 대당 단가 {formatWon(model.price)} + 설치비 {formatWon(model.cost)}</li>
-                  )}
-                  <li>구축비용 = (단가 + 설치비) × 대수 + 충전기(4대당 1기). 유지보수·자재 관리비 제외</li>
-                  <li>시뮬레이션 고정 시간 6시간(출고 전용) · 시드 101 · 재고 항상 충분 가정 · 낱개 피킹 주문만 산정(한 줄 최대 10개)</li>
-                  <li>경로 계획 PIBT + 가중 다익스트라 · 1칸 = 1 m · 고정 창고 레이아웃</li>
-                </ul>
-              </details>
-            </div>
-            <div>
-              <h4>읽는 법</h4>
+              <h4>구축비용</h4>
               <div className="notice">
-                확정 견적이 아닌 도입 전 검토 자료입니다. 피크 여유가 필요하면 한 단계 위 구성도 함께 보십시오.
-                {failed.length > 0 && (
-                  <>
-                    <br />
-                    <br />
-                    {failed.map((r) => `${r.amr_count}대`).join(', ')} run은 결과가 없어 곡선에서 빠져 있습니다.
-                  </>
-                )}
+                (단가 + 설치비) × 대수 + 충전기(4대당 1기)로 계산합니다.
+                유지보수비와 자재 관리비는 포함되지 않습니다.
               </div>
             </div>
           </div>

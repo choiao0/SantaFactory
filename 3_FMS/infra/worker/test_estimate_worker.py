@@ -1,6 +1,9 @@
 # -*- coding: utf-8 -*-
 """견적 워커 번역기·변환기 검사 — 브로커·시뮬 없이 돈다. 3_FMS/infra/worker 에서 `python -m pytest -q`."""
 import json
+import sys
+import threading
+import time
 import os
 
 import pytest
@@ -108,30 +111,73 @@ def test_handle_never_raises():
     assert r["status"] == "failed" and r["run_id"] == "est_77_n3" and "amr.count" in r["error"]
 
 
-def test_consume_publishes_then_acks(monkeypatch):
-    """가짜 pika: 메시지 1건 → 결과가 sim.result 로 발행된 뒤 ack. (실브로커 실사는 docs/견적_워커.md 검증 절)"""
-    import sys, types
-    calls = []
+def _fake_pika(handle_result_status="failed"):
+    """가짜 pika: ch.consume 이 메시지 1건을 주고 나서 (None, None, None) 을 무한히 준다(inactivity_timeout 폴).
+    ack 가 나오면 stop_event 를 세워 루프를 끝낸다. 호출 순서는 calls 에 남는다."""
+    import types
+    calls, stop = [], threading.Event()
 
     class Ch:
         def basic_qos(self, prefetch_count): calls.append(("qos", prefetch_count))
-        def basic_consume(self, queue, on_message_callback):
-            self.cb, self.q = on_message_callback, queue
+        def consume(self, queue, inactivity_timeout):
+            calls.append(("consume", queue, inactivity_timeout))
+            yield types.SimpleNamespace(delivery_tag=7), None, b'{"run_id":"r1","amr":{"count":0}}'
+            while True:
+                calls.append(("poll",))
+                time.sleep(inactivity_timeout)
+                yield None, None, None
         def basic_publish(self, exchange, routing_key, body, properties): calls.append(("publish", routing_key, json.loads(body)["status"]))
-        def basic_ack(self, delivery_tag): calls.append(("ack", delivery_tag))
-        def start_consuming(self):
-            self.cb(self, types.SimpleNamespace(delivery_tag=7), None, b'{"run_id":"r1","amr":{"count":0}}')
-            raise StopIteration                      # 루프 탈출용
+        def basic_ack(self, delivery_tag): calls.append(("ack", delivery_tag)); stop.set()
+        def basic_nack(self, delivery_tag, requeue): calls.append(("nack", delivery_tag, requeue))
+        def cancel(self): calls.append(("cancel",))
 
     fake = types.ModuleType("pika")
     fake.URLParameters = lambda url: url
-    fake.BlockingConnection = lambda p: types.SimpleNamespace(channel=lambda: Ch())
+    fake.BlockingConnection = lambda p: types.SimpleNamespace(channel=lambda: Ch(), close=lambda: None)
     fake.BasicProperties = lambda **kw: kw
     fake.exceptions = types.SimpleNamespace(AMQPError=ConnectionError)
+    return fake, calls, stop
+
+
+def test_consume_publishes_then_acks(monkeypatch):
+    """가짜 pika: 메시지 1건 → 작업 스레드가 handle → pika 스레드가 결과 발행 뒤 ack (명세 §1-3 순서 불변)."""
+    fake, calls, stop = _fake_pika()
     monkeypatch.setitem(sys.modules, "pika", fake)
-    with pytest.raises(StopIteration):
-        w.consume()
-    assert calls == [("qos", 1), ("publish", "sim.result", "failed"), ("ack", 7)]
+    w.consume(stop_event=stop, poll_s=0.01)
+    kinds = [c[0] for c in calls]
+    assert kinds[:2] == ["qos", "consume"] and calls[0] == ("qos", 1)
+    assert [c for c in calls if c[0] in ("publish", "ack")] == [("publish", "sim.result", "failed"), ("ack", 7)]
+    assert kinds.index("publish") < kinds.index("ack") < kinds.index("cancel")
+
+
+def test_consume_keeps_polling_while_handle_runs(monkeypatch):
+    """-222 핵심: handle 이 오래 걸리는 동안 pika 스레드는 폴(=heartbeat 처리)을 계속 돈다 — 옛 구조는 콜백 안에서 막혔다."""
+    fake, calls, stop = _fake_pika()
+    monkeypatch.setitem(sys.modules, "pika", fake)
+    slow = w.handle
+    def slow_handle(body):
+        time.sleep(0.3)                      # 시뮬 서브프로세스 흉내
+        return slow(body)
+    monkeypatch.setattr(w, "handle", slow_handle)
+    w.consume(stop_event=stop, poll_s=0.02)
+    kinds = [c[0] for c in calls]
+    polls_before_ack = kinds[:kinds.index("ack")].count("poll")
+    assert polls_before_ack >= 5, f"handle 0.3 s 동안 폴이 {polls_before_ack}번 — pika 스레드가 막혔다"
+    assert kinds.index("publish") < kinds.index("ack")
+
+
+def test_job_wraps_unexpected_exception():
+    """작업 스레드에서 handle 이 예외로 죽어도 failed 결과가 남아 ack 가 나갈 수 있다."""
+    import types
+    j = w.Job(1, b'{"run_id":"r9"}')
+    j.thread = types.SimpleNamespace(start=lambda: None)
+    orig = w.handle
+    w.handle = lambda body: (_ for _ in ()).throw(RuntimeError("boom"))
+    try:
+        j._run()
+    finally:
+        w.handle = orig
+    assert j.done.is_set() and j.result["status"] == "failed" and j.result["run_id"] == "r9" and "boom" in j.result["error"]
 
 
 def test_explicit_orders_and_capacity_flags():
@@ -140,15 +186,15 @@ def test_explicit_orders_and_capacity_flags():
     extra = w.to_sim_args(req, orders_path="/tmp/o.json")["extra_args"]
     assert "--orders-file=/tmp/o.json" in extra
     svc = max(1, int(w.SVC_PER_TOTE_S / DT + 0.5))
-    assert {"--capacity=6", "--tote-units=8", "--svc-per-tote=%d" % svc} <= set(extra)
+    assert {"--capacity=6", "--tote-units=10", "--svc-per-tote=%d" % svc} <= set(extra)
     no_cap = w.to_sim_args({**req, "amr": {"count": 3, "capacity": None}}, orders_path="/tmp/o.json")["extra_args"]
     assert "--orders-file=/tmp/o.json" in no_cap
     assert not any(f.startswith("--capacity") for f in no_cap)
-    assert "--tote-units=8" in no_cap
+    assert "--tote-units=10" in no_cap
     assert "--svc-per-tote=%d" % svc in no_cap
     null_units = w.to_sim_args({**req, "amr": {"count": 3, "capacity": None, "tote_units": None}},
                                orders_path="/tmp/o.json")["extra_args"]     # 백엔드 실제 형식: 키는 있고 값은 null
-    assert "--tote-units=8" in null_units
+    assert "--tote-units=10" in null_units
     empty = w.to_sim_args(REQ)["extra_args"]           # orders_path 없음 → 간격 플래그만 (handle 은 그 전에 outbound[] 를 요구한다)
     assert not any(f.startswith("--orders-file") for f in empty)
     assert not any(f.startswith("--capacity") for f in empty)

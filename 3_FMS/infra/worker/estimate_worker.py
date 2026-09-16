@@ -25,6 +25,7 @@ import re
 import shutil
 import sys
 import tempfile
+import threading
 import time
 
 from objective import SimFailed, run_once, tick_seconds
@@ -310,26 +311,81 @@ def amqp_url():
     return f"amqp://{user}:{pw}@{host}:5672/"
 
 
-def consume():
+# AMQP 소비(pika 스레드)와 시뮬 실행(작업 스레드)의 분리 (S15P21A106-222, 2026-09-16).
+#   옛 구조는 basic_consume 콜백 안에서 handle()(시뮬 서브프로세스, 최대 SIM_TIMEOUT_S) 을 막고 기다렸다. 그동안 pika 가
+#   프레임을 못 처리해 heartbeat(브로커 기본 60 s)가 2회 결측되면 연결이 끊기고, 끝난 뒤 publish/ack 가 닫힌 채널에 떨어져
+#   메시지가 재큐 → 같은 run 을 다시 2분 → 무한 반복, 백엔드는 run-timeout. 6h 28대 run 이 EC2·리플레이·워커 2개 경합에서 2분을 넘긴다.
+#   새 구조는 host_orch/amqp.py Consumer 와 같은 꼴: pika 스레드가 ch.consume(inactivity_timeout=POLL_S) 제너레이터로 폴링하고
+#   (그 사이 heartbeat 처리), 일은 작업 스레드 하나가 하고, 완료를 보면 **같은 pika 스레드에서** publish → ack 한다.
+#   채널은 pika 스레드만 만지므로 add_callback_threadsafe 도 락도 없다. prefetch 1 이라 진행 중 job 은 항상 하나.
+POLL_S = float(os.environ.get("SIM_POLL_S", "1.0"))     # 폴 간격 [s] — heartbeat(60 s) 보다 충분히 짧으면 된다
+RECONNECT_S = 5.0
+
+
+class Job:
+    """요청 1건의 작업 스레드. handle() 은 예외를 안 내지만(failed 결과), 스레드에서 새면 안 되니 한 번 더 감싼다."""
+
+    def __init__(self, delivery_tag, body):
+        self.delivery_tag, self.body = delivery_tag, body
+        self.result = None
+        self.done = threading.Event()
+        self.thread = threading.Thread(target=self._run, name="sim-job", daemon=True)
+
+    def start(self):
+        self.thread.start()
+        return self
+
+    def _run(self):
+        try:
+            self.result = handle(self.body)
+        except Exception as e:  # noqa: BLE001 — 작업 스레드가 죽으면 ack 도 결과도 없이 큐가 막힌다
+            run_id = "?"
+            try:
+                run_id = json.loads(self.body).get("run_id", "?")
+            except Exception:  # noqa: BLE001
+                pass
+            self.result = dict(run_id=run_id, status="failed", error=f"worker internal error: {e}"[:2000], kpi=None)
+        finally:
+            self.done.set()
+
+
+def _serve(pika, conn, stop_event, poll_s):
+    """연결 하나의 수명: 폴링 루프. 진행 중 job 은 연결이 끊겨도 계속 돌고(§2), 재연결 뒤 결과를 발행한다."""
+    ch = conn.channel()
+    ch.basic_qos(prefetch_count=1)
+    log(f"소비 시작 {REQUEST_QUEUE} → {RESULT_QUEUE} (sim_engine={SIM_ENGINE_DIR}, theta={THETA_PATH or '중립'}, poll={poll_s:g}s)")
+    job = None
+    for method, _props, body in ch.consume(REQUEST_QUEUE, inactivity_timeout=poll_s):
+        if stop_event.is_set():
+            if job is not None and not job.done.is_set():
+                ch.basic_nack(delivery_tag=job.delivery_tag, requeue=True)     # 재배포: 진행 중 건은 다른 워커에게
+            ch.cancel()
+            return
+        if method is not None:                              # 새 요청 (prefetch 1 → job 이 없을 때만 온다)
+            job = Job(method.delivery_tag, body).start()
+        if job is not None and job.done.is_set():
+            ch.basic_publish(exchange="", routing_key=RESULT_QUEUE, body=json.dumps(job.result),
+                             properties=pika.BasicProperties(content_type="application/json", delivery_mode=2))
+            ch.basic_ack(delivery_tag=job.delivery_tag)     # 결과 발행 뒤 ack (명세 §1-3) — pika 스레드에서
+            job = None
+
+
+def consume(stop_event=None, poll_s=POLL_S):
     import pika
-
-    def on_message(ch, method, props, body):
-        result = handle(body)
-        ch.basic_publish(exchange="", routing_key=RESULT_QUEUE, body=json.dumps(result),
-                         properties=pika.BasicProperties(content_type="application/json", delivery_mode=2))
-        ch.basic_ack(delivery_tag=method.delivery_tag)          # 결과 발행 뒤에 ack (명세 §1-3)
-
-    while True:
+    stop_event = stop_event or threading.Event()
+    while not stop_event.is_set():
         try:
             conn = pika.BlockingConnection(pika.URLParameters(amqp_url()))
-            ch = conn.channel()
-            ch.basic_qos(prefetch_count=1)
-            ch.basic_consume(queue=REQUEST_QUEUE, on_message_callback=on_message)
-            log(f"소비 시작 {REQUEST_QUEUE} → {RESULT_QUEUE} (sim_engine={SIM_ENGINE_DIR}, theta={THETA_PATH or '중립'})")
-            ch.start_consuming()
+            try:
+                _serve(pika, conn, stop_event, poll_s)
+            finally:
+                try:
+                    conn.close()
+                except Exception:  # noqa: BLE001
+                    pass
         except pika.exceptions.AMQPError as e:
-            log(f"브로커 연결 실패/끊김: {e} — 5초 후 재시도")
-            time.sleep(5)
+            log(f"브로커 연결 실패/끊김: {e} — {RECONNECT_S:.0f}초 후 재시도")
+            stop_event.wait(RECONNECT_S)
 
 
 def main(argv):
