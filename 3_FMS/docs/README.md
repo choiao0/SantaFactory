@@ -121,6 +121,10 @@ python checks/check_results_identity.py --quick
 python checks/check_lifelong_battery.py
 python -m pytest ../ai_theta/tests ../contracts/tests tests -q     # tests = 명시 주문 모드 (-156)
 
+# θ 를 건드렸을 때만 — 위 기준선은 전부 중립 θ 라 θ 규칙의 고부하 STALL 을 못 잡는다 (-229, 계약 §5)
+SWEEP_ENGINES=heading SWEEP_SEEDS=101,102,103,104   SWEEP_EXTRA=--theta=../infra/out/theta_wallA_r24_g15.json   SWEEP_OUT=load_sweep_eval_theta_<태그>.csv python sweeps/fleet_sweep_load.py
+python sweeps/compare_csv.py results/load_sweep_eval_theta_v313.csv results/load_sweep_eval_theta_<태그>.csv --rows
+
 # 합성 창고 (-139) — wallA 재현이 링 영역에서 공식 맵과 같은지
 cd ../map && python synth_warehouse.py wallA /tmp/wallA && python synth_warehouse.py check /tmp/wallA
 ```

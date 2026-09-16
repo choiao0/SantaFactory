@@ -52,7 +52,7 @@ cd 3_FMS
 python3 -m fms_core --env-file infra/emqx/.env -v                       # 상주 (MQTT_HOST · MQTT_PORT · MQTT_PW_FMS_CORE)
 python3 -m fms_core --env-file infra/emqx/.env --once start.json --once-window-s 120   # host-orch 없이 Start 1건 → 창 뒤 Stop → 결과 stdout
 python3 -m fms_core --spawn 3                                            # DES 와 같은 초기 배치 → Isaac WSIM_SPAWN 문자열
-python3 -m pytest fms_core/tests host_orch/tests sim_engine/tests -q   # MR CI(.gitlab-ci.yml fms-python-test)가 도는 것과 같은 묶음
+python3 -m pytest fms_core/tests host_orch/tests sim_engine/tests infra/worker -q   # MR CI(.gitlab-ci.yml fms-python-test)가 도는 것과 같은 묶음 (308; optuna 없으면 280)
 ```
 
 옵션: `--planner kernel` · `--tick-s`(틱 최소 길이, 기본 = DES 틱 길이 1 m ÷ 속도, 속도 0.9 → 1.11 s; `--planner-opt speed=` 로 속도 지정) · `--ack-timeout-s 30`(노드 하나 도착 상한) · `--ready-timeout-s 420` ·
