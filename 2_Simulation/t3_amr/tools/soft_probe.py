@@ -48,6 +48,12 @@ def run(seed):
 def main():
     print(f"[soft_probe] pitch {PITCH} · {N}대 · {HORIZON}틱 · gap {GAP}")
     print(f"             PIBT_FRONT_RULE={os.environ.get('PIBT_FRONT_RULE', '(안 줌)')}")
+    # ★ 어느 판인지 머리글에 박는다 (-224). 킬스위치를 서버에 안 올린 채
+    #   기준선 판을 돌려 위반 0 을 보고서야 알아차린 적이 있다.
+    #   표만 보고 기준선과 구현판을 헷갈리는 것도 막는다.
+    _sh = os.environ.get("PIBT_SOFT_HOLD", "1")
+    print(f"             PIBT_SOFT_HOLD={_sh}"
+          f"  -> soft_hold {'켬' if _sh not in ('0', '', 'false') else '★ 꺼짐 (기준선)'}")
     print()
     print(f"  {'시드':>4}  {'위반':>5}  {'태스크':>6}  {'대기':>4}"
           f"  {'soft_clash':>10}  {'정체최대':>8}  {'정체평균':>8}  {'100틱+':>7}")
