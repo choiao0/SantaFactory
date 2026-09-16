@@ -91,6 +91,15 @@ def main():
           f"(pibt_scene.py:135 — 「iw_hub.usd 조인트 저작값」)")
     print(f"   바퀴 관절  L={dof[li]}  R={dof[ri]}")
 
+    # ★ 시간 창. **사고 구간을 빼고 다시 재는** 데 쓴다 -- 이상치 한 대의
+    #   L 역산이 그 사고 자체 때문에 커진 것인지(순환) 원래 다른 것인지는
+    #   구간을 빼 보면 갈린다.
+    t0 = float(os.environ.get("T0", t[0]))
+    t1 = float(os.environ.get("T1", t[-1]))
+    if t0 > t[0] or t1 < t[-1]:
+        print(f"   ★ 시간 창 {t0:.1f}~{t1:.1f}s 만 쓴다")
+    win = (t[:-1] >= t0) & (t[:-1] <= t1)
+
     dt = np.diff(t)
     dt[dt <= 0] = np.nan
     rows = []

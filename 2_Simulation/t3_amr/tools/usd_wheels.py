@@ -24,7 +24,7 @@
 쓰는 법
 -------
     source paths.sh
-    python tools/usd_wheels.py $WAREHOUSE/robots/iwhub/iw_hub.usd
+    python tools/usd_wheels.py $ROBOT
     python tools/usd_wheels.py $STAGE/pibt12.usd          # 스폰된 12대 비교
 
 `pxr` 이 없으면 Isaac 파이썬으로 돌린다:
@@ -44,6 +44,8 @@ except ImportError:
         "  (venv 에 usd-core 가 있으면 그냥 돌아갑니다: pip install usd-core)")
 
 KEYS = ("wheel", "caster", "swivel")
+# 스폰된 로봇이 사는 경로. 창고 쪽 스케일과 갈라 보려고 쓴다.
+ROBOT_ROOT = os.environ.get("ROBOT_ROOT", "/World/Robots")
 
 
 def fmt(v):
@@ -58,6 +60,15 @@ def main():
     if not args:
         raise SystemExit(__doc__)
     path = args[0]
+    # 없는 경로를 그냥 넘기면 pxr 이 역추적을 뱉어 원인이 안 보인다.
+    # `$WAREHOUSE` 같은 빈 변수를 쓰면 `/robots/...` 가 되는데, 그때
+    # 「셸 변수가 비었다」가 바로 보여야 한다.
+    if not path or not os.path.isfile(path):
+        raise SystemExit(
+            f"★ 파일이 없습니다: {path!r}\n"
+            f"  셸 변수가 비지 않았는지 보세요. 에셋은 `$ROBOT` 입니다:\n"
+            f"    python tools/usd_wheels.py $ROBOT\n"
+            f"    python tools/usd_wheels.py $STAGE/pibt12.usd")
     stage = Usd.Stage.Open(path)
     if stage is None:
         raise SystemExit(f"★ 열 수 없습니다: {path}")
@@ -70,20 +81,32 @@ def main():
     print(f"   upAxis {UsdGeom.GetStageUpAxis(stage)}")
 
     # ── 스케일이 걸린 prim ────────────────────────────────────────────────
-    scaled = []
+    #   ★ 로봇 아래만 따로 센다. 창고 바닥·조명에 스케일이 걸린 것은 흔하고
+    #     우리 계산과 무관하다. 물어야 할 것은 **로봇에 걸렸나** 하나다.
+    scaled, robot_scaled = [], []
     for p in stage.Traverse():
         if not p.IsA(UsdGeom.Xformable):
             continue
         for op in UsdGeom.Xformable(p).GetOrderedXformOps():
-            if "scale" in op.GetOpName():
-                s = op.Get()
-                if s is not None and any(abs(float(c) - 1.0) > 1e-6 for c in s):
-                    scaled.append((p.GetPath().pathString, tuple(float(c) for c in s)))
-    print(f"\n── 스케일이 1 이 아닌 prim {len(scaled)}개 ──")
-    for pth, s in scaled[:12]:
-        print(f"   {s}  {pth}")
-    if not scaled:
-        print("   없음 — 저작값이 곧 실제값이다")
+            if "scale" not in op.GetOpName():
+                continue
+            s = op.Get()
+            if s is None or all(abs(float(c) - 1.0) <= 1e-6 for c in s):
+                continue
+            row = (p.GetPath().pathString, tuple(float(c) for c in s))
+            scaled.append(row)
+            if ROBOT_ROOT in row[0]:
+                robot_scaled.append(row)
+    print(f"\n── 스케일이 1 이 아닌 prim {len(scaled)}개 "
+          f"(그중 {ROBOT_ROOT} 아래 {len(robot_scaled)}개) ──")
+    if robot_scaled:
+        print(f"   ★ 로봇에 스케일이 걸려 있다 — 저작값 != 실제값이다")
+        for pth, s in robot_scaled[:20]:
+            print(f"   {s}  {pth}")
+    else:
+        print(f"   ★ **로봇 아래에는 없다** — 저작값이 곧 실제값이다")
+        for pth, s in scaled[:4]:
+            print(f"   (참고) {s}  {pth}")
 
     # ── 바퀴·캐스터 조인트 ───────────────────────────────────────────────
     print(f"\n── 조인트 (이름에 {KEYS} 포함) ──")
@@ -116,29 +139,40 @@ def main():
     print(f"\n── 바퀴 지오메트리 ──")
     cache = UsdGeom.BBoxCache(Usd.TimeCode.Default(),
                               [UsdGeom.Tokens.default_, UsdGeom.Tokens.render])
-    m = 0
+    # ★ **이름별로 묶는다.** 로봇이 12대면 같은 메시가 12번 나와서, 앞에서
+    #   끊으면 이름 두어 개만 보이고 **바깥 타이어 메시가 있는지 안 보인다.**
+    #   실제로 그래서 `STR_Inner_*`(안쪽 림) 만 보고 반지름을 잘못 읽을 뻔했다.
+    seen = {}
     for p in stage.Traverse():
-        nm = p.GetName().lower()
-        if "wheel" not in nm or not p.IsA(UsdGeom.Gprim):
+        nm = p.GetName()
+        if "wheel" not in nm.lower() or not p.IsA(UsdGeom.Gprim):
             continue
-        m += 1
+        if nm in seen:
+            seen[nm][0] += 1
+            continue
         if p.IsA(UsdGeom.Cylinder):
             c = UsdGeom.Cylinder(p)
-            print(f"   {p.GetName():<22} Cylinder radius={c.GetRadiusAttr().Get()}"
-                  f"  height={c.GetHeightAttr().Get()}  axis={c.GetAxisAttr().Get()}")
+            desc = (f"Cylinder radius={c.GetRadiusAttr().Get()}"
+                    f"  height={c.GetHeightAttr().Get()}"
+                    f"  axis={c.GetAxisAttr().Get()}")
+            seen[nm] = [1, desc, p.GetPath().pathString]
             continue
         rng = cache.ComputeWorldBound(p).ComputeAlignedRange()
         if rng.IsEmpty():
             continue
         sz = rng.GetSize()
         d = sorted(float(c) for c in sz)
-        print(f"   {p.GetName():<22} bbox {fmt(sz)}"
-              f"  -> 반지름 추정 {d[-1] / 2.0 * mpu:.5f} m")
-        if m >= 12:
-            print("   ... (12개에서 끊는다)")
-            break
-    if not m:
+        seen[nm] = [1, f"bbox {fmt(sz)}  -> 반지름 추정 {d[-1] / 2.0 * mpu:.5f} m",
+                    p.GetPath().pathString]
+    if not seen:
         print("   없음")
+    else:
+        print(f"   서로 다른 이름 {len(seen)}개 (같은 이름은 로봇 수만큼 반복된다)")
+        for nm, (cnt, desc, pth) in sorted(seen.items()):
+            print(f"   {nm:<24} x{cnt:<3} {desc}")
+            print(f"      {pth}")
+        print(f"   ※ 이름에 Inner/Rim 이 들어간 것은 안쪽 부품일 수 있다 —")
+        print(f"     가장 **큰** 반지름이 접지면이다.")
 
     print(f"\n   읽는 법")
     print(f"    · `localPos0` 두 바퀴의 **가로 성분 차이**가 wheel_base 다.")
