@@ -90,7 +90,7 @@ numba ≥0.63 이 `coverage.types.Tracer`(7.5+)를 요구해 import 가 죽기 �
 host-orch 쪽(-215 같이): `Runner/VideoUrl` → `sim.verify.result.artifacts.video`. **EC2 host-orch 는 `--fms-node` 없이 띄운다** — t3_amr 이 자체 계획으로 돌아 fms-core 가 RUNNING 이 될 일이 없다.
 **`--stop-timeout-s` 도 올려야 한다(기본 60 → 300 권장)** — Stop 뒤 Kit 정리(≤25 s) + ffmpeg 조립(프레임 수천 장이면 1 분 넘게) + MinIO 업로드가 STOPPING 안에서 일어난다. 업로드는 워커 스레드라 그동안 하트비트·NCMD 는 계속 처리된다.
 
-단위 테스트(브로커·Isaac 없이): `cd 2_Simulation && python3 -m pytest` (40건). 브로커 붙여 손으로 돌리기:
+단위 테스트(브로커·Isaac 없이): `cd 2_Simulation && python3 -m pytest` (58건). 브로커 붙여 손으로 돌리기:
 ```bash
 cd 2_Simulation/t3_amr && python3 -m edge --env-file ../../3_FMS/infra/emqx/.env -v     # MINIO_* 없으면 VideoUrl = file://…
 ```
@@ -99,7 +99,7 @@ cd 2_Simulation/t3_amr && python3 -m edge --env-file ../../3_FMS/infra/emqx/.env
 |---|---|---|
 | `n_robots` | `PIBT_N` | 계획 폴더 `plan/traj_pibt_h/fleet_NN` 이 없으면 `REPLAN=1` 로 run_record.sh 가 먼저 계획한다(로컬, Isaac 불필요) |
 | `scenario.seed` | `PIBT_SEED` | |
-| `timeout_s − 300` (= window_s) | `PIBT_HORIZON`(틱 = (창+60 s) ÷ 1.33 s) | 창 끝은 host-orch Stop 이 자른다. 틱 길이는 `T3AMR_TICK_S` |
+| `timeout_s − 300` (= window_s) | `PIBT_HORIZON`(틱 = (창+60 s) ÷ 0.333 s, 0.333 = 1.2 m ÷ (0.9 m/s × 4틱) — 211 틱 모델, `recorder.DEFAULT_TICK_S`) | 창 끝은 host-orch Stop 이 자른다. 틱 길이는 `T3AMR_TICK_S` |
 | `scenario.orders` | — | **못 받는다.** t3_amr 은 lifelong 자체 발주. `PIBT_ORDER_GAP` 으로 부하만 맞춘다(후속) |
 
 ## 4. 아직 안 정한 것
