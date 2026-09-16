@@ -89,7 +89,11 @@ def fingerprint(adg) -> dict:
         #   줄인다 (도달 관계·실행 시각은 동일, `tools/adg_edge_audit.py`).
         #   적어 두지 않으면 나중에 `edges_sig` 가 달라졌을 때 「규칙이
         #   깨졌나」와 「스위치가 달랐나」를 못 가른다.
-        "slim": os.environ.get("PIBT_ADG_SLIM", "0"),
+        # ★ 기본값을 `build_adg` 와 **같게** 둬야 한다 (거기가 "1" 이다).
+        #   "0" 으로 두면 환경변수를 안 줬을 때 실제로는 slim 으로 지었는데
+        #   기록은 「안 썼다」가 되어, 지문이 거짓말을 한다. 2026-09-16 에
+        #   실제로 그렇게 적혔다.
+        "slim": os.environ.get("PIBT_ADG_SLIM", "1"),
         "front_rule": os.environ.get("PIBT_FRONT_RULE", ""),
     }
 
@@ -122,6 +126,11 @@ def _save(meta):
     with open(OUT, "w", encoding="utf-8") as f:
         json.dump(meta, f, ensure_ascii=False, indent=1, sort_keys=True)
     print(f"\n기준 저장: {OUT}")
+    print("  ☠ **덮어썼다면 되돌릴 수 있는지 먼저 보라** — `git diff` 에서")
+    print("    `actions` 나 `actions_sig` 가 달라졌으면 그 기준선은 **다른")
+    print("    설정**에서 뜬 것이라 덮으면 안 되는 파일이었다는 뜻이다.")
+    print("    (2026-09-16 에 pitch 1.0·4칸 켠 기준선을 1.2·꺼짐으로 덮었다.")
+    print("     `git checkout` 으로 되돌리고 `FP_OUT` 으로 새 파일에 떴다.)")
     print(f"★ 지금 **설정도 같이 저장됐다** — slim={os.environ.get('PIBT_ADG_SLIM', '1')} · "
           f"front_rule={os.environ.get('PIBT_FRONT_RULE', '') or '(꺼짐)'}")
     print("  기준은 「코드를 고치기 전」이 아니라 **이 설정에서의 값**이다.")
