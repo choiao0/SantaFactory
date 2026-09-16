@@ -10,7 +10,19 @@
   - V&V: isaacsim.asset.gen.omap으로 씬→점유맵 재생성 후 원 그리드와 diff
 
 실행:
-  cd ~/isaacsim && ./python.sh <repo>/2_Simulation/t3_amr/warehouse/scene/build_scene.py
+  source paths.sh
+  python "$W/warehouse/scene/build_scene.py"
+
+  기존 `$SCENE` 은 **이 스크립트가 알아서 지우고 다시 만든다** (아래
+  `os.remove`). 손으로 `rm` 할 필요가 없다.
+
+  ★ 2026-09-17: 옛 안내는 `cd ~/isaacsim && ./python.sh …` 였다. 서버
+    (jupyter04)에는 그 폴더가 없다 — Isaac 이 venv 에 pip 로 들어가 있어
+    **그냥 `python`** 이면 된다. 무대 빌더(`runners/build_amr_scene_v2.py`)
+    도 그렇게 부른다 (`amr/path/_common.py:155`). 그 안내를 믿고 `rm` 부터
+    했다가 씬만 지우고 빌드는 안 도는 일이 실제로 있었다.
+    되돌리기: `git checkout -- warehouse/scene/warehouse_scene.usd`
+
 전제: ../map/ 에 맵 세트(occupancy_grid.npy 등)가 있다 — 없으면 ../map/source/warehouse_layout_v5_5_final.py 로 생성.
 """
 
@@ -725,6 +737,62 @@ for bi, ru in enumerate(rack_units):
                           lx, yc, z=dz, rot_z=90.0, scale=(DECK_SCALE, 1.0, 1.0))
                 n_shelf += 1
 print(f"[3] 렉 조립: 프레임 {n_frame} + 데크 {n_shelf}", flush=True)
+
+# 3a) ★ 렉 콜라이더 — 격자에서 직접 (S15P21A106-224)
+#
+#   위의 프레임·데크는 **원격 S3 참조**다 (`ASSETS`). 그 기계에 에셋이 없으면
+#   빈 Xform 만 남는데, 그러면 랙 자리가 **물리적으로 통째로 빈다.**
+#   2026-09-17 서버 실측: 참조 5,752개 전부 기하 0개 — 격자 값 2 의 48,420칸
+#   (x 32.1~98.1 · y 47.0~67.7) 이 씬에 없었다.
+#
+#   벽·컨베이어·포장대·파렛트는 이미 격자 유래 박스가 콜라이더를 지고 있어
+#   (「콜라이더 단일 소스는 격자에서 나온 투명 박스」) 참조가 죽어도 충돌이
+#   남는다. **랙만 그 원칙에서 빠져 있었다.** 여기서 맞춘다.
+#
+#   계획은 값 2 를 장애물로 보므로 정상 주행에는 영향이 없다. 밀려 들어간
+#   로봇이 **부딪히는 대신 통과하던** 것을 막는 것이 목적이다.
+#
+#   ★ PhysX 부하는 문제가 안 된다. 예전에 랙 콜리전을 안 붙인 근거가
+#     「메시가 많아 부하가 크다」였는데(`runners/build_amr_scene_v2.py`
+#     독스트링), 그건 **참조 에셋 메시**(프레임 176 + 데크 264) 얘기다.
+#     격자 사각형으로 접으면 **블록당 하나, 전부 24개**다 (실측). 이미 씬에
+#     들어 있는 벽 박스 3,620개에 비하면 없는 것과 같다.
+#   ★★ 2026-09-17 기본값을 **끔으로 되돌린다.** 켜 놓고 재 보니 계획이
+#     회전 스윕을 **정적 장애물과 대조하지 않는다**는 것이 드러났다 —
+#     다른 로봇하고만 본다. 실측 (12대 · 3시드 · 1,260틱):
+#
+#         회전 547건 중 197건(36.0 %)이 막힌 칸을 스윕한다
+#         랙 95 · 통로차단(물리적으로 빈칸) 70 · 컨베이어 18 · 구조물 12 · 파렛트 2
+#
+#     벽·컨베이어·파렛트는 이미 콜라이더가 있어 그 32건은 **전부터** 차체가
+#     고체를 밀고 있었다. 랙 95건은 이걸 켜야 비로소 생긴다 — 회전의 17 %에
+#     없던 접촉이 붙고, 기준선(시드 2 = 560.0s · 시드 5 = 541.5s)이 통째로
+#     달라진다.
+#
+#     그래서 순서가 뒤바뀐다. **먼저 계획기가 스윕을 정적 장애물과 대조하게
+#     한 뒤**에 이걸 켠다. 지금 켜면 계획이 낸 합법 회전을 물리가 막는 꼴이라,
+#     충실도가 오르는 게 아니라 둘이 싸운다.
+#
+#         RACK_COLLIDER=1   켠다 (그 실험을 할 때만)
+if os.environ.get("RACK_COLLIDER", "0") not in ("0", "false", "False"):
+    # 최상단 빔 + 파렛트 유닛로드 한 단. `round` 는 표시용이 아니라 **값**을
+    # 위한 것이다 — 2.7 + 1.35 가 4.050000000000001 로 찍혔다.
+    RACK_COL_Z = round(DECK_Z[-1] + 1.35, 3)
+    n_rc = 0
+    for i, (r0, c0, h, w) in enumerate(greedy_rects(grid == 2)):
+        b = add_box(stage, f"/World/racks/solid_{i}", c0 * CELL, r0 * CELL,
+                    w * CELL, h * CELL, 0.0, RACK_COL_Z)
+        UsdGeom.Imageable(b.GetPrim()).MakeInvisible()   # 비주얼은 참조 에셋 몫
+        n_rc += 1
+    print(f"[3a] ★ 렉 콜라이더 **켜짐** (RACK_COLLIDER=1): 투명 박스 {n_rc}개 "
+          f"(격자 값2, 높이 {RACK_COL_Z} m)", flush=True)
+    print(f"     회전의 17 %에 없던 접촉이 생긴다 — 기준선과 비교 불가다. "
+          f"계획기가 스윕을 정적 장애물과 대조하게 한 뒤에 켜는 것이 맞다",
+          flush=True)
+else:
+    print("[3a] 렉 콜라이더 꺼짐 (기본). 랙은 원격 에셋뿐이라 그 자리가 "
+          "물리적으로 빈다 — 계획이 랙을 스윕하므로 지금은 그게 맞다 "
+          "(켜려면 RACK_COLLIDER=1)", flush=True)
 
 # 3b) 렉 화물 (시각 전용, 랙 풋프린트 안 — 그리드 값2 그대로):
 #     피킹 스테이지 — 파렛트 재고에서 옮겨온 낱박스가 선반에 "어느 정도"

@@ -224,6 +224,12 @@ class Kernel(object):
         self.stag_peak = {a: 0 for a in starts}
         self.replan = Replanner(free, self.edge_cost, self.turn_cost)
         self.done = 0
+        # ★ 완료 **틱**을 남긴다 (-224). 총계만으로는 FMS 의 `saturated_tph`
+        #   와 못 맞댄다 — 그쪽은 포화 창 [1800 s, 10800 s) 안에서 세는데,
+        #   배정표의 도착 분포는 앞 10분과 뒤 50분이 비어 있어 6h 전체로
+        #   나누면 **낮게 나온다.** 창을 잘라 세려면 틱이 있어야 한다.
+        self.done_ticks = []
+        self._t = -1                      # step 이 매 틱 갱신한다
         self.unreachable = 0
 
         # --- 충전존 복귀 (FMS core.py:72-75). 비우면 고정 홈 = 이전 동작 ---
@@ -430,9 +436,13 @@ class Kernel(object):
             r["state"], r["goal"] = TO_DROP, r["task"]["to"]
         else:                                            # SVC_DROP → 일 끝
             self.done += 1
+            # 시그니처는 못 바꾼다 — `battery.BatteryKernel` 이 이 메서드를
+            # 오버라이드하고 `super()._service_done(a)` 로 부른다.
+            self.done_ticks.append(self._t)
             r["state"], r["task"], r["goal"] = FREED, None, None
 
     def step(self, t):
+        self._t = t                       # `_service_done` 이 완료 틱에 쓴다
         for task in self.stream.arrivals(t):
             self.waiting.append(task)
 
@@ -617,7 +627,8 @@ class Kernel(object):
 def run_lifelong(free, starts, cells_by_cat, horizon=600, seed=0, order_gap=15,
                  shifts=("in", "out", "out"), edge_cost=None, wait_cost=None,
                  turn_cost=None, turn_ticks=None, move_ticks=None, verbose=True,
-                 kernel_cls=None, kernel_kw=None, zone_cells=(), order_end=None):
+                 kernel_cls=None, kernel_kw=None, zone_cells=(), order_end=None,
+                 stream=None):
     """T틱까지 돌린다. **정체로 죽지 않는다** — 못 가는 로봇은 대기할 뿐이다.
 
     반환 (history, cells_hist, info). history 는 run_h 와 같은 형식이므로
@@ -630,10 +641,16 @@ def run_lifelong(free, starts, cells_by_cat, horizon=600, seed=0, order_gap=15,
     치우면 로봇이 충전존으로 복귀한다. 둘을 **같이 줘야** 복귀가 보인다:
     `zone_cells` 만 주면 갈 곳은 정해지는데 갈 틈이 안 나고, `order_end` 만
     주면 시작 칸으로 흩어져 돌아간다.
+
+    `stream` 을 주면 주문을 **그것이 낸다** — `arrivals(t)`·`n_task`·`windows`
+    ·`order_end` 넷만 있으면 된다 (`fms_stream.FileOrderStream` 이 그렇다).
+    그러면 `seed`·`order_gap`·`shifts`·`order_end` 는 주문에 안 쓰인다.
+    커널 훅과 같은 뜻이다 — 이 파일에 FMS 파일 형식이 섞이면 안 된다.
     """
     rng = np.random.default_rng(seed)
-    stream = OrderStream(rng, cells_by_cat, horizon, order_gap, shifts,
-                         order_end=order_end)
+    if stream is None:
+        stream = OrderStream(rng, cells_by_cat, horizon, order_gap, shifts,
+                             order_end=order_end)
     # ★ 커널을 갈아 끼울 자리. 기본값이면 동작은 이전과 **완전히 같다**.
     #   battery.BatteryKernel 이 이 훅으로 들어온다 — 이 파일에 배터리 코드가
     #   섞이지 않게 하려는 것이다.
@@ -653,6 +670,7 @@ def run_lifelong(free, starts, cells_by_cat, horizon=600, seed=0, order_gap=15,
               if K.zone else None)
     info = {"horizon": horizon, "tasks_spawned": stream.n_task,
             "tasks_done": K.done, "waiting": len(K.waiting),
+            "done_ticks": list(K.done_ticks),
             "windows": stream.windows, "order_end": stream.order_end,
             "parked_end": parked,
             # agent -> [(배정 틱, 주문 도착 틱)]. `isaac_drive` 가 릴리스
