@@ -42,6 +42,8 @@ import sys
 import numpy as np
 
 PITCH = float(os.environ.get("PITCH", os.environ.get("PIBT_PITCH", "1.0")))
+R = float(os.environ.get("WHEEL_RADIUS", "0.08"))
+L = float(os.environ.get("WHEEL_BASE", "0.5796"))
 NEAR = math.radians(float(os.environ.get("NEAR_DEG", "3")))
 MIN_DEG = float(os.environ.get("MIN_DEG", "45"))
 BUDGET = float(os.environ.get("BUDGET_MM", "105"))
@@ -101,6 +103,14 @@ def main():
     if not sw:
         raise SystemExit(f"★ 스위블 관절이 없습니다: {dof}")
 
+    def find(*keys, default=None):
+        for n, nm in enumerate(dof):
+            if all(k in nm.lower() for k in keys):
+                return n
+        return default
+    li = find("left", "wheel", default=0)
+    ri = find("right", "wheel", default=1)
+
     print(f"[swivel_sweep] {os.path.basename(path)} · 로봇 {pose.shape[1]}대 · "
           f"{len(t):,} 프레임 · {t[0]:.1f}~{t[-1]:.1f}s")
     print(f"   DOF {len(dof)} · 스위블 {[dof[i] for i in sw]}")
@@ -118,8 +128,17 @@ def main():
                 turned = math.degrees(abs(np.sum(v[:-1] * dtv)))
                 ratios.append(turned / deg if deg > 1e-6 else float("nan"))
             slide = math.hypot(x[j] - x[i], y[j] - y[i]) * 1000.0
+            # ★ 접지비 — 바퀴가 **요구한** 회전각 대비 차체가 **실제로** 돈 각.
+            #   1 이면 안 미끄러진 것이고, 0 에 가까우면 헛도는 것이다.
+            #   a6 의 그 회전은 바퀴가 -1.8 rad/s 를 3.07 초 요구했는데(317도)
+            #   차체는 84.5 도만 돌았다.
+            wl, wr = jnt[i:j + 1, a, li], jnt[i:j + 1, a, ri]
+            implied = math.degrees(abs(np.sum(
+                (R * (wr[:-1] - wl[:-1]) / L) * dtv)))
+            grip = deg / implied if implied > 1e-6 else float("nan")
             rows.append({"a": a, "i": i, "j": j, "deg": deg,
                          "ratio": float(np.mean(ratios)), "slide": slide,
+                         "grip": grip, "implied": implied,
                          "t0": t[i], "dur": t[j] - t[i]})
 
     if not rows:
@@ -127,10 +146,19 @@ def main():
 
     ratio = np.array([r["ratio"] for r in rows])
     slide = np.array([r["slide"] for r in rows])
+    grip = np.array([r["grip"] for r in rows])
     print(f"\n── 회전 {len(rows)}개 ──")
-    for lab, v, unit in (("스위블 비", ratio, ""), ("축 밀림", slide, "mm")):
-        print(f"   {lab:<10} 중앙 {np.median(v):7.2f}  p95 {np.percentile(v, 95):7.2f}"
-              f"  최대 {v.max():7.2f}{unit}")
+    for lab, v, unit in (("스위블 비", ratio, ""), ("★ 접지비", grip, ""),
+                         ("축 밀림", slide, "mm")):
+        # NaN 은 빼고 센다 — 바퀴가 거의 안 돈 회전은 접지비가 정의되지 않는다.
+        f = v[np.isfinite(v)]
+        if not len(f):
+            print(f"   {lab:<10} 전부 정의 안 됨")
+            continue
+        n_nan = len(v) - len(f)
+        tail = f"   (정의 안 됨 {n_nan}개 제외)" if n_nan else ""
+        print(f"   {lab:<10} 중앙 {np.median(f):7.2f}  p95 {np.percentile(f, 95):7.2f}"
+              f"  최대 {f.max():7.2f}{unit}{tail}")
     print(f"   예산 {BUDGET:.0f}mm 초과 회전 {(slide > BUDGET).sum()}개 / {len(rows)}")
 
     # ── ★ 인과 — 스위블이 안 돈 회전에서만 밀리는가 ──────────────────────
@@ -154,14 +182,31 @@ def main():
               + ("(음이면 안 돌수록 많이 밀린다 = 인과에 부합)"
                  if c < 0 else "(양수 — 인과 방향과 반대다)"))
 
-    # ── 최악 회전들 ──────────────────────────────────────────────────────
+    # ── ★ 접지비가 밀림을 설명하는가 ────────────────────────────────────
+    fin = np.isfinite(grip)
+    gl = fin & (grip < 0.6)
+    gh = fin & (grip >= 0.6)
+    print(f"\n── ★ 접지비 0.6 미만 vs 이상 ──")
+    if (~fin).any():
+        print(f"   ※ 접지비가 정의 안 된 회전 {int((~fin).sum())}개는 뺐다 "
+              f"(바퀴가 거의 안 돈 회전).")
+    print(f"   {'구분':<16}{'회전수':>8}{'밀림 중앙':>11}{'밀림 최대':>11}"
+          f"{'예산초과':>10}")
+    for lab, m in (("헛돎 (<0.6)", gl), ("접지 (>=0.6)", gh)):
+        if not m.any():
+            print(f"   {lab:<16}{0:>8}          —          —         —")
+            continue
+        print(f"   {lab:<16}{int(m.sum()):>8}{np.median(slide[m]):>10.1f}mm"
+              f"{slide[m].max():>10.1f}mm{int((slide[m] > BUDGET).sum()):>10}")
+
     print(f"\n── 밀림 상위 8 ──")
     print(f"   {'로봇':>5}{'t0':>9}{'지속':>8}{'회전각':>9}"
-          f"{'스위블 비':>11}{'밀림':>10}")
+          f"{'바퀴요구':>10}{'접지비':>9}{'스위블비':>10}{'밀림':>10}")
     for r in sorted(rows, key=lambda r: -r["slide"])[:8]:
-        mark = "   <- 예산 초과" if r["slide"] > BUDGET else ""
+        mark = "  <- 예산 초과" if r["slide"] > BUDGET else ""
         print(f"   a{r['a']:<4}{r['t0']:>9.2f}{r['dur']:>7.2f}s"
-              f"{r['deg']:>8.1f}도{r['ratio']:>11.2f}{r['slide']:>9.1f}mm{mark}")
+              f"{r['deg']:>8.1f}도{r['implied']:>9.1f}도{r['grip']:>9.2f}"
+              f"{r['ratio']:>10.2f}{r['slide']:>9.1f}mm{mark}")
 
     print(f"\n   읽는 법")
     print(f"    · **밀림 상위가 스위블 비 낮은 쪽에 몰리면** 캐스터가 원인이다.")

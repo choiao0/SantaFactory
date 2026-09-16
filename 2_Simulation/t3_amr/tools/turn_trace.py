@@ -134,6 +134,15 @@ def main():
     print(f"   ★ {verdict}")
 
     # ── 궤적 표 ─────────────────────────────────────────────────────────
+    # 실측 속도에는 **부호를 붙인다** — 명령 v 와 나란히 놓을 것이라서다.
+    # 크기만 찍으면 `명령 -0.300 / 실측 +0.300` 이 부호 오류처럼 보인다
+    # (실제로는 물리적 후진이고 둘이 맞는 것이다).
+    def signed_v(k, d):
+        if d <= 0:
+            return 0.0
+        return ((x[k + 1] - x[k]) * math.cos(yaw[k])
+                + (y[k + 1] - y[k]) * math.sin(yaw[k])) / d
+
     print(f"\n── 궤적 (회전 앞뒤 포함) ──")
     if cmd is None:
         print("   ※ 이 녹화에는 명령 (v, w) 이 없다 — 옛 형식이다.")
@@ -148,7 +157,7 @@ def main():
         if k + 1 >= len(t):
             break
         d = t[k + 1] - t[k]
-        v = math.hypot(x[k + 1] - x[k], y[k + 1] - y[k]) / d if d > 0 else 0.0
+        v = signed_v(k, d)
         wv = wrap(yaw[k + 1] - yaw[k]) / d if d > 0 else 0.0
         mark = "  <- 회전 시작" if i <= k < i + span else (
                "  <- 회전 끝" if j <= k < j + span else "")
@@ -184,7 +193,7 @@ def main():
             if k + 1 >= len(t):
                 break
             d = t[k + 1] - t[k]
-            v = math.hypot(x[k + 1] - x[k], y[k + 1] - y[k]) / d if d > 0 else 0.0
+            v = signed_v(k, d)
             wv = wrap(yaw[k + 1] - yaw[k]) / d if d > 0 else 0.0
             lw, rw = jnt[k, li], jnt[k, ri]
             print(f"   {t[k]:>8.2f}{cmd[k, 0]:>8.3f}{cmd[k, 1]:>8.3f}"
