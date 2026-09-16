@@ -162,9 +162,13 @@ def _one_seed(seed, on, diag):
 
     acyc = adg.topological_order() is not None
     # 규칙 ② 가 실제로 간선을 만들었나 — guard 를 가진 액션 수로 가늠
+    # ★ 이건 **guard 를 가진 액션 수**(= 회전 수)이지 간선 수가 아니다.
+    #   헤더가 「soft간선」이라 규칙끼리 비교하면 「제약이 몇 개냐」로 읽히는데,
+    #   규칙이 바뀌면 **계획 자체가 달라져** 회전 수가 달라지는 것이라 비교가
+    #   안 된다. 2026-09-16 에 그렇게 읽을 뻔해서 이름을 고쳤다.
     nsoft = sum(1 for a in adg.actions if a.guard)
     row = (f"{len(adg.actions):>8}{adg.type1:>8}{adg.type2:>8}"
-           f"{nsoft:>9}{str(acyc):>8}")
+           f"{nsoft:>10}{str(acyc):>8}")
     return acyc, row
 
 
@@ -197,7 +201,7 @@ def _header(rule, on, diag, dims):
           f"{'   <- 결과에 명시할 것' if FIXLIVE else ''}")
     print(f"  front_cells((5,5,1)->(5,5,0)) = {sorted(geo.front_cells(5, 5, 1, 0))}")
     print()
-    print(f"  {'시드':>5}{'액션':>8}{'type1':>8}{'type2':>8}{'soft간선':>9}"
+    print(f"  {'시드':>5}{'액션':>8}{'type1':>8}{'type2':>8}{'guard액션':>10}"
           f"{'비순환':>8}   비고")
 
 
