@@ -113,12 +113,19 @@ def plan(n=12, seed=None, seconds=None, map_dir=None, extra=None):
     #   `PIBT_SEED` 를 쓴다 (`live_pibt.py:164`, 기본 9).
     #
     #       PIBT_SEED=2 REPLAN=1 bash run_record.sh
-    #         계획   시드 1 (모듈 상수)  -> starts.json · 무대 스폰
-    #         주행   시드 2 (PIBT_SEED)  -> 다른 시작 칸
+    #         계획   시드 1 (모듈 상수)
+    #         주행   시드 2 (PIBT_SEED)
     #
-    #   스폰이 계획 시작점과 어긋나면 추종기가 자기 경로를 영영 못 잡는다
-    #   (실측: robot 0 이 88.2 m 떨어져 추종오차 76 m, 420초 제자리 —
-    #   `runners/build_amr_scene_v2.py` 주석). 오류는 안 난다.
+    #   ★ 무엇이 어긋나나 — **주문 스트림과 배차**다. lifelong 의 시작 칸은
+    #     충전존 슬롯이라 **시드와 무관**하다 (시드 1·2·7 이 같은 칸: 실측).
+    #     그래서 스폰은 안 틀어진다 — 「robot 0 이 88.2 m 떨어져」는 one-shot
+    #     경로의 실패 모드이고 여기엔 안 걸린다.
+    #
+    #     대신 `OrderStream` 이 시드를 쓰므로 **계획이 그린 판과 주행이 실제로
+    #     도는 판이 다른 주문으로 선다.** 주행은 어차피 in-process 로 다시
+    #     계획하니 주행 자체는 자기 완결적이지만, 저장된 `trajectories.json`
+    #     (씬 빌더·검증·영상이 읽는다)은 **다른 시나리오**를 담는다. 둘을 같은
+    #     판으로 알고 비교하면 조용히 틀린다.
     #
     #   `--seed` 인자가 오면 그게 이긴다 (명시가 환경변수보다 강하다).
     _seed = seed if seed is not None else int(
