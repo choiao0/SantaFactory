@@ -33,15 +33,35 @@ export default function FleetStep({ fleet, onChange, model, requesting, error, e
     )
   }
 
+  // 점을 직접 누르면 그 점을 잡는다. 두 점이 붙어 있을 때 위치로만 고르면 왼쪽 점의 오른쪽 절반이
+  // 오른쪽 점으로 판정돼 왼쪽 점을 잡을 수 없다
+  // 한 대 차이면 두 점이 겹쳐 어느 쪽을 눌렀는지 구분이 안 된다. 그때는 처음 끄는 방향으로 정한다 —
+  // 왼쪽으로 끌면 왼쪽 점, 오른쪽으로 끌면 오른쪽 점
+  const grab = (which) => (e) => {
+    e.stopPropagation()
+    dragging.current = fleet.max - fleet.min === 1 ? { startX: e.clientX } : which
+    trackRef.current.setPointerCapture(e.pointerId)
+  }
+
+  // 빈 트랙을 누르면 픽셀 거리로 가까운 점을 옮긴다
   const onPointerDown = (e) => {
-    const n = valueAt(e.clientX)
-    const which = Math.abs(n - fleet.min) <= Math.abs(n - fleet.max) ? 'min' : 'max'
+    const rect = trackRef.current.getBoundingClientRect()
+    const x = clamp(e.clientX - rect.left, 0, rect.width)
+    const xMin = (pct(fleet.min) / 100) * rect.width
+    const xMax = (pct(fleet.max) / 100) * rect.width
+    const which = Math.abs(x - xMin) <= Math.abs(x - xMax) ? 'min' : 'max'
     dragging.current = which
-    move(which, n)
+    move(which, valueAt(e.clientX))
     e.currentTarget.setPointerCapture(e.pointerId)
   }
   const onPointerMove = (e) => {
-    if (dragging.current) move(dragging.current, valueAt(e.clientX))
+    if (!dragging.current) return
+    if (typeof dragging.current === 'object') {
+      const dx = e.clientX - dragging.current.startX
+      if (Math.abs(dx) < 4) return
+      dragging.current = dx < 0 ? 'min' : 'max'
+    }
+    move(dragging.current, valueAt(e.clientX))
   }
   const onPointerUp = () => {
     dragging.current = null
@@ -70,8 +90,27 @@ export default function FleetStep({ fleet, onChange, model, requesting, error, e
         >
           <div className="track" />
           <div className="fill" style={{ left: `${pct(fleet.min)}%`, width: `${pct(fleet.max) - pct(fleet.min)}%` }} />
-          <div className="knob" style={{ left: `${pct(fleet.min)}%` }} />
-          <div className="knob" style={{ left: `${pct(fleet.max)}%` }} />
+          {/* 겹치면 움직일 여지가 있는 쪽을 위에 둔다 — 오른쪽 끝에 몰리면 왼쪽 점을, 왼쪽 끝에 몰리면 오른쪽 점을 */}
+          <div
+            className="knob"
+            style={{ left: `${pct(fleet.min)}%`, zIndex: pct(fleet.min) > 50 ? 3 : 2 }}
+            onPointerDown={grab('min')}
+            role="slider"
+            aria-label="최소 대수"
+            aria-valuemin={MIN}
+            aria-valuemax={fleet.max - 1}
+            aria-valuenow={fleet.min}
+          />
+          <div
+            className="knob"
+            style={{ left: `${pct(fleet.max)}%`, zIndex: pct(fleet.min) > 50 ? 2 : 3 }}
+            onPointerDown={grab('max')}
+            role="slider"
+            aria-label="최대 대수"
+            aria-valuemin={fleet.min + 1}
+            aria-valuemax={MAX}
+            aria-valuenow={fleet.max}
+          />
           {TICKS.map((n) => (
             <span key={n} className={`tick${n >= fleet.min && n <= fleet.max ? ' on' : ''}`} style={{ left: `${pct(n)}%` }}>
               {n}
