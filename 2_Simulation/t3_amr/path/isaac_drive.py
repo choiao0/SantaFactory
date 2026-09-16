@@ -1301,17 +1301,40 @@ class KinematicDriver:
     """
 
     def __init__(self, x: float, y: float, yaw: float, rng: random.Random,
-                 slip: float = 0.0, lag: float = 0.0):
+                 slip: float = 0.0, lag: float = 0.0, pose_lag: float = 0.0):
         self.x, self.y, self.yaw = x, y, yaw
         self.rng = rng
         self.slip = slip
         self.lag = lag
+        # ★ `lag` 은 **명령** 쪽 1차 지연(구동기 응답)이고, `pose_lag` 은
+        #   **관측** 쪽 지연이다 (-224). 둘은 위험이 다르다.
+        #
+        #   EMQX/ROS2 를 붙이면 실행기가 보는 pose 가 낡는다. 그런데
+        #   `complete()` 가 바로 그 pose 로 `body & released` 를 판정한다.
+        #   낡은 pose 로 「빠져나왔다」고 하면 아직 그 칸에 있는데 뒷차를
+        #   들여보낸다 — 순서 보장이 아니라 **기하 여유**가 깨진다.
+        #
+        #   여유가 얼마나 얇은지는 산수로 나온다:
+        #       4칸 규칙 설계 여유 41.4 mm / v_max 0.9 m/s = 46 ms
+        #       도착 허용오차     50.0 mm / 0.9           = 56 ms
+        #   설계 여유 전부가 로봇 이동 46 밀리초다. 브로커 왕복과 같은 크기라
+        #   붙이기 **전에** 재야 한다.
+        self.pose_lag = float(pose_lag)
+        self._t = 0.0
+        self._hist: list[tuple[float, float, float, float]] = [(0.0, x, y, yaw)]
         self._v = self._w = 0.0
         self._cv = self._cw = 0.0
         self.gain = 1.0 - slip * rng.random() if slip else 1.0
 
     def axle_pose(self) -> tuple[float, float, float]:
-        return (self.x, self.y, self.yaw)
+        if self.pose_lag <= 0.0:
+            return (self.x, self.y, self.yaw)
+        want = self._t - self.pose_lag
+        h = self._hist
+        # 앞에서부터 버린다 — h[0] 이 `want` 이하인 **가장 최근** 표본이 되게.
+        while len(h) > 1 and h[1][0] <= want:
+            h.pop(0)
+        return (h[0][1], h[0][2], h[0][3])
 
     def command(self, v: float, w: float) -> None:
         self._cv, self._cw = v, w
@@ -1324,6 +1347,9 @@ class KinematicDriver:
         self.yaw = wrap(self.yaw + w * dt)
         self.x += v * math.cos(self.yaw) * dt
         self.y += v * math.sin(self.yaw) * dt
+        self._t += dt
+        if self.pose_lag > 0.0:
+            self._hist.append((self._t, self.x, self.y, self.yaw))
 
 
 class DifferentialDriver:
@@ -2150,13 +2176,14 @@ class FleetController:
 
 def make_kinematic_drivers(geom: RobotGeom, start: dict[int, State], seed: int = 0,
                            slip: float = 0.10, lag: float = 0.15,
+                           pose_lag: float = 0.0,
                            ) -> dict[int, KinematicDriver]:
     rng = random.Random(seed)
     out = {}
     for a, s in start.items():
         x, y, yaw = geom.state_pose(s)
         out[a] = KinematicDriver(x, y, yaw, random.Random(rng.random() * 1e9),
-                                 slip=slip, lag=lag)
+                                 slip=slip, lag=lag, pose_lag=pose_lag)
     return out
 
 
