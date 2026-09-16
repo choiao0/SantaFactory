@@ -51,11 +51,6 @@ function formatDuration(sec) {
   return `${h}:${m}:${s}`
 }
 
-/** 재생 시계를 "HH:MM:SS" 로. 시뮬 안의 경과 시간이지 벽시계가 아니다. */
-function formatClock(sec) {
-  return `T+${formatDuration(sec)}`
-}
-
 /**
  * 선택한 대수의 주행을 재생한다 (S15P21A106-205).
  *
@@ -191,17 +186,13 @@ function ReplayBoard({ estimateId, amrCount }) {
   return (
     <div className="rp-wrap">
       <div className="rp-bar">
-        <h4>REPRESENTATIVE RUN</h4>
+        <h4>RUN REPLAY</h4>
       </div>
 
       <div className="sim-board">
         <div className="board-head">
-          <span>TOP VIEW · SIMPY QUOTE ENGINE</span>
-          <span>
-            {replay
-              ? `전체 ${formatClock(replay.seconds)} · 1 CELL = 1 m`
-              : '1 CELL = 1 m'}
-          </span>
+          <span>SIMPY ENGINE</span>
+          <span>1 CELL = 1 m</span>
         </div>
         <div className="hud tl"><b>{amrCount ?? '—'}</b> AMR</div>
 
@@ -225,7 +216,6 @@ function ReplayBoard({ estimateId, amrCount }) {
 
         <div className="board-foot">
           <span>{replay ? `AMR ${Object.keys(replay.robots).length}대` : ''}</span>
-          <span>{replay && playing ? 'PLAYING' : 'PAUSED'}<b>×{speed}</b></span>
         </div>
         {/* 화면에 실제로 칠해지는 것만 적는다. 로봇 상태(주행·대기 등)는 데이터에 없어서 색이 하나다 */}
         <div className="legend">
@@ -266,7 +256,7 @@ export default function RunsStep({ estimateId, estimate, connected, error }) {
       )}
 
       {estimateId != null && !estimate && !error && (
-        <div className="runs-empty"><span className="live-dot pulse" /> ESTIMATE #{estimateId} · 진행 상황 연결 중…</div>
+        <div className="runs-empty"><span className="live-dot pulse" /> 진행 상황 연결 중…</div>
       )}
 
       {error && <div className="runs-empty form-error">{error}</div>}
@@ -275,7 +265,7 @@ export default function RunsStep({ estimateId, estimate, connected, error }) {
         <>
           <div className="runs-head">
             <span className="mono">
-              ESTIMATE #{estimate.estimate_id} · {formatDateTime(estimate.created_at)}
+              {formatDateTime(estimate.created_at)}
               <b>{finished} / {runs.length} DONE</b>
             </span>
             <div className="runs-legend">

@@ -97,7 +97,6 @@ export default function EstimatePage() {
           model={selectedModel}
           requesting={requesting}
           error={requestError}
-          estimateId={estimateId}
           onRequest={requestEstimate}
         />
         <RunsStep estimateId={estimateId} estimate={stream.estimate} connected={stream.connected} error={stream.error} />
@@ -107,8 +106,6 @@ export default function EstimatePage() {
           estimateId={estimateId}
           estimate={stream.estimate}
           verdict={stream.verdict}
-          model={selectedModel}
-          form={form}
         />
       </main>
       <Footer />

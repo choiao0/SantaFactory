@@ -134,6 +134,7 @@ section.step > p.desc { font-size: 18px; line-height: 1.7; max-width: 760px; mar
   display: inline-block;
   background: var(--red); border: 0; color: #fff;
   padding: 17px 26px;
+  border-radius: 6px;
   font: 600 16px var(--font-head);
   cursor: pointer;
 }
@@ -397,6 +398,10 @@ section.step > p.desc { font-size: 18px; line-height: 1.7; max-width: 760px; mar
 .charts h5 { font: 500 14px var(--font-mono); letter-spacing: .08em; color: #77776f; margin: 0 0 10px; }
 .charts svg { width: 100%; height: auto; display: block; }
 .chart-cap { font: 500 14px var(--font-mono); color: #77776f; letter-spacing: .03em; margin-top: 10px; line-height: 1.6; }
+/* 범례 색칠. box-sizing 을 박아 둬야 테두리 있는 칸(결과 없는 run)만 커지지 않는다 */
+.chart-cap i { box-sizing: border-box; display: inline-block; width: 11px; height: 11px; vertical-align: -1px; margin: 0 6px 0 18px; border-radius: 2px; }
+/* 구분점 대신 간격으로 끊는다 — 첫 항목 앞은 비우고 */
+.chart-cap i:first-child { margin-left: 0; }
 .q-table { width: 100%; border-collapse: collapse; font-size: 17px; margin: 22px 0 30px; }
 .q-table th { font: 500 13.5px var(--font-mono); letter-spacing: .06em; color: #77776f; text-align: left; border-bottom: 2px solid var(--ink); padding: 10px 12px; }
 .q-table td { border-bottom: 1px solid #d5d3ce; padding: 11px 12px; white-space: nowrap; }
