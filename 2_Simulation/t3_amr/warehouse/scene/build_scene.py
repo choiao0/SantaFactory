@@ -10,7 +10,19 @@
   - V&V: isaacsim.asset.gen.omap으로 씬→점유맵 재생성 후 원 그리드와 diff
 
 실행:
-  cd ~/isaacsim && ./python.sh <repo>/2_Simulation/t3_amr/warehouse/scene/build_scene.py
+  source paths.sh
+  python "$W/warehouse/scene/build_scene.py"
+
+  기존 `$SCENE` 은 **이 스크립트가 알아서 지우고 다시 만든다** (아래
+  `os.remove`). 손으로 `rm` 할 필요가 없다.
+
+  ★ 2026-09-17: 옛 안내는 `cd ~/isaacsim && ./python.sh …` 였다. 서버
+    (jupyter04)에는 그 폴더가 없다 — Isaac 이 venv 에 pip 로 들어가 있어
+    **그냥 `python`** 이면 된다. 무대 빌더(`runners/build_amr_scene_v2.py`)
+    도 그렇게 부른다 (`amr/path/_common.py:155`). 그 안내를 믿고 `rm` 부터
+    했다가 씬만 지우고 빌드는 안 도는 일이 실제로 있었다.
+    되돌리기: `git checkout -- warehouse/scene/warehouse_scene.usd`
+
 전제: ../map/ 에 맵 세트(occupancy_grid.npy 등)가 있다 — 없으면 ../map/source/warehouse_layout_v5_5_final.py 로 생성.
 """
 
