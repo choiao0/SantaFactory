@@ -118,12 +118,20 @@ def load_split(stage, mpu):
         print(f"   {n:<22}{m:>9.2f}{x:>13.3f}{mark}")
     print(f"   {'합':<22}{tot:>9.2f}{cx:>13.3f}   ← 전체 무게중심")
 
-    # 구동축 x=0, 캐스터 x=CASTER_X. 지렛대로 갈린다.
-    cx_caster = float(os.environ.get("CASTER_X", "-0.65"))
+    # 구동축 x=0, 캐스터는 **데이터에서 뽑는다.** 조인트 `localPos0` 는
+    # -0.65 인데 `localPos1` 오프셋이 더해져 실제 강체는 -0.677 이다. 상수로
+    # 박으면 그 차이만큼 지렛대가 틀린다.
+    rear = [x for n, _m, x in items
+            if any(k in n.lower() for k in ("caster", "swivel"))]
+    cx_caster = (sum(rear) / len(rear) if rear
+                 else float(os.environ.get("CASTER_X", "-0.65")))
+    if os.environ.get("CASTER_X"):
+        cx_caster = float(os.environ["CASTER_X"])
     if abs(cx_caster) < 1e-9:
         return
     f_caster = max(0.0, min(1.0, cx / cx_caster))
-    print(f"\n   구동축 x=0 · 캐스터 x={cx_caster}")
+    print(f"\n   구동축 x=0 · 캐스터 x={cx_caster:.3f}"
+          + ("  (뒤 강체 위치에서 뽑음)" if rear else "  (기본값)"))
     print(f"   캐스터 하중 {tot * f_caster:6.2f} kg ({f_caster * 100:.1f} %)"
           f"   ← 마찰 0 이라 **접지력이 안 된다**")
     print(f"   구동축 하중 {tot * (1 - f_caster):6.2f} kg "
