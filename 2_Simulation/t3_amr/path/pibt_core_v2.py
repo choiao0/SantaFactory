@@ -63,6 +63,15 @@ import importlib.util
 import os
 import sys
 
+# ★ 상류 의존성 주의 (2026-09-16).
+#   `3_FMS/sim_engine/pibt/hgraph.py` 가 `from numba import njit` 을 모듈
+#   최상단에서 한다 (FMS -225, 재계획 거리장 3.1배 가속). 이 파사드는 그
+#   파일을 **직접 로드**하므로 numba 가 없으면 `ModuleNotFoundError` 로
+#   터진다 — Isaac 이 필요 없는 계획 층 도구까지 전부.
+#
+#   사본을 안 두고 원본을 로드하는 구조의 대가다. 상류가 의존성을 늘리면
+#   우리 환경도 같이 늘려야 한다. `install.sh` 의 import 확인에 넣어 뒀다.
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.dirname(_HERE)
 

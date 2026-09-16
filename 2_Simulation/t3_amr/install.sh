@@ -386,7 +386,11 @@ python - "$W" <<'PY'
 import sys, os
 W = sys.argv[1]
 ok = True
-for m in ("numpy", "pxr", "isaacsim"):
+# ★ numba 는 2026-09-16 에 필수가 됐다 (FMS -225 가 `pibt/hgraph.py` 의
+#   재계획 거리장을 Numba 커널로 바꾸면서 `from numba import njit` 을
+#   모듈 최상단에 넣었다). `pibt_core_v2` 가 그 파일을 직접 로드하므로
+#   **계획 층 도구가 전부 여기서 막힌다** — Isaac 이 필요 없는 도구까지.
+for m in ("numpy", "numba", "pxr", "isaacsim"):
     try:
         __import__(m); print("  OK   %s" % m)
     except Exception as e:
