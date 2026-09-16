@@ -272,10 +272,13 @@ def sec_hist(rows, tol_pos):
     # --- [h1] 도착 판정이 정말 끊는가 ---------------------------------
     print()
     print(f"   [h1] `hypot(dx,dy)` 분포 — 도착 판정 `<= {tol_mm:.0f} mm` 가 끊나")
-    e = [0, 10, 20, 30, 40, tol_mm, tol_mm + 10, 1e9]
-    nm = ["0-10", "10-20", "20-30", "30-40", f"40-{tol_mm:.0f}",
-          f"{tol_mm:.0f}-{tol_mm + 10:.0f}", f"{tol_mm + 10:.0f}+"]
-    hist(hyp, e, nm)
+    # ★ 경계를 `[0,10,20,30,40,tol,...]` 로 박으면 **tol 이 40 보다 작을 때
+    #   순서가 뒤집힌다** — `40-15`, `15-25` 같은 칸 이름이 찍히고 개수가 전부
+    #   마지막 칸으로 몰린다 (tol 15 로 돌렸다가 걸렀다, 2026-09-16).
+    #   `tol` 에 비례해 나누고 정렬해서 쓴다.
+    e = sorted({0.0} | {tol_mm * f for f in (0.25, 0.5, 0.75, 1.0, 1.5, 2.0)})
+    nm = [f"{a:.0f}-{b:.0f}" for a, b in zip(e, e[1:])] + [f"{e[-1]:.0f}+"]
+    hist(hyp, e + [1e9], nm)
     over = int((hyp > tol_mm).sum())
     print(f"     {tol_mm:.0f} mm 초과 {over}회 ({100.0 * over / len(hyp):.1f}%)"
           f"  ·  최대 {hyp.max():.1f} mm")
@@ -291,9 +294,12 @@ def sec_hist(rows, tol_pos):
     #   `tol.pos` 를 덜 줄여도 되므로 속도 상한을 안 건드린다.
     print()
     print("   [h2] 부호 있는 세로 — 편향인가 (허용오차 크기와 별개 정보)")
-    e = [-1e9, -tol_mm, -40, -20, 0, 20, 40, tol_mm, 1e9]
-    nm = [f"<-{tol_mm:.0f}", f"-{tol_mm:.0f}~-40", "-40~-20", "-20~0",
-          "0~20", "20~40", f"40~{tol_mm:.0f}", f">{tol_mm:.0f}"]
+    # [h1] 과 같은 이유로 tol 에 비례해 나눈다. 0 을 가운데 두고 대칭이다.
+    half = sorted({tol_mm * f for f in (0.25, 0.5, 0.75, 1.0)})
+    e = [-1e9] + [-x for x in reversed(half)] + [0.0] + half + [1e9]
+    nm = ([f"<{-half[-1]:.0f}"]
+          + [f"{a:.0f}~{b:.0f}" for a, b in zip(e[1:-2], e[2:-1])]
+          + [f">{half[-1]:.0f}"])
     hist(lon0, e, nm)
     _bias_verdict(lon0, tol_mm)
 
