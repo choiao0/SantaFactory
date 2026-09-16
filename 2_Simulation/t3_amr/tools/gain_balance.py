@@ -51,7 +51,10 @@ VMIN = float(os.environ.get("VMIN", "0.30"))
 YAW_TOL = math.radians(float(os.environ.get("YAW_TOL", "10")))
 K_CROSS = float(os.environ.get("K_CROSS", "1.8"))
 K_HEAD = float(os.environ.get("K_HEAD", "2.2"))
-W_MAX = float(os.environ.get("W_MAX", "2.07"))
+# ★ 1.8 이다 (`pibt_scene.py` GEOM_KW · amr_driver_v2.OMEGA_MAX). 2.07 로
+#   두면 **포화 프레임을 놓친다** — 컨트롤러는 1.8 에서 자르는데 도구는 2.07
+#   까지 안 잘라서, 실제로 포화된 구간이 「포화 0%」로 보인다.
+W_MAX = float(os.environ.get("W_MAX", "1.8"))
 REAR = float(os.environ.get("REAR_LEN", "1.110"))
 WIDTH = 0.800
 BUDGET = (PITCH - WIDTH) / 2.0 * 1000.0          # 로봇당 예산 mm
