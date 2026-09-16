@@ -218,8 +218,18 @@ class TestCoordinator:
         job = c.submit(b'{"run_id": "x", "n_robots": "two"}')
 
         assert job.done and job.result() == {"run_id": "x", "status": "failed", "error": "bad request: n_robots must be an integer in 1..64",
-                                             "verify": None, "kpi": None, "artifacts": None}
+                                             "verify": None, "kpi": None, "artifacts": None,
+                                             "source_run_id": None, "estimate_id": None}
         assert c.submit(b"garbage").result()["run_id"] is None
+
+    def test_failed_result_keeps_the_estimate_id_so_the_backend_can_route_it(self):
+        # 2026-09-16 verify_2: 거절 결과에 estimate_id 가 없어 BE 가 "estimate_id 없는 검증 결과 무시" 로 버리고 화면이 굳었다 (-235)
+        c, _, _ = self.make()
+
+        r = c.submit(b'{"run_id": "verify_2", "n_robots": "two", "estimate_id": 2, "source_run_id": "est_2_n8"}').result()
+
+        assert r["status"] == "failed" and r["estimate_id"] == 2 and r["source_run_id"] == "est_2_n8"
+        assert c.submit(b'{"run_id": "verify_3", "n_robots": 0, "estimate_id": "3"}').result()["estimate_id"] is None
 
     def test_second_submit_while_busy_raises(self):
         c, _, _ = self.make()
@@ -335,9 +345,11 @@ class TestScenario:
     def test_request_carries_scenario_and_sha_into_start(self):
         r = O.VerifyRequest.from_json(req_json(scenario=self.SCENARIO))
 
-        assert r.scenario == self.SCENARIO and r.scenario_sha256 == O.scenario_sha256(self.SCENARIO)
+        expected = O.slice_orders_to_window(self.SCENARIO, 60)          # 창으로 자른 정규형이 실린다 (-235)
+        assert expected["orders"]["outbound"] == self.SCENARIO["orders"]["outbound"] and expected["window_start_s"] == 5
+        assert r.scenario == expected and r.scenario_sha256 == O.scenario_sha256(expected)
         cmd = r.start_command()
-        assert cmd["scenario"] == self.SCENARIO and cmd["scenario_sha256"] == r.scenario_sha256
+        assert cmd["scenario"] == expected and cmd["scenario_sha256"] == r.scenario_sha256
         assert "scenario" not in O.VerifyRequest.from_json(req_json()).start_command()
 
     def test_scenario_must_be_object_and_small(self):
@@ -563,3 +575,52 @@ class TestCoordinatorFms:
         c, sent, _ = self.make()
         c.on_mqtt(self.FND, spb.encode_data(7, [(self.FST, "IDLE")]))
         assert sent[-1] == ("fms-core", [(O.REBIRTH, spb.BOOLEAN, True)])
+
+
+
+class TestWindowSlice:
+    """-235: 러너는 창만 재현한다 — 창 밖 주문은 NCMD 에 싣지 않는다. 2026-09-16 첫 버튼(하루 6,000 건 586 KB)이 상한에 걸린 원인."""
+
+    @staticmethod
+    def scen(*times, **extra):
+        return {"seed": 1, "orders": {"meta": {"n": len(times)},
+                                      "outbound": [{"order_id": i, "ordered_at_s": t, "lines": []} for i, t in enumerate(times)]},
+                **extra}
+
+    def test_keeps_orders_inside_the_window_starting_at_the_first_order(self):
+        out = O.slice_orders_to_window(self.scen(100, 400, 2000), 600)
+
+        assert [o["ordered_at_s"] for o in out["orders"]["outbound"]] == [100, 400]      # t1 = 100 + 600 + 60 = 760
+        assert out["window_start_s"] == 100 and out["orders"]["window"] == {"start_s": 100.0, "end_s": 760.0, "kept": 2, "total": 3}
+        assert out["orders"]["meta"] == {"n": 3} and out["seed"] == 1
+
+    def test_explicit_window_start_is_respected(self):
+        out = O.slice_orders_to_window(self.scen(100, 400, 2000, window_start_s=300), 600)
+
+        assert [o["ordered_at_s"] for o in out["orders"]["outbound"]] == [400] and out["window_start_s"] == 300
+
+    def test_does_not_touch_scenarios_without_a_recognisable_order_list(self):
+        plain = {"seed": 1, "blob": "x"}
+        odd = {"orders": {"outbound": [{"order_id": 1}]}}                        # ordered_at_s 없음 → 판단은 러너 몫
+
+        assert O.slice_orders_to_window(plain, 600) is plain and O.slice_orders_to_window(odd, 600) is odd
+        assert O.slice_orders_to_window(self.scen(), 600)["orders"]["window"]["kept"] == 0
+
+    def test_input_is_left_unchanged(self):
+        src = self.scen(100, 2000)
+        O.slice_orders_to_window(src, 600)
+
+        assert len(src["orders"]["outbound"]) == 2 and "window_start_s" not in src
+
+    def test_a_full_day_of_orders_passes_the_size_cap_once_sliced(self):
+        day = {"seed": 42, "orders": {"outbound": [
+            {"order_id": i, "ordered_at_s": 25200 + i * 3.6, "store_id": 1,
+             "lines": [{"product_id": 3, "qty": 2, "rack_id": "A3"}, {"product_id": 9, "qty": 1, "rack_id": "B7"}]}
+            for i in range(6000)]}}
+        assert len(O.canonical_json(day)) > O.MAX_SCENARIO_BYTES                  # 그대로면 거절되던 크기
+
+        r = O.VerifyRequest.from_json(req_json(scenario=day, window_s=600))
+
+        w = r.scenario["orders"]["window"]
+        assert w["total"] == 6000 and w["kept"] == 184 and r.scenario["window_start_s"] == 25200      # (600+60)/3.6 + 1
+        assert r.scenario_sha256 == O.scenario_sha256(r.scenario) and len(O.canonical_json(r.scenario)) < O.MAX_SCENARIO_BYTES

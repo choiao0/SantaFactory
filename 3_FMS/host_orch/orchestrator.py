@@ -32,7 +32,8 @@ SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 MAX_ROBOTS = 64
 DEFAULT_WINDOW_S = 600.0
 START_MARGIN_S = 300.0          # sim-runner 쪽 timeout_s = window + 여유(기동 + 정지)
-MAX_SCENARIO_BYTES = 512 * 1024   # sim-runner 와 같은 상한 (MQTT 패킷 1 MB 아래)
+MAX_SCENARIO_BYTES = 512 * 1024   # sim-runner 와 같은 상한 (MQTT 패킷 1 MB 아래). 창으로 자른 뒤에 잰다(-235)
+ORDER_WINDOW_MARGIN_S = 60.0      # 창 뒤 여유 — 러너의 계획 여유(t3_amr edge/recorder HORIZON_MARGIN_S)와 같다
 
 
 def iso(ts: float) -> str:
@@ -46,6 +47,28 @@ def canonical_json(obj: Any) -> bytes:
 
 def scenario_sha256(obj: Any) -> str:
     return hashlib.sha256(canonical_json(obj)).hexdigest()
+
+
+def slice_orders_to_window(scenario: dict, window_s: float) -> dict:
+    """`scenario.orders.outbound` 를 창 [t0, t0 + window_s + ORDER_WINDOW_MARGIN_S] 로 자른 **새** scenario (-235).
+
+    러너는 창만 재현하므로 하루치 주문(6,000 건 ≈ 586 KB)을 통째로 NCMD 에 실을 이유가 없다 — 2026-09-16 첫 버튼이
+    MAX_SCENARIO_BYTES 에 걸려 거절된 원인. t0 = `window_start_s`(있으면) 아니면 첫 주문 시각(SIM_VERIFY §6 ① 의
+    "저장 주문 기준"). 잘라낸 scenario 에는 `window_start_s = t0` 와 `orders.window` {start_s, end_s, kept, total} 를
+    적는다. outbound 가 없거나 형식이 다르면 손대지 않는다(러너·fms-core 가 판단). 입력은 바꾸지 않는다.
+    """
+    orders = scenario.get("orders")
+    if not isinstance(orders, dict) or not isinstance(orders.get("outbound"), list):
+        return scenario
+    outbound = orders["outbound"]
+    if not all(isinstance(o, dict) and _is_num(o.get("ordered_at_s")) for o in outbound):
+        return scenario
+    ws = scenario.get("window_start_s")
+    t0 = float(ws) if _is_num(ws) else (float(min(o["ordered_at_s"] for o in outbound)) if outbound else 0.0)
+    t1 = t0 + float(window_s) + ORDER_WINDOW_MARGIN_S
+    kept = [o for o in outbound if t0 <= o["ordered_at_s"] <= t1]
+    window = {"start_s": t0, "end_s": t1, "kept": len(kept), "total": len(outbound)}
+    return {**scenario, "window_start_s": t0, "orders": {**orders, "outbound": kept, "window": window}}
 
 
 @dataclass(frozen=True)
@@ -104,6 +127,7 @@ class VerifyRequest:
         if scenario is not None:
             if not isinstance(scenario, dict):
                 raise ValueError("scenario must be a JSON object")
+            scenario = slice_orders_to_window(scenario, float(window))
             size = len(canonical_json(scenario))
             if size > MAX_SCENARIO_BYTES:
                 raise ValueError(f"scenario too large: {size} B > {MAX_SCENARIO_BYTES}")
@@ -408,14 +432,20 @@ class Job:
 
 
 class FailedRequest:
-    """파싱 실패한 요청 — 결과 큐에 failed 로 바로 내보낸다(명세 §1-2: 실패도 정상 발행)."""
+    """파싱 실패한 요청 — 결과 큐에 failed 로 바로 내보낸다(명세 §1-2: 실패도 정상 발행).
 
-    def __init__(self, run_id: Optional[str], error: str):
+    estimate_id · source_run_id 는 본문에서 그대로 옮긴다 — 없으면 BE 가 어느 견적의 실패인지 몰라 결과를 버리고
+    화면이 "검증 중" 으로 굳는다 (2026-09-16 verify_2, -235).
+    """
+
+    def __init__(self, run_id: Optional[str], error: str, estimate_id: Optional[int] = None,
+                 source_run_id: Optional[str] = None):
         self.run_id, self.error, self.phase, self.done = run_id, error, "FAILED", True
+        self.estimate_id, self.source_run_id = estimate_id, source_run_id
 
     def result(self) -> dict:
         return {"run_id": self.run_id, "status": "failed", "error": self.error, "verify": None,
-                "kpi": None, "artifacts": None}
+                "kpi": None, "artifacts": None, "source_run_id": self.source_run_id, "estimate_id": self.estimate_id}
 
 
 class Commands:
@@ -436,11 +466,23 @@ class Busy(ValueError):
     """다른 run_id 의 잡이 진행 중 — 호출자는 요청을 들고 있다가 다시 submit 한다."""
 
 
-def run_id_of(body: Any) -> Optional[str]:
+def _raw_fields(body: Any) -> dict:
+    """파싱에 실패한 본문에서도 식별자는 건진다 — JSON 객체가 아니면 빈 dict."""
     try:
-        return _opt_str(json.loads(body).get("run_id"))
+        d = json.loads(body)
     except Exception:  # noqa: BLE001
-        return None
+        return {}
+    return d if isinstance(d, dict) else {}
+
+
+def run_id_of(body: Any) -> Optional[str]:
+    return _opt_str(_raw_fields(body).get("run_id"))
+
+
+def failed_request(body: Any, error: str) -> "FailedRequest":
+    """본문을 못 읽어도 식별자(run_id · estimate_id · source_run_id)는 건져 실패 결과에 싣는다 (-235)."""
+    raw = _raw_fields(body)
+    return FailedRequest(run_id_of(body), error, _opt_int(raw.get("estimate_id")), _opt_str(raw.get("source_run_id")))
 
 
 class Coordinator:
@@ -470,7 +512,7 @@ class Coordinator:
         try:
             req = VerifyRequest.from_json(body)
         except ValueError as e:
-            return FailedRequest(run_id_of(body), f"bad request: {e}")
+            return failed_request(body, f"bad request: {e}")
         if self.job is not None and not self.job.done:
             if self.job.req.run_id == req.run_id:
                 return self.job
