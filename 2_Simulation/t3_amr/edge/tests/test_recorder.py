@@ -55,8 +55,14 @@ class TestPureAssembly:
         e = REC.environment(c, spec(n=3), base={})
         assert e["REPLAN"] == "0" and "PIBT_SEED" not in e and "SIM_SCENARIO_PATH" not in e
 
+    def test_default_tick_matches_the_211_tick_model(self):
+        # path/metrics.tick_seconds = pitch / (v_max × MOVE_TICKS). 215 의 4/3 은 211 이전 값이라
+        # 창 300 s 에 270틱만 계획해 시뮬 ≈ 90 s 에 끝났다 (2026-09-16 컨테이너 실측: 400틱 = 시뮬 116 s)
+        assert abs(REC.DEFAULT_TICK_S - 1.2 / (0.9 * 4)) < 1e-9
+        assert REC.horizon_ticks(300.0) == 1080                     # (300+60) / 0.3333 = 1080
+
     def test_horizon_ticks_rounds_up(self):
-        assert REC.horizon_ticks(600.0, 4.0 / 3.0) == 495          # (600+60)/1.333 = 495
+        assert REC.horizon_ticks(600.0, 0.7) == 943                 # (600+60)/0.7 = 942.86 → 943
 
 
 class TestLifecycle:

@@ -25,6 +25,7 @@ stage_old/
 # --- 실행 결과 ---
 out/
 logs/
+deploy/data/           # 컨테이너 bind mount(/data): out · stage · logs · state — compose.yml
 *.mp4
 *.npz
 *.etli

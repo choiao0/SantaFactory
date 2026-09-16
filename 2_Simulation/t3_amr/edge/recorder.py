@@ -22,7 +22,16 @@ from .spec import RunSpec, canonical_json
 
 RUN_ENV_MARK = "SIM_RUN_ID"                  # 자식 환경 표식 — 데몬 재시작 때 남은 런 프로세스를 찾는다
 DEFAULT_PLANNER = "pibt_h"
-DEFAULT_TICK_S = 4.0 / 3.0                   # live_pibt 계획 틱 ≈ 1.33 s (315틱 = 420 s). T3AMR_TICK_S 로 바꾼다
+# 계획 틱 길이 — path/metrics.tick_seconds 와 같은 식:
+#   pitch / (v_max × MOVE_TICKS) = 1.2 / (0.9 × 4) ≈ 0.333 s (211 틱 모델).
+#   215 는 옛 값 4/3(315틱 = 420 s, 211 이전)을 썼다 → 창 300 s 에 270틱만 계획해
+#   시뮬 ≈ 90 s 에 "전원 완주"로 끝났다 (2026-09-16 컨테이너 실측: 400틱 = 시뮬 116 s).
+#   엣지는 numpy 없이 돌아야 해서 metrics 를 import 하지 않고 상수를 둔다.
+#   격자(PIBT_PITCH)·v_max·MOVE_TICKS 가 바뀌면 여기와 T3AMR_TICK_S(edge.py --tick-s)를 같이 본다.
+PLAN_PITCH_M = 1.2                           # live_pibt PIBT_PITCH 기본 · isaac_drive.RobotGeom.pitch
+PLAN_V_MAX_MPS = 0.9                         # isaac_drive.RobotGeom.v_max
+MOVE_TICKS = 4                               # 3_FMS/sim_engine pibt.geometry.MOVE_TICKS — 전진 1칸 = 4틱 (-211)
+DEFAULT_TICK_S = PLAN_PITCH_M / (PLAN_V_MAX_MPS * MOVE_TICKS)
 HORIZON_MARGIN_S = 60.0                      # 창보다 조금 길게 계획 — 창 끝은 host-orch Stop 이 자른다
 READY_MARKER = "캡처 ON"
 FINISHED_MARKERS = ("post_quit", "전원 완주")

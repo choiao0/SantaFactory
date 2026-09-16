@@ -20,7 +20,7 @@ import paho.mqtt.client as mqtt
 import psutil
 
 from . import spb, telemetry
-from .recorder import RUN_ENV_MARK, Recorder, RecorderConfig
+from .recorder import DEFAULT_TICK_S, RUN_ENV_MARK, Recorder, RecorderConfig
 from .runner import RUNNING, STARTING, STOPPING, Runner, RunnerConfig
 from .spb import EdgeSession
 from .upload import Uploader
@@ -223,8 +223,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--t3amr-dir", default=T3AMR_DIR, help="run_record.sh 가 있는 폴더")
     p.add_argument("--state-dir", default=DEFAULT_STATE_DIR, help="bdseq · runs/<run_id>/scenario.json · alive")
     p.add_argument("--planner", default="pibt_h")
-    p.add_argument("--tick-s", type=float, default=float(os.environ.get("T3AMR_TICK_S") or 4.0 / 3.0),
-                   help="계획 틱 길이[s] — window_s → PIBT_HORIZON 환산")
+    p.add_argument("--tick-s", type=float, default=float(os.environ.get("T3AMR_TICK_S") or DEFAULT_TICK_S),
+                   help="계획 틱 길이[s] — window_s → PIBT_HORIZON 환산. "
+                        "기본 0.333 = 1.2 m ÷ (0.9 m/s × 4틱) (recorder.DEFAULT_TICK_S)")
     p.add_argument("--heartbeat-s", type=float, default=5.0)
     p.add_argument("--ready-timeout-s", type=float, default=420.0, help="Start 뒤 첫 프레임까지 상한")
     p.add_argument("--host-offline-s", type=float, default=15.0, help="host-orch STATE offline 지속 → Stop")
