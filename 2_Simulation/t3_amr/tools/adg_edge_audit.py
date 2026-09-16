@@ -166,7 +166,40 @@ def verify(chains):
             "unreachable": bad, "acyclic": acyclic}
 
 
+def sweep_seeds(seeds, horizon):
+    """여러 시드에서 **도달 관계가 같은지** 만 본다 — 기본값을 옮기기 전 관문.
+
+    한 시드 한 호라이즌으로는 부족하다. 규칙 ② 가 만드는 모양이 시드마다
+    다르므로(칸 사용 분포가 다르다), 여러 판에서 재현돼야 상수 성질이다.
+    """
+    global SEED
+    print(f"\n══ 시드 스윕 — 호라이즌 {horizon:,} ══")
+    print(f"   {'시드':>6}{'액션':>9}{'full 간선':>12}{'slim 간선':>12}"
+          f"{'감소':>8}{'빠짐':>11}{'도달불가':>10}{'비순환':>8}")
+    ok = True
+    for sd in seeds:
+        SEED = sd
+        r = audit(horizon)
+        v = r["verify"]
+        if v is None:
+            print(f"   {sd:>6}  ★ VERIFY=0 이라 검증을 안 했다")
+            ok = False
+            continue
+        bad = len(v["unreachable"])
+        ok = ok and bad == 0 and v["acyclic"]
+        print(f"   {sd:>6}{r['actions']:>9,}{v['full']:>12,}{v['slim']:>12,}"
+              f"{(1 - v['slim'] / max(v['full'], 1)) * 100:>7.1f}%"
+              f"{v['missing']:>11,}{bad:>10}"
+              f"{'O' if v['acyclic'] else '☠ X':>8}", flush=True)
+    print(f"\n   ★ {'전 시드 통과 — 기본값을 옮길 근거가 선다' if ok else '☠ 통과 못 한 시드가 있다 — 쓰면 안 된다'}")
+    return 0 if ok else 1
+
+
 def main():
+    seeds = os.environ.get("SEEDS", "")
+    if seeds:
+        return sweep_seeds([int(v) for v in seeds.split(",")],
+                           int(os.environ.get("HORIZON", "2520")))
     ladder = [int(v) for v in
               os.environ.get("LADDER", "1260,2520,5040").split(",")]
     print(f"[adg_edge_audit] pitch {PITCH} · {N}대 · 시드 {SEED} · "
