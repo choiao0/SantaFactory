@@ -629,8 +629,20 @@ def run_lifelong(free, starts, cells_by_cat, horizon=600, seed=0, order_gap=15,
             # agent -> 태스크를 받은 틱들. `isaac_drive` 가 릴리스 바닥에 쓴다 (-211)
             "task_start": {a: list(v) for a, v in K.task_start.items()},
             "busy_robots": sum(1 for r in K.rb.values() if r["state"] != IDLE),
-            # soft 칸이 두 대에 겹쳐 한쪽을 무시한 횟수 (-211). 재기준선에서 0 인지 본다.
-            "soft_clash": getattr(K, "_soft_clash", 0)}
+            # soft 칸이 두 대에 겹쳐 한쪽을 무시한 횟수 (-224).
+            #   ★ 0 을 단언하면 안 된다 — 버그 신호가 아니라 **노출 지표**다
+            #     (겹친 채 도는 것 자체는 합법. FMS 답신 12 §1·§4 확인).
+            "soft_clash": getattr(K, "_soft_clash", 0),
+            # ★ 교착 지표 (-224). `soft_hold` 는 제약을 늘리므로 위험이 접촉이
+            #   아니라 **처리량·교착**이다. FMS 답신 12 §3: 위상 잠금은
+            #   6대·시드 42 에서 실측된 사후 기록이고, **밀도가 아니라 배치**가
+            #   정한다 — 저밀도에서도 난다. 그래서 반드시 같이 본다.
+            #   (`tools/adg_cycles.py` 로는 못 본다. 그쪽은 `run_h` 라
+            #    `lifelong` 을 안 탄다.)
+            "stag_max": max(K.stag.stag.values(), default=0),
+            "stag_mean": (sum(K.stag.stag.values()) / len(K.stag.stag)
+                          if K.stag.stag else 0.0),
+            "stag_stuck": sum(1 for v in K.stag.stag.values() if v >= 100)}
     if hasattr(K, "report"):
         info.update(K.report())
     if verbose:

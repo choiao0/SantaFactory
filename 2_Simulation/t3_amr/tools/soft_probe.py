@@ -39,6 +39,9 @@ def run(seed):
     return dict(seed=seed, ghits=len(ghits), gkinds=gkinds,
                 tasks=li.get("tasks_done"), waiting=li.get("waiting"),
                 clash=li.get("soft_clash", "-"), ticks=len(history) - 1,
+                stag_max=li.get("stag_max", "-"),
+                stag_mean=li.get("stag_mean", "-"),
+                stuck=li.get("stag_stuck", "-"),
                 hits=ghits)
 
 
@@ -46,13 +49,34 @@ def main():
     print(f"[soft_probe] pitch {PITCH} · {N}대 · {HORIZON}틱 · gap {GAP}")
     print(f"             PIBT_FRONT_RULE={os.environ.get('PIBT_FRONT_RULE', '(안 줌)')}")
     print()
-    print(f"  {'시드':>4}  {'위반':>5}  {'태스크':>6}  {'대기':>4}  {'soft_clash':>10}")
+    print(f"  {'시드':>4}  {'위반':>5}  {'태스크':>6}  {'대기':>4}"
+          f"  {'soft_clash':>10}  {'정체최대':>8}  {'정체평균':>8}  {'100틱+':>7}")
     rows = []
     for s in SEEDS:
         r = run(s)
         rows.append(r)
+        sm = r["stag_mean"]
         print(f"  {r['seed']:>4}  {r['ghits']:>5}  {r['tasks']:>6}  "
-              f"{r['waiting']:>4}  {str(r['clash']):>10}")
+              f"{r['waiting']:>4}  {str(r['clash']):>10}"
+              f"  {str(r['stag_max']):>8}"
+              f"  {sm if isinstance(sm, str) else format(sm, '.1f'):>8}"
+              f"  {str(r['stuck']):>7}")
+    print(f"  {'합/평':>4}  {sum(r['ghits'] for r in rows):>5}"
+          f"  {sum(r['tasks'] for r in rows):>6}"
+          f"  {sum(r['waiting'] for r in rows):>4}")
+    print()
+    # ★ 판정은 **둘 다** 봐야 한다 — 위반 0 만 보면 교착을 놓친다
+    #   (FMS 답신 12 §3: 위상 잠금은 6대에서도 난다).
+    bad = [r["seed"] for r in rows if r["ghits"]]
+    stuck = [r["seed"] for r in rows
+             if isinstance(r["stuck"], int) and r["stuck"]]
+    print(f"  위반 있는 시드   {bad or '없음'}")
+    print(f"  100틱+ 정체 시드 {stuck or '없음'}")
+    if not bad and not stuck:
+        print("  -> 계획 층 통과. 다음은 주행 검증이다 —")
+        print("     ★ 위반 0 은 접촉 0 을 뜻하지 않는다. soft 규칙은 물리")
+        print("       여유를 안 준다 — 합법 배치 최소 여유 41.4 mm 인데")
+        print("       회전 중 이탈 구간 최대가 74.3 mm 다 (FMS 답신 12 §2).")
     print()
     for r in rows:
         if not r["ghits"]:
