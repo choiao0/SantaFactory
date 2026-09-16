@@ -269,14 +269,24 @@ def main():
         #   뒤로 1.11 m 매달린 구조라, 무게가 뒤로 쏠리면 그 하중이 **마찰 0인
         #   캐스터**로 가고 구동 바퀴의 접지력이 그만큼 준다. 기하 중심으로
         #   가정하면 안 되는 값이라 저작값을 그대로 찍는다.
-        com = at("physics:centerOfMass")
         print(f"   mass={m}  density={d}   {pth}")
-        if com is not None:
-            print(f"      centerOfMass {fmt(com)}"
-                  + ("   ★ 저작됨" if any(abs(float(c)) > 1e-9 for c in com)
-                     else "   (0,0,0 — 기본값이거나 실제로 원점)"))
+        # ★ `(0,0,0)` 은 **저작된 값**일 수도 스키마 기본값일 수도 있다.
+        #   둘은 뜻이 정반대다 — 이 로봇은 섀시 원점이 구동축 중점이라
+        #   (`localPos0` 가 (0, ±0.28963, 0)), 저작된 (0,0,0) 이면 무게가
+        #   **전부 구동축에** 실리고, 미저작이면 PhysX 가 지오메트리에서
+        #   계산해 **뒤로 1.11 m 매달린 차체 쪽으로 쏠린다.**
+        #   `Get()` 만으로는 못 가른다. `IsAuthored()` 로 본다.
+        ca = p.GetAttribute("physics:centerOfMass")
+        if ca and ca.IsAuthored():
+            print(f"      centerOfMass {fmt(ca.Get())}   ★ **저작됨**")
+        elif ca:
+            print(f"      centerOfMass {fmt(ca.Get())}   "
+                  f"(미저작 — PhysX 가 지오메트리에서 계산한다)")
         else:
-            print(f"      centerOfMass 없음 — 지오메트리에서 추정된다")
+            print(f"      centerOfMass 속성 없음 — 지오메트리에서 계산된다")
+        ia = p.GetAttribute("physics:diagonalInertia")
+        if ia and ia.IsAuthored():
+            print(f"      diagonalInertia {fmt(ia.Get())}   ★ 저작됨")
     if not n_mass:
         print(f"   바퀴·섀시 계통에 `physics:mass`/`density` 가 없다 "
               f"— 지오메트리에서 추정된다")
@@ -289,6 +299,9 @@ def main():
     print(f"    · ★ 캐스터 마찰이 0 이면 **접지력 전부가 구동 바퀴에만** 있다.")
     print(f"      그때는 무게중심 위치가 바로 접지력이다 — 뒤로 쏠릴수록")
     print(f"      구동축 하중이 줄어 회전에서 미끄러지기 쉬워진다.")
+    print(f"    · ★ `centerOfMass` 는 **저작 여부가 값보다 중요하다.** 이 로봇은")
+    print(f"      섀시 원점이 구동축 중점이라(`localPos0` = (0, ±0.28963, 0)),")
+    print(f"      저작된 (0,0,0) = 무게가 전부 구동축 · 미저작 = 뒤로 쏠림이다.")
     print(f"    · `localPos0` 두 바퀴의 **가로 성분 차이**가 wheel_base 다.")
     print(f"      코드는 0.5796 (= 2 x 0.28963) 을 쓴다.")
     print(f"    · 반지름은 코드가 0.08 을 쓴다.")
