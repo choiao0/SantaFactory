@@ -556,7 +556,11 @@ def _rec_setup(drivers, arts):
             keys = sorted(drivers, key=str)
         rec = {"path": path, "hz": hz, "next": 0.0, "keys": keys,
                "drivers": drivers, "arts": arts,
-               "t": [], "pose": [], "alt": [], "off": False,
+               # ★ 명령 (v, w) 도 같이 남긴다 (-224). pose 만 있으면 「명령은
+               #   정상인데 안 따라왔나, 명령 자체가 이상했나」를 못 가른다.
+               #   2026-09-16 agent6 회전 교착에서 실제로 여기서 막혔다 —
+               #   궤적으로 옆미끄러짐까지는 확인했는데 명령값이 없었다.
+               "t": [], "pose": [], "alt": [], "cmd": [], "off": False,
                "flush": flush, "flush_next": flush if flush > 0 else float("inf"),
                "nflush": 0}
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
@@ -604,20 +608,30 @@ def _rec_write(rec, tag):
         t=_np.asarray(rec["t"], dtype=_np.float32),
         pose=_np.asarray(rec["pose"], dtype=_np.float32),
         pose_alt=_np.asarray(rec["alt"], dtype=_np.float32),
+        # (N, R, 2) = 그 프레임에 나간 명령 (v m/s, w rad/s). -224.
+        cmd=_np.asarray(rec["cmd"], dtype=_np.float32),
         stage=_np.array(str(rec.get("stage", ""))))
     os.replace(tmp + ".npz", rec["path"])          # savez 가 .npz 를 붙인다
     carb.log_warn(f"[pibt] 자세 기록 {tag}: {len(rec['t'])} 프레임 · "
                   f"{rec['t'][-1]:.1f} s → {rec['path']}")
 
 
-def _rec_sample(rec, t_sim):
-    """시뮬 시각 기준으로 샘플한다. 실패하면 스스로 꺼진다."""
+def _rec_sample(rec, t_sim, fleet=None):
+    """시뮬 시각 기준으로 샘플한다. 실패하면 스스로 꺼진다.
+
+    `fleet` 을 주면 그 스텝에 나간 명령 `(v, w)` 도 같이 남긴다 (-224).
+    """
     if rec is None or rec["off"] or t_sim < rec["next"]:
         return
     rec["next"] += 1.0 / rec["hz"]
     try:
         import math as _m
         row_p, row_a = [], []
+        # 붙이는 것은 아래에서 t·pose 와 **같이** 한다 — 중간에 예외가 나면
+        # 배열 길이가 어긋나고, 그러면 뒤에 읽는 도구가 조용히 틀린다.
+        last = getattr(fleet, "_last_cmd", None) or {}
+        row_c = [(float(last.get(a, (0.0, 0.0))[0]),
+                  float(last.get(a, (0.0, 0.0))[1])) for a in rec["keys"]]
         for a in rec["keys"]:
             # 1순위 — 링크 프레임. 렌더러가 쓰는 prim op 에 가장 가깝다.
             pos, quat = rec["arts"][a].get_world_pose()
@@ -632,6 +646,7 @@ def _rec_sample(rec, t_sim):
         rec["t"].append(float(t_sim))
         rec["pose"].append(row_p)
         rec["alt"].append(row_a)
+        rec["cmd"].append(row_c)
     except Exception as e:
         rec["off"] = True
         carb.log_error(f"[pibt] ★ 자세 기록 중단 (주행은 계속): {e!r}")
@@ -707,7 +722,7 @@ def _tick(f, dt):
 
     # [patch_pibt_record] 자세 기록 — 스크린샷과 같은 이유로 f.step 뒤에 둔다.
     #   스텝 수가 아니라 **시뮬 시각**으로 샘플한다 (physics dt 와 무관하게 Hz 유지).
-    _rec_sample(state.get("rec"), state["t"])
+    _rec_sample(state.get("rec"), state["t"], f)
 
     # 개루프 — 명령은 나가는데 pose 가 안 변한다. probe 를 통과했는데도 나오면
     # 주행 중에 pose 소스가 끊긴 것이다 (타임라인 정지, prim 재로드 등).

@@ -65,6 +65,12 @@ def main():
     if AGENT >= pose.shape[1]:
         raise SystemExit(f"★ agent{AGENT} 이 없습니다 (로봇 {pose.shape[1]}대)")
     x, y, yaw = pose[:, AGENT, 0], pose[:, AGENT, 1], pose[:, AGENT, 2]
+    # 명령 (v, w) — 있으면 실측과 나란히 찍는다. 없는 옛 녹화도 읽힌다.
+    cmd = None
+    if "cmd" in getattr(z, "files", []):
+        c = np.asarray(z["cmd"], dtype=np.float64)
+        if c.ndim == 3 and c.shape[0] == len(t) and AGENT < c.shape[1]:
+            cmd = c[:, AGENT, :]
 
     lo = float(os.environ.get("T0", t[0]))
     hi = float(os.environ.get("T1", t[-1]))
@@ -121,8 +127,12 @@ def main():
 
     # ── 궤적 표 ─────────────────────────────────────────────────────────
     print(f"\n── 궤적 (회전 앞뒤 포함) ──")
+    if cmd is None:
+        print("   ※ 이 녹화에는 명령 (v, w) 이 없다 — 옛 형식이다.")
     print(f"   {'t':>8}{'x':>9}{'y':>9}{'yaw':>9}"
-          f"{'속도':>9}{'각속도':>9}{'칸중심까지':>11}")
+          + (f"{'명령v':>9}{'실측v':>9}{'명령w':>9}{'실측w':>9}" if cmd is not None
+             else f"{'속도':>9}{'각속도':>9}")
+          + f"{'칸중심까지':>11}")
     span = max(1, (j - i) // 14)
     k0 = max(0, i - span * 6)
     k1 = min(len(t) - 1, j + span * 4)
@@ -134,8 +144,10 @@ def main():
         wv = wrap(yaw[k + 1] - yaw[k]) / d if d > 0 else 0.0
         mark = "  <- 회전 시작" if i <= k < i + span else (
                "  <- 회전 끝" if j <= k < j + span else "")
+        mid = (f"{cmd[k, 0]:>9.3f}{v:>9.3f}{cmd[k, 1]:>9.3f}{wv:>9.3f}"
+               if cmd is not None else f"{v:>9.3f}{wv:>9.3f}")
         print(f"   {t[k]:>8.2f}{x[k]:>9.3f}{y[k]:>9.3f}"
-              f"{math.degrees(yaw[k]):>9.1f}{v:>9.3f}{wv:>9.3f}"
+              f"{math.degrees(yaw[k]):>9.1f}{mid}"
               f"{math.hypot(cx - x[k], cy - y[k]) * 1000:>10.0f}mm{mark}")
 
     print(f"\n   읽는 법")
@@ -146,6 +158,12 @@ def main():
     print(f"      PhysX 접촉 쪽이고, `tools/axle_frame.py` 로 프레임 오차와")
     print(f"      진짜 밀림을 다시 갈라야 한다.")
     print(f"    · 표의 **속도** 열을 회전 시작 직전에서 본다. 0 이 아니면 (a) 다.")
+    if cmd is not None:
+        print(f"    · ★ 명령 v 가 0 인데 실측 v 가 0 이 아니면 **물리**다 —")
+        print(f"      명령대로 안 따라온 것이다. 명령 v 자체가 0 이 아니면")
+        print(f"      **컨트롤러**다 (회전은 v=0 만 낸다).")
+        print(f"    · 명령 w 와 실측 w 를 같이 본다. 명령이 포화(2.07)인데 실측이")
+        print(f"      한참 작으면 바퀴가 명령 속도를 못 내고 있는 것이다.")
     return 0
 
 
