@@ -161,8 +161,8 @@ class EstimateEvaluatorTest {
     }
 
     @Test
-    void recommends_the_smallest_fleet_when_no_lead_time_limit_is_set() {
-        // 같은 데이터에 상한만 없애면 4대가 답이다 — 리드타임이 대수를 올린다는 것을 뒤집어 보인다
+    void recommends_the_highest_scoring_fleet_when_no_lead_time_limit_is_set() {
+        // 같은 데이터에 상한만 없애면 점수가 가장 높은 4대가 답이다 — 리드타임이 대수를 올린다는 것을 뒤집어 보인다
         EstimateVerdict verdict = evaluator.evaluate(leadTimeRuns(), new EstimateGoal(85.0, 90.0, 10_000_000_000L, null));
 
         assertThat(verdict.recommendedCount()).isEqualTo(4);
@@ -177,12 +177,15 @@ class EstimateEvaluatorTest {
         assertThat(verdict.reasonCode()).isEqualTo(ReasonCode.LEAD_TIME_LONG);
     }
 
-    /** 처리율·가동률·예산은 4대부터 통과하고, 리드타임 p90 만 대수에 따라 줄어드는 데이터. */
+    /**
+     * 처리율·가동률·예산은 4대부터 통과하고, 리드타임 p90 만 대수에 따라 줄어드는 데이터.
+     * 효율 점수는 4대 85.5 · 6대 84.6 · 8대 83.7 로 4대가 가장 높다 — 상한이 있을 때만 답이 밀린다.
+     */
     private List<RunResult> leadTimeRuns() {
         return List.of(
                 new RunResult(4, 90.0, 95.0, costCalculator.cost(4), 900.0),
-                new RunResult(6, 92.0, 93.0, costCalculator.cost(6), 500.0),
-                new RunResult(8, 93.0, 91.0, costCalculator.cost(8), 400.0));
+                new RunResult(6, 92.0, 92.0, costCalculator.cost(6), 500.0),
+                new RunResult(8, 93.0, 90.0, costCalculator.cost(8), 400.0));
     }
 
     @Test
@@ -230,7 +233,8 @@ class EstimateEvaluatorTest {
         EstimateVerdict verdict = evaluator.evaluate(twoPoints, new EstimateGoal(20.0, 90.0, 1_000_000_000L, null));
 
         assertThat(verdict.kneeCount()).isNull();
-        assertThat(verdict.recommendedCount()).isEqualTo(2);
+        // 둘 다 조건을 만족하면 점수가 높은 쪽 — 3대 41.1 × 97.3 = 40.0 > 2대 27.6 × 98.7 = 27.2
+        assertThat(verdict.recommendedCount()).isEqualTo(3);
     }
 
     @Test

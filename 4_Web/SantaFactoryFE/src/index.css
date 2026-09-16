@@ -377,9 +377,11 @@ section.step > p.desc { font-size: 18px; line-height: 1.7; max-width: 760px; mar
 .verify-video { display: block; width: 100%; max-height: 520px; background: #000; }
 
 .paper { background: var(--white); color: var(--ink); }
+/* 위 여백은 다른 섹션의 큰 제목(section.step h2)과 같은 18px — QUOTE 만 제목이 없어
+   eyebrow 에 바로 붙으면 섹션 사이 리듬이 깨진다 */
 .q-head {
   display: flex; justify-content: space-between; align-items: flex-end;
-  border-bottom: 2px solid var(--ink); padding-bottom: 14px; margin-bottom: 22px;
+  border-bottom: 2px solid var(--ink); padding-bottom: 14px; margin: 18px 0 22px;
   gap: 14px; flex-wrap: wrap;
 }
 .q-head h3 { font: 800 28px var(--font-head); letter-spacing: -.04em; margin: 0; }

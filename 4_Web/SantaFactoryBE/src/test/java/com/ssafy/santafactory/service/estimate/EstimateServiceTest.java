@@ -337,8 +337,9 @@ class EstimateServiceTest {
 
         service().applyResult(done(sixAmr.getRunId(), 100, 95, 0.93));
 
-        // 4대가 처리율 85 % · 가동률 95 % 로 3조건을 처음 만족한다
-        assertThat(estimate.getRecommendedCount()).isEqualTo(4);
+        // 4·6대가 조건을 만족하고, 그중 효율 점수가 높은 6대가 권장이다
+        // (4대 85 × 95 = 80.8, 6대 100 × 93 = 93.0)
+        assertThat(estimate.getRecommendedCount()).isEqualTo(6);
         assertThat(estimate.getReasonCode()).isNull();
         assertThat(estimate.getStatus()).isEqualTo(EstimateStatus.DONE);
         assertThat(estimate.getCompletedAt()).isNotNull();
