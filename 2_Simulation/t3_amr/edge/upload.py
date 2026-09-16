@@ -1,7 +1,9 @@
-"""mp4 → MinIO(EC2) → 공개 URL. 클라이언트는 주입 가능(테스트). `minio` 는 여기서만, 늦게 import 한다.
+"""mp4 → MinIO(EC2) → **객체 키**. 클라이언트는 주입 가능(테스트). `minio` 는 여기서만, 늦게 import 한다.
 
-URL 규약: <PUBLIC_MEDIA_BASE>/<bucket>/<run_id>/<파일명> — nginx `/media/` 가 MinIO(9002) 로 프록시한다.
-버킷은 EC2 에서 미리 만들고 익명 읽기 정책을 준다(deploy/README.md). 없으면 여기서 만들되 정책은 못 건다.
+돌려주는 값은 URL 이 아니라 객체 키 `<bucket>/<run_id>/<파일명>` 이다 (-233). 버킷은 비공개라 키만 알아서는 못 열고,
+백엔드가 조회 시점에 읽기 전용 계정으로 서명 URL 을 만든다(3_FMS/contracts/SIM_VERIFY_CONTRACT.md §7).
+버킷과 계정은 EC2 에서 미리 만든다(deploy/README.md §3). 이 코드가 쓰는 `sim-runner` 계정은 PutObject 만 있어서
+bucket_exists(HEAD) 도 stat 도 403 이다 — 그래서 여기서는 올리기만 하고 아무것도 조회하지 않는다.
 """
 from __future__ import annotations
 
@@ -21,7 +23,6 @@ class Uploader:
     access_key: str
     secret_key: str
     bucket: str
-    public_base: str
     secure: bool = False
 
     @staticmethod
@@ -32,14 +33,14 @@ class Uploader:
         if not (endpoint and access and secret):
             return None
         return Uploader(endpoint, access, secret, e.get("MINIO_BUCKET") or "verify-videos",
-                        e.get("PUBLIC_MEDIA_BASE") or f"http://{endpoint}",
                         (e.get("MINIO_SECURE") or "0") not in ("0", "", "false", "no"))
 
     def object_name(self, run_id: str, path: str) -> str:
         return f"{run_id}/{os.path.basename(path)}"
 
-    def url(self, run_id: str, path: str) -> str:
-        return f"{self.public_base.rstrip('/')}/{self.bucket}/{self.object_name(run_id, path)}"
+    def object_key(self, run_id: str, path: str) -> str:
+        """Runner/VideoUrl 에 싣는 값. 백엔드는 이걸 `<bucket>` 과 `<키>` 로 나눠 서명한다."""
+        return f"{self.bucket}/{self.object_name(run_id, path)}"
 
     def client(self) -> Any:
         """타임아웃을 박은 MinIO 클라이언트 — 끝없이 매달리면 런이 STOPPING 에 갇힌다.
@@ -52,11 +53,11 @@ class Uploader:
                      http_client=http)
 
     def upload(self, path: str, run_id: str, client: Any = None) -> str:
-        """올리고 공개 URL 을 돌려준다. 실패는 예외로 — 호출자가 LAST_ERROR 로 바꾼다."""
+        """올리고 객체 키를 돌려준다. 실패는 예외로 — 호출자가 LAST_ERROR 로 바꾼다.
+        버킷 존재 확인·생성은 하지 않는다(쓰기 전용 계정은 HEAD 가 403).
+        버킷이 없으면 fput 이 NoSuchBucket 으로 죽는다 — 버킷은 운영이 미리 만든다."""
         if not os.path.isfile(path) or os.path.getsize(path) == 0:
             raise FileNotFoundError(f"video missing or empty: {path}")
         c = client if client is not None else self.client()
-        if not c.bucket_exists(self.bucket):
-            c.make_bucket(self.bucket)
         c.fput_object(self.bucket, self.object_name(run_id, path), path, content_type=CONTENT_TYPE)
-        return self.url(run_id, path)
+        return self.object_key(run_id, path)

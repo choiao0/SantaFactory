@@ -28,7 +28,9 @@ STATE, RUN_ID, HEARTBEAT, RTF = "Runner/State", "Runner/RunId", "Runner/Heartbea
 ISAAC, RAM, VRAM, LAST_ERROR = "Runner/IsaacInstances", "Runner/RamMB", "Runner/VramMB", "Runner/LastError"
 CMD_START, CMD_STOP = "Run Control/Start", "Run Control/Stop"
 SCENARIO_SHA = "Runner/ScenarioSha"
-VIDEO_URL = "Runner/VideoUrl"                # 신규(-215): 런이 끝나며 올린 mp4 의 공개 URL. host-orch → artifacts.video
+# (-215) 런이 끝나며 올린 mp4 를 가리킨다. 값은 URL 이 아니라 객체 키 `<bucket>/<run_id>/<파일>` 이다(-233).
+# host-orch 가 sim.verify.result.artifacts.video 로 그대로 옮긴다.
+VIDEO_URL = "Runner/VideoUrl"
 
 NODE_METRICS = {d.name: d for d in (
     MetricDef(BDSEQ, spb.INT64, 0, 0), MetricDef(REBIRTH, spb.BOOLEAN, 1, False),

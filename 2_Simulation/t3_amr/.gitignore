@@ -25,7 +25,10 @@ stage_old/
 # --- 실행 결과 ---
 out/
 logs/
-deploy/data/           # 컨테이너 bind mount(/data): out · stage · logs · state — compose.yml
+#   컨테이너 bind mount(/data): out · stage · logs · state — deploy/compose.yml. (gitignore 는 줄 안 주석을 못 쓴다 — 패턴 뒤에 # 를 붙이면 패턴의 일부가 된다)
+deploy/data/
+#   MinIO sim-runner 자격 — compose env_file (-233)
+deploy/.env
 *.mp4
 *.npz
 *.etli
