@@ -224,6 +224,12 @@ class Kernel(object):
         self.stag_peak = {a: 0 for a in starts}
         self.replan = Replanner(free, self.edge_cost, self.turn_cost)
         self.done = 0
+        # ★ 완료 **틱**을 남긴다 (-224). 총계만으로는 FMS 의 `saturated_tph`
+        #   와 못 맞댄다 — 그쪽은 포화 창 [1800 s, 10800 s) 안에서 세는데,
+        #   배정표의 도착 분포는 앞 10분과 뒤 50분이 비어 있어 6h 전체로
+        #   나누면 **낮게 나온다.** 창을 잘라 세려면 틱이 있어야 한다.
+        self.done_ticks = []
+        self._t = -1                      # step 이 매 틱 갱신한다
         self.unreachable = 0
 
         # --- 충전존 복귀 (FMS core.py:72-75). 비우면 고정 홈 = 이전 동작 ---
@@ -430,9 +436,13 @@ class Kernel(object):
             r["state"], r["goal"] = TO_DROP, r["task"]["to"]
         else:                                            # SVC_DROP → 일 끝
             self.done += 1
+            # 시그니처는 못 바꾼다 — `battery.BatteryKernel` 이 이 메서드를
+            # 오버라이드하고 `super()._service_done(a)` 로 부른다.
+            self.done_ticks.append(self._t)
             r["state"], r["task"], r["goal"] = FREED, None, None
 
     def step(self, t):
+        self._t = t                       # `_service_done` 이 완료 틱에 쓴다
         for task in self.stream.arrivals(t):
             self.waiting.append(task)
 
@@ -660,6 +670,7 @@ def run_lifelong(free, starts, cells_by_cat, horizon=600, seed=0, order_gap=15,
               if K.zone else None)
     info = {"horizon": horizon, "tasks_spawned": stream.n_task,
             "tasks_done": K.done, "waiting": len(K.waiting),
+            "done_ticks": list(K.done_ticks),
             "windows": stream.windows, "order_end": stream.order_end,
             "parked_end": parked,
             # agent -> [(배정 틱, 주문 도착 틱)]. `isaac_drive` 가 릴리스

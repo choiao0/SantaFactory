@@ -846,6 +846,11 @@ def main():
             li = info["lifelong"]
             print(f"[scene] 태스크 생성 {li['tasks_spawned']} · "
                   f"완료 {li['tasks_done']} · 대기 {li['waiting']}")
+            # ★ FMS `saturated_tph` 와 맞댈 값. 전체 horizon 으로 나눈 위
+            #   숫자는 배정표의 빈 앞머리·꼬리 때문에 낮게 나온다 (-224).
+            print(metrics.fmt_windowed(
+                metrics.windowed(li.get("done_ticks"), geom,
+                                 horizon=horizon)))
             if li.get("zone"):
                 print(f"[scene] 존 복귀 대기 {li['zone_wait_steps']}틱 · "
                       f"재선택 {li['zone_retargets']}회 · "
