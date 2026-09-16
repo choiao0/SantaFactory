@@ -11,6 +11,11 @@ import java.util.Optional;
 /**
  * 대수별 결과에서 권장 대수와 효율 감소 지점을 뽑는다.
  *
+ * <p>권장은 <b>목표·예산을 만족하는 구성 중 효율 점수(처리율 × 가동률)가 가장 높은 대수</b>다.
+ * 예전에는 "만족하는 최소 대수"였는데, 그러면 목표를 아슬아슬하게 넘긴 구성이 뽑혀 — 처리율 96.5 %
+ * 12대가 100 % 13대를 제치는 식으로 — 하루 물량의 일부가 계속 밀린다. 점수는 처리율이 오르는 구간에서
+ * 커지고 포화 뒤 가동률이 떨어지며 작아지므로, 최고점이 곧 "다 처리하면서 가장 알찬" 지점이다.
+ *
  * <p>실패한 run 은 애초에 리스트에 들어오지 않으므로 대수가 중간중간 비어 있을 수 있고,
  * 전 대수 실패면 빈 리스트가 들어온다. 둘 다 정상 입력으로 다룬다.
  *
@@ -35,13 +40,30 @@ public class EstimateEvaluator {
                 .toList();
         Integer knee = findKnee(sorted);
 
+        // 조건을 만족하는 구성 중 효율 점수가 가장 높은 대수. 같은 점수면 적은 쪽(= 싼 쪽)을 쓴다
         Optional<RunResult> recommended = sorted.stream()
                 .filter(run -> satisfies(run, goal))
-                .findFirst();
+                .max(Comparator.comparingDouble(EstimateEvaluator::efficiencyScore)
+                        .thenComparing(Comparator.comparingInt(RunResult::amrCount).reversed()));
 
         return recommended
                 .map(run -> EstimateVerdict.of(run.amrCount(), knee))
                 .orElseGet(() -> EstimateVerdict.none(reasonFor(sorted, goal), knee));
+    }
+
+    /**
+     * 효율 점수 = 처리율 × 가동률 (둘 다 %라 곱한 값도 0~100 이다).
+     *
+     * <p>대수가 적으면 처리율이 낮아 점수가 낮고, 많으면 가동률이 떨어져 다시 낮아진다 — 그래서 곡선에
+     * 봉우리가 생기고 그 지점이 "물량을 처리하면서 로봇을 놀리지 않는" 대수다. 처리율만 보면 포화한 뒤로
+     * 평평해서 어디까지 사면 되는지가 드러나지 않는다.
+     *
+     * <p>표준 지표가 아니다 — 단위가 없고, 처리율 50 × 가동률 100 과 처리율 100 × 가동률 50 이 같은 점수가
+     * 된다(앞은 물량이 안 나가는 실패 구성인데도). 그래서 <b>점수만으로 고르지 않는다</b>:
+     * {@link #satisfies} 로 목표·예산을 먼저 거른 뒤 남은 구성끼리만 비교한다.
+     */
+    private static double efficiencyScore(RunResult run) {
+        return run.throughputPercent() * run.utilizationPercent() / 100.0;
     }
 
     /** 처리율 ≥ 목표 · 가동률 ≥ 목표 · 비용 ≤ 예산 · 리드타임 p90 ≤ 상한. */
