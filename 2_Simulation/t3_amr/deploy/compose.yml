@@ -31,3 +31,4 @@ services:
     restart: unless-stopped
 volumes:
   ov-cache:
+    name: t3amr-ov-cache            # 고정 이름 — compose 프로젝트명(폴더명)에 안 묶여 단독 docker run(deploy/README §1)과 셰이더 캐시를 공유한다
