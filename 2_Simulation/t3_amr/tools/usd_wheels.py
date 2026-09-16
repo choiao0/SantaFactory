@@ -17,6 +17,13 @@
     바퀴 조인트            localPos0 / localPos1 · 회전축 · 부모/자식
     바퀴 지오메트리        반지름 (Cylinder) 또는 bbox 로 추정
     prim 스케일            xformOp:scale — 걸려 있으면 저작값 != 실제
+    ★ 물리 재질            staticFriction · dynamicFriction · 무엇에 묶였나
+    ★ 질량                 physics:mass / density
+
+마지막 둘은 2026-09-16 에 붙였다. Isaac 공식 트러블슈팅이 「바퀴 마찰이 너무
+적으면 미끄러짐이 생긴다」고 적고 있고, MIR100 이 90도 명령에 10도만 돈 사례가
+**PhysicsMaterial 이 아예 없던** 경우였다. 우리 a6 접지 상실(1/89)을 볼 때
+제일 먼저 확인할 자리다.
 
 무대(`$STAGE/pibt12.usd`)를 주면 **스폰된 로봇 12대를 각각** 본다. 로봇 사이에
 차이가 있는지가 그때 보인다. 에셋(`$ROBOT`)을 주면 원본 하나만 본다.
@@ -191,7 +198,81 @@ def main():
         print(f"   ※ 이름에 Inner/Rim 이 들어간 것은 안쪽 부품일 수 있다 —")
         print(f"     가장 **큰** 반지름이 접지면이다.")
 
+    # ── ★ 물리 재질과 질량 ───────────────────────────────────────────────
+    #   Isaac 공식 트러블슈팅이 「마찰이 너무 적으면 바퀴 미끄러짐이 생긴다」고
+    #   적고 있고, MIR100 이 90도 명령에 10도만 돈 사례는 PhysicsMaterial 이
+    #   **아예 없던** 경우였다. 없으면 기본값으로 도는데 그 값이 낮으면
+    #   경계에서 미끄러진다. 질량도 같은 갈래다 — 가벼우면 접지가 준다.
+    print(f"\n── 물리 재질 (physics:*Friction 을 가진 prim) ──")
+    mats = []
+    for p in stage.Traverse():
+        vals = {}
+        for a in p.GetAttributes():
+            n = a.GetName()
+            if n.startswith("physics:") and (
+                    "Friction" in n or "restitution" in n.lower()):
+                vals[n.split(":")[-1]] = a.Get()
+        if vals:
+            mats.append((p.GetPath().pathString, vals))
+    if not mats:
+        print(f"   ☠ **하나도 없다** — 스테이지에 물리 재질이 안 잡혀 있다.")
+        print(f"     Isaac 기본값으로 도는데, 그게 낮으면 회전에서 미끄러진다.")
+        print(f"     (MIR100 이 90도 명령에 10도만 돈 사례가 이 상태였다.)")
+    else:
+        for pth, v in mats[:20]:
+            print(f"   {v}")
+            print(f"      {pth}")
+
+    print(f"\n── 바퀴·섀시가 어느 재질에 묶였나 ──")
+    try:
+        from pxr import UsdShade
+        bound = {}
+        for p in stage.Traverse():
+            pth = p.GetPath().pathString
+            if not any(k in pth.lower() for k in PART_KEYS):
+                continue
+            try:
+                m, _rel = UsdShade.MaterialBindingAPI(p).ComputeBoundMaterial(
+                    materialPurpose="physics")
+            except Exception:
+                continue
+            if m and m.GetPrim().IsValid():
+                key = m.GetPrim().GetPath().pathString
+                bound.setdefault(key, []).append(pth)
+        if bound:
+            for mat, users in list(bound.items())[:10]:
+                print(f"   {mat}")
+                for u in users[:3]:
+                    print(f"      <- {u}")
+                if len(users) > 3:
+                    print(f"      <- … 외 {len(users) - 3}개")
+        else:
+            print(f"   ☠ **묶인 것이 없다** — 바퀴에 물리 재질이 안 붙어 있다.")
+    except ImportError:
+        print(f"   (UsdShade 를 못 불러와 확인 못 함)")
+
+    print(f"\n── 질량 ──")
+    n_mass = 0
+    for p in stage.Traverse():
+        pth = p.GetPath().pathString
+        if not any(k in pth.lower() for k in PART_KEYS):
+            continue
+        m = p.GetAttribute("physics:mass").Get() if p.HasAttribute("physics:mass") else None
+        d = p.GetAttribute("physics:density").Get() if p.HasAttribute("physics:density") else None
+        if m is None and d is None:
+            continue
+        n_mass += 1
+        if n_mass <= 10:
+            print(f"   mass={m}  density={d}   {pth}")
+    if not n_mass:
+        print(f"   바퀴·섀시 계통에 `physics:mass`/`density` 가 없다 "
+              f"— 지오메트리에서 추정된다")
+
     print(f"\n   읽는 법")
+    print(f"    · 재질이 **없으면** 그것부터다. 있으면 `staticFriction` ·")
+    print(f"      `dynamicFriction` 값을 본다 — 낮으면 회전에서 미끄러진다.")
+    print(f"    · 마찰은 **쌍의 성질**이다. 바퀴만 보지 말고 바닥")
+    print(f"      (`/World/Warehouse/ground`) 쪽도 같이 봐야 한다.")
     print(f"    · `localPos0` 두 바퀴의 **가로 성분 차이**가 wheel_base 다.")
     print(f"      코드는 0.5796 (= 2 x 0.28963) 을 쓴다.")
     print(f"    · 반지름은 코드가 0.08 을 쓴다.")
