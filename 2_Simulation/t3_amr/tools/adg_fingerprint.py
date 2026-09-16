@@ -39,7 +39,10 @@ MODE = os.environ.get("MODE", "lifelong")        # lifelong | oneshot
 #   둘 다 안 바꾸면 이 도구가 **4배 짧은 구간**의 지문을 뜨게 된다.
 HORIZON = int(os.environ.get("HORIZON", "1260"))
 GAP = int(os.environ.get("GAP", "60"))
-OUT = os.path.join(os.environ["W"], "tools", "adg_fingerprint.json")
+# 기준 파일. 설정이 다르면 **다른 파일**에 떠야 한다 — 4칸 켠 기준과 끈 기준은
+# 간선 수가 달라 한 파일에 못 담는다 (-224).
+OUT = os.environ.get("FP_OUT") or os.path.join(
+    os.environ["W"], "tools", "adg_fingerprint.json")
 
 
 def _sha(items) -> str:
@@ -119,7 +122,18 @@ def _save(meta):
     with open(OUT, "w", encoding="utf-8") as f:
         json.dump(meta, f, ensure_ascii=False, indent=1, sort_keys=True)
     print(f"\n기준 저장: {OUT}")
-    print("★ 이 파일은 **코드를 고치기 전** 상태다. 커밋해 둘 것.")
+    print(f"★ 지금 **설정도 같이 저장됐다** — slim={os.environ.get('PIBT_ADG_SLIM', '1')} · "
+          f"front_rule={os.environ.get('PIBT_FRONT_RULE', '') or '(꺼짐)'}")
+    print("  기준은 「코드를 고치기 전」이 아니라 **이 설정에서의 값**이다.")
+    print("  `git diff` 로 무엇이 달라졌는지 보고 커밋할 것.")
+    if not os.environ.get("PIBT_FRONT_RULE"):
+        print("\n  ※ 4칸 규칙이 꺼져 있어 `guard` 가 전부 비고, 그러면 ADG")
+        print("    규칙 ② 가 한 번도 안 돈다 — `PIBT_ADG_SLIM` 이 이 기준선에")
+        print("    **영향을 줄 수 없다.** slim 을 지키려면 4칸을 켠 기준이 따로")
+        print("    필요하다:")
+        print("      PIBT_FRONT_RULE=4 PIBT_PITCH=1.0 \\")
+        print("        FP_OUT=$W/tools/adg_fingerprint_front4.json \\")
+        print("        python tools/adg_fingerprint.py --save")
     return EXIT_OK
 
 
