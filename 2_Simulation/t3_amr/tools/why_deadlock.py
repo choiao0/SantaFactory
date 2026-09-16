@@ -70,9 +70,19 @@ def main():
     cells = geom.swept_cells(frm, to)
     rest = frozenset(occupied(to))
     released = cells - rest
+    # 4칸 규칙이 내놓는 앞 칸. `soft = guard & cells` 가 실제 soft 다.
+    try:
+        guard = geom.front_cells(frm, to)
+    except Exception as e:
+        guard = frozenset()
+        print(f"   (front_cells 실패: {e!r})")
+    soft = guard & cells
     print(f"\n── 칸 ──")
     print(f"   스윕 cells   {sorted(cells)}")
     print(f"   끝 자세 rest {sorted(rest)}")
+    print(f"   4칸 guard    {sorted(guard)}"
+          + (f"   (스윕 밖 {sorted(guard - cells)})" if guard - cells else ""))
+    print(f"   soft         {sorted(soft)}   <- 코만 스치는 칸")
     print(f"   ★ released  {sorted(released)}   <- 이 칸들이 비어야 끝난다")
 
     body = geom.footprint_cells(px, py, pyaw)
@@ -88,6 +98,27 @@ def main():
         print(f"     축을 {sorted(hit)} 밖으로 되돌릴 수단이 없다.")
     else:
         print(f"   complete() 가 참이어야 한다 — 다른 원인을 봐야 한다.")
+
+    # ── ★ soft 를 빼면 풀리나 (복구 대책 후보) ───────────────────────────
+    #   soft 의 정의가 「상대의 **축**만 금지, 몸은 와도 된다」이므로, 몸이
+    #   남아 있어도 놓아주는 것이 규칙 자체와 일관된다. `released` 만 지금
+    #   `cells` 전체를 보고 있어 soft 칸까지 기다린다.
+    slim_rel = released - soft
+    slim_hit = body & slim_rel
+    print(f"\n── 후보 — `released` 에서 soft 를 빼면 ──")
+    print(f"   released - soft = {sorted(slim_rel) or '없음'}")
+    print(f"   실측 몸과 교집합 = {sorted(slim_hit) or '없음'}")
+    if hit and not slim_hit:
+        print(f"   ★ **이 교착은 안 났다.** 막은 칸 {sorted(hit)} 이 전부 soft 다.")
+        print(f"     (코만 스치는 칸을 몸이 빠질 때까지 기다린 것이다)")
+    elif hit and slim_hit:
+        print(f"   여전히 막힌다 — {sorted(slim_hit)} 은 soft 가 아니다.")
+        print(f"     이 대책만으로는 안 풀린다.")
+
+    print(f"\n   ※ 안전 논거는 따로 세워야 한다. soft 칸은 규칙상 상대의 **몸**이")
+    print(f"     들어올 수 있으므로 일찍 놓아줘도 규칙과 모순은 없다. 다만 4칸의")
+    print(f"     여유(41.4 mm)는 **이상적 자세** 기준이고, 여기서는 축이 밀린")
+    print(f"     상태다. 그 조합을 재 봐야 한다.")
 
     # ── 얼마나 밀리면 못 끝내는가 ─────────────────────────────────────────
     print(f"\n── 여유 — 끝 자세에서 축이 얼마나 밀려도 되나 ──")
