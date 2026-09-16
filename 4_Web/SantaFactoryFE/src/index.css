@@ -542,6 +542,13 @@ footer a:hover { color: #fff; }
 .signup-page .login-title { font-size: clamp(40px, 6.4vw, 76px); margin: 10px 0 22px; }
 .signup-page .login-form { gap: 12px; }
 .signup-page .login-form input { padding: 10px 14px; font-size: 17px; }
+.verify-row { display: flex; gap: 8px; align-items: stretch; }
+.verify-row input { flex: 1; min-width: 0; }
+.verify-row input[readonly] { color: #8f8f8b; border-style: dashed; }
+.verify-button {
+  flex: none; margin-top: 8px; padding: 0 14px; border-radius: 4px;
+  font: 600 14px var(--font-head); white-space: nowrap;
+}
 .signup-page .tabs { margin-bottom: 4px; }
 .signup-page .tab { padding: 11px; }
 
