@@ -62,6 +62,73 @@ def fmt(v):
         return str(v)
 
 
+def load_split(stage, mpu):
+    """★ 하중이 구동축과 캐스터에 어떻게 갈리나 — **도구가 계산한다.**
+
+    손으로 더하다 두 번 틀렸다 (2026-09-16). 그리고 무대에는 원본 에셋에 없는
+    것이 붙는다 — **적재 선반**(`chassis/shelf`)이 그렇다. 섀시 밑에 달리므로
+    무게중심을 뒤로 끌 수 있고, 캐스터가 무마찰이라 그 하중은 **접지력이 되지
+    않는다.** 그래서 선반 유무로 구동축 하중이 달라진다.
+
+    섀시 좌표에서 잰다 — 조인트 `localPos0` 가 섀시 기준이고, 구동축이 섀시
+    원점(x=0), 캐스터가 x=-0.65 다. 로봇이 무대에서 돌아가 있어도 상관없다.
+    """
+    root = None
+    for p in stage.Traverse():
+        if p.GetName() == "chassis":
+            root = p
+            break
+    if root is None:
+        print(f"\n── 하중 배분 ──\n   `chassis` prim 을 못 찾았다")
+        return
+    print(f"\n── ★ 하중 배분 ({root.GetPath().pathString}) ──")
+
+    inv = UsdGeom.Xformable(root).ComputeLocalToWorldTransform(
+        Usd.TimeCode.Default()).GetInverse()
+    items = []
+    for p in Usd.PrimRange(root):
+        a = p.GetAttribute("physics:mass")
+        m = float(a.Get()) if a and a.Get() else 0.0
+        if m <= 0.0:
+            continue
+        xf = UsdGeom.Xformable(p).ComputeLocalToWorldTransform(
+            Usd.TimeCode.Default()) * inv
+        pos = xf.ExtractTranslation()
+        ca = p.GetAttribute("physics:centerOfMass")
+        if ca and ca.IsAuthored():
+            c = ca.Get()
+            pos = pos + xf.TransformDir(Gf.Vec3d(*[float(v) for v in c]))
+        items.append((p.GetName(), m, float(pos[0]) * mpu))
+
+    if not items:
+        print(f"   `physics:mass` 를 가진 강체가 없다")
+        return
+    tot = sum(m for _n, m, _x in items)
+    cx = sum(m * x for _n, m, x in items) / tot
+    print(f"   {'강체':<22}{'질량 kg':>9}{'섀시 x (m)':>13}")
+    for n, m, x in sorted(items, key=lambda r: -r[1]):
+        mark = "   ← 원본 에셋에 없다" if "shelf" in n.lower() or "tab" in n.lower() else ""
+        print(f"   {n:<22}{m:>9.2f}{x:>13.3f}{mark}")
+    print(f"   {'합':<22}{tot:>9.2f}{cx:>13.3f}   ← 전체 무게중심")
+
+    # 구동축 x=0, 캐스터 x=CASTER_X. 지렛대로 갈린다.
+    cx_caster = float(os.environ.get("CASTER_X", "-0.65"))
+    if abs(cx_caster) < 1e-9:
+        return
+    f_caster = max(0.0, min(1.0, cx / cx_caster))
+    print(f"\n   구동축 x=0 · 캐스터 x={cx_caster}")
+    print(f"   캐스터 하중 {tot * f_caster:6.2f} kg ({f_caster * 100:.1f} %)"
+          f"   ← 마찰 0 이라 **접지력이 안 된다**")
+    print(f"   구동축 하중 {tot * (1 - f_caster):6.2f} kg "
+          f"({(1 - f_caster) * 100:.1f} %)")
+    mu = float(os.environ.get("MU", "0.9"))
+    print(f"   구동 바퀴 접지력 ~ {mu} x {tot * (1 - f_caster):.1f} x 9.81 = "
+          f"{mu * tot * (1 - f_caster) * 9.81:.0f} N   (mu={mu})")
+    if f_caster > 0.3:
+        print(f"   ★ 무게가 뒤로 쏠려 있다 — 캐스터가 무마찰이면 그만큼")
+        print(f"     접지력을 잃는다. 선반·적재물이 원인인지 위 표에서 볼 것.")
+
+
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith("-")]
     if not args:
@@ -251,7 +318,9 @@ def main():
     except ImportError:
         print(f"   (UsdShade 를 못 불러와 확인 못 함)")
 
-    print(f"\n── 질량 ──")
+    load_split(stage, mpu)
+
+    print(f"\n── 질량 (개별) ──")
     n_mass = 0
     for p in stage.Traverse():
         pth = p.GetPath().pathString
@@ -263,7 +332,7 @@ def main():
         if m is None and d is None:
             continue
         n_mass += 1
-        if n_mass > 10:
+        if n_mass > int(os.environ.get("MASS_MAX", "40")):
             continue
         # ★ 무게중심이 하중 배분을 정한다. 이 로봇은 구동축이 **앞**이고 차체가
         #   뒤로 1.11 m 매달린 구조라, 무게가 뒤로 쏠리면 그 하중이 **마찰 0인
