@@ -11,6 +11,8 @@ import com.ssafy.santafactory.dto.simulation.SimulationRequest;
 import com.ssafy.santafactory.dto.simulation.SimulationResponse;
 import com.ssafy.santafactory.dto.simulation.VerifyRequest;
 import com.ssafy.santafactory.dto.simulation.VerifyResultResponse;
+import com.ssafy.santafactory.dto.warehouse.WarehouseResponse;
+import com.ssafy.santafactory.service.estimate.quote.QuoteSource;
 import com.ssafy.santafactory.entity.estimate.Estimate;
 import com.ssafy.santafactory.entity.estimate.RunStatus;
 import com.ssafy.santafactory.entity.estimate.VerifySnapshot;
@@ -242,6 +244,15 @@ public class EstimateService {
                 .orElseThrow(() -> new GlobalException(ErrorCode.ESTIMATE_NOT_FOUND));
         ownershipGuard.checkEstimate(estimate, me);
         return toDetail(estimate);
+    }
+
+    /** 견적서 재료 — 상세 응답과 창고를 한 트랜잭션에서 읽는다 (S15P21A106-236). 소유권 확인은 상세 조회와 같다. */
+    @Transactional(readOnly = true)
+    public QuoteSource quoteSource(Long estimateId, AuthenticatedMember me) {
+        Estimate estimate = estimateRepository.findById(estimateId)
+                .orElseThrow(() -> new GlobalException(ErrorCode.ESTIMATE_NOT_FOUND));
+        ownershipGuard.checkEstimate(estimate, me);
+        return new QuoteSource(toDetail(estimate), WarehouseResponse.from(estimate.getWarehouse()));
     }
 
     private EstimateDetailResponse toDetail(Estimate estimate) {
