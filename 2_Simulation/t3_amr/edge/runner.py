@@ -13,7 +13,7 @@ from concurrent.futures import Executor, Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any
 
-from . import spb, telemetry
+from . import gpu, spb, telemetry
 from .recorder import Recorder
 from .spb import EdgeSession, MetricDef
 from .spec import RunSpec
@@ -55,9 +55,12 @@ class Runner:
     def __init__(self, cfg: RunnerConfig, session: EdgeSession, recorder_factory: Callable[[], Recorder],
                  publisher: Any, uploader: Uploader | None = None,
                  ram_mb: Callable = telemetry.ram_mb, vram_mb: Callable = telemetry.vram_mb,
-                 executor: Executor | None = None):
+                 executor: Executor | None = None, gpu_probe: Callable[[], str | None] = gpu.probe,
+                 on_gpu_lost: Callable[[], None] | None = None):
         self.cfg, self.session, self.recorder_factory, self.pub = cfg, session, recorder_factory, publisher
         self.uploader, self.ram_mb, self.vram_mb = uploader, ram_mb, vram_mb
+        # Start 직전 GPU 프로브(-241). 실패면 Kit 을 띄우지 않고 ERROR 보고 → on_gpu_lost (edge 는 프로세스를 내린다)
+        self.gpu_probe, self.on_gpu_lost = gpu_probe, on_gpu_lost
         # 업로드는 워커 스레드에서 — tick() 은 Edge 의 락을 쥐고 도니 여기서 기다리면
         # paho 스레드(Stop 재전송·keepalive)가 막힌다
         self.executor = executor or ThreadPoolExecutor(max_workers=1, thread_name_prefix="t3amr-upload")
@@ -145,6 +148,13 @@ class Runner:
         self._begin(spec, now)
 
     def _begin(self, spec: RunSpec, now: float) -> None:
+        gpu_err = self.gpu_probe()
+        if gpu_err is not None:
+            log.error("run %s: GPU unavailable — %s (처방은 컨테이너 재시작, deploy/README.md)", spec.run_id, gpu_err)
+            self._set_state(ERROR, {LAST_ERROR: f"gpu unavailable: {gpu_err}", RUN_ID: ""})
+            if self.on_gpu_lost is not None:
+                self.on_gpu_lost()
+            return
         self.spec, self.rec, self.started_at, self.final_state = spec, self.recorder_factory(), now, IDLE
         try:
             self.rec.start(spec, now)
@@ -229,9 +239,16 @@ class Runner:
             self._set_state(IDLE, {**extra, VIDEO_URL: f"file://{path}"})
             return
         log.info("run %s: uploading %s", self.spec.run_id, path)
-        self._upload = self.executor.submit(self.uploader.upload, path, self.spec.run_id)
+        self._upload = self.executor.submit(self._upload_then_tidy, path, self.spec.run_id, self.rec)
         if self._upload.done():            # 동기 executor(테스트)면 같은 틱에 끝난다
             self._finish_upload()
+
+    def _upload_then_tidy(self, path: str, run_id: str, rec: Recorder) -> str:
+        """워커 스레드: 업로드가 되면 프레임 PNG 를 지운다(런당 1.6~2.6 GB, -241). 실패 런의 것은 진단용으로 남는다."""
+        url = self.uploader.upload(path, run_id)
+        n = rec.remove_frames()
+        log.info("run %s: uploaded → %s · removed %d frame file(s)", run_id, url, n)
+        return url
 
     def _finish_upload(self) -> None:
         """업로드 결과 → URL 과 함께 IDLE, 실패면 ERROR. 어느 쪽이든 그 NDATA 하나로 host-orch 가 런을 닫는다."""

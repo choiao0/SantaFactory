@@ -50,6 +50,7 @@ class FakeRecorder:
         self.finished = False
         self.video = None
         self.exits_after_stop = True
+        self.frames_removed = False
 
     def start(self, spec, now):
         if self.launch_error:
@@ -84,6 +85,10 @@ class FakeRecorder:
 
     def isaac_count(self):
         return 1 if self._alive else 0
+
+    def remove_frames(self):
+        self.frames_removed = True
+        return 3
 
     def die(self):
         self._alive = False
@@ -154,9 +159,15 @@ class Harness:
         self.rec = FakeRecorder()
         self.uploader = uploader if uploader is not None else FakeUploader()
         self.telemetry = {"ram": 100, "vram": 2000}
+        self.gpu_error = None           # 문자열이면 Start 직전 GPU 프로브가 그 사유로 실패한다 (-241)
+        self.gpu_lost = 0               # on_gpu_lost 호출 횟수
         self.runner = R.Runner(R.RunnerConfig(**cfg), self.session, lambda: self.rec, self.pub, self.uploader,
                                ram_mb=lambda pids: self.telemetry["ram"], vram_mb=lambda: self.telemetry["vram"],
-                               executor=executor if executor is not None else ImmediateExecutor())
+                               executor=executor if executor is not None else ImmediateExecutor(),
+                               gpu_probe=lambda: self.gpu_error, on_gpu_lost=self._on_gpu_lost)
+
+    def _on_gpu_lost(self):
+        self.gpu_lost += 1
 
     def connect(self, now=0.0):
         self.runner.on_connected(now)

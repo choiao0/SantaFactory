@@ -31,6 +31,7 @@ T3AMR_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))     # ed
 DEFAULT_STATE_DIR = os.environ.get("T3AMR_STATE") or os.path.expanduser("~/.local/state/t3amr_edge")
 KEEPALIVE_S = 60          # MQTT_CONTRACT §0: sim-runner 60 s
 TICK_S = 0.5
+EXIT_GPU_LOST = 3                 # GPU 프로브 실패로 스스로 내려간 종료 코드 (-241)
 SHUTDOWN_GRACE_S = 300.0  # 종료 신호 뒤 런 정리(SIGINT → 조립 → 업로드) 상한
 VRAM_PERIOD_S = 5.0
 NODE_SUBSCRIPTIONS = (("NCMD", 0),)                       # ACL: NCMD/<node>
@@ -84,6 +85,7 @@ class Edge:
         self._runner: Runner | None = None          # build() 가 붙인다
         self.lock = threading.RLock()
         self.stop_event = threading.Event()
+        self.exit_code = 0
         self.vram_cache: int | None = None
         self._vram_t = -VRAM_PERIOD_S
         self.client = client if client is not None else mqtt.Client(
@@ -119,6 +121,13 @@ class Edge:
 
     def cached_vram(self) -> int | None:
         return self.vram_cache
+
+    def on_gpu_lost(self) -> None:
+        """Start 직전 GPU 프로브 실패(-241): 루프를 내려 NDEATH 를 발행하고 EXIT_GPU_LOST 로 끝낸다.
+        compose `restart: unless-stopped` 가 다시 띄우면 nvidia 훅이 /dev/nvidia* 를 다시 넣는다."""
+        log.error("GPU lost — shutting down so the container restarts with its devices re-injected")
+        self.exit_code = EXIT_GPU_LOST
+        self.stop_event.set()
 
     def sample_vram(self, now: float, sample: Callable = telemetry.vram_mb) -> None:
         if now - self._vram_t < VRAM_PERIOD_S:
@@ -252,7 +261,8 @@ def build(args: argparse.Namespace) -> tuple:
     cfg = RunnerConfig(args.group, args.node_id, args.heartbeat_s, args.ready_timeout_s, args.host_offline_s)
     os.makedirs(args.state_dir, exist_ok=True)
     edge = Edge(args.node_id, args.node_id, password, session, os.path.join(args.state_dir, "alive"))
-    edge.runner = Runner(cfg, session, lambda: Recorder(rec_cfg), edge, uploader, vram_mb=edge.cached_vram)
+    edge.runner = Runner(cfg, session, lambda: Recorder(rec_cfg), edge, uploader, vram_mb=edge.cached_vram,
+                         on_gpu_lost=edge.on_gpu_lost)
     return edge, host, port
 
 
@@ -268,7 +278,7 @@ def main(argv: list | None = None) -> int:
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, lambda *_: edge.stop_event.set())
     edge.run(host, port)
-    return 0
+    return edge.exit_code
 
 
 if __name__ == "__main__":
