@@ -153,6 +153,8 @@ services:
       # 템플릿은 서버에서 전부 채워 보내므로 스크립트가 필요 없다. 끄면 렌더가 결정적이고 가볍다
       - --chromium-disable-javascript=true
     mem_limit: 512m
+    ports:
+      - "127.0.0.1:3001:3000"      # 로컬에서 백엔드를 Docker 밖(gradle)에서 띄울 때만 쓴다(3000 은 frontend 가 쓴다). 외부 노출 아님
     healthcheck:
       test: ["CMD", "curl", "--silent", "--fail", "http://localhost:3000/health"]
       interval: 10s

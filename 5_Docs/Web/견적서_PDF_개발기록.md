@@ -37,7 +37,7 @@
 | 파일 | 역할 |
 |---|---|
 | `4_Web/pdf/Dockerfile`, `4_Web/pdf/fonts/PretendardVariable.ttf` | `gotenberg/gotenberg:8` + 한글 폰트(가변 TTF 6.7 MB, SIL OFL). `fc-cache` 로 등록 |
-| `4_Web/docker-compose.yml` `pdf` 서비스 | `mem_limit: 512m`, `--api-timeout=60s --chromium-max-queue-size=2 --chromium-disable-javascript=true`, healthcheck. 외부 포트 없음. backend 가 `depends_on` |
+| `4_Web/docker-compose.yml` `pdf` 서비스 | `mem_limit: 512m`, `--api-timeout=60s --chromium-max-queue-size=2 --chromium-disable-javascript=true`, healthcheck. 호스트 바인딩은 `127.0.0.1:3001`(로컬에서 백엔드를 gradle 로 띄울 때용, 3000 은 frontend 컨테이너가 쓴다). backend 가 `depends_on` |
 | `Jenkinsfile` | `$COMPOSE build backend pdf`, `4_Web/pdf/` 변경도 BE 빌드 트리거 |
 | `service/estimate/quote/QuotePdfProperties` | `pdf.base-url`(비면 503), `pdf.timeout`(30s), `pdf.site-url`(문서 안 링크) |
 | `service/estimate/quote/QuoteSource` | 상세 응답 + `WarehouseResponse`. `EstimateService.quoteSource()` 가 한 트랜잭션에서 만든다 |
@@ -90,13 +90,13 @@
 
 | 키 | 기본 | 비고 |
 |---|---|---|
-| `pdf.base-url` ← `PDF_BASE_URL` | 빈 값 | compose 는 `http://pdf:3000`. 비면 견적서 API 가 503 |
+| `pdf.base-url` ← `PDF_BASE_URL` | 빈 값 | compose 는 `http://pdf:3000`(컨테이너 간). 로컬 gradle 실행은 `http://localhost:3001`. 비면 견적서 API 가 503 |
 | `pdf.timeout` | 30s | 변환기 응답 대기이자 세마포어 대기 상한 |
 | `pdf.site-url` ← `APP_PUBLIC_URL` | `http://localhost:5173` | compose 기본 `https://j15a106.p.ssafy.io` |
 | `estimate.verify-compare.*` | 0.10 / 0.01 | 05 비교 판정 기준. 조회 시 계산이라 과거 견적에도 즉시 적용 |
 | `mail.enabled` 등 | 기존 | 꺼져 있으면 첨부 메일도 로그만 |
 
-로컬에서 보기: `docker compose -f 4_Web/docker-compose.yml up -d pdf` 뒤 백엔드에 `PDF_BASE_URL=http://localhost:3000`. 렌더된 HTML 만 보려면 `./gradlew test --tests '*QuoteTemplateTest'` 가 `build/quote-preview.html` 을 남긴다.
+로컬에서 보기: `docker compose -f 4_Web/docker-compose.yml up -d pdf` 뒤 백엔드에 `PDF_BASE_URL=http://localhost:3001`. 렌더된 HTML 만 보려면 `./gradlew test --tests '*QuoteTemplateTest'` 가 `build/quote-preview.html` 을 남긴다.
 
 ## 6. 검증한 것
 
