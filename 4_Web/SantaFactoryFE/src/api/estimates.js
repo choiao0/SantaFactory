@@ -39,6 +39,16 @@ export function requestVerify(estimateId) {
   return api.post(`/estimates/${estimateId}/verify`)
 }
 
+/** 견적서 PDF 를 받아 저장한다. 계산이 끝난 견적만 가능(409), 변환기가 없으면 503. */
+export function downloadQuotePdf(estimateId) {
+  return api.download(`/estimates/${estimateId}/quote.pdf`)
+}
+
+/** 로그인 계정 이메일로 견적서 PDF 를 보낸다. 202 면 뒤에서 발송 중. */
+export function emailQuote(estimateId) {
+  return api.post(`/estimates/${estimateId}/quote/email`)
+}
+
 export function openEstimateStream(estimateId, { onSnapshot, onRun, onDone, onError }) {
   const source = new EventSource(streamUrl(`/estimates/${estimateId}`))
   const parse = (event) => JSON.parse(event.data)

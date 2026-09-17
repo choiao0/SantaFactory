@@ -1,3 +1,5 @@
+import { useState } from 'react'
+import { downloadQuotePdf, emailQuote } from '../api/estimates.js'
 import { formatDateTime, formatEok, formatPercent, formatWon } from '../utils/format.js'
 
 const MONO = 'DM Mono, Pretendard Variable, Pretendard, monospace'
@@ -233,6 +235,53 @@ function Placeholder({ estimateId, estimate }) {
   )
 }
 
+/**
+ * 견적서 PDF 저장·메일 전송 (S15P21A106-236). 둘 다 백엔드가 만든 같은 문서다 — 저장은 파일로 받고,
+ * 메일은 로그인 계정 이메일로 간다. 계산이 끝나기 전엔 서버가 409 를 주므로 버튼을 막아 둔다.
+ */
+function QuoteActions({ estimateId, finished }) {
+  const [busy, setBusy] = useState(null) // null | 'pdf' | 'mail'
+  const [message, setMessage] = useState(null)
+
+  const run = async (kind, action, doneText) => {
+    setBusy(kind)
+    setMessage(null)
+    try {
+      await action()
+      setMessage({ ok: true, text: doneText })
+    } catch (e) {
+      setMessage({ ok: false, text: e.message ?? '요청에 실패했습니다.' })
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  return (
+    <div className="printrow">
+      <button
+        type="button"
+        className="button"
+        disabled={!finished || busy !== null}
+        onClick={() => run('pdf', () => downloadQuotePdf(estimateId), '견적서를 저장했습니다.')}
+      >
+        {busy === 'pdf' ? '견적서 만드는 중…' : '견적서 PDF 저장 ↗'}
+      </button>
+      <button
+        type="button"
+        className="ghost"
+        disabled={!finished || busy !== null}
+        onClick={() => run('mail', () => emailQuote(estimateId), '가입한 이메일로 견적서를 보냈습니다. 잠시 후 메일함을 확인하세요.')}
+      >
+        {busy === 'mail' ? '보내는 중…' : '메일로 받기'}
+      </button>
+      <a className="ghost" href="#s1">조건 바꿔 다시 요청</a>
+      {message && (
+        <span className="mono" style={{ fontSize: 13, color: message.ok ? '#1c7c4f' : '#b51616' }}>{message.text}</span>
+      )}
+    </div>
+  )
+}
+
 export default function QuoteStep({ estimateId, estimate, verdict }) {
   const ready = Boolean(estimate && verdict)
   const runs = estimate?.runs ?? []
@@ -394,10 +443,7 @@ export default function QuoteStep({ estimateId, estimate, verdict }) {
             </div>
           </div>
 
-          <div className="printrow">
-            <button type="button" className="button">견적서 PDF 저장 ↗</button>
-            <a className="ghost" href="#s1">조건 바꿔 다시 요청</a>
-          </div>
+          <QuoteActions estimateId={estimateId} finished={verdict.status === 'DONE' || verdict.status === 'PARTIAL'} />
         </>
       )}
     </section>

@@ -87,6 +87,54 @@ def plan_seconds(horizon, geom):
     return horizon * tick_seconds(geom)
 
 
+# FMS 「시나리오 재현 절차」(2026-09-16) §7-4 의 포화 창. 초 단위로 둔다 —
+# 틱으로 박으면 틱 모델이 바뀔 때 조용히 다른 구간을 잰다.
+SATURATED_WINDOW_S = (1800.0, 10800.0)
+
+
+def windowed(done_ticks, geom, window_s=SATURATED_WINDOW_S, horizon=None):
+    """**창 안 완료**로 낸 처리량. FMS `saturated_tph` 와 맞대는 값이다.
+
+    왜 따로 필요한가
+    ----------------
+    `throughput` 은 `horizon` 전체로 나눈다. 그런데 배정표의 도착 분포는
+    앞 10분과 뒤 50분이 거의 비어 있어(답신 21 §4), 6h 전체로 나누면
+    **낮게 나온다.** 창이 다르면 숫자가 비교 불능이라, 창을 명시한 값을
+    따로 낸다.
+
+    `done_ticks` 는 `lifelong` 의 `info["done_ticks"]` 다. 없으면 None.
+    """
+    if done_ticks is None:
+        return None
+    ts = tick_seconds(geom)
+    lo, hi = window_s
+    lo_t, hi_t = round(lo / ts), round(hi / ts)
+    if horizon is not None and horizon < hi_t:
+        # 창이 판보다 길면 **그 창이 아니다.** 조용히 잘라 쓰면 다른 구간을
+        # 같은 이름으로 부르게 된다.
+        return {"window_s": (lo, hi), "covered": False,
+                "horizon_tick": int(horizon), "need_tick": int(hi_t)}
+    n = sum(1 for t in done_ticks if lo_t <= t < hi_t)
+    span_h = (hi - lo) / 3600.0
+    return {"window_s": (lo, hi), "covered": True,
+            "window_tick": (int(lo_t), int(hi_t)),
+            "done_in_window": int(n),
+            "tasks_per_h": round(n / span_h, 1) if span_h > 0 else 0.0}
+
+
+def fmt_windowed(w):
+    if w is None:
+        return "[포화창] done_ticks 가 없다 — 옛 판이다"
+    lo, hi = w["window_s"]
+    if not w["covered"]:
+        return (f"[포화창] 판이 짧아 못 잰다 — 창 {lo:.0f}~{hi:.0f}s "
+                f"= {w['need_tick']:,}틱 필요, horizon {w['horizon_tick']:,}틱")
+    a, b = w["window_tick"]
+    return (f"[포화창] {lo:.0f}~{hi:.0f}s (틱 {a:,}~{b:,}) 완료 "
+            f"{w['done_in_window']:,}개 = **{w['tasks_per_h']} tasks/h** "
+            f"(FMS saturated_tph 와 같은 창)")
+
+
 def throughput(tasks_done, horizon, geom, makespan=None,
                stretch=STRETCH_MEASURED, kind="critical_path"):
     """FMS 와 같은 단위(`tasks_per_h`)로 환산한 처리량 딕셔너리.

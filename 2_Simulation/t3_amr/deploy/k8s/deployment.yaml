@@ -24,6 +24,7 @@ spec:
           env:
             - { name: NODE_ID, value: "sim-runner-gpu01" }
             - { name: NVIDIA_DRIVER_CAPABILITIES, value: "all" }
+            - { name: SHOT_STRIDE, value: "10" }     # 5배속 (compose 와 같게, -241)
           envFrom:
             - secretRef: { name: t3amr-runner-env }
           resources:

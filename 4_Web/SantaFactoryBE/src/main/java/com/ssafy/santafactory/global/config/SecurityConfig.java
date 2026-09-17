@@ -47,6 +47,7 @@ public class SecurityConfig {
      */
     private static final String[] PUBLIC = {
             "/api/auth/signup", "/api/auth/login", "/api/auth/refresh", "/api/auth/logout",
+            "/api/auth/email/**",   // 가입 전 이메일 인증 — 아직 회원이 아니다
             "/swagger-ui/**", "/v3/api-docs/**",
             "/", "/index.html", "/assets/**", "/favicon.ico",
     };

@@ -13,6 +13,9 @@ spring:
     listener:
       simple:
         auto-startup: false
+  # JavaMailSender 빈을 만들어 두어 운영과 같은 빈 구성이 되게 한다. 보내지는 않는다(mail.enabled 기본 false)
+  mail:
+    host: localhost
 
 # 이 파일이 main 의 application.yml 을 클래스패스에서 가려버리므로, 테스트에서 필요한 값은
 # 여기 다시 적어야 한다. 단가가 비면 perUnitCost() 가 0 이 되어 예산 기반 대수 산정을 건너뛰고

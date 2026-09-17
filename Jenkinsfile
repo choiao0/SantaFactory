@@ -62,7 +62,8 @@ pipeline {
                     def changedList = changedFiles.trim() ? changedFiles.trim().tokenize('\n') : []
 
                     env.BUILD_BE = (fullBuild || common ||
-                        paths.contains('\n4_Web/SantaFactoryBE/')) ? 'true' : 'false'
+                        paths.contains('\n4_Web/SantaFactoryBE/') ||
+                        paths.contains('\n4_Web/pdf/')) ? 'true' : 'false'
                     env.BUILD_FE = (fullBuild || common ||
                         paths.contains('\n4_Web/SantaFactoryFE/')) ? 'true' : 'false'
                     env.BUILD_FMS = (fullBuild || common ||
@@ -90,7 +91,7 @@ pipeline {
                 withCredentials([file(credentialsId: 'app-env', variable: 'APP_ENV_FILE')]) {
                     sh '''
                         cp -f "$APP_ENV_FILE" 4_Web/.env
-                        $COMPOSE build backend
+                        $COMPOSE build backend pdf
                         docker tag santafactory-be:latest santafactory-be:$BUILD_NUMBER
                         $COMPOSE up -d backend
                     '''

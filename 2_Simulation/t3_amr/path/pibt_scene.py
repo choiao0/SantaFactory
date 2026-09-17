@@ -772,6 +772,30 @@ def main():
                          "치운 로봇이 충전존으로 복귀한다. "
                          "1 이하면 horizon 비율(예: 0.7), 1 초과면 틱 수. "
                          "생략하면 horizon 끝까지 주문이 들어온다(이전 동작)")
+    # ★ **환경변수로 켜지지 않는다** (2026-09-17 정정).
+    #
+    #   처음에는 `default=os.environ.get("ASSIGN")` 이었다. 그런데 주행은
+    #   계획을 파일에서 읽지 않고 `live_pibt.py` 가 **in-process 로 다시
+    #   세운다.** 그쪽은 `ASSIGN` 도 `--orders` 도 안 본다. 그래서 `ASSIGN`
+    #   이 셸에 남아 있으면
+    #
+    #       main.py plan -> pibt_scene   ASSIGN 을 주워 배정표로 계획
+    #       live_pibt                    난수 스트림으로 주행
+    #
+    #   **계획과 주행이 다른 주문으로 돈다 — 오류도 경고도 없이.**
+    #   `fms_stream.py` 의 자체 점검이 `ASSIGN` 을 쓰라고 안내하므로 같은
+    #   셸에서 이어 돌리면 바로 밟는다.
+    #
+    #   배정표로 **주행**까지 하려면 `live_pibt.py` 에도 같은 스위치를 심어
+    #   둘이 어긋날 수 없게 만들어야 한다. 그 전까지는 명시 인자만 받는다.
+    ap.add_argument("--orders",
+                    help="FMS 배정표 CSV (`packing_assign_s*.csv`). 주면 주문을 "
+                         "난수로 만들지 않고 **그 파일 그대로** 읽는다 — 언제 · "
+                         "어느 버퍼 · 어느 포장대가 FMS 와 같아진다. "
+                         "`--seed`·`--order-gap` 은 주문에 안 쓰인다. "
+                         "★ 계획 전용이다. 주행(live_pibt)은 이 파일을 안 읽고 "
+                         "다시 계획하므로, 이걸로 주행까지 바꾸려 하면 둘이 "
+                         "갈린다")
     args = ap.parse_args()
 
     map_dir = os.path.abspath(args.map)
@@ -810,11 +834,23 @@ def main():
                 oe = int(round(horizon * oe)) if oe <= 1.0 else int(round(oe))
                 print(f"[scene] 업무 종료 {oe}틱 / horizon {horizon}틱 "
                       f"— 남은 {horizon - oe}틱은 복귀 시간")
+            # ★ FMS 배정표를 주면 주문을 난수로 만들지 않는다. 태스크 생성이
+            #   비트 단위로 같아져야 배차·주행 차이만 남는다.
+            fstream = None
+            if args.orders:
+                from fms_stream import FileOrderStream
+                fstream = FileOrderStream(args.orders, geom, free, args.map,
+                                          horizon, order_end=oe)
+                bad = fstream.verify()
+                if bad:
+                    print(f"[scene] ★ 스테이션 인덱스가 밀린 데 {len(bad)}곳 — "
+                          f"{bad[:3]}")
             adg, order, history, info = plan_and_build_lifelong(
                 free, starts, goals, geom, horizon=horizon, seed=args.seed,
                 order_gap=args.order_gap, battery=args.battery,
                 dispatch=args.dispatch, zone_cells=zone, order_end=oe,
-                docks=charge_docks(free, geom) if args.battery else ())
+                docks=charge_docks(free, geom) if args.battery else (),
+                **({"stream": fstream} if fstream is not None else {}))
         else:
             from isaac_drive import plan_and_build
             adg, order, history, info = plan_and_build(free, starts, goals, geom,
@@ -828,6 +864,11 @@ def main():
             li = info["lifelong"]
             print(f"[scene] 태스크 생성 {li['tasks_spawned']} · "
                   f"완료 {li['tasks_done']} · 대기 {li['waiting']}")
+            # ★ FMS `saturated_tph` 와 맞댈 값. 전체 horizon 으로 나눈 위
+            #   숫자는 배정표의 빈 앞머리·꼬리 때문에 낮게 나온다 (-224).
+            print(metrics.fmt_windowed(
+                metrics.windowed(li.get("done_ticks"), geom,
+                                 horizon=horizon)))
             if li.get("zone"):
                 print(f"[scene] 존 복귀 대기 {li['zone_wait_steps']}틱 · "
                       f"재선택 {li['zone_retargets']}회 · "

@@ -20,12 +20,18 @@ public enum ErrorCode {
     WAREHOUSE_NOT_FOUND(HttpStatus.NOT_FOUND, "EST404_1", "요청한 창고를 찾을 수 없습니다."),
     ESTIMATE_NOT_FOUND(HttpStatus.NOT_FOUND, "EST404_2", "요청한 견적을 찾을 수 없습니다."),
     ESTIMATE_NOT_VERIFIABLE(HttpStatus.CONFLICT, "EST409_1", "권장 대수가 없어 물리 검증을 시작할 수 없습니다."),
+    ESTIMATE_NOT_FINISHED(HttpStatus.CONFLICT, "EST409_2", "견적 계산이 끝난 뒤에 견적서를 만들 수 있습니다."),
+    QUOTE_PDF_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "PDF503", "견적서 변환기에 연결할 수 없습니다. 잠시 후 다시 시도해 주세요."),
 
     // Auth
     UNAUTHORIZED(HttpStatus.UNAUTHORIZED, "AUTH401_1", "로그인이 필요합니다."),
     INVALID_CREDENTIALS(HttpStatus.UNAUTHORIZED, "AUTH401_2", "이메일 또는 비밀번호가 올바르지 않습니다."),
     REFRESH_TOKEN_INVALID(HttpStatus.UNAUTHORIZED, "AUTH401_3", "다시 로그인해 주세요."),
     EMAIL_ALREADY_USED(HttpStatus.CONFLICT, "AUTH409_1", "이미 사용 중인 이메일입니다."),
+    EMAIL_CODE_INVALID(HttpStatus.BAD_REQUEST, "AUTH400_1", "인증 코드가 올바르지 않습니다."),
+    EMAIL_NOT_VERIFIED(HttpStatus.FORBIDDEN, "AUTH403_1", "이메일 인증을 먼저 완료해 주세요."),
+    EMAIL_CODE_EXPIRED(HttpStatus.GONE, "AUTH410_1", "인증 코드가 만료되었습니다. 다시 요청해 주세요."),
+    EMAIL_SEND_TOO_OFTEN(HttpStatus.TOO_MANY_REQUESTS, "AUTH429_1", "잠시 후 다시 요청해 주세요."),
     ;
 
     private final HttpStatus httpStatus;

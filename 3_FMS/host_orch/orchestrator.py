@@ -488,8 +488,12 @@ def failed_request(body: Any, error: str) -> "FailedRequest":
 class Coordinator:
     """tracker + 현재 잡 하나 (prefetch 1). MQTT 스레드와 AMQP 루프가 같은 락으로 부른다.
 
-    재전달(채널 단절 뒤 RabbitMQ 가 unacked 를 다시 줌)에 멱등: 진행 중인 같은 run_id 는 그 잡을, 이미 끝난 run_id(최근 50개)는
+    재전달(채널 단절 뒤 RabbitMQ 가 unacked 를 다시 줌)에 멱등: 진행 중인 같은 run_id 는 그 잡을, **done 으로 끝난** run_id(최근 50개)는
     끝난 잡을 돌려줘 결과만 다시 발행한다 — GPU 런을 두 번 돌리지 않는다.
+
+    failed 로 끝난 run_id 는 다시 돌린다(-241). BE 는 run_id 를 견적 id 로 고정하므로, 실패한 견적의 재검증 요청이 여기서
+    옛 실패 결과로 되돌아오면 host-orch 를 재시작하는 것 말고는 길이 없었다 (2026-09-17 verify_7 09:08 실측). 재전달로
+    실패 런이 한 번 더 도는 경우는 어차피 결과가 필요한 상황이라 받아들인다.
     """
     RECENT_MAX = 50
 
@@ -517,8 +521,9 @@ class Coordinator:
             if self.job.req.run_id == req.run_id:
                 return self.job
             raise Busy(f"busy with {self.job.req.run_id}")
-        if req.run_id in self.recent:
-            return self.recent[req.run_id]
+        prior = self.recent.get(req.run_id)
+        if prior is not None and prior.phase == "DONE":
+            return prior                                   # 결과만 재발행. FAILED 는 아래로 — 새 런 (-241)
         self.job = Job(req, self.node_id, self.cfg, self.clock(), self.fms_node_id)
         self.recent[req.run_id] = self.job
         while len(self.recent) > self.RECENT_MAX:

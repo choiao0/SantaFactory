@@ -15,7 +15,7 @@ export class ApiError extends Error {
  * `/auth/refresh` 에 걸면 무한 루프가 되고, 로그인·가입 실패는 토큰이 없어서가 아니라
  * 자격 증명이 틀려서라 갱신해봐야 결과가 같다.
  */
-const NO_REFRESH = ['/auth/login', '/auth/signup', '/auth/refresh', '/auth/logout']
+const NO_REFRESH = ['/auth/login', '/auth/signup', '/auth/refresh', '/auth/logout', '/auth/email']
 
 let refreshing = null
 let onSessionLost = () => {}
@@ -88,6 +88,45 @@ function refreshSession() {
 export const api = {
   get: (path) => request(path),
   post: (path, body) => request(path, { method: 'POST', body }),
+  download: (path) => download(path),
+}
+
+/**
+ * 파일 응답(PDF 등)을 받아 저장까지 한다. 실패 응답은 JSON 이라 위 request 와 같은 규칙으로 에러를 만든다.
+ * 401 은 한 번 갱신 뒤 재시도 — 견적서 버튼은 보통 화면을 오래 열어 둔 뒤 누르기 때문이다.
+ */
+async function download(path, allowRefresh = true) {
+  const response = await fetch(`${BASE_URL}${path}`, { credentials: 'same-origin' })
+
+  if (response.status === 401 && allowRefresh && (await refreshSession())) {
+    return download(path, false)
+  }
+  if (!response.ok) {
+    let payload = null
+    try {
+      payload = await response.json()
+    } catch {
+      payload = null
+    }
+    if (response.status === 401) onSessionLost()
+    throw new ApiError(payload?.code ?? `HTTP${response.status}`, payload?.message ?? response.statusText, response.status, payload?.result)
+  }
+
+  const blob = await response.blob()
+  const disposition = response.headers.get('Content-Disposition') ?? ''
+  const encoded = /filename\*=UTF-8''([^;]+)/i.exec(disposition)?.[1]
+  const plain = /filename="?([^";]+)"?/i.exec(disposition)?.[1]
+  const filename = encoded ? decodeURIComponent(encoded) : (plain ?? 'download')
+
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = filename
+  document.body.appendChild(anchor)
+  anchor.click()
+  anchor.remove()
+  URL.revokeObjectURL(url)
+  return filename
 }
 
 export function streamUrl(path) {

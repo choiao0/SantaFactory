@@ -12,6 +12,7 @@ from __future__ import annotations
 import glob
 import math
 import os
+import shutil
 import signal
 import subprocess
 from collections.abc import Callable
@@ -121,6 +122,15 @@ class Recorder:
     def video_path(self) -> str | None:
         p = os.path.join(self.cfg.out_dir, f"demo_{self.tag()}.mp4")
         return p if self.spec and os.path.isfile(p) and os.path.getsize(p) > 0 else None
+
+    def remove_frames(self) -> int:
+        """shots_<TAG>/ 를 통째로 지운다 — mp4 가 올라간 뒤에만 부른다(-241). 지운 파일 수를 돌려주고, 없으면 0."""
+        d = self.shots_dir()
+        if not self.spec or not os.path.isdir(d):
+            return 0
+        n = sum(len(files) for _, _, files in os.walk(d))
+        shutil.rmtree(d, ignore_errors=True)
+        return n
 
     def write_scenario(self, spec: RunSpec) -> str | None:
         if spec.scenario is None:

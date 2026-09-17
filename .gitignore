@@ -6,6 +6,7 @@ __pycache__/
 4_Web/SantaFactoryBE/.env
 3_FMS/infra/.env
 3_FMS/infra/.env.estimate
+3_FMS/infra/firewall/allow.env
 
 server-setup/
 

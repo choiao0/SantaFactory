@@ -67,8 +67,12 @@ def edge(tmp_path):
     session = spb.EdgeSession(str(tmp_path / "bdseq"))
     e = E.Edge("sim-runner-gpu01", "sim-runner-gpu01", "pw", session, str(tmp_path / "alive"), client=FakeMqttClient())
     e.rec = FakeRecorder()
+    # 문자열이면 Start 직전 GPU 프로브가 실패한다 (-241).
+    # CI 이미지(python:slim)엔 nvidia-smi 가 없으니 기본 프로브를 쓰면 안 된다.
+    e.gpu_error = None
     e.runner = R.Runner(R.RunnerConfig(heartbeat_s=5.0), session, lambda: e.rec, e, FakeUploader(),
-                        ram_mb=lambda pids: 1, vram_mb=lambda: 1, executor=ImmediateExecutor())
+                        ram_mb=lambda pids: 1, vram_mb=lambda: 1, executor=ImmediateExecutor(),
+                        gpu_probe=lambda: e.gpu_error, on_gpu_lost=e.on_gpu_lost)
     return e
 
 
@@ -125,6 +129,14 @@ class TestRunAndShutdown:
         assert c.connected == ("broker", 1883, E.KEEPALIVE_S) and c.loop == "stopped" and c.disconnected
         assert c.kinds()[-1] == "NDEATH"
         assert spb.metrics_by_name(c.published[-1][1])["bdSeq"] == edge.session.bd_seq
+
+    def test_gpu_lost_on_start_stops_the_loop_with_exit_code_3(self, edge):
+        edge._on_connect(edge.client, None, None, 0)
+        edge.gpu_error = "nvidia-smi rc=255: Failed to initialize NVML: Unknown Error"
+        edge._on_message(edge.client, None, Msg("spBv1.0/santa/NCMD/sim-runner-gpu01",
+                                                ncmd(**{R.CMD_START: start_payload()})))
+        assert edge.runner.state == R.ERROR and not edge.rec.started
+        assert edge.stop_event.is_set() and edge.exit_code == E.EXIT_GPU_LOST
 
     def test_shutdown_while_running_stops_the_run_first(self, edge, monkeypatch):
         edge._on_connect(edge.client, None, None, 0)

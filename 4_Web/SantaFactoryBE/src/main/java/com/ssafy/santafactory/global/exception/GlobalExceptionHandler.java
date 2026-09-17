@@ -9,6 +9,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -55,6 +56,18 @@ public class GlobalExceptionHandler {
                 ));
         ErrorCode ec = ErrorCode.VALIDATION_ERROR;
         writeError(response, ec.getHttpStatus(), ApiResponse.onFailure(ec.getCode(), ec.getMessage(), errors));
+    }
+
+    /**
+     * 요청 본문을 읽을 수 없다 — JSON 문법 오류, 깨진 UTF-8, 타입이 맞지 않는 값, 본문 없음. 검증 이전 단계라
+     * {@link MethodArgumentNotValidException} 로는 안 잡히고, 두면 500 으로 떨어져 클라이언트 잘못이 서버
+     * 장애로 보인다. 원인은 로그로만 남긴다 — 예외 메시지에 파서 내부 경로가 섞여 그대로 내보낼 게 아니다.
+     */
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public void handleUnreadableBody(HttpMessageNotReadableException e, HttpServletResponse response) throws IOException {
+        log.warn("읽을 수 없는 요청 본문: {}", e.getMostSpecificCause().getMessage());
+        ErrorCode ec = ErrorCode.VALIDATION_ERROR;
+        writeError(response, ec.getHttpStatus(), ApiResponse.onFailure(ec.getCode(), "요청 본문을 읽을 수 없습니다.", null));
     }
 
     /** @Validated 파라미터/경로변수 검증 실패 */

@@ -7,9 +7,19 @@ import { api } from './client.js'
  * JS 가 읽지도 쓰지도 못한다. 로그인 여부는 저장해 둔 값이 아니라 `me()` 로 확인한다.
  */
 
-/** 가입. 역할은 보내지 않는다 — 서버가 항상 USER 로 만든다. */
-export function signUp({ email, password, name, company, phone }) {
-  return api.post('/auth/signup', { email, password, name, company, phone })
+/** 가입 인증 코드 발송. 같은 이메일은 60초에 한 번(429). 이미 가입된 이메일은 409. */
+export function sendEmailCode(email) {
+  return api.post('/auth/email/code', { email })
+}
+
+/** 코드 확인. 맞으면 `{ email_token }` — 가입에 실어 보낸다. 5회 틀리면 코드부터 다시. */
+export function verifyEmailCode(email, code) {
+  return api.post('/auth/email/verify', { email, code })
+}
+
+/** 가입. 역할은 보내지 않는다 — 서버가 항상 USER 로 만든다. emailToken 은 코드 확인이 준 값이다. */
+export function signUp({ email, password, name, company, phone, emailToken }) {
+  return api.post('/auth/signup', { email, password, name, company, phone, email_token: emailToken })
 }
 
 /** 로그인. 응답 본문은 회원 정보고, 토큰은 Set-Cookie 로만 온다. */

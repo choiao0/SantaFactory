@@ -6,6 +6,7 @@ import com.ssafy.santafactory.entity.estimate.Estimate;
 import com.ssafy.santafactory.entity.estimate.EstimateStatus;
 import com.ssafy.santafactory.entity.estimate.ReasonCode;
 import com.ssafy.santafactory.entity.estimate.RunStatus;
+import com.ssafy.santafactory.entity.simulation.RunKpiDetail;
 import com.ssafy.santafactory.entity.simulation.SimScenario;
 
 import java.time.LocalDateTime;
@@ -35,7 +36,9 @@ public record EstimateDetailResponse(
         LocalDateTime completedAt,
         Long elapsedSeconds,
         String verifyVideoUrl,
-        List<Run> runs
+        List<Run> runs,
+        /** 물리 검증 결과와 계산 대비 (S15P21A106-236). 검증 전이면 null. */
+        Verification verification
 ) {
 
     /** 대수 1개 = 표의 한 행. */
@@ -54,7 +57,9 @@ public record EstimateDetailResponse(
              * 설명하는 유일한 지표라 화면에 내보낸다 — 처리율이 포화한 뒤에도 이 값은 계속 짧아진다.
              */
             Double leadTimeP90,
-            String error
+            String error,
+            /** 판정 밖 상세 지표 (S15P21A106-236). 시뮬이 하나도 안 줬거나 옛 run 이면 null. */
+            RunKpi kpi
     ) {
 
         public static Run from(SimScenario scenario) {
@@ -67,11 +72,60 @@ public record EstimateDetailResponse(
                     scenario.getOutbound(),
                     scenario.getTotalCost(),
                     scenario.getLeadTimeP90(),
-                    scenario.getError());
+                    scenario.getError(),
+                    RunKpi.from(scenario.getKpiDetail()));
         }
     }
 
-    public static EstimateDetailResponse of(Estimate estimate, List<SimScenario> runs, String verifyVideoUrl) {
+    /** 명세 §1-2 kpi 의 키 이름·단위(초·m·0~1 비율) 그대로. */
+    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
+    public record RunKpi(
+            Integer ordersTotal,
+            Integer ordersCompleted,
+            Double leadTimeMeanS,
+            Double queueTimeMeanS,
+            Double throughputOrdersPerH,
+            Double conflictWaitRatio,
+            Long distanceTotalM
+    ) {
+
+        public static RunKpi from(RunKpiDetail detail) {
+            if (detail == null) {
+                return null;
+            }
+            return new RunKpi(detail.getOrdersTotal(), detail.getOrdersCompleted(), detail.getLeadTimeMeanS(),
+                    detail.getQueueTimeMeanS(), detail.getThroughputOrdersPerH(), detail.getConflictWaitRatio(),
+                    detail.getDistanceTotalM());
+        }
+    }
+
+    /**
+     * 물리 검증 결과 — 정상 종료 여부와, 권장 대수의 계산 결과 대비 피크 10분 창의 차이.
+     * {@code comparison} 은 notice 가 비교를 허용할 때만 있고, 각 Metric 의 {@code diff} 는 검증 − 예상(지표 단위 그대로)이다.
+     */
+    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
+    public record Verification(
+            String status,
+            VerifyNoticeCode notice,
+            Integer nRobots,
+            Integer robotsOnline,
+            Integer windowS,
+            String error,
+            LocalDateTime verifiedAt,
+            Comparison comparison
+    ) {
+
+        @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
+        public record Comparison(Metric throughputOrdersPerH, Metric leadTimeP90S, Metric conflictWaitRatio) {
+        }
+
+        @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
+        public record Metric(Double expected, Double verified, Double diff) {
+        }
+    }
+
+    public static EstimateDetailResponse of(Estimate estimate, List<SimScenario> runs, String verifyVideoUrl,
+                                            Verification verification) {
         return new EstimateDetailResponse(
                 estimate.getId(),
                 estimate.getStatus(),
@@ -86,6 +140,7 @@ public record EstimateDetailResponse(
                 estimate.getCompletedAt(),
                 estimate.elapsedSeconds(),
                 verifyVideoUrl,
-                runs.stream().map(Run::from).toList());
+                runs.stream().map(Run::from).toList(),
+                verification);
     }
 }
