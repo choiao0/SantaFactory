@@ -49,7 +49,7 @@ args = ap.parse_args()
 from isaacsim import SimulationApp
 simulation_app = SimulationApp({"headless": True})
 import omni.usd
-from pxr import Usd, UsdGeom, UsdPhysics, UsdLux, UsdShade, Sdf, Gf
+from pxr import Usd, UsdGeom, UsdPhysics, UsdLux, Sdf, Gf
 
 WHEEL_R = 0.081        # 확정값(에셋 저작 0.08). 로봇을 바닥에 앉히는 z 오프셋
 
@@ -121,6 +121,9 @@ print("[s] GroundPlane 생성 (무한 평면 콜라이더, z=0)", flush=True)
 #       GROUND_FRICTION=0.9,0.7      정적 0.9 · 동적 0.7
 _gf = os.environ.get("GROUND_FRICTION", "").strip()
 if _gf:
+    # ★ 최상단이 아니라 여기서 import 한다. 기본 경로는 이 모듈을 안 쓰는데
+    #   위에 두면 import 하나가 **모든 주행**을 죽인다. 이 파일은 주행 경로다.
+    from pxr import UsdShade
     _v = [float(x) for x in _gf.split(",")]
     _static, _dynamic = _v[0], (_v[1] if len(_v) > 1 else _v[0])
     _m = UsdShade.Material.Define(st, "/World/PhysicsMaterials/Ground")

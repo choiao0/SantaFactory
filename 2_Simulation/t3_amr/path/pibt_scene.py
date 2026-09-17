@@ -778,12 +778,21 @@ def main():
     #   돌았다 (주행은 `live_pibt` 가 다시 계획한다). 실제로 그 함정에 걸렸다.
     #   이제 환경변수 경로는 `FMS_ASSIGN` 하나이고 `run_lifelong` 이 읽는다 —
     #   계획과 주행이 같은 문을 지나므로 갈릴 자리가 없다.
+    #
+    #   ★ 단 **이 인자 자체는 계획에만 걸린다.** 여기서 만든 스트림은
+    #     `plan_and_build_lifelong(stream=…)` 으로 들어가는데, 주행은
+    #     (`live_pibt` -> 같은 함수) 스트림을 안 넘기므로 `FMS_ASSIGN` 을 본다.
+    #     그래서 `--orders` 만 주고 `FMS_ASSIGN` 을 안 주면 **계획과 주행이
+    #     다른 주문으로 돈다 — 오류도 경고도 없이.** 배정표로 주행까지 하려면
+    #     `FMS_ASSIGN` 을 쓴다. (224 의 옛 주석이 경고하던 자리다)
     ap.add_argument("--orders", default=None,
                     help="FMS 배정표 CSV (`packing_assign_s*.csv`). 주면 주문을 "
                          "난수로 만들지 않고 **그 파일 그대로** 읽는다 — 언제 · "
                          "어느 버퍼 · 어느 포장대가 FMS 와 같아진다. "
                          "`--seed`·`--order-gap` 은 주문에 안 쓰인다. "
-                         "환경변수 ASSIGN 으로도 준다")
+                         "★ 계획 전용이다. 주행(live_pibt)은 이 파일을 안 읽고 "
+                         "다시 계획하므로, 이걸로 주행까지 바꾸려 하면 둘이 "
+                         "갈린다")
     args = ap.parse_args()
 
     map_dir = os.path.abspath(args.map)
