@@ -91,6 +91,22 @@ if [ "$PIBT_N" -lt 1 ] 2>/dev/null; then
 fi
 export PIBT_N
 
+# ★ 격자·규칙을 **계획보다 먼저** 정한다 (2026-09-17, S15P21A106-224).
+#
+#   예전에는 이 두 줄이 187행쯤, 즉 REPLAN 계획 블록(105행) **뒤에** 있었다.
+#   그래서 `REPLAN=1 bash run_record.sh` 가
+#
+#       계획   pibt_h.PITCH 기본값 1.2 로 선다 (PIBT_PITCH 가 아직 없다)
+#       주행   PIBT_PITCH=1.0
+#
+#   로 갈렸다. 충전존 시작 슬롯이 pitch 에서 나오므로 (x [103.8, 106.2] vs
+#   [103.5, 105.5, 107.5]) **무대 스폰이 주행 계획과 다른 자리**가 된다.
+#   추종기가 자기 경로를 못 잡는 그 실패 모드다. 오류는 안 난다.
+#
+#   자세한 값·근거는 아래 원래 주석에 그대로 둔다.
+export PIBT_FRONT_RULE="${PIBT_FRONT_RULE:-4}"
+export PIBT_PITCH="${PIBT_PITCH:-1.0}"
+
 # [patch_record_n] 계획과 대수가 일치해야 한다 — 계획 디렉터리 이름에 대수가 박혀 있다.
 #   안 맞으면 35초 부팅하고 계획 로드까지 간 뒤에야 죽는다. 0초에 막는다.
 # [patch_record_n_fix] 계획 디렉터리는 0 패딩이다 — pibt_h.py 의 f"fleet_{n:02d}"
@@ -184,8 +200,9 @@ export PIBT_SHOT_EXT="$SHOT_EXT"
 #   ★ 1.0 채택은 **아직 확정이 아니다.** 1.0 vs 1.2 포화 처리량이 남아 있고
 #     거기서 1.2 로 되돌아갈 수 있다. 그때는 이 한 줄만 1.2 로 바꾸면 된다.
 #     1.2 로 한 판 돌리려면:  PIBT_PITCH=1.2 bash run_record.sh
-export PIBT_FRONT_RULE="${PIBT_FRONT_RULE:-4}"
-export PIBT_PITCH="${PIBT_PITCH:-1.0}"
+#
+# ★ 이 두 줄은 위(계획 블록 앞)로 옮겼다 — 여기 두면 REPLAN 계획이 기본값
+#   1.2 로 서고 주행만 1.0 이 된다 (2026-09-17). 값·근거는 위 주석 그대로다.
 
 # 규칙을 켜 달라고 했는데 격자가 게이팅 구간이면, 29분을 쓰고 나서 "규칙이
 # 안 걸렸네" 를 깨닫는 것이 가장 나쁘다. 0초에 알린다.
