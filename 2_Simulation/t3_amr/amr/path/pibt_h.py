@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """pibt_core_v2(헤딩) + isaac_drive(ADG) — 시간표 없이 **순서**로 주행."""
 import os
+import re
 import sys
 
 from . import default_map
@@ -155,18 +156,37 @@ def plan(n=12, seed=None, seconds=None, map_dir=None, extra=None):
         if _oe:
             argv += ["--order-end", _oe]
     out = run(argv + (extra or []))
-    # ★ 이 note 는 주석이 아니라 **밖으로 나가는 값**이다. 예전에는 「계획 420 s ·
-    #   x1.72 = 722 s」가 박혀 있었는데, 그건 pitch 1.2 시절 값이라 기본이 1.0 이
-    #   된 뒤로 계속 틀린 숫자를 뱉고 있었다 (실제로는 350 s). 격자에서 파생시킨다.
-    horizon = int(os.environ.get("PIBT_HORIZON", str(HORIZON)))
+    # ★ **계획기가 실제로 쓴 틱 수를 로그에서 읽는다** (2026-09-17).
+    #
+    #   예전에는 `PIBT_HORIZON or HORIZON` 으로 다시 계산했다. 그런데
+    #   `main.py plan` 의 `--seconds` 기본값이 420 이라 이 함수는 거의 항상
+    #   `--seconds/--clock plan` 가지로 가고, 틱 수는 `metrics.horizon_for` 가
+    #   격자에서 정한다. pitch 1.0 이면 **1512틱**인데 note 는 1260 을 찍었다.
+    #
+    #       [lifelong] T=1512틱                  <- 실제
+    #       주의: … 1260틱 … = 계획 350 s        <- note (틀렸다)
+    #
+    #   note 는 주석이 아니라 **밖으로 나가는 값**이다. 두 번째로 같은 자리가
+    #   틀렸다 — 앞서는 「계획 420 s · x1.72 = 722 s」가 박혀 있었고 그건
+    #   pitch 1.2 시절 값이라 기본이 1.0 이 된 뒤로 계속 틀린 숫자를 뱉었다.
+    #   파생시키지 말고 **계획기가 찍은 것을 읽는다** — 다시 어긋날 수가 없다.
+    m = re.search(r"T=(\d+)틱", out or "")
+    horizon = int(m.group(1)) if m else int(
+        os.environ.get("PIBT_HORIZON", str(HORIZON)))
     mt = _move_ticks()
     plan_s = horizon * pitch / (0.90 * mt)           # 0.90 = 계획 속도 v_plan
+    # 주행은 `PIBT_HORIZON`(기본 HORIZON)으로 **다시 계획한다.** 둘이 다르면
+    # 저장된 궤적과 실제 주행이 다른 길이가 된다 — 그 사실을 note 에 적는다.
+    drive_h = int(os.environ.get("PIBT_HORIZON", str(HORIZON)))
+    gap = "" if (m is None or drive_h == horizon) else (
+        f"  ★ 주행은 {drive_h}틱으로 다시 계획한다 (PIBT_HORIZON)")
     return {"out": os.path.join(rel(OUT), f"fleet_{n:02d}"), "log": out,
             # ★ 시드를 찍는다. 주행이 in-process 로 다시 계획하므로 **어느
             #   시드로 세운 계획인지**가 로그에 없으면 어긋나도 못 알아챈다.
             "note": f"{MODE} · seed {_seed} · {horizon}틱 x "
                     f"(pitch {pitch}/0.90/{mt}) = 계획 {plan_s:.0f} s "
-                    f"(Isaac 벽시계는 stretch 를 곱한다 — metrics.STRETCH_MEASURED)"}
+                    f"(Isaac 벽시계는 stretch 를 곱한다 — "
+                    f"metrics.STRETCH_MEASURED)" + gap}
 
 
 def verify(n=12, map_dir=None):
