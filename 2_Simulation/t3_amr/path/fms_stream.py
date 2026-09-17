@@ -45,8 +45,36 @@ import re
 import sys
 
 IDX = re.compile(r"^([A-Za-z_]+)\[(\d+)\]$")
-# FMS 재현 절차 §1-1 ①. 속도 0.9 · MOVE_TICKS 4.
-DT = 1.0 / (float(os.environ.get("SPEED", "0.9")) * 4)
+
+# ★★ 틱은 **pitch 에 걸린다.** 이걸 안 보면 1.0 vs 1.2 비교가 통째로 망가진다.
+#
+#     dt = pitch / (v_plan x MOVE_TICKS)
+#         pitch 1.0 -> 0.27778 s
+#         pitch 1.2 -> 0.33333 s
+#
+#   `packing_assign` 의 `created_tick` 은 **FMS 격자(1.0 m)** 에서 만든 값이라
+#   0.27778 s 짜리 틱이다. 그걸 1.2 판에 **그대로** 넣으면 같은 틱 번호가
+#   0.33333 s 를 뜻하게 되어, 도착 시각이 통째로 **1.2배 늘어난다** —
+#   1.2 판이 같은 6시간 동안 주문을 덜 받는다. 그 상태로 포화 처리량을 맞대면
+#   1.2 가 유리한 쪽으로 기울고, 원인은 지표에 안 보인다.
+#
+#   그래서 **초로 한 번 돌린다**: 파일 틱 -> 초 -> 우리 틱.
+#       tick_ours = round(tick_file * DT_FILE / DT_OURS) = round(tick_file / pitch)
+#   pitch 1.0 이면 배율이 정확히 1.0 이라 **비트 단위로 같다** (아래 검증).
+#
+#   `DT` 는 옛 이름 그대로 둔다 — 파일 쪽 dt 다.
+DT = float(os.environ.get("FMS_FILE_DT", "")
+           or 1.0 / (float(os.environ.get("SPEED", "0.9")) * 4))
+
+
+def our_dt(geom):
+    """우리 격자의 틱 길이 [s]. `isaac_drive` 의 `tick_s` 와 **같은 식**이다.
+
+    거기서는 `geom.pitch / (geom.v_max * MOVE_TICKS)` 로 쓴다
+    (`isaac_drive.py:1762`). 두 벌로 두면 조용히 갈리므로 식을 옮겨 적는다.
+    """
+    from pibt_core import MOVE_TICKS
+    return geom.pitch / (geom.v_max * MOVE_TICKS)
 
 # 첫 30분 비율의 기대값과 허용폭 (FMS 재현 절차). 분포가 통째로 다른 파일을
 # 물었는지 보는 거친 지표라 폭을 넉넉히 둔다 — 정밀도가 아니라 **자릿수**다.
@@ -143,15 +171,24 @@ class FileOrderStream(object):
         #   「첫 30분」이라 100 % 가 나오고, 단언 ③ 이 거짓 경보를 낸다.
         #   실제로 `run_lifelong(horizon=1260)` 에서 그렇게 터졌다.
         #   이 값은 「어떤 파일인가」를 묻는 것이지 「우리가 얼마나 쓰나」가 아니다.
+        # 첫 30분은 **파일 틱**으로 잰다 (파일의 성질이므로 파일 dt 로).
         self._early_win = round(1800.0 / DT)
         self._early_all = 0
+
+        # ★ 파일 틱 -> 우리 틱 배율. pitch 1.0 이면 정확히 1.0 이다.
+        self.dt_file = DT
+        self.dt_ours = our_dt(geom)
+        self.tick_scale = self.dt_file / self.dt_ours
+        self.rescaled = abs(self.tick_scale - 1.0) > 1e-12
 
         with open(csv_path, newline="", encoding="utf-8") as f:
             for row in csv.DictReader(f):
                 self.total += 1
-                t = int(row["created_tick"])
-                if t < self._early_win:
+                t_file = int(row["created_tick"])
+                if t_file < self._early_win:
                     self._early_all += 1
+                t = (t_file if not self.rescaled
+                     else int(round(t_file * self.tick_scale)))
                 if t >= self.horizon:
                     self.skipped_late += 1
                     continue
@@ -227,9 +264,12 @@ class FileOrderStream(object):
         확인은 액션 수로도 된다 — 시드 생성이 416,714 라, 파일을 물면 반드시
         달라야 한다. 같으면 파일이 **안 걸린** 것이다.
         """
+        scale = ("틱 그대로 (pitch 1.0)" if not self.rescaled else
+                 f"★ 틱 환산 x{self.tick_scale:.5f} "
+                 f"(파일 dt {self.dt_file:.5f}s -> 우리 dt {self.dt_ours:.5f}s)")
         return (f"파일 {os.path.basename(self.path)} · sha256 "
                 f"{self.sha256[:12]}… · {self.loaded:,}건 "
-                f"(전체 {self.total:,}행, horizon {self.horizon:,}틱)")
+                f"(전체 {self.total:,}행, horizon {self.horizon:,}틱) · {scale}")
 
     # ── ★ 로드 시 단언 넷 ────────────────────────────────────────────────
     def check(self, strict=True, verbose=True):
