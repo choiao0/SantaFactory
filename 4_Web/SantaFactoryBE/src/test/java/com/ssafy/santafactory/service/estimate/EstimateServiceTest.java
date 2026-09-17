@@ -553,8 +553,7 @@ class EstimateServiceTest {
         when(estimateRepository.findById(77L)).thenReturn(Optional.of(estimate));
         when(videoPresigner.sign("verify_77/v1.mp4")).thenReturn("https://host/signed");
 
-        service().applyVerifyResult(verifyFull("verify_77", 77L, "verify_77/v1.mp4",
-                "window elapsed", 14, 14, null, fullKpi(30, 29, 0.7)));
+        service().applyVerifyResult(verifyFull("verify_77", 77L, "verify_77/v1.mp4", VerifyShape.normal(14), fullKpi(30, 29, 0.7)));
 
         assertThat(estimate.getVerify().getRunId()).isEqualTo("verify_77");
         assertThat(estimate.getVerify().getStatus()).isEqualTo("done");
@@ -580,7 +579,7 @@ class EstimateServiceTest {
         JsonNode warnings = new ObjectMapper().readTree("[\"theta file missing\"]");
 
         service().applyVerifyResult(verifyFull("verify_77", 77L, null,
-                "window elapsed", 14, 14, warnings, fullKpi(30, 29, 0.7)));
+                new VerifyShape("window elapsed", 14, 14, warnings), fullKpi(30, 29, 0.7)));
 
         assertThat(estimate.getVerify().getWarningsJson()).isEqualTo("[\"theta file missing\"]");
     }
@@ -610,7 +609,7 @@ class EstimateServiceTest {
         when(scenarioRepository.findByEstimateIdOrderByAmrCountAsc(77L)).thenReturn(List.of(two, four));
 
         // 검증: 시간당 152건, p90 414초(+7.8 %), 혼잡 0.081(+1.3 %p) → 혼잡이 기준을 넘는다
-        service().applyVerifyResult(verifyFull("verify_77", 77L, null, "window elapsed", 4, 4, null,
+        service().applyVerifyResult(verifyFull("verify_77", 77L, null, VerifyShape.normal(4),
                 new SimulationResponse.Kpi(30, 29, null, null, null, 230.0, 414.0, 50.0,
                         152.0, null, 0.72, 0.081, 30_000L, 0L)));
         EstimateDetailResponse detail = service().detail(77L, ADMIN);
@@ -898,14 +897,21 @@ class EstimateServiceTest {
                 new VerifyResultResponse.Artifacts(videoUrl), null, null);
     }
 
+    /** 검증 런의 모양 — 종료 사유, 로봇 수, 가동 수, fms 경고. */
+    private record VerifyShape(String reason, int nRobots, int robotsOnline, JsonNode warnings) {
+        static VerifyShape normal(int robots) {
+            return new VerifyShape("window elapsed", robots, robots, null);
+        }
+    }
+
     /** 계약 §3 전체 모양 — verify 블록과 kpi 까지 온 결과. */
-    private VerifyResultResponse verifyFull(String runId, Long estimateId, String videoUrl, String reason,
-                                            int nRobots, int robotsOnline, JsonNode warnings,
+    private VerifyResultResponse verifyFull(String runId, Long estimateId, String videoUrl, VerifyShape shape,
                                             SimulationResponse.Kpi kpi) {
-        return new VerifyResultResponse(runId, "done", null, estimateId, "est_%d_n%d".formatted(estimateId, nRobots),
+        return new VerifyResultResponse(runId, "done", null, estimateId,
+                "est_%d_n%d".formatted(estimateId, shape.nRobots()),
                 videoUrl == null ? null : new VerifyResultResponse.Artifacts(videoUrl),
-                new VerifyResultResponse.Verify(nRobots, robotsOnline, 600, reason,
-                        new VerifyResultResponse.Fms("done", null, warnings)),
+                new VerifyResultResponse.Verify(shape.nRobots(), shape.robotsOnline(), 600, shape.reason(),
+                        new VerifyResultResponse.Fms("done", null, shape.warnings())),
                 kpi);
     }
 

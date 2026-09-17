@@ -24,8 +24,8 @@ class VerifyComparatorTest {
 
     @Test
     void not_finished_when_status_is_not_done_or_reason_is_not_window_elapsed() {
-        Verification failed = comparator.compare(snapshot("failed", "runner NDEATH", 14, 14, null, 152.0, 400.0, 0.07), recommended());
-        Verification cutShort = comparator.compare(snapshot("done", "heartbeat lost", 14, 14, null, 152.0, 400.0, 0.07), recommended());
+        Verification failed = comparator.compare(snapshot("failed", "runner NDEATH", null, new Metrics(152.0, 400.0, 0.07)), recommended());
+        Verification cutShort = comparator.compare(snapshot("done", "heartbeat lost", null, new Metrics(152.0, 400.0, 0.07)), recommended());
 
         assertThat(failed.notice()).isEqualTo(VerifyNoticeCode.NOT_FINISHED);
         assertThat(failed.comparison()).isNull();
@@ -34,7 +34,7 @@ class VerifyComparatorTest {
 
     @Test
     void different_conditions_hides_comparison_when_fms_warnings_present() {
-        Verification v = comparator.compare(snapshot("done", "window elapsed", 14, 14, "[\"neutral theta\"]", 152.0, 400.0, 0.07), recommended());
+        Verification v = comparator.compare(snapshot("done", "window elapsed", "[\"neutral theta\"]", new Metrics(152.0, 400.0, 0.07)), recommended());
 
         assertThat(v.notice()).isEqualTo(VerifyNoticeCode.DIFFERENT_CONDITIONS);
         assertThat(v.comparison()).isNull();
@@ -42,19 +42,19 @@ class VerifyComparatorTest {
 
     @Test
     void no_baseline_when_recommended_run_or_its_detail_is_missing() {
-        VerifySnapshot ok = snapshot("done", "window elapsed", 14, 14, null, 152.0, 400.0, 0.07);
+        VerifySnapshot ok = snapshot("done", "window elapsed", null, new Metrics(152.0, 400.0, 0.07));
         SimScenario withoutDetail = SimScenario.queued(estimate(), "est_1_n14", 14, 0L);
         withoutDetail.markDone(95.6, 70.2, 956L, 384.0);
 
         assertThat(comparator.compare(ok, null).notice()).isEqualTo(VerifyNoticeCode.NO_BASELINE);
         assertThat(comparator.compare(ok, withoutDetail).notice()).isEqualTo(VerifyNoticeCode.NO_BASELINE);
-        assertThat(comparator.compare(snapshot("done", "window elapsed", 14, 14, null, null, null, null), recommended()).notice())
+        assertThat(comparator.compare(snapshot("done", "window elapsed", null, new Metrics(null, null, null)), recommended()).notice())
                 .isEqualTo(VerifyNoticeCode.NO_BASELINE);
     }
 
     @Test
     void partial_fleet_when_robots_online_below_n_robots_but_comparison_shown() {
-        Verification v = comparator.compare(snapshot("done", "window elapsed", 14, 12, null, 152.0, 390.0, 0.07), recommended());
+        Verification v = comparator.compare(snapshot("done", "window elapsed", new Fleet(14, 12), null, new Metrics(152.0, 390.0, 0.07)), recommended());
 
         assertThat(v.notice()).isEqualTo(VerifyNoticeCode.PARTIAL_FLEET);
         assertThat(v.comparison()).isNotNull();
@@ -63,7 +63,7 @@ class VerifyComparatorTest {
 
     @Test
     void slower_at_peak_when_lead_time_p90_exceeds_tolerance() {
-        Verification v = comparator.compare(snapshot("done", "window elapsed", 14, 14, null, 159.0, 430.0, 0.068), recommended());
+        Verification v = comparator.compare(snapshot("done", "window elapsed", null, new Metrics(159.0, 430.0, 0.068)), recommended());
 
         assertThat(v.notice()).isEqualTo(VerifyNoticeCode.SLOWER_AT_PEAK);
         assertThat(v.comparison().leadTimeP90S().diff()).isEqualTo(46.0);
@@ -71,7 +71,7 @@ class VerifyComparatorTest {
 
     @Test
     void slower_at_peak_when_conflict_wait_exceeds_tolerance() {
-        Verification v = comparator.compare(snapshot("done", "window elapsed", 14, 14, null, 159.0, 384.0, 0.081), recommended());
+        Verification v = comparator.compare(snapshot("done", "window elapsed", null, new Metrics(159.0, 384.0, 0.081)), recommended());
 
         assertThat(v.notice()).isEqualTo(VerifyNoticeCode.SLOWER_AT_PEAK);
         assertThat(v.comparison().conflictWaitRatio().diff()).isCloseTo(0.013, within(1e-9));
@@ -79,7 +79,7 @@ class VerifyComparatorTest {
 
     @Test
     void matches_when_both_within_tolerance() {
-        Verification v = comparator.compare(snapshot("done", "window elapsed", 14, 14, null, 152.0, 414.0, 0.075), recommended());
+        Verification v = comparator.compare(snapshot("done", "window elapsed", null, new Metrics(152.0, 414.0, 0.075)), recommended());
 
         assertThat(v.notice()).isEqualTo(VerifyNoticeCode.MATCHES);
         assertThat(v.comparison().throughputOrdersPerH().diff()).isEqualTo(-7.0);
@@ -88,7 +88,7 @@ class VerifyComparatorTest {
 
     @Test
     void a_missing_metric_leaves_only_that_metric_empty() {
-        Verification v = comparator.compare(snapshot("done", "window elapsed", 14, 14, null, 152.0, null, 0.07), recommended());
+        Verification v = comparator.compare(snapshot("done", "window elapsed", null, new Metrics(152.0, null, 0.07)), recommended());
 
         assertThat(v.notice()).isEqualTo(VerifyNoticeCode.MATCHES);
         assertThat(v.comparison().leadTimeP90S().verified()).isNull();
@@ -98,7 +98,7 @@ class VerifyComparatorTest {
 
     @Test
     void an_old_payload_without_reason_counts_as_finished() {
-        Verification v = comparator.compare(snapshot("done", null, null, null, null, 159.0, 384.0, 0.068), recommended());
+        Verification v = comparator.compare(snapshot("done", null, new Fleet(null, null), null, new Metrics(159.0, 384.0, 0.068)), recommended());
 
         assertThat(v.notice()).isEqualTo(VerifyNoticeCode.MATCHES);
     }
@@ -115,9 +115,19 @@ class VerifyComparatorTest {
         return run;
     }
 
-    private static VerifySnapshot snapshot(String status, String reason, Integer nRobots, Integer online, String warnings,
-                                           Double throughputPerH, Double p90, Double conflict) {
-        return new VerifySnapshot("verify_1", status, reason, null, nRobots, online, 600, warnings,
-                throughputPerH, p90, conflict, LocalDateTime.now());
+    private record Fleet(Integer nRobots, Integer online) {
+    }
+
+    private record Metrics(Double throughputPerH, Double p90, Double conflict) {
+    }
+
+    /** 로봇 14대 전부 가동된 검증 결과. */
+    private static VerifySnapshot snapshot(String status, String reason, String warnings, Metrics m) {
+        return snapshot(status, reason, new Fleet(14, 14), warnings, m);
+    }
+
+    private static VerifySnapshot snapshot(String status, String reason, Fleet fleet, String warnings, Metrics m) {
+        return new VerifySnapshot("verify_1", status, reason, null, fleet.nRobots(), fleet.online(), 600, warnings,
+                m.throughputPerH(), m.p90(), m.conflict(), LocalDateTime.now());
     }
 }

@@ -10,7 +10,9 @@ import org.springframework.stereotype.Service;
 import org.thymeleaf.TemplateEngine;
 import org.thymeleaf.context.Context;
 
+import java.util.Arrays;
 import java.util.Locale;
+import java.util.Objects;
 
 /**
  * 견적서 PDF 만들기 (S15P21A106-236). DB 읽기는 {@link EstimateService#quoteSource} 한 번으로 끝내고,
@@ -28,7 +30,23 @@ public class QuotePdfService {
     private final GotenbergClient gotenberg;
     private final QuotePdfProperties props;
 
+    /** 만들어진 PDF. 배열은 내용으로 비교하고, 출력에는 크기만 남긴다. */
     public record QuotePdf(String fileName, byte[] bytes) {
+
+        @Override
+        public boolean equals(Object o) {
+            return o instanceof QuotePdf other && Objects.equals(fileName, other.fileName) && Arrays.equals(bytes, other.bytes);
+        }
+
+        @Override
+        public int hashCode() {
+            return 31 * Objects.hashCode(fileName) + Arrays.hashCode(bytes);
+        }
+
+        @Override
+        public String toString() {
+            return "QuotePdf[" + fileName + ", " + (bytes == null ? 0 : bytes.length) + " bytes]";
+        }
     }
 
     /** 만들 수 있는 견적인지만 확인한다 — 메일 요청을 202 로 받기 전에 404·409·503 을 바로 돌려주기 위해. */
