@@ -9,7 +9,7 @@ EC2 에 상시로 떠서 (1) `spBv1.0/STATE/host-orch` 로 자기 생사를 알�
 | 파일 | 역할 |
 |---|---|
 | `tracker.py` | Primary Host 상태 — 노드·디바이스 메트릭, 별칭, seq 검사 → needs_rebirth, NDEATH(bdSeq 일치) → offline |
-| `orchestrator.py` | `VerifyRequest` 검증(`scenario` sha256 포함), `Job` 상태기계 STARTING → RUNNING → STOPPING → DONE\|FAILED, `FmsLink`(fms-core Start 재전송 · RUNNING 게이트 · 정지 확인 · kpi_summary), 결과 JSON(`scenario_ack` · `kpi` · `verify.fms`), `Coordinator`(잡 1개 + Rebirth 발송, 재전달 멱등, `biz/v1/event` 라우팅) |
+| `orchestrator.py` | `VerifyRequest` 검증(`scenario` sha256 포함), `Job` 상태기계 STARTING → RUNNING → STOPPING → DONE\|FAILED, `FmsLink`(fms-core Start 재전송 · RUNNING 게이트 · 정지 확인 · kpi_summary), 결과 JSON(`scenario_ack` · `kpi` · `verify.fms`), `Coordinator`(잡 1개 + Rebirth 발송, 재전달 멱등 — `done` 만 캐시하고 `failed` 는 재요청 시 새 런 -241, `biz/v1/event` 라우팅) |
 | `amqp.py` | pika 소비 루프 — prefetch 1, 잡이 끝날 때까지 0.5 s tick, 결과 발행 뒤 ack. `publish_request` · `drain` 은 테스트용 |
 | `mqtt_host.py` | paho — STATE online retained + 유언 offline, `spBv1.0/santa/#` + `biz/v1/#` 구독, NCMD 발행 |
 | `app.py` | 배선 + CLI (`python3 -m host_orch`). `--once` 는 AMQP 없이 요청 1건 |

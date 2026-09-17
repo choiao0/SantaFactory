@@ -94,6 +94,7 @@ DES 요청의 `horizon_s · shifts · inbound_gap_s · outbound_gap_s · warehou
 | 상황 | 동작 |
 |---|---|
 | 요청 수신 | sim-runner 가 NBIRTH 로 보이고 IDLE/ERROR 면 NCMD Start. 다른 run_id 로 바쁘면 기다렸다가 start_timeout(180 s) 에 failed |
+| 같은 run_id 재요청 | 진행 중이면 그 잡(재전달 멱등, Start 한 번), `done` 으로 끝났으면 결과만 재발행(GPU 런 반복 안 함), **`failed` 로 끝났으면 새 런**(-241). BE 는 run_id 를 견적 id 로 고정한 채 재발행하면 된다 — 실패한 견적의 재검증이 옛 실패 결과로 되돌아오던 문제 (2026-09-17) |
 | 요청 파싱 실패 | 결과 `failed` 를 바로 발행. `estimate_id` · `source_run_id` 는 본문에서 그대로 옮긴다 — BE 가 어느 견적의 실패인지 알아 화면에 알릴 수 있게 (-235, 2026-09-16 verify_2 가 이것 없이 버려져 화면이 굳었다) |
 | `scenario.orders.outbound` | **창 밖 주문은 러너에 보내지 않는다.** 창 = [t0, t0 + window_s + 60], t0 = `window_start_s`(있으면) 아니면 첫 주문 시각(§6 ① 의 저장 주문 기준). 잘라낸 scenario 에 `window_start_s = t0` 와 `orders.window {start_s, end_s, kept, total}` 를 적고 sha 도 그 기준으로 낸다. 512 KiB 상한은 자른 뒤에 잰다 — 하루 6,000 건(586 KB)을 통째로 보내던 요청이 거절되던 문제 (-235) |
 | sim-runner RUNNING (fms-core 켜짐, `--fms-node`) | 같은 Start 를 fms-core 에 NCMD (15 s 마다 재전송). `Fms/State` RUNNING · `Fms/RunId` 일치일 때 창 시작(결정 11). fms-core ERROR/IDLE · `bad Start` · start_timeout → failed |
@@ -110,7 +111,7 @@ DES 요청의 `horizon_s · shifts · inbound_gap_s · outbound_gap_s · warehou
 ## 5. BE 쪽 (제안, 미구현)
 
 - 견적 상태에 `VERIFYING` 추가 (미결 ③). `sim.verify.result` 의 `status` 로 `VERIFIED` / `VERIFY_FAILED`.
-- 재시도: `failed` + `reason` 이 `start timeout` · `runner NDEATH` · `heartbeat lost` 면 재발행 가능(같은 run_id 는 sim-runner 가 멱등 처리). `runner ended the run` 은 원인(`error`) 확인 후.
+- 재시도: `failed` + `reason` 이 `start timeout` · `runner NDEATH` · `heartbeat lost` 면 재발행 가능(같은 run_id 는 sim-runner 가 멱등 처리). `runner ended the run` 은 원인(`error`) 확인 후. host-orch 는 `failed` 였던 run_id 의 재요청을 새 런으로 돌린다(-241, §4) — `done` 이었던 run_id 는 결과만 다시 온다.
 
 ## 6. 미결 (로드맵 §04)
 

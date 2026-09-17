@@ -322,6 +322,17 @@ class TestCoordinatorRedelivery:
 
         assert again is job and sent == [O.CMD_START, O.CMD_STOP]
 
+    def test_failed_run_id_is_run_again_on_resubmit(self):
+        c, sent = self.make()
+        job = c.submit(req_json())
+        job.step(c.tracker.node("sim-runner-gpu01"), 1000.0, c.cmd)       # start timeout → FAILED
+        assert job.done and job.phase == "FAILED"
+
+        again = c.submit(req_json())
+
+        assert again is not job and not again.done and c.recent["verify-1"] is again
+        assert sent[-1] == O.CMD_START and sent.count(O.CMD_START) == 3   # 최초 · 재전송 · 재요청
+
     def test_other_run_id_while_busy_raises_busy(self):
         c, _ = self.make()
         c.submit(req_json())
