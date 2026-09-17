@@ -648,9 +648,30 @@ def run_lifelong(free, starts, cells_by_cat, horizon=600, seed=0, order_gap=15,
     커널 훅과 같은 뜻이다 — 이 파일에 FMS 파일 형식이 섞이면 안 된다.
     """
     rng = np.random.default_rng(seed)
+    # ★ 주문 출처를 **여기 한 곳**에서 정한다 (2026-09-17).
+    #   `pibt_scene` 에만 꽂으면 `plan_scale`·`soft_probe`·`adg_edge_audit` 이
+    #   전부 안 탄다 — 셋 다 이 함수를 직접 부른다. 공통 진입점에 두어야
+    #   도구가 아무것도 안 고쳐도 따라온다.
+    #   형식을 아는 코드는 `fms_stream` 에 둔다 (위 독스트링의 약속).
+    src = "시드 생성"
+    if stream is None:
+        try:
+            import fms_stream
+        except ImportError:
+            fms_stream = None
+        if fms_stream is not None:
+            stream = fms_stream.from_env(free, horizon, order_end=order_end)
+            if stream is not None:
+                src = stream.provenance()
     if stream is None:
         stream = OrderStream(rng, cells_by_cat, horizon, order_gap, shifts,
                              order_end=order_end)
+        src = (f"시드 생성 (seed={seed} · order_gap={order_gap} · "
+               f"shifts={list(shifts)})")
+    # ★ 출처를 **반드시** 찍는다. 2026-09-17 에 「파일을 물었나 시드가 냈나」를
+    #   로그로 못 갈라 30분을 날렸다. 확인은 액션 수로도 된다 — 시드 생성이
+    #   416,714 라, 파일을 물면 반드시 달라야 한다. 같으면 안 걸린 것이다.
+    print(f"[lifelong] 주문 출처: {src}")
     # ★ 커널을 갈아 끼울 자리. 기본값이면 동작은 이전과 **완전히 같다**.
     #   battery.BatteryKernel 이 이 훅으로 들어온다 — 이 파일에 배터리 코드가
     #   섞이지 않게 하려는 것이다.
@@ -681,6 +702,9 @@ def run_lifelong(free, starts, cells_by_cat, horizon=600, seed=0, order_gap=15,
             #   ★ 0 을 단언하면 안 된다 — 버그 신호가 아니라 **노출 지표**다
             #     (겹친 채 도는 것 자체는 합법. FMS 답신 12 §1·§4 확인).
             "soft_clash": getattr(K, "_soft_clash", 0),
+            # ★ 주문 출처 — 결과 표에도 남긴다. 로그만 보고 「파일인가 시드인가」
+            #   를 못 갈라 30분을 날린 뒤에 넣었다 (2026-09-17).
+            "orders_src": src,
             # ★ 어느 쪽 판인지 결과에 남긴다 (-224). 표만 보고 기준선과
             #   구현판을 헷갈리는 일이 실제로 있었다.
             "soft_hold": os.environ.get("PIBT_SOFT_HOLD", "1")

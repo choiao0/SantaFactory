@@ -48,6 +48,67 @@ IDX = re.compile(r"^([A-Za-z_]+)\[(\d+)\]$")
 # FMS 재현 절차 §1-1 ①. 속도 0.9 · MOVE_TICKS 4.
 DT = 1.0 / (float(os.environ.get("SPEED", "0.9")) * 4)
 
+# 첫 30분 비율의 기대값과 허용폭 (FMS 재현 절차). 분포가 통째로 다른 파일을
+# 물었는지 보는 거친 지표라 폭을 넉넉히 둔다 — 정밀도가 아니라 **자릿수**다.
+EARLY_EXPECT = float(os.environ.get("FMS_EARLY_PCT", "38"))
+EARLY_TOL = float(os.environ.get("FMS_EARLY_TOL", "4"))
+
+
+def sha256(path):
+    import hashlib
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for blk in iter(lambda: f.read(1 << 20), b""):
+            h.update(blk)
+    return h.hexdigest()
+
+
+def _orders_json_for(csv_path):
+    """`packing_assign_s103.csv` 의 짝이 되는 주문 JSON 을 찾는다.
+
+    `FMS_ORDERS_JSON` 이 있으면 그것. 없으면 같은 폴더에서
+    `orders*_s{seed}_*.json` 을 찾는다.
+
+    ★ 여럿이면 **고르지 않고 일치를 확인한다.** 실제로 시드마다 `cap10` 과
+      `cap24` 두 벌이 있는데, 둘은 수량 상한만 다르고 ②④ 가 쓰는 값
+      (주문 집합 · 주문별 랙)은 **완전히 같다** (실측 s103: 6,000/6,000 ·
+      랙 집합이 다른 주문 0건). 그러니 아무거나 써도 되는데, **그걸 확인하고**
+      쓰는 것과 **가정하고** 쓰는 것은 다르다. 다르면 거기서 끊는다.
+
+      이걸 「후보가 둘이라 건너뜀」으로 두었더니 제일 중요한 ④ 가 매번
+      안 돌았다 (2026-09-17).
+    """
+    import glob
+    import json
+    env = os.environ.get("FMS_ORDERS_JSON", "").strip()
+    if env:
+        return env, "FMS_ORDERS_JSON", None
+    m = re.search(r"_s(\d+)", os.path.basename(csv_path))
+    if not m:
+        return None, "시드를 파일명에서 못 읽었다", None
+    d = os.path.dirname(os.path.abspath(csv_path))
+    hit = sorted(glob.glob(os.path.join(d, f"orders*_s{m.group(1)}_*.json")))
+    if not hit:
+        return None, f"orders*_s{m.group(1)}_*.json 이 없다", None
+    if len(hit) == 1:
+        return hit[0], "자동", None
+
+    def key(p):
+        with open(p, encoding="utf-8") as f:
+            j = json.load(f)
+        return {o["order_id"]: tuple(sorted({l.get("rack_id")
+                                             for l in o.get("lines", ())}))
+                for o in j.get("outbound", ())}
+    base = key(hit[0])
+    for p in hit[1:]:
+        if key(p) != base:
+            return None, (f"후보 {len(hit)}개가 **서로 다르다** — "
+                          f"`FMS_ORDERS_JSON` 으로 지정할 것: "
+                          + ", ".join(os.path.basename(x) for x in hit)), None
+    return hit[0], "자동", (f"후보 {len(hit)}개가 주문 집합·주문별 랙에서 "
+                            f"일치함을 확인하고 첫 번째를 씀 ("
+                            + ", ".join(os.path.basename(x) for x in hit) + ")")
+
 
 class FileOrderStream(object):
     """`lifelong.OrderStream` 과 같은 자리에 꽂힌다.
@@ -60,6 +121,7 @@ class FileOrderStream(object):
         import pibt_scene as PS
 
         self.path = csv_path
+        self.sha256 = sha256(csv_path)
         self.horizon = int(horizon)
         self.order_end = None if order_end is None else max(0, int(order_end))
         self.n_task = 0
@@ -76,10 +138,20 @@ class FileOrderStream(object):
         self.skipped_bad = []        # 칸을 못 찾은 것
         self.total = 0
 
+        # ★ 도착 분포는 **파일 전체**로 센다 — horizon 과 무관하게 (2026-09-17).
+        #   `loaded`(horizon 안)로 재면 horizon 이 30분보다 짧을 때 전부가
+        #   「첫 30분」이라 100 % 가 나오고, 단언 ③ 이 거짓 경보를 낸다.
+        #   실제로 `run_lifelong(horizon=1260)` 에서 그렇게 터졌다.
+        #   이 값은 「어떤 파일인가」를 묻는 것이지 「우리가 얼마나 쓰나」가 아니다.
+        self._early_win = round(1800.0 / DT)
+        self._early_all = 0
+
         with open(csv_path, newline="", encoding="utf-8") as f:
             for row in csv.DictReader(f):
                 self.total += 1
                 t = int(row["created_tick"])
+                if t < self._early_win:
+                    self._early_all += 1
                 if t >= self.horizon:
                     self.skipped_late += 1
                     continue
@@ -147,6 +219,142 @@ class FileOrderStream(object):
         self.n_task += len(out)
         return list(out)
 
+    # ── ★ 출처를 한 줄로 ─────────────────────────────────────────────────
+    def provenance(self):
+        """머리글에 찍을 한 줄. **이게 없어서 30분을 날렸다** (2026-09-17).
+
+        주문이 파일에서 왔는지 시드에서 났는지 로그만 보고는 못 갈랐다.
+        확인은 액션 수로도 된다 — 시드 생성이 416,714 라, 파일을 물면 반드시
+        달라야 한다. 같으면 파일이 **안 걸린** 것이다.
+        """
+        return (f"파일 {os.path.basename(self.path)} · sha256 "
+                f"{self.sha256[:12]}… · {self.loaded:,}건 "
+                f"(전체 {self.total:,}행, horizon {self.horizon:,}틱)")
+
+    # ── ★ 로드 시 단언 넷 ────────────────────────────────────────────────
+    def check(self, strict=True, verbose=True):
+        """엉뚱한 파일·엉뚱한 매핑을 **포화 결과 전에** 잡는다.
+
+        넷 다 「틀리면 포화 지표에서만 드러나고, 그때는 원인이 안 갈리는」
+        종류다. 특히 ④ 가 그렇다 — 매핑이 밀리면 이동 수요가 통째로 달라지는데
+        주행은 멀쩡히 돌고 처리량만 이상해진다.
+
+            ① sha256          어느 파일인가. `FMS_SHA256` 을 주면 대조한다
+            ② 주문 = 토트      CSV 행수 == JSON outbound == meta.orders
+            ③ 첫 30분 비율     분포가 통째로 다른 파일인지 보는 거친 지표
+            ④ frm 매핑        **우리가 rack_buffers 로 계산한 칸**이
+                              CSV `frm_name` 과 같은가
+
+        `strict` 면 실패에서 `RuntimeError`. `FMS_CHECK=warn` 으로 낮춘다.
+        """
+        import json
+        bad, note = [], []
+
+        # ① sha256
+        want = os.environ.get("FMS_SHA256", "").strip()
+        if want and want != self.sha256:
+            bad.append(f"① sha256 불일치 — 기대 {want[:12]}… / 실제 "
+                       f"{self.sha256[:12]}…")
+        note.append(f"① sha256 {self.sha256[:16]}…"
+                    + ("  (FMS_SHA256 과 일치)" if want else "  (대조값 없음)"))
+
+        done = ["①"]
+        jp, why, agreed = _orders_json_for(self.path)
+        if agreed:
+            note.append(f"   {agreed}")
+        if jp is None:
+            note.append(f"②④ **건너뜀** — {why}")
+            self._report(note, bad, strict, verbose, done)
+            return bad
+        with open(jp, encoding="utf-8") as f:
+            od = json.load(f)
+        ob = od.get("outbound", [])
+        meta = od.get("meta", {})
+
+        # ② 주문 = 토트
+        n_csv, n_json = self.total, len(ob)
+        n_meta = int(meta.get("orders", -1))
+        if not (n_csv == n_json == n_meta):
+            bad.append(f"② 개수가 안 맞는다 — CSV {n_csv:,} · JSON {n_json:,} "
+                       f"· meta.orders {n_meta:,}")
+        done.append("②")
+        note.append(f"② 주문 {n_csv:,} = 토트 {n_json:,} "
+                    f"(meta.orders {n_meta:,})  · {os.path.basename(jp)} [{why}]")
+
+        # ③ 첫 30분 비율 — **파일 전체** 기준 (horizon 과 무관)
+        win, early = self._early_win, self._early_all
+        pct = 100.0 * early / max(self.total, 1)
+        if abs(pct - EARLY_EXPECT) > EARLY_TOL:
+            bad.append(f"③ 첫 30분 {pct:.1f} % — 기대 {EARLY_EXPECT:.0f} "
+                       f"± {EARLY_TOL:.0f}. 다른 파일이거나 틱 변환이 틀렸다")
+        done.append("③")
+        note.append(f"③ 첫 30분(<{win:,}틱) {early:,}/{self.total:,}행 "
+                    f"= {pct:.1f} % (기대 {EARLY_EXPECT:.0f} ± {EARLY_TOL:.0f})"
+                    + ("" if self.horizon >= win else
+                       f"  ※ horizon {self.horizon:,} < {win:,} 이라 이 판은 "
+                       f"파일의 앞부분만 쓴다"))
+
+        # ④ ★ frm 매핑 — 우리가 계산한 값이 CSV 와 같은가
+        rbp = os.path.join(self._map, "rack_buffers.json")
+        if not os.path.exists(rbp):
+            note.append(f"④ rack_buffers.json 이 없어 건너뜀 ({rbp})")
+        else:
+            with open(rbp, encoding="utf-8") as f:
+                racks = json.load(f).get("racks", {})
+            by_oid = {o.get("order_id"): o for o in ob}
+            miss, mism, split = 0, [], 0
+            with open(self.path, newline="", encoding="utf-8") as f:
+                for row in csv.DictReader(f):
+                    o = by_oid.get(int(row["task_id"]))
+                    if o is None:
+                        miss += 1
+                        continue
+                    idx = {racks.get(l.get("rack_id")) for l in o.get("lines", ())}
+                    idx.discard(None)
+                    if len(idx) != 1:
+                        split += 1
+                        continue
+                    mine = f"aisle_buf[{idx.pop()}]"
+                    if mine != row["frm_name"].strip():
+                        mism.append((row["task_id"], mine, row["frm_name"]))
+            if miss:
+                bad.append(f"④ task_id 가 JSON order_id 에 없는 행 {miss:,}건 "
+                           f"— 조인 키가 틀렸다")
+            if mism:
+                bad.append(f"④ ★ frm 매핑이 다른 행 {len(mism):,}건 — "
+                           f"예: {mism[:3]}")
+            done.append("④")
+            note.append(f"④ frm 매핑 대조 {n_csv:,}행 · 불일치 {len(mism):,} · "
+                        f"조인 실패 {miss:,} · 한 주문이 여러 버퍼 {split:,}")
+
+        self._report(note, bad, strict, verbose, done)
+        return bad
+
+    @staticmethod
+    def _report(note, bad, strict, verbose, done=()):
+        # ★ **돈 것만 통과라고 말한다** (2026-09-17). 처음에는 실패가 없으면
+        #   무조건 「단언 넷 통과」를 찍었는데, 그때 ②④ 는 건너뛰고 있었다.
+        #   오늘만 세 번째로 나온 같은 종류의 버그다 — 거짓말하는 진단.
+        ALL = ("①", "②", "③", "④")
+        miss = [k for k in ALL if k not in tuple(done)]
+        if verbose:
+            for ln in note:
+                print(f"[fms_stream]   {ln}")
+        if not bad:
+            if verbose:
+                if miss:
+                    print(f"[fms_stream]   ~ {len(done)}/4 통과 · "
+                          f"**{''.join(miss)} 는 안 돌았다** — 위 사유를 볼 것")
+                else:
+                    print("[fms_stream]   ★ 단언 넷 전부 통과")
+            return
+        msg = "★ 주문 파일 단언 실패:\n  " + "\n  ".join(bad)
+        if strict and os.environ.get("FMS_CHECK", "") not in ("warn", "0"):
+            raise RuntimeError(
+                msg + "\n  (`FMS_CHECK=warn` 으로 낮출 수 있다 — 다만 "
+                      "틀린 채로 돌면 포화 지표에서만 드러난다)")
+        print("[fms_stream] " + msg, file=sys.stderr)
+
     # ── ★ 인덱스가 밀리지 않았나 ─────────────────────────────────────────
     def verify(self):
         """`cells_by_cat[cat][i]` 가 `stations.json` 의 i 번째와 같은 칸인가.
@@ -180,6 +388,40 @@ class FileOrderStream(object):
         return bad
 
 
+def from_env(free, horizon, geom=None, map_dir=None, order_end=None):
+    """`FMS_ASSIGN` 이 있으면 스트림을, 없으면 `None` 을 돌려준다.
+
+    ★ 왜 여기인가 (2026-09-17). `pibt_scene` 에만 꽂으면
+      `plan_scale`·`soft_probe`·`adg_edge_audit` 이 **전부 안 탄다.** 셋 다
+      `lifelong.run_lifelong` 을 직접 부르기 때문이다. 그래서 공통 진입점인
+      `run_lifelong` 이 이 함수를 부르고, 도구는 아무것도 안 고쳐도 따라온다.
+
+      그리고 이 배치가 옛 함정을 **없앤다** — 예전에는 계획만 배정표로 서고
+      주행은 난수 스트림으로 돌았다 (주행이 `live_pibt` 에서 다시 계획한다).
+      이제 둘 다 `run_lifelong` 을 지나므로 갈릴 자리가 없다.
+
+    `lifelong.py` 에 FMS 파일 형식이 섞이지 않게, 형식을 아는 코드는 전부
+    이쪽에 둔다 (`run_lifelong` 독스트링의 약속).
+    """
+    path = os.environ.get("FMS_ASSIGN", "").strip()
+    if not path:
+        return None
+    if not os.path.exists(path):
+        raise RuntimeError(f"★ FMS_ASSIGN 이 가리키는 파일이 없다: {path}")
+    if map_dir is None:
+        map_dir = os.environ.get("MAP", "")
+    if not map_dir:
+        raise RuntimeError("★ FMS_ASSIGN 을 쓰려면 `MAP` 이 필요하다 "
+                           "(source paths.sh)")
+    if geom is None:
+        import pibt_scene as PS
+        geom = PS.make_geom(float(os.environ.get("PIBT_PITCH", "1.0")))
+    st = FileOrderStream(path, geom, free, map_dir, horizon,
+                         order_end=order_end)
+    st.check(strict=True)
+    return st
+
+
 def _main():
     sys.path.insert(0, os.path.join(os.environ["W"], "path"))
     import pibt_scene as PS
@@ -188,9 +430,16 @@ def _main():
     pitch = float(os.environ.get("PITCH", os.environ.get("PIBT_PITCH", "1.0")))
     n = int(os.environ.get("N", "24"))
     horizon = int(os.environ.get("HORIZON", "77760"))
+    # ★ 이름이 `FMS_ASSIGN` 이다. 옛 이름 `ASSIGN` 은 `pibt_scene.py --orders` 의
+    #   기본값이기도 해서, 한 번 export 하고 같은 셸에서 `run_record.sh` 를
+    #   돌리면 **계획만** 배정표로 서고 주행은 난수 스트림으로 돌았다
+    #   (주행은 `live_pibt` 가 다시 계획한다). 이름을 겹치지 않게 옮겼다.
+    #
+    #   ★★ 그리고 `from_env()` 가 `run_lifelong` 에서 같은 이름을 읽으므로
+    #     이제 계획과 주행이 **같은 자리**를 지난다 — 갈릴 데가 없어졌다.
     csv_path = os.environ.get(
-        "ASSIGN", os.path.join(os.environ["W"], "tools", "_orders",
-                               f"packing_assign_s{sd}.csv"))
+        "FMS_ASSIGN", os.path.join(os.environ["W"], "tools", "_orders",
+                                   f"packing_assign_s{sd}.csv"))
 
     geom, free, _starts, _goals = PS.setup_lifelong(
         os.environ["MAP"], n, pitch, int(sd), verbose=False)
