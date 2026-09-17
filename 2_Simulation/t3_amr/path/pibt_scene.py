@@ -864,6 +864,15 @@ def main():
             print(metrics.fmt_windowed(
                 metrics.windowed(li.get("done_ticks"), geom,
                                  horizon=horizon)))
+            # ★ 정체 로봇·틱 — FMS `standoff_ticks` 의 대안 지표 (FMS-26 §2-7).
+            #   **문턱을 같이 찍는다** — 문턱이 다르면 비교가 안 되는 값인데
+            #   값만 남기면 나중에 어느 문턱이었는지 못 찾는다 (FMS-28 §5 동의).
+            if "stag_robot_ticks" in li:
+                _cap = horizon * len(starts)
+                print(f"[정체] 로봇·틱 {li['stag_robot_ticks']:,} / 상한 "
+                      f"{_cap:,} = {100.0 * li['stag_robot_ticks'] / max(_cap, 1):.1f} %"
+                      f"   (문턱 hd_after={li.get('hd_after')}틱 · "
+                      f"목표 있는 로봇만)")
             if li.get("zone"):
                 print(f"[scene] 존 복귀 대기 {li['zone_wait_steps']}틱 · "
                       f"재선택 {li['zone_retargets']}회 · "
