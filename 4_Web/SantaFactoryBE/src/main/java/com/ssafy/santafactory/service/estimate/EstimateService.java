@@ -13,6 +13,8 @@ import com.ssafy.santafactory.dto.simulation.VerifyRequest;
 import com.ssafy.santafactory.dto.simulation.VerifyResultResponse;
 import com.ssafy.santafactory.entity.estimate.Estimate;
 import com.ssafy.santafactory.entity.estimate.RunStatus;
+import com.ssafy.santafactory.entity.estimate.VerifySnapshot;
+import com.ssafy.santafactory.entity.simulation.RunKpiDetail;
 import com.ssafy.santafactory.entity.simulation.SimScenario;
 import com.ssafy.santafactory.entity.warehouse.Warehouse;
 import com.ssafy.santafactory.global.auth.AuthenticatedMember;
@@ -83,6 +85,7 @@ public class EstimateService {
     private final OutboundOrderGenerator outboundOrderGenerator;
     private final ObjectMapper objectMapper;
     private final VerifyVideoPresigner videoPresigner;
+    private final VerifyComparator verifyComparator;
 
     // ── 생성 ─────────────────────────────────────────────────────────────────
 
@@ -238,8 +241,21 @@ public class EstimateService {
         Estimate estimate = estimateRepository.findById(estimateId)
                 .orElseThrow(() -> new GlobalException(ErrorCode.ESTIMATE_NOT_FOUND));
         ownershipGuard.checkEstimate(estimate, me);
-        return EstimateDetailResponse.of(estimate, scenarioRepository.findByEstimateIdOrderByAmrCountAsc(estimateId),
-                videoPresigner.sign(estimate.getVerifyVideoUrl()));
+        return toDetail(estimate);
+    }
+
+    private EstimateDetailResponse toDetail(Estimate estimate) {
+        List<SimScenario> runs = scenarioRepository.findByEstimateIdOrderByAmrCountAsc(estimate.getId());
+        return EstimateDetailResponse.of(estimate, runs, videoPresigner.sign(estimate.getVerifyVideoUrl()),
+                verifyComparator.compare(estimate.getVerify(), recommendedRun(estimate, runs)));
+    }
+
+    private static SimScenario recommendedRun(Estimate estimate, List<SimScenario> runs) {
+        Integer recommended = estimate.getRecommendedCount();
+        if (recommended == null) {
+            return null;
+        }
+        return runs.stream().filter(run -> recommended.equals(run.getAmrCount())).findFirst().orElse(null);
     }
 
     /**
@@ -282,8 +298,7 @@ public class EstimateService {
     public EstimateDetailResponse snapshot(Long estimateId) {
         Estimate estimate = estimateRepository.findById(estimateId)
                 .orElseThrow(() -> new GlobalException(ErrorCode.ESTIMATE_NOT_FOUND));
-        return EstimateDetailResponse.of(estimate, scenarioRepository.findByEstimateIdOrderByAmrCountAsc(estimateId),
-                videoPresigner.sign(estimate.getVerifyVideoUrl()));
+        return toDetail(estimate);
     }
 
     @Transactional(readOnly = true)
@@ -424,6 +439,7 @@ public class EstimateService {
                     response.estimateId(), response.runId());
             return;
         }
+        estimate.applyVerifyResult(toVerifySnapshot(response));
         String video = response.artifacts() != null ? response.artifacts().video() : null;
         if (video != null) {
             estimate.applyVerifyVideo(video);
@@ -432,6 +448,35 @@ public class EstimateService {
                 estimate.getId(), response.status(), video);
         eventPublisher.publishEvent(new EstimateVerified(
                 estimate.getId(), response.status(), videoPresigner.sign(video), response.error()));
+    }
+
+    /** 계약 §3 페이로드에서 견적에 남길 것만 뽑는다. verify·kpi 가 없는 옛 페이로드는 성패만 남는다. */
+    private VerifySnapshot toVerifySnapshot(VerifyResultResponse response) {
+        VerifyResultResponse.Verify verify = response.verify();
+        SimulationResponse.Kpi kpi = response.kpi();
+        VerifyResultResponse.Fms fms = verify == null ? null : verify.fms();
+        return new VerifySnapshot(
+                response.runId(), response.status(),
+                verify == null ? null : verify.reason(), response.error(),
+                verify == null ? null : verify.nRobots(),
+                verify == null ? null : verify.robotsOnline(),
+                verify == null ? null : verify.windowS(),
+                warningsJson(fms),
+                kpi == null ? null : kpi.throughputOrdersPerH(),
+                kpi == null ? null : kpi.leadTimeP90S(),
+                kpi == null ? null : kpi.conflictWaitRatio(),
+                LocalDateTime.now());
+    }
+
+    private String warningsJson(VerifyResultResponse.Fms fms) {
+        if (fms == null || fms.warnings() == null || fms.warnings().isNull()) {
+            return null;
+        }
+        try {
+            return objectMapper.writeValueAsString(fms.warnings());
+        } catch (JsonProcessingException e) {
+            return fms.warnings().toString();
+        }
     }
 
     /**
@@ -474,8 +519,14 @@ public class EstimateService {
             return;
         }
         run.markDone(throughputPercent(kpi), utilizationPercent(kpi), dailyOutbound(run, kpi), kpi.leadTimeP90S());
+        run.applyKpiDetail(toKpiDetail(kpi));
         log.info("run 완료: runId={}, 처리율={}%, 가동률={}%",
                 run.getRunId(), run.getThroughput(), run.getUtilization());
+    }
+
+    private RunKpiDetail toKpiDetail(SimulationResponse.Kpi kpi) {
+        return new RunKpiDetail(kpi.ordersTotal(), kpi.ordersCompleted(), kpi.leadTimeMeanS(), kpi.queueTimeMeanS(),
+                kpi.throughputOrdersPerH(), kpi.conflictWaitRatio(), kpi.distanceTotalM());
     }
 
     /**

@@ -2,6 +2,7 @@ package com.ssafy.santafactory.entity.estimate;
 
 import com.ssafy.santafactory.entity.warehouse.Warehouse;
 import jakarta.persistence.Column;
+import jakarta.persistence.Embedded;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
@@ -105,6 +106,10 @@ public class Estimate {
     @Column(name = "replay_scene_json")
     private String replaySceneJson;
 
+    /** 물리 검증 결과 (S15P21A106-236). 검증 전이면 null. 재검증하면 덮어쓴다. */
+    @Embedded
+    private VerifySnapshot verify;
+
     private Estimate(Warehouse warehouse, String amrModel,
                      double targetThroughput, double targetUtilization, long budgetLimit) {
         this.warehouse = warehouse;
@@ -161,6 +166,13 @@ public class Estimate {
     /** 물리 검증 결과로 받은 리플레이 영상 URL을 반영한다. */
     public void applyVerifyVideo(String url) {
         this.verifyVideoUrl = url;
+    }
+
+    /** 물리 검증 결과를 반영한다. 영상과 같이 성패를 가리지 않고 마지막 결과를 남긴다. */
+    public void applyVerifyResult(VerifySnapshot snapshot) {
+        if (snapshot != null) {
+            this.verify = snapshot;
+        }
     }
 
     /**

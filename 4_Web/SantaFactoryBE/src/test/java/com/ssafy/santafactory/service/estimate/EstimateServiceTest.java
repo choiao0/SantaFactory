@@ -2,6 +2,8 @@ package com.ssafy.santafactory.service.estimate;
 
 import com.ssafy.santafactory.dto.estimate.EstimateCreateRequest;
 import com.ssafy.santafactory.dto.estimate.EstimateCreateResponse;
+import com.ssafy.santafactory.dto.estimate.EstimateDetailResponse;
+import com.ssafy.santafactory.dto.estimate.VerifyNoticeCode;
 import com.ssafy.santafactory.dto.simulation.SimulationRequest;
 import com.ssafy.santafactory.dto.simulation.SimulationResponse;
 import com.ssafy.santafactory.dto.simulation.VerifyRequest;
@@ -10,6 +12,7 @@ import com.ssafy.santafactory.entity.estimate.Estimate;
 import com.ssafy.santafactory.entity.estimate.EstimateStatus;
 import com.ssafy.santafactory.entity.estimate.ReasonCode;
 import com.ssafy.santafactory.entity.estimate.RunStatus;
+import com.ssafy.santafactory.entity.simulation.RunKpiDetail;
 import com.ssafy.santafactory.entity.simulation.SimScenario;
 import com.ssafy.santafactory.entity.warehouse.Warehouse;
 import com.ssafy.santafactory.global.auth.OwnershipGuard;
@@ -92,7 +95,8 @@ class EstimateServiceTest {
                 eventPublisher,
                 outboundOrderGenerator,
                 objectMapper,
-                videoPresigner
+                videoPresigner,
+                new VerifyComparator(new VerifyCompareProperties(0.10, 0.01))
         );
     }
     return service;
@@ -513,7 +517,7 @@ class EstimateServiceTest {
         Estimate estimate = withId(estimate(85.0, 90.0, 1_000_000_000L), 77L);
         when(estimateRepository.findById(77L)).thenReturn(Optional.of(estimate));
 
-        service().applyVerifyResult(new VerifyResultResponse("v1", "failed", "start timeout", 77L, null));
+        service().applyVerifyResult(new VerifyResultResponse("v1", "failed", "start timeout", 77L, null, null, null, null));
 
         assertThat(estimate.getVerifyVideoUrl()).isNull();
         ArgumentCaptor<EstimateEvents.EstimateVerified> event = ArgumentCaptor.captor();
@@ -521,6 +525,121 @@ class EstimateServiceTest {
         assertThat(event.getValue().status()).isEqualTo("failed");
         assertThat(event.getValue().videoUrl()).isNull();
         assertThat(event.getValue().error()).isEqualTo("start timeout");
+    }
+
+    // ── 상세 지표·검증 결과 저장 (S15P21A106-236) ────────────────────────────
+
+    @Test
+    void apply_result_persists_kpi_detail_on_the_run() {
+        Estimate estimate = estimate(85.0, 90.0, 1_000_000_000L);
+        SimScenario run = run(estimate, 4);
+        when(scenarioRepository.findByRunId(run.getRunId())).thenReturn(Optional.of(run));
+        when(scenarioRepository.findByEstimateIdOrderByAmrCountAsc(any())).thenReturn(List.of(run));
+
+        service().applyResult(new SimulationResponse(run.getRunId(), "done", null, fullKpi(100, 96, 0.8), null));
+
+        assertThat(run.getKpiDetail().getOrdersTotal()).isEqualTo(100);
+        assertThat(run.getKpiDetail().getOrdersCompleted()).isEqualTo(96);
+        assertThat(run.getKpiDetail().getLeadTimeMeanS()).isEqualTo(212.0);
+        assertThat(run.getKpiDetail().getQueueTimeMeanS()).isEqualTo(48.0);
+        assertThat(run.getKpiDetail().getThroughputOrdersPerH()).isEqualTo(159.0);
+        assertThat(run.getKpiDetail().getConflictWaitRatio()).isEqualTo(0.068);
+        assertThat(run.getKpiDetail().getDistanceTotalM()).isEqualTo(171_400L);
+    }
+
+    @Test
+    void apply_verify_result_persists_snapshot_and_still_publishes_video_event() {
+        Estimate estimate = withId(estimate(85.0, 90.0, 1_000_000_000L), 77L);
+        when(estimateRepository.findById(77L)).thenReturn(Optional.of(estimate));
+        when(videoPresigner.sign("verify_77/v1.mp4")).thenReturn("https://host/signed");
+
+        service().applyVerifyResult(verifyFull("verify_77", 77L, "verify_77/v1.mp4",
+                "window elapsed", 14, 14, null, fullKpi(30, 29, 0.7)));
+
+        assertThat(estimate.getVerify().getRunId()).isEqualTo("verify_77");
+        assertThat(estimate.getVerify().getStatus()).isEqualTo("done");
+        assertThat(estimate.getVerify().getReason()).isEqualTo("window elapsed");
+        assertThat(estimate.getVerify().getNRobots()).isEqualTo(14);
+        assertThat(estimate.getVerify().getRobotsOnline()).isEqualTo(14);
+        assertThat(estimate.getVerify().getWindowS()).isEqualTo(600);
+        assertThat(estimate.getVerify().getWarningsJson()).isNull();
+        assertThat(estimate.getVerify().getThroughputOrdersPerH()).isEqualTo(159.0);
+        assertThat(estimate.getVerify().getLeadTimeP90S()).isEqualTo(384.0);
+        assertThat(estimate.getVerify().getConflictWaitRatio()).isEqualTo(0.068);
+        assertThat(estimate.getVerify().getVerifiedAt()).isNotNull();
+        assertThat(estimate.getVerifyVideoUrl()).isEqualTo("verify_77/v1.mp4");
+        ArgumentCaptor<EstimateEvents.EstimateVerified> event = ArgumentCaptor.captor();
+        verify(eventPublisher).publishEvent(event.capture());
+        assertThat(event.getValue().videoUrl()).isEqualTo("https://host/signed");
+    }
+
+    @Test
+    void apply_verify_result_keeps_fms_warnings_as_json() throws Exception {
+        Estimate estimate = withId(estimate(85.0, 90.0, 1_000_000_000L), 77L);
+        when(estimateRepository.findById(77L)).thenReturn(Optional.of(estimate));
+        JsonNode warnings = new ObjectMapper().readTree("[\"theta file missing\"]");
+
+        service().applyVerifyResult(verifyFull("verify_77", 77L, null,
+                "window elapsed", 14, 14, warnings, fullKpi(30, 29, 0.7)));
+
+        assertThat(estimate.getVerify().getWarningsJson()).isEqualTo("[\"theta file missing\"]");
+    }
+
+    @Test
+    void detail_omits_verification_before_any_verify_result() {
+        Estimate estimate = withId(estimate(85.0, 90.0, 1_000_000_000L), 77L);
+        when(estimateRepository.findById(77L)).thenReturn(Optional.of(estimate));
+        when(scenarioRepository.findByEstimateIdOrderByAmrCountAsc(77L)).thenReturn(List.of(run(estimate, 4)));
+
+        EstimateDetailResponse detail = service().detail(77L, ADMIN);
+
+        assertThat(detail.verification()).isNull();
+        assertThat(detail.runs().get(0).kpi()).isNull();
+    }
+
+    @Test
+    void detail_compares_verify_kpi_against_recommended_run() {
+        Estimate estimate = withId(estimate(85.0, 90.0, 1_000_000_000L), 77L);
+        SimScenario two = run(estimate, 2);
+        SimScenario four = run(estimate, 4);
+        four.markDone(96.0, 80.0, 96L, 384.0);
+        four.applyKpiDetail(new RunKpiDetail(100, 96, 212.0, 48.0, 159.0, 0.068, 171_400L));
+        ReflectionTestUtils.setField(estimate, "createdAt", LocalDateTime.now());   // @PrePersist 가 없어 직접
+        estimate.complete(4, null, null, false);
+        when(estimateRepository.findById(77L)).thenReturn(Optional.of(estimate));
+        when(scenarioRepository.findByEstimateIdOrderByAmrCountAsc(77L)).thenReturn(List.of(two, four));
+
+        // 검증: 시간당 152건, p90 414초(+7.8 %), 혼잡 0.081(+1.3 %p) → 혼잡이 기준을 넘는다
+        service().applyVerifyResult(verifyFull("verify_77", 77L, null, "window elapsed", 4, 4, null,
+                new SimulationResponse.Kpi(30, 29, null, null, null, 230.0, 414.0, 50.0,
+                        152.0, null, 0.72, 0.081, 30_000L, 0L)));
+        EstimateDetailResponse detail = service().detail(77L, ADMIN);
+
+        EstimateDetailResponse.Verification verification = detail.verification();
+        assertThat(verification.notice()).isEqualTo(VerifyNoticeCode.SLOWER_AT_PEAK);
+        assertThat(verification.comparison().throughputOrdersPerH().expected()).isEqualTo(159.0);
+        assertThat(verification.comparison().throughputOrdersPerH().verified()).isEqualTo(152.0);
+        assertThat(verification.comparison().throughputOrdersPerH().diff()).isEqualTo(-7.0);
+        assertThat(verification.comparison().leadTimeP90S().expected()).isEqualTo(384.0);
+        assertThat(verification.comparison().leadTimeP90S().diff()).isEqualTo(30.0);
+        assertThat(verification.comparison().conflictWaitRatio().diff()).isCloseTo(0.013, within(1e-9));
+        assertThat(detail.runs().get(1).kpi().throughputOrdersPerH()).isEqualTo(159.0);
+    }
+
+    @Test
+    void verify_result_never_changes_the_verdict() {
+        Estimate estimate = withId(estimate(85.0, 90.0, 1_000_000_000L), 77L);
+        estimate.complete(4, 6, null, false);
+        when(estimateRepository.findById(77L)).thenReturn(Optional.of(estimate));
+
+        service().applyVerifyResult(new VerifyResultResponse("verify_77", "failed", "runner NDEATH", 77L,
+                null, null, null, null));
+
+        assertThat(estimate.getRecommendedCount()).isEqualTo(4);
+        assertThat(estimate.getKneeCount()).isEqualTo(6);
+        assertThat(estimate.getStatus()).isEqualTo(EstimateStatus.DONE);
+        assertThat(estimate.getVerify().getStatus()).isEqualTo("failed");
+        assertThat(estimate.getVerify().getError()).isEqualTo("runner NDEATH");
     }
 
     // ── 물리 검증 요청 발행 ──────────────────────────────────────────────────
@@ -775,7 +894,27 @@ class EstimateServiceTest {
     }
 
     private VerifyResultResponse verifyDone(String runId, Long estimateId, String videoUrl) {
-        return new VerifyResultResponse(runId, "done", null, estimateId,
-                new VerifyResultResponse.Artifacts(videoUrl));
+        return new VerifyResultResponse(runId, "done", null, estimateId, null,
+                new VerifyResultResponse.Artifacts(videoUrl), null, null);
+    }
+
+    /** 계약 §3 전체 모양 — verify 블록과 kpi 까지 온 결과. */
+    private VerifyResultResponse verifyFull(String runId, Long estimateId, String videoUrl, String reason,
+                                            int nRobots, int robotsOnline, JsonNode warnings,
+                                            SimulationResponse.Kpi kpi) {
+        return new VerifyResultResponse(runId, "done", null, estimateId, "est_%d_n%d".formatted(estimateId, nRobots),
+                videoUrl == null ? null : new VerifyResultResponse.Artifacts(videoUrl),
+                new VerifyResultResponse.Verify(nRobots, robotsOnline, 600, reason,
+                        new VerifyResultResponse.Fms("done", null, warnings)),
+                kpi);
+    }
+
+    /** 14개 키가 전부 채워진 kpi. 시간당 159건 · 평균 212초 · p90 384초 · 대기 48초 · 혼잡 6.8 % · 171.4 km. */
+    private SimulationResponse.Kpi fullKpi(int ordersTotal, int ordersCompleted, double amrUtilization) {
+        return new SimulationResponse.Kpi(
+                ordersTotal, ordersCompleted, 0, 0,
+                21_600L, 212.0, 384.0, 48.0,
+                159.0, 167.0,
+                amrUtilization, 0.068, 171_400L, 0L);
     }
 }
