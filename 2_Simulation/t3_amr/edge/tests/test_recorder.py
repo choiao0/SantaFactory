@@ -126,3 +126,13 @@ class TestLifecycle:
         with open(p, "wb") as f:
             f.write(b"\x00" * 16)
         assert r.video_path() == p
+
+    def test_remove_frames_deletes_the_shots_dir_and_is_a_noop_afterwards(self, tmp_path):
+        r = REC.Recorder(cfg(tmp_path), spawn=FakePopen)
+        r.spec = spec()
+        os.makedirs(r.shots_dir())
+        for name in ("f_000001.png", "f_000002.png"):
+            open(os.path.join(r.shots_dir(), name), "wb").close()
+
+        assert r.remove_frames() == 2 and not os.path.exists(r.shots_dir())
+        assert r.remove_frames() == 0

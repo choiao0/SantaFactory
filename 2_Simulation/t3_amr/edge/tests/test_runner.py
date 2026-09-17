@@ -124,7 +124,7 @@ class TestStopAndVideo:
         assert h.runner.state == R.ERROR
         assert "no video" in h.pub.named_with("NDATA", R.LAST_ERROR)[R.LAST_ERROR] and h.uploader.calls == []
 
-    def test_upload_failure_is_an_error(self, tmp_path):
+    def test_upload_failure_is_an_error_and_keeps_the_frames(self, tmp_path):
         h = Harness(tmp_path, uploader=FakeUploader(fail=OSError("connection refused")), heartbeat_s=5.0)
         h.connect()
         h.run_until_running()
@@ -132,6 +132,15 @@ class TestStopAndVideo:
         h.stop(100.0)
         h.runner.tick(101.0)
         assert h.runner.state == R.ERROR and "upload failed" in h.pub.named_with("NDATA", R.LAST_ERROR)[R.LAST_ERROR]
+        assert not h.rec.frames_removed                      # 실패 런의 프레임은 진단용으로 남긴다 (-241)
+
+    def test_successful_upload_removes_the_frames(self, h):
+        h.connect()
+        h.run_until_running()
+        h.rec.video = "/data/out/demo_verify_77_n3.mp4"
+        h.stop(100.0)
+        h.runner.tick(101.0)
+        assert h.runner.state == R.IDLE and h.uploader.calls and h.rec.frames_removed
 
     def test_without_uploader_reports_local_path(self, tmp_path):
         h = Harness(tmp_path, heartbeat_s=5.0)
@@ -206,6 +215,21 @@ class TestStopAndVideo:
         assert h.runner.state == R.ERROR
         h.start(200.0, run_id="verify_78_n2", n=2)
         assert h.runner.state == R.STARTING and h.rec.spec.run_id == "verify_78_n2"
+
+
+class TestGpuProbe:
+    def test_gpu_loss_reports_error_without_launching_and_asks_for_shutdown(self, h):
+        h.connect()
+        h.gpu_error = "nvidia-smi rc=255: Failed to initialize NVML: Unknown Error"
+        h.start(1.0)
+        assert h.runner.state == R.ERROR and not h.rec.started and h.gpu_lost == 1
+        m = h.pub.named_with("NDATA", R.LAST_ERROR)
+        assert m[R.LAST_ERROR] == "gpu unavailable: " + h.gpu_error and m[R.RUN_ID] == ""
+
+    def test_gpu_ok_launches_as_before(self, h):
+        h.connect()
+        h.start(1.0)
+        assert h.runner.state == R.STARTING and h.rec.started and h.gpu_lost == 0
 
 
 class TestHeartbeat:

@@ -62,6 +62,7 @@ numba ≥0.63 이 `coverage.types.Tracer`(7.5+)를 요구해 import 가 죽기 �
 **GPU capability 에 `ngx` 가 있어야 한다**(-237). compose 는 `deploy.resources.reservations.devices.capabilities` 목록이 곧 마운트 범위라
 `ngx` 를 빼면 DLSS 디노이저 라이브러리가 안 들어와 프레임이 노이즈로 덮이고 mp4 가 100 Mbps 가 된다(2026-09-16 verify_4: 366 MB/30 s,
 `ngx` 넣은 뒤 같은 조건 2~3 MB). 확인: 컨테이너 안 `ls /usr/lib/x86_64-linux-gnu | grep -c ngx` → 2. `docker run --gpus all` 과 k8s(env `all`)는 해당 없음.
+**GPU 접근이 어느 날 조용히 사라진다**(-241, 2026-09-17 새벽 실측). unattended-upgrade 가 `systemd daemon-reload` 를 부르면 docker(systemd cgroup 드라이버, cgroup v2)가 상주 컨테이너의 device cgroup 을 다시 적용하는데, nvidia 훅이 넣어 준 `/dev/nvidia*` 허용은 그때 사라진다. 컨테이너는 살아 있고 장치 파일도 보이지만 열리지 않아 `nvidia-smi` 가 NVML 999, Kit 이 Vulkan INCOMPATIBLE_DRIVER 를 내고 프레임 0 장으로 420 s 를 태운 뒤 실패한다. 처방 둘: ① compose `devices:` 에 `/dev/nvidia0 nvidiactl nvidia-modeset nvidia-uvm nvidia-uvm-tools` 를 명시해 docker 자신의 목록(HostConfig)에 올린다 — 재적용에서 살아남는다(NVIDIA 문서의 처방, 대안은 CDI `nvidia-ctk cdi generate`). ② 엣지가 Start 마다 `nvidia-smi` 프로브(`edge/gpu.py`)를 돌려 안 되면 Kit 을 띄우지 않고 `LastError` `gpu unavailable: …` 로 ERROR 보고 뒤 종료 코드 3 으로 내려간다 → `restart: unless-stopped` 가 다시 띄우며 nvidia 훅이 장치를 재주입하고, host-orch 는 NDEATH 로 런을 바로 접어 BE 가 재시도할 수 있다. 재현·확인: `sudo systemctl daemon-reload` 뒤 `docker exec t3amr-runner nvidia-smi -L`. k8s 는 device plugin 이 장치를 스펙에 넣으므로 해당 없음.
 컨테이너는 uid 1000 `runner` 로 돈다 — bind mount 하는 `deploy/data` 는 호스트 계정(uid 1000) 소유면 된다. 다른 uid 면 소유권을 1000 으로 맞춘다.
 
 첫 빌드·실행 기록(2026-09-16, 이 박스): 빌드 25 분·26.4 GB, `check` 통과(RTX 5080 · 595.91 · isaacsim 6.0.1.0). 첫 `record 2` 에서 드러난 것 셋과 그 수정(-220):
@@ -85,15 +86,18 @@ numba ≥0.63 이 `coverage.types.Tracer`(7.5+)를 요구해 import 가 죽기 �
 | 파일 | 역할 |
 |---|---|
 | `edge/edge.py` | paho 연결, NDEATH 유언·NBIRTH, NCMD/STATE 구독, 틱 루프, `alive` 파일(livenessProbe) |
-| `edge/runner.py` | 상태기계 IDLE → STARTING(첫 프레임 대기) → RUNNING → STOPPING(SIGINT → mp4 조립 → 업로드) → IDLE/ERROR. `Runner/VideoUrl` 메트릭 |
-| `edge/recorder.py` | Start → `RUN_TAG`·`PIBT_N`·`PIBT_SEED`·`PIBT_HORIZON`·`REPLAN` 환경으로 `run_record.sh` 기동, 촬영 감지(`캡처 ON`·프레임), 정지 사다리 |
+| `edge/runner.py` | 상태기계 IDLE → STARTING(첫 프레임 대기) → RUNNING → STOPPING(SIGINT → mp4 조립 → 업로드 → 프레임 삭제) → IDLE/ERROR. `Runner/VideoUrl` 메트릭. Start 직전 GPU 프로브(-241) |
+| `edge/recorder.py` | Start → `RUN_TAG`·`PIBT_N`·`PIBT_SEED`·`PIBT_HORIZON`·`REPLAN` 환경으로 `run_record.sh` 기동, 촬영 감지(`캡처 ON`·프레임), 정지 사다리, `remove_frames()`(업로드 성공 뒤 `out/shots_<run>/` 삭제 — 런당 1.6~2.6 GB, 실패 런은 진단용으로 남김, -241) |
+| `edge/gpu.py` | Start 직전 `nvidia-smi` 프로브. 실패 사유가 `LastError` 에 실리고 엣지는 종료 코드 3 으로 내려간다 (-241, §1 'GPU 접근') |
 | `edge/upload.py` | mp4 → MinIO(`MINIO_*`, 쓰기 전용 계정) → **객체 키** `<run_id>/<파일>` (-233, 버킷 이름은 안 붙는다). URL 은 백엔드가 조회 시 서명해서 만든다 |
 | `edge/spec.py` | Start JSON 파싱. `window_s` 는 `timeout_s − 300` 에서 되돌린다 |
+
+영상 길이는 compose env `SHOT_STRIDE` 로 정한다(-241): 배속 = STRIDE × `SHOT_FPS`(30) / 60. 기본을 20(10배속, 창 600 s → 26 s)에서 **10(5배속, 약 53 s)** 으로 낮췄다. 프레임 PNG 는 2배(런당 약 3 GB)지만 업로드 뒤 지우므로 디스크에 안 쌓인다.
 
 host-orch 쪽(-215 같이): `Runner/VideoUrl` → `sim.verify.result.artifacts.video`. **EC2 host-orch 는 `--fms-node` 없이 띄운다** — t3_amr 이 자체 계획으로 돌아 fms-core 가 RUNNING 이 될 일이 없다.
 **`--stop-timeout-s` 도 올려야 한다(기본 60 → 300 권장)** — Stop 뒤 Kit 정리(≤25 s) + ffmpeg 조립(프레임 수천 장이면 1 분 넘게) + MinIO 업로드가 STOPPING 안에서 일어난다. 업로드는 워커 스레드라 그동안 하트비트·NCMD 는 계속 처리된다.
 
-단위 테스트(브로커·Isaac 없이): `cd 2_Simulation && python3 -m pytest` (58건). 브로커 붙여 손으로 돌리기:
+단위 테스트(브로커·Isaac 없이): `cd 2_Simulation && python3 -m pytest` (66건). 브로커 붙여 손으로 돌리기:
 ```bash
 cd 2_Simulation/t3_amr && python3 -m edge --env-file ../../3_FMS/infra/emqx/.env -v     # MINIO_* 없으면 VideoUrl = file://… (로컬 확인용)
 ```

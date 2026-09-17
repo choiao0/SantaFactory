@@ -2,7 +2,7 @@
 # t3_amr 러너 컨테이너 엔트리포인트.
 #   edge            상주 엣지 — MQTT(Sparkplug) NCMD Start 를 받아 run_record.sh 를 돌리고 mp4 를 MinIO 에 올린다 (기본)
 #   record [N]      엣지 없이 한 번 녹화 (컨테이너·GPU·촬영 검증용). N = 로봇 대수, 기본 3
-#   check           GPU · Isaac import · ffmpeg · 에셋(iw.hub·선반) · 계획기 원본(3_FMS/sim_engine)만 확인하고 끝
+#   check           GPU(프로브) · Isaac import · ffmpeg · 에셋(iw.hub·선반) · 계획기 원본(3_FMS/sim_engine)만 확인하고 끝
 #   shell           bash
 set -euo pipefail
 cd /app/2_Simulation/t3_amr            # Dockerfile 의 $T3. 저장소와 같은 두 단 배치 — path/pibt_core_v2.py 가 ../../3_FMS/sim_engine 을 찾는다
@@ -29,7 +29,10 @@ import pibt_core_v2  # noqa: F401  — 계획기 로더. 원본을 못 찾으면
 import pibt_core
 print("planner", pibt_core.__pibt_source__, "vendored" if pibt_core.__pibt_vendored__ else "upstream",
       "MOVE_TICKS", pibt_core.MOVE_TICKS)
-if missing or pibt_core.__pibt_vendored__:
+from edge import gpu  # noqa: E402  — Start 직전과 같은 프로브 (-241). device cgroup 이 지워졌으면 여기서 걸린다
+gpu_err = gpu.probe()
+print("gpu", gpu_err or "ok")
+if missing or pibt_core.__pibt_vendored__ or gpu_err:
     sys.exit(1)
 PY
     ffmpeg -version | head -1
