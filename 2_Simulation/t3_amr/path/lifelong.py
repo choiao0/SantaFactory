@@ -84,6 +84,10 @@ SERVICE = (SVC_PICK, SVC_DROP, CHARGING)
 # IDLE 은 우리 쪽에서 goal=None 이라 목표 대신 **서 있는 칸**으로 예약한다.
 ZONE_CLAIM = (TO_HOME, TO_CHARGE, TO_CHARGE_HI, CHARGING)
 
+# ★ 정체 문턱 — FMS `hd_after` 와 같은 값 (FMS-26 §2-6). `stag_robot_ticks`
+#   가 이 값을 쓴다. 저쪽이 바꾸면 여기도 같이 바꿔야 비교가 선다.
+HD_AFTER = int(os.environ.get("PIBT_HD_AFTER", "16"))
+
 SERVICE_TICKS = 3          # 픽/드롭 서비스 시간. FMS SERVICE_STEPS 와 같은 자리
 
 
@@ -222,6 +226,8 @@ class Kernel(object):
         #   보고했는데 겪은 로봇은 8대였다 (FMS 답신 15 §3).
         #   「끝까지 막혀 있던 수」가 아니라 **「겪은 수」**를 세야 한다.
         self.stag_peak = {a: 0 for a in starts}
+        # 정체 로봇·틱 누적 (FMS-26 §2-7 대안 지표). 위 주석 참조.
+        self.stag_robot_ticks = 0
         self.replan = Replanner(free, self.edge_cost, self.turn_cost)
         self.done = 0
         # ★ 완료 **틱**을 남긴다 (-224). 총계만으로는 FMS 의 `saturated_tph`
@@ -594,6 +600,22 @@ class Kernel(object):
                 self.stag.update(a, r["goal"], self.dm(r["goal"])[s1])
                 if self.stag.get(a) > self.stag_peak[a]:
                     self.stag_peak[a] = self.stag.get(a)
+                # ★ 정체 로봇·틱 — FMS `standoff_ticks` 의 **대안 지표**
+                #   (FMS-26 §2-7). 「`stag >= hd_after` 인 로봇을 매 틱 세어
+                #   합한다」. 대치 상태기계 없이 잴 수 있고, 저쪽 대치 감지의
+                #   **입력**이라 대치 로봇·틱의 상위 집합이다.
+                #
+                #   ★★ `stag_stuck` 과 **다른 값이다.** 이름이 비슷해서
+                #     묶으면 안 된다:
+                #       stag_stuck        `stag_peak >= 100` 인 로봇 수. 판당 한 번
+                #       stag_robot_ticks  `stag >= 16` 인 로봇 수를 **매 틱 누적**
+                #
+                #   목표가 있는 로봇만 센다 — 목표가 없으면 `stag` 가 이 틱에
+                #   갱신되지 않아 **옛 값이 남는다.** 저쪽 감지도 `state ∈ NAV`
+                #   를 요구하므로(§2-2 A) 목표가 있는 쪽이 맞다고 본다.
+                #   (해석이 하나 들어갔다 — 답신에 그렇게 적었다.)
+                if self.stag.get(a) >= HD_AFTER:
+                    self.stag_robot_ticks += 1
                 self.age[a] = 0 if s1[:2] == r["goal"] else self.age[a] + 1
                 if s1[:2] == r["goal"]:
                     self._arrive(a)
@@ -728,6 +750,9 @@ def run_lifelong(free, starts, cells_by_cat, horizon=600, seed=0, order_gap=15,
             "stag_mean": (sum(K.stag_peak.values()) / len(K.stag_peak)
                           if K.stag_peak else 0.0),
             "stag_stuck": sum(1 for v in K.stag_peak.values() if v >= 100),
+            # ★ FMS `standoff_ticks` 의 대안 — 이름이 비슷한 위 값과 **다르다**
+            "stag_robot_ticks": K.stag_robot_ticks,
+            "hd_after": HD_AFTER,
             # 끝 시점 값 — 「지금도 막혀 있나」. 판정에 쓰려면 이쪽이 맞다
             "stag_stuck_end": sum(1 for v in K.stag.stag.values() if v >= 100)}
     if hasattr(K, "report"):
