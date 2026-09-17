@@ -653,8 +653,15 @@ def run_lifelong(free, starts, cells_by_cat, horizon=600, seed=0, order_gap=15,
     #   전부 안 탄다 — 셋 다 이 함수를 직접 부른다. 공통 진입점에 두어야
     #   도구가 아무것도 안 고쳐도 따라온다.
     #   형식을 아는 코드는 `fms_stream` 에 둔다 (위 독스트링의 약속).
-    src = "시드 생성"
-    if stream is None:
+    # ★ 호출자가 스트림을 **직접 준** 경우도 말해야 한다 (2026-09-17 정정).
+    #   처음에는 `src = "시드 생성"` 으로 두고 `stream is None` 일 때만 고쳤는데,
+    #   `pibt_scene --orders` 처럼 밖에서 넣어 주면 **파일로 돌면서 「시드
+    #   생성」이라고 찍었다.** 출처를 찍는 줄이 출처를 속이면 없느니만 못하다.
+    src = None
+    if stream is not None:
+        src = (stream.provenance() if hasattr(stream, "provenance")
+               else f"호출자가 준 스트림 ({type(stream).__name__})")
+    else:
         try:
             import fms_stream
         except ImportError:

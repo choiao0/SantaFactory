@@ -772,7 +772,13 @@ def main():
                          "치운 로봇이 충전존으로 복귀한다. "
                          "1 이하면 horizon 비율(예: 0.7), 1 초과면 틱 수. "
                          "생략하면 horizon 끝까지 주문이 들어온다(이전 동작)")
-    ap.add_argument("--orders", default=os.environ.get("ASSIGN"),
+    # ★ 환경변수 기본값을 **뺀다** (2026-09-17, S15P21A106-200).
+    #   옛 이름 `ASSIGN` 을 기본값으로 두면, 한 번 export 하고 같은 셸에서
+    #   `run_record.sh` 를 돌릴 때 **계획만** 배정표로 서고 주행은 난수로
+    #   돌았다 (주행은 `live_pibt` 가 다시 계획한다). 실제로 그 함정에 걸렸다.
+    #   이제 환경변수 경로는 `FMS_ASSIGN` 하나이고 `run_lifelong` 이 읽는다 —
+    #   계획과 주행이 같은 문을 지나므로 갈릴 자리가 없다.
+    ap.add_argument("--orders", default=None,
                     help="FMS 배정표 CSV (`packing_assign_s*.csv`). 주면 주문을 "
                          "난수로 만들지 않고 **그 파일 그대로** 읽는다 — 언제 · "
                          "어느 버퍼 · 어느 포장대가 FMS 와 같아진다. "
@@ -823,10 +829,17 @@ def main():
                 from fms_stream import FileOrderStream
                 fstream = FileOrderStream(args.orders, geom, free, args.map,
                                           horizon, order_end=oe)
+                # ★ 단언 넷을 **여기서도** 돌린다 (2026-09-17, S15P21A106-200).
+                #   `run_lifelong` 의 `FMS_ASSIGN` 경로는 `from_env()` 가
+                #   `check()` 를 부르는데, 이 `--orders` 경로는 안 불렀다.
+                #   같은 파일을 어느 문으로 들어오느냐에 따라 검사가 도는지가
+                #   갈리면, 도는 쪽으로만 확인해 놓고 안 도는 쪽으로 돌리게 된다.
+                fstream.check(strict=True)
                 bad = fstream.verify()
                 if bad:
                     print(f"[scene] ★ 스테이션 인덱스가 밀린 데 {len(bad)}곳 — "
                           f"{bad[:3]}")
+                print(f"[scene] 주문 출처: {fstream.provenance()}")
             adg, order, history, info = plan_and_build_lifelong(
                 free, starts, goals, geom, horizon=horizon, seed=args.seed,
                 order_gap=args.order_gap, battery=args.battery,
