@@ -20,6 +20,8 @@ public enum ErrorCode {
     WAREHOUSE_NOT_FOUND(HttpStatus.NOT_FOUND, "EST404_1", "요청한 창고를 찾을 수 없습니다."),
     ESTIMATE_NOT_FOUND(HttpStatus.NOT_FOUND, "EST404_2", "요청한 견적을 찾을 수 없습니다."),
     ESTIMATE_NOT_VERIFIABLE(HttpStatus.CONFLICT, "EST409_1", "권장 대수가 없어 물리 검증을 시작할 수 없습니다."),
+    ESTIMATE_NOT_FINISHED(HttpStatus.CONFLICT, "EST409_2", "견적 계산이 끝난 뒤에 견적서를 만들 수 있습니다."),
+    QUOTE_PDF_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "PDF503", "견적서 변환기에 연결할 수 없습니다. 잠시 후 다시 시도해 주세요."),
 
     // Auth
     UNAUTHORIZED(HttpStatus.UNAUTHORIZED, "AUTH401_1", "로그인이 필요합니다."),

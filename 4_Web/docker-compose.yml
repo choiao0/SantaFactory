@@ -49,6 +49,9 @@ services:
       ADMIN_EMAIL: ${ADMIN_EMAIL}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD}
       DEMO_PASSWORD: ${DEMO_PASSWORD}
+      # 견적서 PDF 변환기(아래 pdf 서비스)와 견적서에 적는 서비스 공개 주소
+      PDF_BASE_URL: http://pdf:3000
+      APP_PUBLIC_URL: ${APP_PUBLIC_URL:-https://j15a106.p.ssafy.io}
     ports:
       - "127.0.0.1:8080:8080"
     depends_on:
@@ -59,6 +62,8 @@ services:
       minio:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      pdf:
         condition: service_healthy
 
   frontend:
@@ -132,6 +137,29 @@ services:
       retries: 10
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD}
+
+  # 견적서 PDF 변환기 (S15P21A106-236). 백엔드가 HTML 을 보내면 크로미움으로 찍어 PDF 를 돌려준다.
+  # 백엔드 JVM 에 브라우저를 넣지 않으려고 분리했다 — 죽어도 견적서 기능만 멈춘다. 외부 포트 없음.
+  # t3.medium(4 GB) 이라 메모리 상한을 건다. 변환 중 크로미움이 300 MB 안팎을 쓴다.
+  pdf:
+    build: ./pdf
+    image: santafactory-pdf:latest
+    container_name: a106-pdf
+    restart: unless-stopped
+    command:
+      - gotenberg
+      - --api-timeout=60s
+      - --chromium-max-queue-size=2
+      # 템플릿은 서버에서 전부 채워 보내므로 스크립트가 필요 없다. 끄면 렌더가 결정적이고 가볍다
+      - --chromium-disable-javascript=true
+    mem_limit: 512m
+    ports:
+      - "127.0.0.1:3001:3000"      # 로컬에서 백엔드를 Docker 밖(gradle)에서 띄울 때만 쓴다(3000 은 frontend 가 쓴다). 외부 노출 아님
+    healthcheck:
+      test: ["CMD", "curl", "--silent", "--fail", "http://localhost:3000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
 
 volumes:
   db-data:

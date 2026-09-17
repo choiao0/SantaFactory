@@ -45,6 +45,9 @@ dependencies {
     // 가입 이메일 인증 코드 발송 (SMTP). spring.mail.host 가 있을 때만 JavaMailSender 가 만들어진다.
     implementation 'org.springframework.boot:spring-boot-starter-mail'
 
+    // 견적서 PDF 의 HTML 템플릿. 변환은 별도 컨테이너(4_Web/pdf)가 하고 여기서는 HTML 만 만든다 (S15P21A106-236).
+    implementation 'org.springframework.boot:spring-boot-starter-thymeleaf'
+
     // refresh 토큰 저장소. TTL 로 만료가 자동 정리되고, 회전·폐기가 SET/DEL 두 줄이다.
     implementation 'org.springframework.boot:spring-boot-starter-data-redis'
 
