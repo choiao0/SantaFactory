@@ -703,6 +703,12 @@ def setup_lifelong(map_dir, n, pitch, seed, mode="cross", verbose=True):
         print(f"[scene] 격자 {free.shape} ({pitch} m, {k}x {mode} 풀링)")
         print(f"[scene] 성분 {n_comp}개 중 스테이션 {n_hit}곳이 붙은 것만 사용 "
               f"({raw} -> {int(free.sum())}칸)")
+    # ★★ 회전 스윕 마스크 (-240). `PIBT_TURN_SWEEP` 이 꺼져 있으면 아무것도 안 한다.
+    #   여기여야 한다 — `keep_station_component` 로 `free` 가 확정된 **뒤**이고,
+    #   `make_geom`(= `front_rule` -> `geo.configure`) 보다 **나중**이다.
+    #   순서가 뒤집히면 `configure` 가 `_TURN_MASK` 를 None 으로 되돌린다.
+    import turn_sweep_mask
+    turn_sweep_mask.apply(free, geom, map_dir, verbose=verbose)
     starts = pick_starts(free, geom, n, verbose)
     cells = station_cells(free, geom, map_dir)
     if verbose:

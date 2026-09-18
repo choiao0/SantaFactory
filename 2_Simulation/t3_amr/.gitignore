@@ -82,3 +82,4 @@ venv/
 #
 #   FMS 에서 다시 받거나 `generate_orders.py` 로 만든다.
 tools/_orders/
+.cache/
