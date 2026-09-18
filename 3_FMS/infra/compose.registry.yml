@@ -1,7 +1,8 @@
-# 사설 이미지 레지스트리 (S15P21A106-248). Jenkins 가 EC2 에서 구운 워커 이미지를 올려 두고 k3s 노드(GCP)가 받아 간다.
+# 사설 이미지 레지스트리 (S15P21A106-248 → 249). Jenkins 가 EC2 에서 구운 워커 이미지를 올려 두고 k3s 노드(GCP)가 받아 간다.
 # SSAFY GitLab 은 컨테이너 레지스트리가 꺼져 있어 EC2 에 직접 둔다.
-#   · 127.0.0.1:5000     — EC2 자신이 push 할 때. 도커는 루프백 평문 레지스트리를 기본 허용해 daemon.json 을 안 건드린다
-#   · 100.100.149.68:5000 — tailnet. 노드가 pull 할 때. 각 노드의 /etc/rancher/k3s/registries.yaml 이 이 주소를 평문으로 받게 한다
+#   · 127.0.0.1:5000 — EC2 자신(Jenkins)이 push 할 때. 도커는 루프백 평문 레지스트리를 기본 허용해 daemon.json 을 안 건드린다
+#   · 노드의 pull 은 nginx 443 `/v2/` 뒤로 간다(nginx/registry-v2.conf: 공인 CA, 출발지 GCP NAT IP, GET/HEAD 만).
+#     이미지 이름은 j15a106.p.ssafy.io/<repo>:<태그>. tailnet 바인딩(100.100.149.68:5000)과 노드 registries.yaml 은 249 에서 없앴다.
 # 공인 NIC 에는 열지 않는다. 오래된 태그는 k8s/registry-prune.sh 가 지운다(DELETE 허용이 그래서 켜져 있다).
 # 2026-09-18 EC2 에는 같은 내용을 docker run 으로 먼저 올렸다(컨테이너 a106-registry, 볼륨 registry-data). compose 로 바꾸려면
 #   docker rm -f a106-registry && docker compose -f compose.registry.yml up -d
@@ -15,7 +16,6 @@ services:
       REGISTRY_STORAGE_DELETE_ENABLED: "true"
     ports:
       - "127.0.0.1:5000:5000"
-      - "100.100.149.68:5000:5000"
     volumes:
       - registry-data:/var/lib/registry
 volumes:
