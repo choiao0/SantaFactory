@@ -1704,6 +1704,23 @@ W_ACCEL = _tol_env("PIBT_W_ACCEL", 0.0)
 TURN_BODY_GATE = os.environ.get("PIBT_TURN_BODY_GATE", "0") not in ("0", "", "off")
 TURN_BODY_MAX = _tol_env("PIBT_TURN_BODY_MAX", 10.0)      # 초
 
+# ★★ 회전 **스텝별 자취** (-240, 2026-09-18). 기본 **꺼짐**.
+#
+#   `begin()` 주석이 「즉 **한쪽 구동바퀴를 중심으로 돌았다**는 뜻이다 … 추측을
+#   끝내려면 **재야 한다**」로 끝나 있다. 이게 그 재는 것이다.
+#
+#   지금 `[회전밀림]` 은 **시작·끝 두 자세**로만 회전중심을 역산한다. 그건 평균이라
+#   세 가설을 못 가른다
+#
+#       첫 스텝에 |r| 이 바퀴 반간격으로 **튄다**   -> 계단 입력 (우리 제어)
+#       |r| 이 0 에서 **서서히** 커진다             -> 하중·접지 (마찰)
+#       중간에 **갑자기** 튄다                      -> 접촉·간섭
+#
+#   ☹ 매 스텝 로그를 찍으면 판이 묻힌다. 버퍼에 담고 **밀린 회전에서만** 덤프한다.
+TURN_TRACE = os.environ.get("PIBT_TURN_TRACE", "0") not in ("0", "", "off", "no")
+TURN_TRACE_MAX = int(os.environ.get("PIBT_TURN_TRACE_MAX", "600"))
+TURN_TRACE_N = int(os.environ.get("PIBT_TURN_TRACE_N", "12"))    # 덤프할 줄 수
+
 
 def _emit(obj, msg: str) -> None:
     """진단 한 줄을 **지금** 내보낸다 (-240, 2026-09-18).
@@ -1762,6 +1779,49 @@ def pivot_in_body(pa: tuple[float, float, float],
     ca, sa = math.cos(pa[2]), math.sin(pa[2])
     rx, ry = px - pa[0], py - pa[1]
     return (ca * rx + sa * ry, -sa * rx + ca * ry)
+
+
+def dump_turn_trace(trace, half: float = 0.0, n: int = 12) -> str:
+    """스텝별 자취를 **구간마다 회전중심을 다시 재어** 한 판으로 만든다.
+
+    ★ 핵심은 「시작→끝」이 아니라 **「직전 스텝 → 지금」**을 매번 푸는 것이다.
+      전체 평균 `|r|` 은 「반은 제대로 돌고 반은 바퀴를 축으로 돌았다」와
+      「내내 그 중간을 축으로 돌았다」를 **같은 수로 만든다.** 구간별로 보면
+      갈린다.
+
+        |r| 이 첫 줄부터 `half` 근처       -> **계단 입력**. 우리 제어다
+        |r| 이 0 에서 서서히 커진다        -> 하중·접지. 마찰이다
+        중간 한 줄만 튄다                  -> 그 시각에 **닿았다**
+
+    `누적`은 시작 자세 기준이라 `[회전밀림]` 이 찍는 값과 같은 물건이고,
+    마지막 줄이 그 값으로 수렴하는지로 이 표가 맞는지 **검산**된다.
+    """
+    if not trace or len(trace) < 3:
+        return "           자취 없음"
+    # 길면 고르게 솎는다. 양 끝은 반드시 남긴다.
+    idx = list(range(len(trace)))
+    if len(idx) > n:
+        step = (len(idx) - 1) / float(n - 1)
+        idx = sorted({int(round(i * step)) for i in range(n)} | {len(trace) - 1})
+    t0, x0, y0, yaw0, _ = trace[0]
+    out = ["           t(s)   yaw(도)  w(rad/s)  구간|r|mm  누적|r|mm  누적이동mm"]
+    prev = None
+    for i in idx:
+        t, x, y, yaw, w = trace[i]
+        seg = "   —"
+        if prev is not None and prev != i:
+            pv = pivot_in_body(trace[prev][1:4], (x, y, yaw))
+            seg = "   —" if pv is None else f"{math.hypot(*pv) * 1000:6.0f}"
+        cum = pivot_in_body((x0, y0, yaw0), (x, y, yaw))
+        cums = "   —" if cum is None else f"{math.hypot(*cum) * 1000:6.0f}"
+        mark = ""
+        if half and seg != "   —" and abs(float(seg) - half * 1000.0) < 60.0:
+            mark = "  ★바퀴"
+        out.append(f"           {t - t0:5.2f}  {math.degrees(yaw):7.1f}  "
+                   f"{w:+8.3f}  {seg}     {cums}     "
+                   f"{math.hypot(x - x0, y - y0) * 1000:6.0f}{mark}")
+        prev = i
+    return "\n".join(out)
 
 # ★ A — 게 걸음 평형에서 빠져나오는 복구 기동 (S15P21A106-240)
 #
@@ -2039,6 +2099,9 @@ class MotionController:
         #   즉 **한쪽 구동바퀴를 중심으로 돌았다**(한 바퀴가 안 돌았다)는 뜻이다.
         #   캐스터는 축 뒤 1.11 m 라 자릿수가 안 맞는다. 추측을 끝내려면 재야 한다.
         self._entry_pose: tuple[float, float, float] | None = None
+        # ★★ 회전을 **한 스텝씩** 담는다 (-240, 4회차). 위 주석이 「추측을 끝내려면
+        #   재야 한다」로 끝나 있었다 — 이게 그 재는 것이다. 액션마다 비운다.
+        self._trace: list[tuple[float, float, float, float, float]] = []
         self.tx, self.ty, self.tyaw = self.g.state_pose(action.to)
         sx, sy, _ = self.g.state_pose(action.frm)
         self.sx, self.sy = sx, sy
@@ -2059,6 +2122,25 @@ class MotionController:
         if self._entry_pos is None:
             self._entry_pos = math.hypot(self.tx - x, self.ty - y)
             self._entry_pose = (x, y, yaw)
+
+        # ★★ 회전 **한 스텝씩** 담아 둔다 (-240, 2026-09-18).
+        #
+        #   지금은 시작·끝 두 자세로만 회전중심을 역산한다. 그건 **평균**이라
+        #   「첫 스텝에 튀었나 · 서서히 갔나 · 중간에 갑자기인가」를 못 가른다.
+        #   실측 두 건이 `|r| = 229 mm` 와 `285 mm` 로 갈렸는데, 앞엣것을
+        #   「어느 부품도 아니다」로 읽고 넘긴 것이 그 때문이다 — 부분 미끄러짐이면
+        #   평균이 중간값으로 나온다.
+        #
+        #   ☹ 로그를 매 스텝 찍으면 판이 묻힌다. 그래서 **버퍼에 담고 밀린
+        #     회전에서만 덤프**한다 (`_dump_turn_trace`).
+        if TURN_TRACE and a.kind == TURN:
+            if not self._trace:
+                self._trace.append((0.0, x, y, yaw, 0.0))
+            # `self._w` 는 **직전 스텝에 실제로 낸** 각속도다 — 그게 `dt` 동안
+            #   돌아 지금 자세가 됐다. 둘을 짝지어 담는다.
+            self._trace.append((self._trace[-1][0] + dt, x, y, yaw, self._w))
+            if len(self._trace) > TURN_TRACE_MAX:
+                del self._trace[len(self._trace) // 2]   # 가운데를 버린다(양 끝 보존)
 
         if a.kind == TURN:
             err = wrap(self.tyaw - yaw)
@@ -2878,6 +2960,12 @@ class FleetController:
                                     f"{_e:.1f} mm  (기준선 "
                                     f"{self._gate_ref:.0f})\n"
                                     f"           {_pvs}")
+                            # ★★ 스텝별 자취 (-240). 위 `|r|` 은 **평균**이라
+                            #   원인을 못 가른다 — 여기서만 판을 편다.
+                            if TURN_TRACE and getattr(c, "_trace", None):
+                                _msg += "\n" + dump_turn_trace(
+                                    c._trace, getattr(drv, "wb", 0.0) * 0.5,
+                                    TURN_TRACE_N)
                             try:
                                 import carb
                                 carb.log_warn(_msg)
