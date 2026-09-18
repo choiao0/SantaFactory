@@ -33,6 +33,8 @@ server-setup/
 !3_FMS/docs/2026-09-04_θ탐색_대수별_결과.md
 !3_FMS/docs/2026-09-04_θ탐색_예산_측정.md
 !3_FMS/docs/2026-09-14_θ탐색조건_v36.md
+!3_FMS/docs/2026-09-15_θ학습_판정.md
+!3_FMS/docs/2026-09-18_θ예측모델_판정.md
 !3_FMS/docs/api_response_schema_v1.html
 
 # t3_amr 날짜 기록도 로컬 보관 (3_FMS 와 같은 방식).
@@ -53,3 +55,15 @@ server-setup/
 3_FMS/sim_engine/results/theta_b2_dummy.json
 3_FMS/sim_engine/results/sim_v2_base_r10_blk_main_heat.png
 
+
+# θ 학습 원시 출력 (S15P21A106-206) — study 로그와 중간 θ. 요약 CSV 와 모델만 커밋한다.
+3_FMS/infra/out/theta_open/
+3_FMS/infra/out/synth_v36/
+3_FMS/infra/out/theta_stall_tmp/
+3_FMS/infra/out/theta_pred/
+3_FMS/infra/out/theta_pred_merged/
+3_FMS/infra/out/theta_pred_expected/
+3_FMS/infra/out/theta_demo/
+3_FMS/infra/out/theta_*_eval/
+3_FMS/infra/out/surrogate_merged.csv
+3_FMS/infra/out/theta_pred_loo/

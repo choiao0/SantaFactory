@@ -1,0 +1,48 @@
+{
+ "n_rows": 3000,
+ "n_maps": 30,
+ "stall_rate": 0.619,
+ "cv": {
+  "MLP": {
+   "auc": 0.714970335223983,
+   "acc": 0.672
+  },
+  "XGBoost": {
+   "auc": 0.7628843782787788,
+   "acc": 0.6973333333333334
+  },
+  "로지스틱": {
+   "auc": 0.7008232075460142,
+   "acc": 0.666
+  }
+ },
+ "best": "XGBoost",
+ "importance": {
+  "wait_cost": 0.09357217658077546,
+  "main_aisle_gain": 0.05228100709449984,
+  "aisles": 0.043058157199958626,
+  "load_frac": 0.02259472853581901,
+  "fleet": 0.01881148689508687,
+  "loop_gain": 0.009899851030251084,
+  "aisle_alt_gain": 0.0059086417203792485,
+  "loop_dir": 0.0032330860337172252,
+  "aisle_phase": 0.002308293632649394,
+  "length": 0.0013436776353632606,
+  "station_out": 0.0005590052950632307,
+  "pitch": 0.0,
+  "aisle_alt_boost": -0.000280240121535813,
+  "station_in": -0.0004823079986431611,
+  "free": -0.00430832313160967,
+  "aisle_period": -0.0060059882889129,
+  "junction_penalty": -0.006010413132937131
+ },
+ "conflict_axes": [
+  "aisle_alt_boost",
+  "loop_gain",
+  "main_aisle_gain",
+  "junction_penalty",
+  "station_in",
+  "station_out",
+  "wait_cost"
+ ]
+}

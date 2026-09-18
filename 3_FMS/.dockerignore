@@ -11,7 +11,11 @@
 **/*.pyc
 
 # 런타임에 안 타는 것
+# θ 예측에 쓰는 3개만 되살린다 (S15P21A106-206) — experiments/·tests/·data/ 는 개발 전용이다.
 ai_theta/
+!ai_theta/predict.py
+!ai_theta/map_features.py
+!ai_theta/model/theta_model.joblib
 docs/
 README.md
 contracts/tests/
