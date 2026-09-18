@@ -24,7 +24,7 @@ from map_loader import ROBOT_DIMS, front_swing, zone_cells
 from pibt.geometry import configure as configure_footprint
 from pibt.geometry import front_cells, front_swing_on
 from pibt.liveness import WAIT_ESC_GRACE
-from pibt_core import (DIRS, MOVE_TICKS, TURN_COST, TURN_TICKS, Replanner, Stagnation, candidates_h,
+from pibt_core import (DIRS, MOVE_TICKS, REV_TICKS, TURN_COST, TURN_TICKS, Replanner, Stagnation, candidates_h,
                        dist_map, dist_map_h, occupied, stay_map_h, step,
                        step_h, swing_cells, valid_state, wait_bias)
 
@@ -58,7 +58,12 @@ class KernelConfig:
     yield_ticks: int = 40         # 양보 임시 목표 유지 상한 (-194: 틱이 잘아져 20 → 40)
     yield_after: int = 16         # 이 틱 이상 실제로 막힌 정면 조우만 양보 (-194: 8 → 16)
     turn_ticks: int = TURN_TICKS  # 90° 회전에 쓰는 틱 (실행)
-    move_ticks: int = MOVE_TICKS  # 전진·후진 1칸에 쓰는 틱 (실행, -194)
+    move_ticks: int = MOVE_TICKS  # 전진 1칸에 쓰는 틱 (실행, -194)
+    rev_ticks: int = REV_TICKS    # 후진 1칸에 쓰는 틱 (계약 v3.15, -250: MOVE_TICKS -> 12).
+                                  # 근거·출처는 geometry.REV_TICKS 주석. v3.14 로 되돌리려면 --rev-ticks=4.
+    replan_max_extra: int = 0     # 정체 재계획 우회 추가 비용 상한 [칸] (-247). 0 = 없음 -> 비트 동일.
+                                  # 없으면 반경 3 안의 로봇 하나 때문에 +200칸 우회를 받고,
+                                  # stag 는 평소 거리장으로 재이므로 그 내내 안 풀린다 (liveness.REPLAN_MAX_EXTRA)
     hd_after: int = 16            # -79 대치(standoff) 감지: 같은 칸을 다투는 두 로봇이 둘 다 이 틱 이상 무진전 (v3.9 부터 헤딩 기본; -194 다틱 후 4 → 16)
     hd_timeout: int = 80          # -79 대치 상한(틱): 넘으면 역할 교대 1회, 그래도 넘으면 해제. V2: 240 → 80 (교대 전엔 매 틱 재판정, R5)
     standoff: bool = False        # 대치 상태기계 V2 (-79). 계약 v3.9 부터 헤딩 main exact·exact,front 기본 True(호출자가 켠다: sim_v2 --no-standoff, fms_core). legacy 는 False(양보 v1, v3.3 비트 동일)
@@ -110,15 +115,16 @@ class FmsKernel(BatteryMixin, MetricsMixin):
         self.station_cells = frozenset(st_cell.values())
         # 거리장 가중은 틱 수가 아니라 전진 1칸 대비 배율이다 — edge_cost 기준이 1.0 이라
         # 틱 수를 그대로 넣으면 회전이 전진의 turn_ticks 배가 된다 (-194, geometry.TURN_COST).
-        assert cfg.move_ticks >= 1 and cfg.turn_ticks >= 1, \
-            f"move_ticks·turn_ticks 는 1 이상: {cfg.move_ticks}, {cfg.turn_ticks}"
+        assert cfg.move_ticks >= 1 and cfg.turn_ticks >= 1 and cfg.rev_ticks >= 1, \
+            f"move_ticks/turn_ticks/rev_ticks 는 1 이상: {cfg.move_ticks}, {cfg.turn_ticks}, {cfg.rev_ticks}"
         self.turn_cost = cfg.turn_ticks / cfg.move_ticks
         self.warnings = []                      # 초기화 중 경고 문구 (셸이 출력)
         self._init_battery(free, n_robots)
         # 거리장 캐시 (θ 는 실행 중 고정이라 무효화 불필요)
         self._dist_cache, self._dist_cache_h, self._stay_cache = {}, {}, {}
         self._stag = Stagnation()               # 헤딩: 거리 개선 없는 연속 틱 (우선순위·대기 상승·재계획)
-        self._replan = Replanner(free, edge_cost, self.turn_cost) if self.heading else None
+        self._replan = (Replanner(free, edge_cost, self.turn_cost, max_extra=cfg.replan_max_extra)
+                        if self.heading else None)
         self._trace = []                        # STALL 진단용 링버퍼 (t, rid -> (상태, busy, 액션))
         self.stall_warning_ticks = []            # 고정 시간 모드 무진전 경고 시각(계속 실행)
         self._init_robots(homes, n_robots)
@@ -134,6 +140,8 @@ class FmsKernel(BatteryMixin, MetricsMixin):
         self.yield_events = []                    # 정면 조우 진단 이벤트 (양보 v2 legacy / -79 대치 "standoff")
         self.standoffs = self.standoff_swaps = 0  # -79 대치 수·역할 교대 수 (SUMMARY, exact,front 만)
         self.standoff_ticks = 0                   # -229 대치에 묶인 로봇·틱 합 (건수와 달리 "얼마나 오래"를 잰다)
+        self.stag_robot_ticks = 0                 # 물리 팀 대안 지표: stag >= hd_after 인 로봇·틱 합.
+        self.stag_robot_ticks_all = 0             # 같은 값, NAV 게이트 없이 (두 해석 차이를 보이려고)
         self.n_submitted = 0
         self._progress = [0, 0]                 # (완료 수, 그때 t) — 워치독
         self.export_log = {}
@@ -462,6 +470,13 @@ class FmsKernel(BatteryMixin, MetricsMixin):
         elif cfg.yield_rule and self._detect_headons(t, states, prio, dists):
             prio = self._priority_h(t)
             dists = self._dists_h(t, states, extra)
+        # 대치 상태기계 없이도 잴 수 있는 대리 지표(물리 팀 t3-27). 대치 감지의 **입력**이라 상위 집합이다 —
+        # 대치는 "정체한 두 로봇이 같은 칸을 다툰다" 이므로, 정체 로봇·틱은 그보다 크거나 같다.
+        # 게이트는 감지와 같은 state ∈ NAV (§2-2 A). _all 은 게이트를 뺀 값 — 두 해석의 차이를 재려고 같이 센다.
+        hd = cfg.hd_after
+        self.stag_robot_ticks += sum(1 for rid in rids
+                                     if robots[rid]["state"] in NAV and self._stag.get(rid) >= hd)
+        self.stag_robot_ticks_all += sum(1 for rid in rids if self._stag.get(rid) >= hd)
         forbid = forbid_axle = None
         if standoff:
             # -79 V2 (R4): 대치 중인 둘도 대기 상승은 정상 — V1 의 "둘 다 calm" 은 후진(×3)보다 대기를 싸게 만들어 이기는 쪽까지
@@ -889,7 +904,8 @@ class FmsKernel(BatteryMixin, MetricsMixin):
             rb["swing_soft"] = front_cells(s0[0], s0[1], s0[2], s1[2])
             return True, False
         if moved:                                        # 전진·후진 시작 (첫 틱)
-            rb["busy"] = self.cfg.move_ticks - 1
+            backward = (s1[0] - s0[0], s1[1] - s0[1]) != DIRS[s0[2]]   # -247: 후진은 더 오래 걸린다
+            rb["busy"] = (self.cfg.rev_ticks if backward else self.cfg.move_ticks) - 1
             rb["busy_move"] = 1
             rb["swing"] = set()
             return False, False

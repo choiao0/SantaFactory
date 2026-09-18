@@ -129,7 +129,10 @@ def _tote_section(a, kernel, stream):
     """토트 적재 SUMMARY(v2.6). 명시 주문 전용 키만 조건부로 덧붙인다."""
     extra = dict(capacity=int(a.capacity), tote_units=a.tote_units,
                  totes=int(stream.totes_total), trips=int(kernel.trips),
-                 orders_oversize=int(stream.orders_oversize))
+                 orders_oversize=int(stream.orders_oversize),
+                 # 서비스(한쪽) = service_steps + 토트수 x svc_per_tote, 양 끝 2회 (-247).
+                 # 둘 다 내는 이유: 안 적은 인자가 기본값으로 조용히 들어가 대조가 어긋났다 (t3-30 §5-1).
+                 svc_per_tote=int(kernel.cfg.svc_per_tote), service_steps=int(kernel.cfg.service_steps))
     if stream.explicit_orders is not None:
         extra.update(orders_file=1, orders_skipped=int(stream.orders_skipped), max_order_totes=int(a.max_order_totes))
     return extra
@@ -184,6 +187,10 @@ def report(a, kernel, stream, ctx):
         # -79 (조건부, exact,front 만): 대치 상태기계 계수
         # -79 대치 상태기계: v3.9 부터 헤딩 main 기본(standoff=1). 계수 두 키는 상태기계가 켜진 런에만
         standoff=int(bool(getattr(a, "standoff", False)) or "front" in a.footprint),
+        # 정체 로봇·틱: 대치 상태기계가 없는 호출자도 낼 수 있는 대리 지표(물리 팀 t3-27 합의). 항상 붙인다 —
+        # 상태기계와 무관하고, standoff_ticks 가 없는 런에서도 혼잡을 비교할 수 있어야 한다.
+        stag_robot_ticks=int(kernel.stag_robot_ticks),
+        stag_robot_ticks_all=int(kernel.stag_robot_ticks_all),
         # standoff_ticks (-229): 건수는 짧은 대치 100건과 긴 대치 1건을 구분 못 한다 — 묶인 로봇·틱이 처리량에 닿는 몫
         **({"standoffs": int(kernel.standoffs), "standoff_swaps": int(kernel.standoff_swaps),
             "standoff_ticks": int(kernel.standoff_ticks)}

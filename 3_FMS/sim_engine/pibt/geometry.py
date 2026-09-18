@@ -118,6 +118,11 @@ def front_swing_on():
 def front_diag_on():
     return _FRONT_DIAG
 REVERSE_FACTOR = 3.0  # 후진 1칸 비용 배율 — 느리고 시야 없는 동작이라 마지막 수단 (3점 회전용)
+REV_TICKS = round(MOVE_TICKS * REVERSE_FACTOR)   # 후진 1칸 실행 틱 (계약 v3.15, -250). 12틱.
+# v3.14 까지 후진이 전진과 같은 MOVE_TICKS 였다 — REVERSE_FACTOR 가 **계획 비용에만** 걸려 있었다.
+# 물리 팀 녹화 실측(t3-31 §2): 전진 0.818 · 후진 0.260 m/s = 3.11~3.14배. speed 0.9 에서
+# 12틱 = 3.3333 s/칸 = **0.300 m/s** 로 그쪽 후진 p99 와 같다(후진 상한 0.3 = 전진 0.9 의 1/3).
+# 값을 여기 한 곳에만 둔다 — KernelConfig 와 sim_v2_tasks 가 이 이름을 쓴다.
 
 def rear_cell(r, c, h):
     return (r - DIRS[h][0], c - DIRS[h][1])
