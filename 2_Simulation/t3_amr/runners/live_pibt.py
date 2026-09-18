@@ -842,9 +842,13 @@ def _tick(f, dt):
         return
 
     if f.stats.contact_events:
+        # ★ **접촉 쌍**을 찍는다 (-240, 2026-09-18). 여기가 `overlap_pairs`(칸 공유)를
+        #   찍고 있어서, 접촉 1건인데 목록에 30쌍이 나와 어느 쌍인지 못 골랐다.
+        #   칸 공유 수는 뒤에 참고로만 붙인다.
         carb.log_error(f"[pibt] ★★ 차체 접촉 {f.stats.contact_events}건  "
-                       f"쌍 {sorted(f.stats.overlap_pairs)}  "
-                       f"차체 최소거리 {f.stats.worst_gap:.3f} m  — 브리지 버그")
+                       f"**접촉 쌍** {sorted(f.stats.contact_pairs)}  "
+                       f"차체 최소거리 {f.stats.worst_gap:.3f} m  — 브리지 버그"
+                       f"   (칸 공유는 별건: {len(f.stats.overlap_pairs)}쌍)")
         try:
             for line in str(f.diagnose()).splitlines()[:25]:
                 carb.log_error("   " + line)

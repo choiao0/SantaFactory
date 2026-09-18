@@ -2232,6 +2232,9 @@ class FleetStats:
     #   즉 칸 공유는 "모델과 실행이 어긋났다" 는 신호이지 충돌이 아니다.
     #   구조적으로 계속 나므로, 주행의 합불은 이 값으로 가른다.
     contact_events: int = 0
+    # ★ **어느 쌍이** 닿았나 (-240). `overlap_pairs` 는 칸 공유라 30쌍씩 나온다 —
+    #   중단 메시지가 그걸 찍고 있어서 접촉 쌍을 못 골라냈다 (2026-09-18).
+    contact_pairs: set[tuple[int, int]] = field(default_factory=set, repr=False)
     stall_steps: int = 0
     sim_time: float = 0.0
 
@@ -2409,6 +2412,7 @@ class FleetController:
         self.open_loop: list[str] = []
         self.stats = FleetStats()
         self._reported: set[tuple[int, int]] = set()   # 겹침 상세를 찍은 쌍
+        self._contacted: set[tuple[int, int]] = set()  # **접촉**을 찍은 쌍 (따로 센다)
         # [patch_carry] 이어달리기 ------------------------------------------
         #   칸마다 정지하면 1.2 m 의 84%가 가감속 램프다. 0.9 m/s 를 쓰는 시간이
         #   한 칸당 0.21 s(8.5%)뿐이다 (2026-09-14 실측 2.367 s/칸).
@@ -2965,12 +2969,60 @@ class FleetController:
                         self.stats.worst_gap = min(self.stats.worst_gap, gap)
                         if gap <= 0.0:                 # 실제 접촉만 합불에 넣는다
                             self.stats.contact_events += 1
+                            self.stats.contact_pairs.add((a, b))
+                            # ★★ 접촉은 **항상** 따로 찍는다 (-240, 2026-09-18).
+                            #   아래 `_reported` 는 쌍마다 첫 겹침 하나만 찍는데,
+                            #   그 쌍이 앞서 **무해하게** 칸만 공유했으면 거기서
+                            #   「⚠ 접촉 아님」으로 소진된다. 그러면 나중에
+                            #   **진짜 닿을 때 아무것도 안 찍힌다.**
+                            #   실제로 2.5 h 판에서 그렇게 됐다 — 접촉 1건인데
+                            #   로그에 쌍도 자세도 없어서 판을 다시 떠야 했다.
+                            if (a, b) not in self._contacted:
+                                self._contacted.add((a, b))
+                                self._report_contact(a, b, shared, poses, gap)
                         # **쌍마다 첫 건만** 찍는다. 물리 60 Hz 라 매 스텝 찍으면
                         # 로그가 수천 줄이 되고, 반대로 전체 첫 건만 찍으면
                         # 뒤에 난 다른 쌍의 정보를 통째로 잃는다.
                         if (a, b) not in self._reported:
                             self._reported.add((a, b))
                             self._report_overlap(a, b, shared, poses, gap)
+
+    def _report_contact(self, a, b, shared, poses, gap) -> None:
+        """★★ **실제로 닿은** 순간 — 쌍·자세·그때 하던 액션까지.
+
+        겹침 상세(`_report_overlap`)와 갈라 둔다. 저쪽은 「칸을 공유했다」를
+        쌍마다 한 번 찍는 진단이고, 이쪽은 **합불을 가르는 사건**이다.
+        저쪽에 묻어 두면 앞서 무해하게 공유한 쌍에서 조용히 사라진다.
+        """
+        # ★ **한 덩어리로** 내보낸다 (-240, 2026-09-18). 여러 번 나눠 찍었더니
+        #   `carb` 로그와 엉켜 두 번째 줄부터 통째로 잘렸다 — 정작 상대편
+        #   agent 의 자세를 잃었고, 그 한 줄이 이 사건의 핵심이었다.
+        lines = [f"★★ 차체 접촉  쌍 ({a},{b})  최소거리 {gap:.4f} m  "
+                 f"공유칸 {sorted(shared)}  t={self.stats.sim_time:.1f}s"]
+        try:
+            for who in (a, b):
+                p = poses[who]
+                act = self.running.get(who)
+                c = self.ctrl.get(who)
+                # 목표에서 얼마나 벗어나 있나 — 예산 41.3 mm 와 맞대려면 이게 있어야 한다
+                off = ""
+                if c is not None and c.action is not None:
+                    off = (f"  목표이탈 "
+                           f"{math.hypot(c.tx - p[0], c.ty - p[1]) * 1000:.1f}mm")
+                lines.append(
+                    f"   agent{who} pose ({p[0]:.3f}, {p[1]:.3f}, "
+                    f"{math.degrees(p[2]):.1f}도){off}  "
+                    f"{act if act is not None else '액션 없음(대기)'}")
+            pa, pb = poses[a], poses[b]
+            lines.append(
+                f"   축 사이 {math.hypot(pb[0] - pa[0], pb[1] - pa[1]):.3f} m"
+                f"   · 설계 여유 예산 41.3 mm (pitch - 폭/2 - 코반경)")
+        except Exception as e:                     # 진단이 주행을 죽이면 안 된다
+            lines.append(f"   ☹ 상세 실패(주행은 계속): {e!r}")
+        try:
+            getattr(self, "_say", print)("\n".join(lines))
+        except Exception:
+            print("\n".join(lines), flush=True)
 
     def _report_overlap(self, a, b, shared, poses, gap) -> None:
         """쌍마다 첫 겹침의 자세·거리·심각도. 이 숫자로 접촉 여부가 판정된다."""
