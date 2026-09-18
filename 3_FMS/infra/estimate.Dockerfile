@@ -38,6 +38,14 @@ ENV OMP_NUM_THREADS=1 \
 COPY infra/requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
+# θ 예측 모델(S15P21A106-206) 전용. requirements.txt 가 아니라 여기 있는 이유 —
+# 그 파일은 fms-core·fms-sim 도 공유해서, 거기 적으면 sklearn 을 쓰지도 않는 두 이미지가
+# 200 MB 씩 커진다. requirements.txt 의 공유 핀은 "시뮬 KPI 가 비트 동일해야 한다" 는 계약이고
+# sklearn 은 시뮬에 한 비트도 안 닿는다 — θ 를 고를 때만 쓴다.
+# 그래도 핀은 박는다: 버전이 달라지면 같은 맵·대수에 다른 θ 가 나와 KPI 가 갈린다.
+# scipy 는 sklearn 종속이지만 직접 박는다 — 딸려오게 두면 빌드 시점마다 다른 버전이 깔린다.
+RUN pip install --no-cache-dir scikit-learn==1.9.0 joblib==1.5.3 scipy==1.17.1
+
 # 배치가 계약이다. map_loader.py:24 가 map 을 sim_engine 의 형제로 찾고,
 # from_theta.py:25 가 contracts 를 sim_engine 의 형제로 찾는다. /app 아래
 # 이 배치를 지키면 코드 수정이 필요 없다.
@@ -45,6 +53,10 @@ COPY sim_engine/ /app/sim_engine/
 COPY map/        /app/map/
 COPY contracts/  /app/contracts/
 COPY infra/out/  /app/infra/out/
+
+# θ 예측 모델 (S15P21A106-206). THETA_MODEL 이 비면 한 번도 안 읽는다 — 굽는 비용은 275 KB 다.
+# map_features.py 가 sim_engine 을 형제로 찾으므로 /app 아래 이 배치여야 한다(위 COPY 들과 같은 계약).
+COPY ai_theta/  /app/ai_theta/
 
 COPY infra/worker/ /opt/worker/
 
