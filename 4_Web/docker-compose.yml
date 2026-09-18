@@ -25,6 +25,9 @@ services:
     container_name: a106-backend
     restart: unless-stopped
     environment:
+      # 엔티티가 LocalDateTime.now() 로 시각을 남기고 오프셋 없이 내려보낸다. 화면은 그걸 브라우저
+      # 지역시로 읽으므로, 서버 JVM 이 UTC 면 한국에서 9시간 어긋나 보인다 (S15P21A106-228).
+      TZ: Asia/Seoul
       DB_URL: jdbc:postgresql://db:5432/${DB_NAME}
       DB_USERNAME: ${DB_USERNAME}
       DB_PASSWORD: ${DB_PASSWORD}
@@ -33,10 +36,22 @@ services:
       RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
       REDIS_HOST: redis
       REDIS_PASSWORD: ${REDIS_PASSWORD}
+      # 영상 presigned URL 서명. 읽기 전용 계정(MINIO_BE_*)이 없으면 root 로 대신 서명한다
+      MINIO_PUBLIC_URL: ${MINIO_PUBLIC_URL:-https://j15a106.p.ssafy.io/media}
+      MINIO_ACCESS_KEY: ${MINIO_BE_ACCESS_KEY:-${MINIO_ROOT_USER}}
+      MINIO_SECRET_KEY: ${MINIO_BE_SECRET_KEY:-${MINIO_ROOT_PASSWORD}}
       JWT_SECRET: ${JWT_SECRET}
+      # 가입 인증 메일(SMTP). MAIL_ENABLED 가 비면 발송하지 않고 코드를 로그에 찍는다
+      MAIL_ENABLED: ${MAIL_ENABLED:-false}
+      MAIL_USERNAME: ${MAIL_USERNAME:-}
+      MAIL_PASSWORD: ${MAIL_PASSWORD:-}
+      MAIL_FROM: ${MAIL_FROM:-}
       ADMIN_EMAIL: ${ADMIN_EMAIL}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD}
       DEMO_PASSWORD: ${DEMO_PASSWORD}
+      # 견적서 PDF 변환기(아래 pdf 서비스)와 견적서에 적는 서비스 공개 주소
+      PDF_BASE_URL: http://pdf:3000
+      APP_PUBLIC_URL: ${APP_PUBLIC_URL:-https://j15a106.p.ssafy.io}
     ports:
       - "127.0.0.1:8080:8080"
     depends_on:
@@ -47,6 +62,8 @@ services:
       minio:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      pdf:
         condition: service_healthy
 
   frontend:
@@ -120,6 +137,29 @@ services:
       retries: 10
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD}
+
+  # 견적서 PDF 변환기 (S15P21A106-236). 백엔드가 HTML 을 보내면 크로미움으로 찍어 PDF 를 돌려준다.
+  # 백엔드 JVM 에 브라우저를 넣지 않으려고 분리했다 — 죽어도 견적서 기능만 멈춘다. 외부 포트 없음.
+  # t3.medium(4 GB) 이라 메모리 상한을 건다. 변환 중 크로미움이 300 MB 안팎을 쓴다.
+  pdf:
+    build: ./pdf
+    image: santafactory-pdf:latest
+    container_name: a106-pdf
+    restart: unless-stopped
+    command:
+      - gotenberg
+      - --api-timeout=60s
+      - --chromium-max-queue-size=2
+      # 템플릿은 서버에서 전부 채워 보내므로 스크립트가 필요 없다. 끄면 렌더가 결정적이고 가볍다
+      - --chromium-disable-javascript=true
+    mem_limit: 512m
+    ports:
+      - "127.0.0.1:3001:3000"      # 로컬에서 백엔드를 Docker 밖(gradle)에서 띄울 때만 쓴다(3000 은 frontend 가 쓴다). 외부 노출 아님
+    healthcheck:
+      test: ["CMD", "curl", "--silent", "--fail", "http://localhost:3000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
 
 volumes:
   db-data:

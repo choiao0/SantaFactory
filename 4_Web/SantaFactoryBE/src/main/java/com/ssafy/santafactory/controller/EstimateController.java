@@ -10,6 +10,9 @@ import com.ssafy.santafactory.global.common.ApiResponse;
 import com.ssafy.santafactory.service.estimate.EstimateEventStream;
 import com.ssafy.santafactory.service.estimate.EstimateService;
 import com.ssafy.santafactory.service.estimate.VerifyEventStream;
+import com.ssafy.santafactory.service.estimate.quote.QuoteMailService;
+import com.ssafy.santafactory.service.estimate.quote.QuotePdfService;
+import com.ssafy.santafactory.service.estimate.quote.QuoteSource;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -18,6 +21,8 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.web.PageableDefault;
+import org.springframework.http.ContentDisposition;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -32,6 +37,8 @@ import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+import java.nio.charset.StandardCharsets;
+
 @Tag(name = "견적", description = "AMR 대수별 시뮬을 돌려 권장 대수를 뽑는다")
 @RestController
 @RequestMapping("/api/estimates")
@@ -41,6 +48,34 @@ public class EstimateController {
     private final EstimateService estimateService;
     private final EstimateEventStream eventStream;
     private final VerifyEventStream verifyEventStream;
+    private final QuotePdfService quotePdfService;
+    private final QuoteMailService quoteMailService;
+
+    @Operation(summary = "견적서 PDF 다운로드",
+            description = "A4 2장 견적서. 계산이 끝난(DONE·PARTIAL) 견적만 만들 수 있고(409), 변환기가 없으면 503. "
+                    + "권한은 견적 상세와 같다.")
+    @GetMapping(value = "/{estimateId}/quote.pdf", produces = MediaType.APPLICATION_PDF_VALUE)
+    public ResponseEntity<byte[]> quotePdf(@PathVariable Long estimateId,
+                                           @AuthenticationPrincipal AuthenticatedMember me) {
+        QuotePdfService.QuotePdf pdf = quotePdfService.render(estimateId, me);
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION,
+                        ContentDisposition.attachment().filename(pdf.fileName(), StandardCharsets.UTF_8).build().toString())
+                .contentType(MediaType.APPLICATION_PDF)
+                .body(pdf.bytes());
+    }
+
+    @Operation(summary = "견적서 메일 전송",
+            description = "로그인 계정 이메일로 견적서 PDF 를 첨부해 보낸다. 만들 수 있는 견적인지 확인한 뒤 202 를 주고 "
+                    + "발송은 뒤에서 한다.")
+    @PostMapping("/{estimateId}/quote/email")
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    public ApiResponse<Void> emailQuote(@PathVariable Long estimateId,
+                                        @AuthenticationPrincipal AuthenticatedMember me) {
+        QuoteSource source = quotePdfService.checkRenderable(estimateId, me);
+        quoteMailService.sendToRequester(source, me);
+        return ApiResponse.onSuccess();
+    }
 
     @Operation(summary = "견적 요청 생성",
             description = "창고 운영조건 + 목표 + 예산으로 대수별 run 을 만들어 시뮬 엔진에 전부 발행한다. "

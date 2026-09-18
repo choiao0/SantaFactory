@@ -4,16 +4,16 @@ EC2 에 상시로 떠서 (1) `spBv1.0/STATE/host-orch` 로 자기 생사를 알�
 (2) RabbitMQ `sim.verify.request` 를 하나씩 꺼내 NCMD Start → 창(window_s) → Stop 으로 GPU 검증 런을 굴리고 `sim.verify.result` 를 낸다.
 `--fms-node fms-core` 면 같은 Start/Stop 을 [`../fms_core/`](../fms_core/) 에도 보내고, 둘 다 RUNNING 일 때 창을 열며, fms-core 의 `kpi_summary` 를 결과 `kpi` 에 싣는다(결정 11).
 규칙의 원본: [`../contracts/MQTT_CONTRACT.md`](../contracts/MQTT_CONTRACT.md) §5 (Host 쪽), [`../contracts/SIM_VERIFY_CONTRACT.md`](../contracts/SIM_VERIFY_CONTRACT.md).
-짝: [`2_Simulation/sim_runner/`](../../2_Simulation/sim_runner/) (GPU 쪽 Edge).
+짝: GPU 쪽 Edge — [`2_Simulation/t3_amr/`](../../2_Simulation/t3_amr/) 에 붙인다(구 `sim_runner` 는 -219, 2026-09-15 로 삭제; 아래 실측 기록은 그 시절 것).
 
 | 파일 | 역할 |
 |---|---|
 | `tracker.py` | Primary Host 상태 — 노드·디바이스 메트릭, 별칭, seq 검사 → needs_rebirth, NDEATH(bdSeq 일치) → offline |
-| `orchestrator.py` | `VerifyRequest` 검증(`scenario` sha256 포함), `Job` 상태기계 STARTING → RUNNING → STOPPING → DONE\|FAILED, `FmsLink`(fms-core Start 재전송 · RUNNING 게이트 · 정지 확인 · kpi_summary), 결과 JSON(`scenario_ack` · `kpi` · `verify.fms`), `Coordinator`(잡 1개 + Rebirth 발송, 재전달 멱등, `biz/v1/event` 라우팅) |
+| `orchestrator.py` | `VerifyRequest` 검증(`scenario` sha256 포함), `Job` 상태기계 STARTING → RUNNING → STOPPING → DONE\|FAILED, `FmsLink`(fms-core Start 재전송 · RUNNING 게이트 · 정지 확인 · kpi_summary), 결과 JSON(`scenario_ack` · `kpi` · `verify.fms`), `Coordinator`(잡 1개 + Rebirth 발송, 재전달 멱등 — `done` 만 캐시하고 `failed` 는 재요청 시 새 런 -241, `biz/v1/event` 라우팅) |
 | `amqp.py` | pika 소비 루프 — prefetch 1, 잡이 끝날 때까지 0.5 s tick, 결과 발행 뒤 ack. `publish_request` · `drain` 은 테스트용 |
 | `mqtt_host.py` | paho — STATE online retained + 유언 offline, `spBv1.0/santa/#` + `biz/v1/#` 구독, NCMD 발행 |
 | `app.py` | 배선 + CLI (`python3 -m host_orch`). `--once` 는 AMQP 없이 요청 1건 |
-| `spb.py` · `sparkplug_b_pb2.py` | `2_Simulation/sim_runner/` 와 **바이트 동일 복사본** (`tests/test_spb_copy.py` 가 지킨다). 바꾸면 둘 다 |
+| `spb.py` · `sparkplug_b_pb2.py` | Sparkplug 코덱 **참조 구현** — `../fms_core/` 사본과 바이트 동일 (`tests/test_spb_copy.py` 가 지킨다). 바꾸면 둘 다 |
 | `tests/` | 브로커 없는 단위 테스트 77개 |
 
 ## 실행
@@ -64,7 +64,8 @@ Stop 둘 다 → sim-runner IDLE(Isaac 정리 21 s) + fms-core IDLE → `done`, 
 
 ## 남은 것
 
-- `artifacts` 는 null — 리플레이·영상 키
+- `artifacts.video` 는 러너의 `Runner/VideoUrl`(-215, t3_amr 엣지)에서 온다 — 값은 버킷 없는 객체 키 `<run_id>/<파일>` 이고 URL 이 아니다(-233, 백엔드 VerifyVideoPresigner 가 서명). host-orch 는 가공 없이 옮긴다. replay·heatmap 키는 아직 null.
+- (-235) 요청의 `scenario.orders.outbound` 는 창 `[t0, t0+window_s+60]` 밖을 잘라 러너에 보낸다(t0 = `window_start_s` 또는 첫 주문 시각, `orders.window` 에 기록). 파싱에 실패한 요청의 `failed` 결과에도 `estimate_id`·`source_run_id` 를 싣는다 — 둘 다 2026-09-16 첫 버튼(verify_2)에서 드러난 결함. 새 러너는 fms-core 없이 자체 계획으로 도니 EC2 host-orch 는 `--fms-node` 를 빼고 띄운다(안 빼면 창이 안 열린다)
 - sim-wms 파드 · k3s Job — 지금은 fms-core 도 compose 상시 데몬(`infra/compose.fms-core.yml`)
 - 러너가 여러 대면 NBIRTH `Runner/State` 가 IDLE 인 노드를 골라 보내고 prefetch 를 러너 수로 (지금은 `--node` 하나)
 - `uagv/v2/+/+/#` 관측 구독은 ACL 에 있지만 아직 안 쓴다 (`biz/v1/#` 은 kpi_summary 에 쓴다)

@@ -1,4 +1,4 @@
-# 시뮬 실행 계약 — `sim_engine/sim_v2_tasks.py` 호출 규약 (v3.6, 2026-09-14)
+# 시뮬 실행 계약 — `sim_engine/sim_v2_tasks.py` 호출 규약 (v3.14, 2026-09-16)
 
 > **v2 비호환 변경 (2026-09-04, S15P21A106-143):** 기본 이동 모델이 **헤딩 PIBT**로 바뀌었다. 칸 모델은 `--cell` opt-in.
 > `--heading`은 그대로 받되 무시한다. **`--heading`을 넘기지 않아 칸 모델을 얻던 호출자는 `--cell`을 넘겨야 한다**
@@ -42,8 +42,8 @@
 > 회전 중 차체(기종 카드 앞 0.39·뒤 1.11·폭 0.80 m + 여유 0.05 m)가 랙·벽을 스치는 (칸, 회전) 조합을 금지한다(실제 맵에서 legacy 허용
 > 회전의 3.5 %). 코 모서리 반경 hypot(0.39, 0.40) = 0.56 > 0.5 라 앞 칸 경계까지 찬 랙에 0.06(여유 포함 0.13) m 들어가던 것을 막는다
 > (Isaac 실측 iw.hub 2 cm·선반형 5.9 cm 침범). **기본값이 헤딩 결과를 바꾸므로 기준값이 바뀐다**(§5). `--footprint=legacy` 는 v3.3 과 비트 동일.
-> 칸 모델(`--cell`)·v1compat 은 회전이 없어 그대로. `--footprint=exact,front`(앞 2칸 축 규칙 + 양보 v2)는 실험용 — 정면 대치(소싸움)
-> 해소가 미완이라 처리량 −5~−27 %, 일부 시드 STALL (docs/2026-09-14_S15P21A106-203_B_앞칸축규칙_양보v2_중간보고.md).
+> 칸 모델(`--cell`)·v1compat 은 회전이 없어 그대로. `--footprint=exact,front`(앞 4칸 축 규칙 + 대치 상태기계 V2, v3.8)는 실험용 — 정면 대치(소싸움)
+> V1(v3.7)은 다틱 위에서 시드 42·exp16·exp22 가 STALL 이었고, V2(v3.8, 2026-09-15)는 시험 세트 base7·b5 전부 완주, base7 exact 대비 −2.4 % (docs/이동계층_PIBT.md 대치 절). 기본 전환은 D3 판정 뒤.
 
 대상: 시뮬을 **프로세스로 호출하는 쪽** — A트랙 θ 탐색 워커(`infra/worker/objective.py`), 견적 엔진 배치 워커, fleet 스윕 스크립트.
 θ 스키마가 `guidance_types.py`로 고정된 것과 같은 이유로, 시뮬 호출 방법도 여기 고정한다. **이 문서에 없는 인자·출력 키에 의존하지 말 것.**
@@ -79,15 +79,19 @@ python sim_v2_tasks.py <tag> <n_robots> <n_orders> <seed> <aisle_block> [--flow=
 | `--theta=<json>` | θ 11개 JSON(`GuidanceTheta` 필드명). 없으면 중립 θ | 범주형은 정수 |
 | `--lane-gain=<≥1.0>` `--pocket-gain=<≥1.0>` | 차선 줄 역방향·주머니 줄 통과 비용 배수(θ 밖, -177) | 기본 2.0. `--no-lanes` = 둘 다 1.0 |
 | `--capacity=<1..6>` | 출고 왕복당 함께 싣는 토트 수 | 기본 1(동승 없음) |
-| `--tote-units=<정수>` | 버퍼별 `ceil(qty 합 / tote_units)`로 주문 토트 수 계산 | 없으면 버퍼당 1토트 |
+| `--tote-units=<정수>` | 버퍼별 `ceil(qty 합 / tote_units)`로 주문 토트 수 계산 | 없으면 버퍼당 1토트. **워커 기본 10**(v3.9, 2026-09-15: 개인 주문 수량 합 ≤ 10 · 토트 10개들이 → 주문 1건 = 토트 1개; v2.6~v3.8 은 8) |
 | `--svc-per-tote=<틱>` | 픽업·하역 각각 `토트 수 × 값`을 기본 서비스 시간에 가산 | 기본 0 |
 | `--no-lanes` | 규칙 기반 출발·복귀 차선과 버퍼 주머니 비용을 끔 | 헤딩 main 기본 ON. `--lane-gain=1 --pocket-gain=1`과 같음 |
+| `--no-standoff` | **대치 상태기계 V2**(-79)를 끄고 v3.8 경로(양보 규칙 v1)로 | v3.9 부터 헤딩 main `exact`·`exact,front` 기본 ON. `legacy` 는 항상 OFF(v3.3 비트 동일). SUMMARY `standoff`(0/1) 항상, 켜진 런은 `standoffs`·`standoff_swaps`·`standoff_ticks` 추가 |
+| `--no-turn-bias` | 대기 상승(장치 ①)을 **대기에만**(v3.10 경로). v3.11 부터 헤딩 main 은 '거리가 줄지 않는 제자리 회전'에도 붙인다 | 포장대 앞 헛회전(5틱 왕복) 해소 — 6h 24·28대 p90 74 → 53분, 회전 36 → 20 %. `legacy`·칸 모델·v1compat 은 항상 OFF. `--turn-bias` 는 호환용 no-op |
+| `--no-goal-wait-free` | 목표 상태(dist 0)의 대기 점수에 θ `wait_cost` 를 그대로(v3.11 경로). v3.12 부터 **0** | θ `wait_cost` > 1.25 면 도착한 유휴 로봇이 대기보다 싼 회전을 영원히 골랐다(6h 24대 비임무 회전 57,691 → 190). 중립 θ 기준값은 불변. 헤딩 전용 |
+| `--no-turn-floor` | 진전 없는 회전(d′ ≥ d)의 점수 하한(대기 점수)을 끔(v3.12 경로). v3.13 부터 `tb += max(0, wait_cost − TURN_COST)` | θ wait_cost − 1.25 = 1.49 차가 거리 증가를 덮어 d′ − d < 1.49 인 헛회전이 남았다(포장대 앞 왕복 31 %). 켜면 왕복 4 %, six 대치 −44 %, θ 고부하 +4 %. 중립 θ 기준값 불변. `legacy` 항상 OFF |
 | `--map-dir=<폴더>` | 맵 세트 폴더. 격자·스테이션·충전 존·토폴로지를 전부 여기서 읽는다 | 기본 = 공식 맵 `3_FMS/map`. 합성 창고는 `map/synth/<이름>`(-139). 폴더에 `topology.json`이 있으면 통로·밴드 좌표를 거기서, 없으면 wallA 상수 |
 | `--no-yield` | 8틱 이상 지속된 정면 조우의 양보 규칙을 끔 | main 헤딩 기본 ON |
 | `--section-limit=<N>` | 블록당 동시 대수 상한. **0 = 끔** | 실질 0/1 스위치다 — N≥2 는 같은 블록 안 두 대가 마주보는 걸 못 막아 무효거나 악화(실측 §5-2) |
 | `--section-grid=<k>` | 블록 한 변[칸]. `--section-limit>0` 일 때만 의미 | 기본 3. 크면 정체 면제로 풀려 무력해진다 |
 | `--speed=<m/s>` | 로봇 속도 → 틱 길이. 헤딩 `dt = CELL_M / (speed × MOVE_TICKS)`, 칸 모델 `dt = CELL_M / speed` (v3.6). 0.1~5.0 | 뜻은 v3.3 과 같다 — **1칸에 걸리는 시간이 `CELL_M / speed`**. 기본 1.0. 틱 단위 인자는 환산하지 않는다(§5-1) |
-| `--footprint=exact\|legacy\|exact,front\|exact,front_2cell` | 회전 발자국 (v3.4). `exact`(기본) = 0.1 m 지도 정적 회전 마스크, `legacy` = v3.3 비트 동일(뒤 3칸만), `exact,front` = 앞 2칸 축 규칙+양보 v2(실험용, 양보 규칙 강제 ON) | 헤딩 전용 — 칸 모델·v1compat 은 legacy 로 기록 |
+| `--footprint=exact\|legacy\|exact,front\|exact,front_2cell` | 회전 발자국 (v3.4). `exact`(기본) = 0.1 m 지도 정적 회전 마스크, `legacy` = v3.3 비트 동일(뒤 3칸만), `exact,front` = 앞 4칸 축 규칙 + 대치 상태기계 V2(실험용, v3.7·v3.8; 양보 규칙 인자 무시) | 헤딩 전용 — 칸 모델·v1compat 은 legacy 로 기록 |
 | `--robot-dims=<앞>,<뒤>,<폭>` | 구동축 기준 차체 치수[m] — 마스크·앞 스윙 판정·Isaac `robot_dim_m` | 기본 0.39,1.11,0.80 (선반형 기종 카드, 물리 팀 2026-09-13) |
 | (기본) | **헤딩 PIBT**(2칸 차체·회전·후진·라이브니스 5종). v2부터 플래그 없이 기본 | SUMMARY에 `heading=1` |
 | `--cell` | 칸 모델(점로봇). 기준선 CSV 재현·A/B 비교축 전용 | v1compat은 플래그와 무관하게 항상 칸 |
@@ -138,6 +142,14 @@ v2.2 조건부 키:
 - `--battery` → `battery=1, chargers, charge_events`(충전 진입 횟수), `charging_steps`(전 로봇 충전 틱 합), `dock_wait_steps`(강제 충전인데 도크 없어 기다린 로봇·틱),
   `charge_evictions`(강제 충전 로봇을 위해 `(low+go)/2` 이상 충전된 로봇을 내보낸 횟수), `soc_min`(%), `soc_end_mean`(%), `soc_empty_steps`(SoC 0 % 체류 틱 — 0이 아니면 충전기 부족 신호), `dock_util`(0~1).
 
+v3.14 조건부 키(-230, 키 추가만 — 값·CLI 불변):
+- 대치 상태기계가 켜진 런(헤딩 `exact`·`exact,front` 기본) → **`standoff_ticks`** = 대치에 묶인 로봇·틱 합(매 틱 `hd_peer` 가 있는 로봇 수를 더한 값, 감지 뒤라 그 틱 새 대치도 센다).
+  `standoffs` 는 **건수**라 짧은 대치 100건과 긴 대치 1건을 구분 못 한다 — 처리량에 닿는 것은 묶인 시간이다.
+- `--horizon` 이 있고 런 길이가 **3시간 이상**이면 → **`saturated_tph`** = 30~180분 구간의 완료/h(반열린 구간 `[1800 s, 10800 s)`).
+  도착이 웨이브인 런(six: 6,000건/6h 는 첫 30분에 38 % 가 들어온다)에서는 `tasks_per_h` 에 뒤 구간의 **수요 제한**이 섞여 용량 지표가 못 된다.
+  30~180분은 활동 태스크가 함대 상한(대수 × 동승)에 붙어 있는 완전 포화 구간이라, 라우팅 변경이 실제로 움직인 몫이 여기서 보인다.
+  구간을 다 못 채우는 런(고정 주문 수·짧은 `--horizon`)에는 뜻이 없어 **키가 안 붙는다** — 그래서 b0z·load 기준선 CSV 의 모양이 그대로다.
+
 v2.4 항상 키(모드 무관): `inbound_total`(생성된 입고 수 — v1compat 0), `distance_m`(전 로봇 주행 칸 합 × 1.0 m). 견적 워커(`infra/worker/estimate_worker.py`)가 명세 §1-2 `inbound_total`·`distance_total_m`으로 그대로 낸다.
 
 v3 항상 키: `lanes`, `yield_rule`, `yield_events`. 양보 이벤트 상세는 STALL 진단 덤프의 최근 12건에 남는다.
@@ -182,16 +194,31 @@ v2.6부터 도착 틱 = `ordered_at_s`(1틱 = 1초), `rack_id` → `map/rack_buf
 고정 시간 모드(v2.2, 2026-09-05 실측, 같은 환경): 24대·3 h·간격 15 → 약 40 s(`SIM_CHECK=1` 포함 51 s), 24대·6 h·간격 15·배터리 → 약 60 s, **28대·6 h·간격 15·배터리 → 90 s**,
 24대·6 h·간격 7.5·배터리(과부하) → 91 s. 실행 시간은 설정한 고정 시간에 비례하고 배터리는 거의 공짜다.
 
+**2026-09-15 (-225, 결과 비트 동일 — 계약 버전 불변):** 6h 견적 조건(24대·6,000건 주문 파일·`--shifts=out`·동승 6·토트 10·서비스 18틱·θ r24_g15·속도 0.9, 다틱 v3.6 이후 77,760틱)에서 실행 시간의 78 % 가 정체 재계획 거리장의 증분 복구(`pibt/hgraph.py`)였다 — 포장대 대기열에서는 막힌 칸 하나가 뒤쪽 상태 2~3천 개의 최단경로를 끊어 영향 집합이 크고, 캐시 적중이 13 % 다. 복구 세 단계를 **Numba 커널**(`_repair_nb`, `numba==0.67.0`·`llvmlite==0.49.0`, `infra/requirements.txt`)로 옮겼다. 힙이 (거리, 인덱스) 전순서라 pop·완화 순서가 같고 값은 비트 동일(기준값 7개·base7 7행·b5 9행·`pibt_dist_identity_check.py`·pytest 252).
+
+| 조건 (이 PC 22코어, Python 3.14 / numpy 2.5.1) | 전 | 후 | |
+|---|---:|---:|---|
+| 24대·6h·시드 103 (77,760틱) | 178.0 s | **57.1 s** | 3.1배 |
+| 같은 조건 6h 의 10 %(7,776틱) | 18.4 s | 7.5 s | 2.5배 |
+| b5 6,000건 S7·S8 (`SIM_CHECK=1`, 6 병렬) | 374 / 368 s | 69 / 70 s | 5.3배 |
+| b5 exp22 / exp16 (120주문·간격 15) | 37.2 / 26.4 s | 13.2 / 11.6 s | 2.5배 |
+| `base 6 40 42 1` | 3.1 s | 2.8 s | 재계획이 적어 이득 작음 |
+
+복구 한 호출은 6h 조건 7 ms → 0.2 ms. 남은 시간은 PIBT 한 틱(`step_h`) ≈ 30 %·커널 부기 ≈ 40 % 로 평평하다. 첫 실행은 `__pycache__` 에 컴파일 캐시(`hgraph.*.nbi/nbc`)를 만들며 수 초 더 걸린다(CI 러너 포함). 상세 `docs/2026-09-15_트러블슈팅_시뮬성능_재계획거리장.md`(로컬).
+
 ## 5. 재현성
 
-- 같은 인자·같은 코드·같은 numpy 버전 → 비트 동일 결과. 기준값 (v3.6, 2026-09-14):
+- 같은 인자·같은 코드·같은 numpy 버전 → 비트 동일 결과. 기준값 (v3.13, 2026-09-16 — v3.11 과 같은 값, v3.12·v3.13 은 중립 θ 에서 무변경):
 
   | 호출 (`base 6 40 42 1` 뒤 인자) | makespan 틱 | tasks_per_h | 비고 |
   |---|---:|---:|---|
   | `--flow=v1compat` | 2317 | 186.4 | 칸 모델 — **불변** |
-  | `--cell --fixed-homes` | 2970 | 127.3 | 칸 모델 — **불변** |
-  | `--no-lanes --no-yield` | 9971 | 151.6 | v3.5 는 2814 / 134.3 |
-  | **(기본)** | **10647** | **142.0** | v3.5 는 2785 / 135.7 |
+  | `--cell --fixed-homes` | 2970 | 127.3 | 칸 모델 — **불변** (`--cell` 만: 2866 / 131.9) |
+  | `--footprint=legacy` | 10442 | 144.8 | v3.3 회전 발자국·양보 v1 — **불변** |
+  | `--no-standoff` | 10702 | 141.3 | 양보 v1 + 회전 상승. v3.9~v3.10 은 10647 / 142.0(= v3.6~v3.8 기본). 옛 값은 `--no-standoff --no-turn-bias` |
+  | `--no-turn-bias` | 10567 | 143.1 | v3.9~v3.10 기본(대기에만 상승) |
+  | `--no-lanes --no-yield` | 9906 | 152.6 | v3.9~v3.10 은 9962 / 151.8, v3.6~v3.8 은 9971 / 151.6 |
+  | **(기본)** | **10533** | **143.5** | 회전 상승(v3.11) + 대치 상태기계 V2. v3.9~v3.10 은 10567 / 143.1, v3.6~v3.8 은 10647 / 142.0, v3.5 는 2785 / 135.7 |
 
   **칸 모델 두 줄은 안 변한다.** 다틱 이동은 헤딩 전용이고 `dt` 도 모델별로 갈랐다 — 칸 모델까지
   `MOVE_TICKS` 로 나누면 서비스 틱이 4 → 15 가 되어 A/B 비교축이 깨진다.
@@ -201,11 +228,23 @@ v2.6부터 도착 틱 = `ordered_at_s`(1틱 = 1초), `rack_id` → `map/rack_buf
   v3.3 값이 나오지는 않는다(틱 모델이 v3.6 에서 바뀌었기 때문).
 
   결과 비교 CSV 는 계약 세대별로 따로 둔다: v3.3 이전 `b0z_sweep.csv`·`load_sweep.csv`,
-  v3.4 `*_v34`, v3.5 `*_v35`, v3.6 `*_v36`. `check_results_identity.py` 는 **CSV 가 적어 둔**
+  v3.4 `*_v34`, v3.5 `*_v35`, v3.6 `*_v36`, **v3.12 `*_v312`(현재 기본, -226)**, θ 고부하 **`*_theta_v313`**. `check_results_identity.py` 는 **CSV 가 적어 둔**
   `lanes`·`yield_rule`·`footprint` 를 읽어 재현하므로 어느 세대든 같은 명령으로 검사된다
   (열이 없는 옛 CSV 는 꺼짐·legacy 로 본다).
   **컨테이너 이미지에서 이 네 값이 같은지 먼저 확인**(numpy 버전이 다르면 float 누적이 달라 어긋날 수 있음).
-- 결과 비교 기준 CSV: `sim_engine/results/b0z_sweep.csv`(40주문), `load_sweep.csv`(고부하). 시뮬 코드 변경 시 B트랙이 이 CSV로 동일성 검사.
+- 결과 비교 기준 CSV: `sim_engine/results/b0z_sweep_v312.csv`(40주문 32행), `load_sweep_v312.csv`(고부하 48행) — 계약 v3.12 기본값(-226, 2026-09-16; 옛 `b0z_sweep.csv`·`load_sweep.csv` 는 v3.3 이전 이력). 시뮬 코드 변경 시 B트랙이 이 CSV로 동일성 검사.
+- **θ 고부하 스윕은 별도 축이다 (v3.13, S15P21A106-229).** 위 기준 CSV 는 전부 **중립 θ** 라 θ 규칙이
+  고부하에서 만드는 STALL 위험을 재지 못한다 — -160 에서 중립 θ load_eval 48행이 v3.11 과 비트 동일인데도
+  θ r24_g15 에서는 28대 +14~28 %·대치 −49 % 로 크게 움직였다. **θ 를 건드리는 변경은 이 쌍으로 본다**:
+
+  ```bash
+  cd 3_FMS/sim_engine
+  SWEEP_ENGINES=heading SWEEP_SEEDS=101,102,103,104     SWEEP_EXTRA=--theta=../infra/out/theta_wallA_r24_g15.json     SWEEP_OUT=load_sweep_eval_theta_<태그>.csv python sweeps/fleet_sweep_load.py   # 48행, 병렬 기본 ~36 s (-231; --jobs=1 순차는 4분 16초)
+  python sweeps/compare_csv.py results/load_sweep_eval_theta_v313.csv results/load_sweep_eval_theta_<태그>.csv --rows
+  ```
+
+  기준 CSV `sim_engine/results/load_sweep_eval_theta_v313.csv`(48행, 하한 켬) ↔ `_theta_v312.csv`(하한 끔, `--no-turn-floor`).
+  **STALL 이 0 인지가 합격선**이고 tasks/h 변화는 근거로 적는다.
 - 시뮬은 확률적(시드) — θ 비교는 시드 ≥ 3 평균. 40주문·간격 50에서는 시드 산포가 θ 효과를 덮는다(고부하 문서 §2). **θ 탐색 권장 조건:
   헤딩(기본) `--order-gap=15`(또는 25), 20~28대, aisle_block=1.**
 - **시드 역할 분리 (v2.3, 2026-09-07 합의).** 시드는 세 집합으로 나누고 역할을 넘나들지 않는다.
@@ -288,7 +327,14 @@ SIM_NO_PLOT=1 PYTHONIOENCODING=utf-8 python sim_v2_tasks.py bo17 24 120 42 1 --o
 | v3.1 | 2026-09-10 | 호환(추가만, -139·-183): `--map-dir=<맵 세트 폴더>`, 조건부 SUMMARY 키 `map_dir`. 맵 세트에 `topology.json`이 있으면 통로·밴드 좌표를 거기서 읽는다(없으면 wallA 상수). `n_robots` 상한이 그 맵의 충전 존 용량이 된다. 인자를 안 주면 v3와 비트 동일(기준값 3개·동일성 12행 확인). θ 탐색 워커 `run_study.py --map-dir`이 이 인자로 호출하고 `meta.condition.map_dir`에 fms_root 기준 상대 경로를 남긴다 |
 | **v3.2** | 2026-09-11 | 호환(추가만, -193): `--section-limit=<N>`·`--section-grid=<k>`, 조건부 SUMMARY 키 `section_limit`·`section_grid`·`section_blocks`·`section_releases`. 통행 칸을 k×k 블록으로 자르고 블록당 동시 대수를 N 으로 묶어 정면 조우(소싸움)를 줄인다. `--section-limit` 을 안 주면 v3.1과 비트 동일(기준값 3개 확인). 측정·한계는 §5-2 |
 | **v3.3** | 2026-09-13 | 호환(추가만, -116): `--speed=<m/s>`(틱 길이 = CELL_M / speed), SUMMARY `speed`·`dt_s` 항상 출력. 커널 틱 동역학 불변, 초 환산만. 인자 없으면 v3.2 와 비트 동일(기준값 4개·동일성 12행). 견적 워커가 `amr.avg_payload_kg`+앵커로 `contracts/speed_model.speed_for_load`, 없으면 0.9 m/s(물리 계획 속도)를 넘긴다 |
-| **v3.7** | 2026-09-14 | **실험 인자만 변경(기본 `exact` 결과 불변, legacy 비트 동일)** (-79 B4 1차): `--footprint=exact,front` 의 soft 칸을 앞 2 → **4칸** {f0, f1, mA, mB}(물리 팀 합의: 뒤 대각은 hard 몸 칸, 코 대각은 여유 무관; 여유 41 → 200 mm)로 재정의, 옛 2칸은 `exact,front_2cell`(비교용, 집행 오차 실측 74 mm 로 기각). soft 의미 = 더하기(hard 불변, 축만 금지, 스윕 밖 칸도 추가 제약). pitch 게이팅 `geometry.configure(robot_dims, pitch)`·`front_needed()`. 정면 해소 = 양보 v2 대신 **대치 상태기계 V1**(`hd_after` 16·`hd_timeout` 240 틱 — v3.6 다틱 기준, soft 밀기 `_make_room`) — exact,front 에서만. 조건부 SUMMARY 키 `standoffs`·`standoff_swaps`(exact,front 만). 새 도구 `pibt/corridor.py`(폭 1 통로 추출)·`sweeps/run_set.py`(세트 병렬). |
+| **v3.8** | 2026-09-15 | **실험 인자만 변경(기본 `exact` 결과 불변 10647 / 142.0, legacy 비트 동일)** (-79 B4 2차): `--footprint=exact,front` 의 대치 상태기계 **V2** — R1 인내(회전 중 로봇의 임시 예약에만 막힌 로봇은 그 틱 대기 상승 0), R2 감지(상대가 회전 중이어도 대치, 지는 쪽 축 금지에 이기는 쪽 회전 중 soft 포함), R3 역할(**움직일 수 있는 쪽이 진다**), R4 calm 폐지(둘 다 대기 상승 정상, 이기는 쪽 재계획 거리장 허용), R5 `hd_timeout` 240 → **80** · 시작 `hd_after` 뒤 재판정 교대(이벤트 `rejudge`, `standoff_swaps` 에 합산). 양보 v2 분기 삭제(legacy 양보 v1 비트 동일 확인). 결과: 시드 42·exp16·exp22 STALL → 완주, base7 exact 대비 −2.4 %(`results/set_base7_front4_v2.csv`·`set_b5_front4_v2.csv`). 진단 `checks/diag_hd.py`, 테스트 `tests/test_standoff.py`. [이동계층_PIBT](../docs/이동계층_PIBT.md#정면-대치-상태기계-s15p21a106-79-b4-footprintexactfront-전용) |
+| **v3.9** | 2026-09-15 | **결과 변경**(-79 D3): (1) **대치 상태기계 V2 를 헤딩 main `exact` 기본으로** — 6,000건/6h(24·28대 × 시드 101·103·104, 동승 6, 주문 1건 = 토트 1개)에서 `exact` 가 포장대 출구 앞 하역 대기열의 제자리 회전 매듭으로 **23~72 %** 완료에 그쳤고, 상태기계만 켜면 **99~100 %**(`results/set_six_exact_v38.csv` vs `set_six_exact_standoff_v38.csv`). 회귀(`results/*_standoff_v38.csv`·`*_v39.csv`): base7 −0.4 %, load −0.2 %, load_eval −0.1 %, b0z −1.2 %, b5 9/9 완주, STALL 0. 양보 규칙 v1 은 `--no-standoff`(v3.8 경로)·`legacy` 에 남는다. 기준값 10647 / 142.0 → **10567 / 143.1**, `--no-lanes --no-yield` 9971 → 9962 / 151.8. SUMMARY `standoff` 키 추가. `fms_core` 검증 경로도 같은 기본. (2) **워커 기본 `tote_units` 8 → 10** + 백엔드 생성기 규칙 "주문 수량 합 ≤ 10" 요청(2026-09-15 결정: 개인 소비자 창고, 주문 1건 = 토트 1개; `--max-order-totes` 는 안전핀으로 유지). 시뮬 코드 무변경, `--tote-units` 명시 호출은 불변. (3) `--footprint=exact,front`(soft 4칸) 기본 전환은 **보류** — 스윕 STALL 1(L1·16대·103)·충전 존 홈 간격 2 매듭·처리량 −2~−15 %. [실험 기록·판정](../docs/이동계층_PIBT.md#정면-대치-상태기계-s15p21a106-79-b4) |
+| **v3.10** | 2026-09-15 | **결과 변경**(-159, 대치 감지 R2′): 임시 예약(회전 중 스윙 `extra`·회전 중 soft `soft_hold`)에만 막힌 wish 도 대치 상대를 찾는다 — 단 정체 **2×`hd_after`(32틱)** 부터(몸·축 영구 예약은 16틱 그대로). 회전 한 번(≤ 5틱)은 R1 인내가, 되풀이 막힘은 대치가 맡는다. 4칸 load_eval 유일 STALL(L1·16대·103, r4 전진 wish 가 r5 스윙에 3,400틱 막힘) 완주. 기준값 **10567 / 143.1 불변**, base7·b5 ±0.1 %, load_eval exact −0.7 %(48행, STALL 0), 4칸 STALL 1 → 0·−0.7 %(4칸 대가 −5.3 %). 문턱을 16 으로 두면 soft 4칸 고밀도에서 대치 3배·−10~−29 %(과감지) — 그래서 분리. 테스트 `test_standoff.py` 6건 |
+| **v3.11** | 2026-09-15 | **결과 변경**(-223, 진전 없는 회전 대기 상승): 라이브니스 장치 ① 대기 상승(bias)을 대기뿐 아니라 **거리가 줄지 않는 제자리 회전**(`dist[h′] ≥ dist[h]`)에도 붙인다. 6h 병목 진단(six 6런): 로봇 시간의 26~40 % 가 회전, 그 73 % 가 포장대 앞, 66 % 가 이동 없는 왕복(h→h′→h) — 대기(1+bias+d) 보다 헛회전(1.25+d′) 이 싸서 5틱 왕복이 굳는 기제. 붙이면 진전 없는 회전 = 대기 값이 되고 후진(×3, 상승 없음)이 상대적으로 싸져 진짜로 물러난다. **six 6런 tasks/h 990 → 996, p90 74 → 53분, 대기 37 → 17분, 회전 36 → 20 %, 대치 14~19k → 3.5~14.5k, STALL 0**; base7 exact −1.4 %·4칸 +0.9 %, b5 −0.7 %, load_eval −0.8 %(STALL 0). 기준값 **10567 / 143.1 → 10533 / 143.5**, `--no-lanes --no-yield` 9962 → 9906 / 152.6, `--no-standoff` 10647 → 10702 / 141.3, `exact,front` 10376 → 10590 / 142.8. `--no-turn-bias` 로 v3.10 경로(10567 / 143.1 재현), `--turn-bias` 는 호환용 no-op. legacy·칸 모델·v1compat 불변. `fms_core/kernel_planner.py`(검증 경로)도 같은 값. 모듈 전역이라 `run_h`(물리 팀 도구)도 함께 바뀐다(답신 10 예고). 기각한 대안: 줄 인내(막는 로봇이 서비스 중이면 bias 0) six −6.5 %. 결과 CSV `results/*_v311.*` |
+| **v3.12** | 2026-09-15 | **결과 변경 — θ 런만**(-90, 목표 상태 대기 점수 0): `candidates_h` 에서 목표 상태(dist 0)의 대기 점수에 θ `wait_cost` 도 면제한다(-204 는 bias 만 면제). θ 의 `wait_cost` 가 `TURN_COST`(1.25) 를 넘으면(six θ r24_g15 = 2.74) 목표에 도착한 로봇에게 회전(1.25+0) 이 대기(2.74) 보다 싸서 **홈에 주차한 유휴 로봇이 5틱마다 90° 씩 영원히 돌았다**(24·103 6h 틱 로그: 회전이 로봇 시간의 33.6 %, 그중 67 % 가 충전 존, 65 % 가 200틱 넘게 제자리인 로봇; `diag_hd --at=902 --robots=11` 후보 순서 turn·turn·wait). six 6런(24·28대 × 101·103·104) v3.11 → v3.12: tasks/h ±0.1 %(수요 제한), **p90 평균 53.0 → 52.7분**(런별 −6~+5 %, 시드 잡음), **대치 44,426 → 35,095(−21 %)**, STALL 0. 24·103 틱 로그: **비임무 회전 57,691 → 190회**, 충전 존 제자리 회전 54,489 → 75, 회전 시간 33.6 → 18.1 %, 태스크당 회전 21.0 → 11.3, **재계획 틱 85,576 → 906**(유휴 회전 로봇이 정체 재계획을 매 틱 부르고 있었다). base7 7/7 비트 동일, b5 신규 θ 런 S7 +0.1 %·S8 0.0 %, 기준값 10개 비트 동일(중립 θ). 중립 θ(wait_cost 1) 는 대기가 이미 1위라 **기준값 표 전부 불변**. `--no-goal-wait-free` 로 v3.11 경로. `fms_core/kernel_planner.py` 도 같은 값. 모듈 전역이라 `run_h` 도 공유(θ 를 안 넘기면 무영향). 이슈 -90 은 원래 '대기열 헛회전 억제'(v3.11 로 해결) 였고 범위를 충전 존 유휴 로봇으로 바꿨다. 결과 CSV `results/*_v312.*` |
+| **v3.13** | 2026-09-16 | **결과 변경 — θ 런만**(-160, 진전 없는 회전 점수 하한 = 대기 점수): `candidates_h` 의 진전 없는 회전(d′ ≥ d) 항을 `tb = bias + max(0, wait_cost[r,c] − turn_cost)` 로. -223 은 bias 를 같게 했지만 θ 의 기본 대기 비용(six θ 2.74)과 `TURN_COST`(1.25) 의 차 1.49 가 남아 **d′ − d < 1.49 면 거리가 늘어나는 회전도 대기보다 쌌다** (robot0 (44,83) t=446: 회전 1.25+2.8 = 4.05 < 대기 2.74+1.6 = 4.34 → 5틱 나가고 되돌아오는 10틱 왕복; 하역 뒤 나가는 길 막힘도 같은 형태). 24·103 6h 틱 로그: 포장대 앞 회전 28,026 → **12,317**, 왕복(h→h′→h) 8,745 → **489**(31 → 4 %), 전체 회전 67,612 → 31,502, 태스크당 회전 11.3 → 5.3, 회전 소모 337k → 157k틱; 돌던 시간이 대기로 옮겨가 충돌 대기 0.8 → 5.1 %·밀림 15.9k → 22.5k. six 6런: tasks/h ±0.1 %, **p90 평균 52.6 → 52.1분, 대치 35,095 → 19,651(−44 %)**, STALL 0. **θ load_eval 48행(θ r24_g15, 하한 끔 vs 켬): STALL 0 → 0, tasks/h L1 +3.6 %·L2 +4.3 %(28대 +14~28 %, 8~12대 −1.9~−3.9 %), 대치 −49 %, 회전 틱 −42 %.** base7 7행 비트 동일, b5 7행 동일 + θ 런 S7·S8 +0.1 %, 중립 θ load_eval 48행 v3.11 과 비트 동일, 기준값 11개 비트 동일, pytest 254. 중립 θ(wait_cost 1.0 < 1.25) 는 항이 0 이라 기준값 표 불변. `--no-turn-floor` 로 v3.12 경로, legacy·칸 모델·v1compat 은 항상 OFF. `fms_core/kernel_planner.py` 도 같은 값. `run_h` 는 θ 없으면 무영향. 결과 CSV `results/*_v313.*`, θ 고부하 기준 `load_sweep_eval_theta_v312.csv` **동반 수정(답신 11 §1·§4, 2026-09-16, 같은 MR 🐛 커밋)**: `_PIBTStepH._release` 가 회전 중 로봇의 주입 `soft_hold` 를 지우던 버그(다른 로봇의 회전 후보가 그 칸을 soft 로 덮어쓴 뒤 밀기 실패로 되돌릴 때) — 주입 원본을 복원. 커널 `soft_hold` 겹침은 낮은 rid 가 주인. 기본 `exact` 는 soft 칸이 빈 집합이라 **무영향(기준값·base7·b5·six 비트 동일)**; `exact,front` 만 결과 변경 — base7 front4 7/7 동일, load_eval front 48행 중 24행 변경·tasks/h 평균 +0.1 %(−5.6~+7.4 %)·STALL 0·대치 L1 +2 %/L2 −7 %(`load_sweep_eval_front_v313_prefix.csv` → `_v313.csv`). Isaac(물리 팀) pitch 1.0 5시드 중 2판 차체 접촉의 원인, 계획 층 위반 273 → 0. 테스트 `tests/test_soft_hold_release.py`. |
+| **v3.14** | 2026-09-16 | **호환(키 추가만, -230) — 결과 불변**: SUMMARY 조건부 키 **`saturated_tph`**(30~180분 완료/h, `--horizon` 런이 3시간 이상일 때만)·**`standoff_ticks`**(대치에 묶인 로봇·틱, 상태기계가 켜진 런). 값·CLI·종료 코드 불변 — 기준값 `base 6 40 42 1` 10533 / 143.5, 동일성 `--quick` 12행 차이 0, base7 7행 `set_base7_v313.csv` 와 tasks/h ±0.0 %. 조건부라 b0z·load 기준선 CSV 에는 `saturated_tph` 가 안 붙는다(동일성 검사는 CSV 에 있는 키만 본다). 배경: six 는 도착이 웨이브(첫 30분 38 %)라 6h 평균 `tasks_per_h` 에 뒤 3h 의 수요 제한이 섞여 **용량 지표가 아니다** — 포화 구간 완료/h(v3.13 24·103 = 1,642)와 p90 으로 본다(`docs/2026-09-15_6h병목진단_포장대_헛회전.md` §8-3). `standoffs` 는 건수뿐이라 대치가 얼마나 오래 묶었는지를 못 나타냈다. `sweeps/run_set.py` 요약 표에 `sat/h`·`sd_tick` 열 추가. 테스트 `tests/test_summary_saturation.py` |
+| **v3.7** | 2026-09-14 | **실험 인자만 변경(기본 `exact` 결과 불변, legacy 비트 동일)** (-79 B4 1차): `--footprint=exact,front` 의 soft 칸을 앞 2 → **4칸** {f0, f1, mA, mB}(물리 팀 합의: 뒤 대각은 hard 몸 칸, 코 대각은 여유 무관; 여유 41 → 200 mm)로 재정의, 옛 2칸은 `exact,front_2cell`(비교용, 집행 오차 실측 74 mm 로 기각). soft 의미 = 더하기(hard 불변, 축만 금지, 스윕 밖 칸도 추가 제약). pitch 게이팅 `geometry.configure(robot_dims, pitch)`·`front_needed()`. 정면 해소 = 양보 v2 대신 **대치 상태기계 V1**(`hd_after` 16·`hd_timeout` 240 틱 — v3.6 다틱 기준, soft 밀기 `_make_room`) — exact,front 에서만. 조건부 SUMMARY 키 `standoffs`·`standoff_swaps`(exact,front 만). 새 도구 `pibt/corridor.py`(폭 1 통로 추출)·`sweeps/run_set.py`(세트 병렬). **각주(2026-09-16, 답신 11)**: 이 행의 "여유 41 → 200 mm" 는 물리 팀이 soft 를 hard 로 계산한 값으로 정정됨 — soft 4칸의 실제 최소 여유는 41.4 mm(2칸과 같음), 근거는 ADG 순환 방지 |
 | **v3.6** | 2026-09-14 | **결과 변경**(-194): 헤딩 1칸 = `MOVE_TICKS`(4)틱 · 회전 `TURN_TICKS`(5)틱, 거리장 회전 가중이 틱 수가 아니라 **전진 1칸 대비 배율** `TURN_COST = 5/4 = 1.25`. 물리 팀 실측(2026-09-13, 회전 1.511 s · 전진 1.2 m 2.367 s)을 **연속 주행**으로 우리 격자에 옮긴 값이다 — 칸당 1.195 s 라 비율 1.264. 연속 주행은 가정이 아니라 구현됐다 (`-211` `3a0b3d5`: 장애물 보고가 없으면 `v_max` 로 칸을 통과한다. 단 -211 은 이 글 시점에 develop 미머지). 근거·측정은 [docs/2026-09-14_θ탐색조건_v36.md](../docs/2026-09-14_θ탐색조건_v36.md). v3.4 가 같은 실측에서 1틱을 유지한 것은 전진이 1틱일 때 0.64 를 정수로 표현할 수 없어서고, 전진을 4틱으로 쪼개면 그 제약이 없다. 헤딩 기준값 2785→**10647 / 142.0**, 2814→9971 / 151.6, **칸 모델·v1compat 불변**. `distance_m` 이 주행 틱이 아니라 밟은 칸 × CELL_M (전엔 1칸 = 1틱이라 같은 값이었다). 틱 단위 라이브니스 상수 6개 조정. θ 스키마·clamp 불변 — 다만 **θ 를 다시 뽑아야 한다**(비율이 최적 θ 를 바꾸는 것을 실측). 워커 부하 인자 `--arrival-s`(초) 신설, §5-1 |
 | **v3.5** | 2026-09-14 | **결과 변경**: (1) 주문 제외 경계 6토트 → `--max-order-totes`(기본 **24**, 0 = 제한 없음) — 7~24토트 주문은 여러 왕복, 24 초과만 팔레트 흐름 제외(`orders_oversize`), 조건부 SUMMARY 키 `max_order_totes`. 파이썬 주문 생성기에도 같은 상한(수량 다시 뽑기)을 넣었으나 -212(주문 원천 백엔드 단일화)로 그 생성기가 삭제되어 상한은 백엔드 `OutboundOrderGenerator` 요청 항목으로 넘김. (2) **PIBT 밀기 실패 되돌림(exact 모드만)**: 밀린 로봇이 모든 후보를 잃어 강제 제자리가 된 뒤 미는 쪽이 후보를 버려도 그 제자리가 남아 틱 내내 못 움직이던 결함 — 회전 마스크로 둘 다 돌 수 없는 자리(존 구석)에서 28대 4대가 6시간 정지(실측). 헤딩 기준값 2889→**2785 / 135.7**, `--no-lanes --no-yield` 2823→2814. `--footprint=legacy` 는 v3.3 비트 동일 유지 |
 | **v3.4** | 2026-09-14 | **결과 변경**(-203): 회전 발자국 `--footprint=exact`(기본) = 0.1 m 지도 정적 회전 마스크(기종 카드 0.39/1.11/0.80 + 여유 0.05), `--robot-dims`, SUMMARY `footprint`·`robot_dims`·`turn_masked` 항상. 헤딩 기준값 2822→2889 / 133.9→130.8, `--no-lanes --no-yield` 2850→2823. `--footprint=legacy` 는 v3.3 비트 동일(동일성 12행은 스크립트가 legacy 고정). 칸 모델·v1compat 불변. `exact,front`(앞 2칸 축 규칙+양보 v2)는 실험용. fms_core `--planner-opt footprint=/robot_dims=` 같은 마스크. 재측정 `*_v34.csv` |

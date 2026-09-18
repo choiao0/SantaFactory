@@ -4,7 +4,9 @@ import com.ssafy.santafactory.client.SimulationClient;
 import com.ssafy.santafactory.dto.estimate.EstimateCreateRequest;
 import com.ssafy.santafactory.dto.estimate.EstimateCreateResponse;
 import com.ssafy.santafactory.dto.estimate.EstimateDetailResponse;
+import com.ssafy.santafactory.dto.estimate.VerifyNoticeCode;
 import com.ssafy.santafactory.dto.simulation.SimulationResponse;
+import com.ssafy.santafactory.dto.simulation.VerifyResultResponse;
 import com.ssafy.santafactory.entity.estimate.EstimateStatus;
 import com.ssafy.santafactory.entity.estimate.ReasonCode;
 import com.ssafy.santafactory.entity.estimate.RunStatus;
@@ -23,6 +25,9 @@ import java.util.List;
 
 import static com.ssafy.santafactory.support.TestPrincipals.ADMIN;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 
 /**
  * 견적 생성 → 결과 수신 → 판정 확정까지 실제 Postgres 로 한 번 관통한다.
@@ -63,7 +68,8 @@ class EstimateFlowIT extends PostgresSupport {
         jdbc.update("DELETE FROM zones");
         jdbc.update("DELETE FROM facility");
         jdbc.update("DELETE FROM warehouses");
-        // 창고 시드(품고)와 같은 값 — 목표 처리율 95 %, 가동률 80 %, 예산 3억
+        // 창고 시드(품고)와 같은 값 — 하루 출고 6,000건, 목표 처리율 95 %, 가동률 80 %, 예산 3억.
+        // 출고 물량은 팀 결정(2026-09-11) 견적 부하 "하루 6,000건 / 6시간" 이다 (S15P21A106-97)
         warehouseId = jdbc.queryForObject("""
                 INSERT INTO warehouses
                     (name, area, width, length, worker_count,
@@ -73,7 +79,7 @@ class EstimateFlowIT extends PostgresSupport {
                 VALUES ('품고', 9900.0, 110.0, 90.0, 12,
                         '2026-01-01 01:00:00', '2026-01-01 09:00:00',
                         '2026-01-01 13:00:00', '2026-01-01 18:00:00', 'OUTBOUND',
-                        600, 800, 95.0, 95.0, 80.0, 300000000)
+                        600, 6000, 95.0, 95.0, 80.0, 300000000)
                 RETURNING warehouse_id
                 """, Long.class);
         seedProductMaster(warehouseId);
@@ -115,6 +121,8 @@ new EstimateCreateRequest(warehouseId, null, null, null, null, null, null), ADMI
         assertThat(queued).extracting(SimScenario::getRunId)
                 .startsWith("est_%d_n1".formatted(created.estimateId()))
                 .endsWith("est_%d_n%d".formatted(created.estimateId(), MAX_AMR));
+        // 발행은 커밋 뒤 이벤트 리스너가 한다 — 실제 트랜잭션 매니저 위에서 대수만큼 나갔는지 본다
+        verify(simulationClient, times(MAX_AMR)).publish(any());
 
         // 대수를 늘릴수록 처리율은 오르고 가동률은 떨어지는 곡선을 하나씩 되돌려준다
         for (int amrCount = 1; amrCount <= MAX_AMR; amrCount++) {
@@ -123,16 +131,52 @@ new EstimateCreateRequest(warehouseId, null, null, null, null, null, null), ADMI
 
         EstimateDetailResponse detail = estimateService.detail(created.estimateId(), ADMIN);
         assertThat(detail.status()).isEqualTo(EstimateStatus.DONE);
-        // 12대가 처음으로 세 조건을 만족한다: 처리율 96 % ≥ 95, 가동률 82 % ≥ 80, 1.86억 ≤ 3억.
-        // 11대는 처리율 88 % 로 모자라고 14대부터는 가동률이 79 % 로 떨어진다
-        assertThat(detail.recommendedCount()).isEqualTo(12);
+        // 조건을 만족하는 건 12·13대뿐이다 — 11대는 처리율 88 % 로 모자라고 14대부터는 가동률이 79 % 로
+        // 목표에 못 미친다. 그 둘 중 효율 점수가 높은 13대가 권장이다
+        // (12대 96 × 82 = 78.7, 13대 100 × 80.5 = 80.5)
+        assertThat(detail.recommendedCount()).isEqualTo(13);
         assertThat(detail.reasonCode()).isNull();
         assertThat(detail.elapsedSeconds()).isNotNull();
         assertThat(detail.runs()).hasSize(MAX_AMR);
         assertThat(detail.runs()).extracting(EstimateDetailResponse.Run::status).containsOnly(RunStatus.DONE);
         assertThat(detail.runs().get(11).throughput()).isEqualTo(96.0);
-        // 시뮬 출고창 4시간(6h × 4/6) 실측 96건 → 실제 출고창 5시간 기준 120건/일
-        assertThat(detail.runs().get(11).outbound()).isEqualTo(120L);
+        // 건/일 환산 배율은 (하루 물량 ÷ 보낸 건수)다 (S15P21A106-214). 하루치 주문을 통째로 실어
+        // 보내므로 배율이 1이고, 실측 96건이 그대로 96건/일이다. 예전의 (실제 출고창 ÷ 시뮬 출고창)
+        // 배율이던 시절에는 5시간 창고에서 ×1.25 로 부풀려 120 이 나왔다
+        assertThat(detail.runs().get(11).outbound()).isEqualTo(96L);
+        // 판정 밖 상세 지표도 run 마다 남는다 (S15P21A106-236)
+        assertThat(detail.runs().get(11).kpi().ordersTotal()).isEqualTo(100);
+        assertThat(detail.runs().get(11).kpi().throughputOrdersPerH()).isEqualTo(120.0);
+        assertThat(detail.verification()).isNull();
+    }
+
+    @Test
+    void verify_result_is_stored_and_compared_against_the_recommended_run() {
+        EstimateCreateResponse created = estimateService.create(
+new EstimateCreateRequest(warehouseId, null, null, null, null, null, null), ADMIN);
+        for (int amrCount = 1; amrCount <= MAX_AMR; amrCount++) {
+            estimateService.applyResult(done(created.estimateId(), amrCount));
+        }
+
+        // 권장 13대의 계산값: 시간당 130건 · p90 900초 · 혼잡 0.05. 검증은 p90 이 +15 % 라 기준(10 %)을 넘는다
+        estimateService.applyVerifyResult(new VerifyResultResponse(
+                "verify_" + created.estimateId(), "done", null, created.estimateId(),
+                "est_%d_n13".formatted(created.estimateId()),
+                new VerifyResultResponse.Artifacts("verify_%d/demo.mp4".formatted(created.estimateId())),
+                new VerifyResultResponse.Verify(13, 13, 600, "window elapsed",
+                        new VerifyResultResponse.Fms("done", null, null)),
+                new SimulationResponse.Kpi(30, 28, 0, 0, 600L, 500.0, 1035.0, 40.0,
+                        126.0, 140.0, 0.7, 0.055, 20_000L, 0L)));
+
+        EstimateDetailResponse detail = estimateService.detail(created.estimateId(), ADMIN);
+        EstimateDetailResponse.Verification verification = detail.verification();
+        assertThat(verification.status()).isEqualTo("done");
+        assertThat(verification.notice()).isEqualTo(VerifyNoticeCode.SLOWER_AT_PEAK);
+        assertThat(verification.comparison().leadTimeP90S().expected()).isEqualTo(900.0);
+        assertThat(verification.comparison().leadTimeP90S().diff()).isEqualTo(135.0);
+        assertThat(verification.comparison().throughputOrdersPerH().expected()).isEqualTo(130.0);
+        assertThat(estimateRepository.findById(created.estimateId()).orElseThrow().getVerify().getRobotsOnline())
+                .isEqualTo(13);
     }
 
     @Test
@@ -187,19 +231,20 @@ new EstimateCreateRequest(warehouseId, null, null, null, null, null, null), ADMI
         EstimateDetailResponse detail = estimateService.detail(created.estimateId(), ADMIN);
         assertThat(detail.runs().get(MAX_AMR - 1).status()).isEqualTo(RunStatus.TIMEOUT);
         assertThat(detail.status()).isEqualTo(EstimateStatus.PARTIAL);
-        assertThat(detail.recommendedCount()).isEqualTo(12);   // 남은 결과로 판정은 그대로
+        assertThat(detail.recommendedCount()).isEqualTo(13);   // 남은 결과로 판정은 그대로
     }
 
     /**
      * 대수가 늘면 처리율 +8 %p(100 % 에서 포화), 가동률 −1.5 %p.
      * 목표 95 % / 80 % 에서는 12~13대만 세 조건을 만족한다.
      */
+    /** 상세 지표는 대수에 비례하는 가짜 값 — 시간당 10 × 대수 건, p90 은 대수가 늘면 짧아진다. */
     private SimulationResponse done(long estimateId, int amrCount) {
         SimulationResponse.Kpi kpi = new SimulationResponse.Kpi(
                 100, Math.min(100, amrCount * 8), null, null,
-                null, null, null, null,
-                null, null,
-                (100 - amrCount * 1.5) / 100.0, null, null, null);
+                21_600L, 300.0, Math.max(60.0, 12_600.0 - amrCount * 900.0), 30.0,
+                amrCount * 10.0, null,
+                (100 - amrCount * 1.5) / 100.0, 0.05, 1_000L * amrCount, 0L);
         return new SimulationResponse("est_%d_n%d".formatted(estimateId, amrCount), "done", null, kpi, null);
     }
 }

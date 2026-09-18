@@ -1,6 +1,7 @@
 package com.ssafy.santafactory.controller;
 
 import static com.ssafy.santafactory.support.TestPrincipals.ADMIN;
+import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.startsWith;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -22,6 +23,9 @@ import com.ssafy.santafactory.global.exception.GlobalException;
 import com.ssafy.santafactory.service.estimate.EstimateEventStream;
 import com.ssafy.santafactory.service.estimate.EstimateService;
 import com.ssafy.santafactory.service.estimate.VerifyEventStream;
+import com.ssafy.santafactory.service.estimate.quote.QuoteMailService;
+import com.ssafy.santafactory.service.estimate.quote.QuotePdfService;
+import com.ssafy.santafactory.service.estimate.quote.QuoteSource;
 import com.ssafy.santafactory.support.WebMvcSecuritySupport;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -56,9 +60,61 @@ class EstimateControllerTest {
     @MockBean
     VerifyEventStream verifyEventStream;
 
+    @MockBean
+    QuotePdfService quotePdfService;
+
+    @MockBean
+    QuoteMailService quoteMailService;
+
     private static final EstimateDetailResponse DETAIL = new EstimateDetailResponse(
             77L, EstimateStatus.RUNNING, "iw.hub", 95.0, 80.0, 300_000_000L,
-            null, null, null, LocalDateTime.of(2026, 9, 8, 10, 0), null, null, List.of());
+            null, null, null, LocalDateTime.of(2026, 9, 8, 10, 0), null, null, null, List.of(), null);
+
+    // ── 견적서 PDF (S15P21A106-236) ──────────────────────────────────────────
+
+    @Test
+    void quote_pdf_downloads_as_an_attachment() throws Exception {
+        when(quotePdfService.render(77L, ADMIN))
+                .thenReturn(new QuotePdfService.QuotePdf("견적서_EST-20260908-0077.pdf", "%PDF-1.7".getBytes()));
+
+        mvc.perform(get("/api/estimates/77/quote.pdf"))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Content-Type", MediaType.APPLICATION_PDF_VALUE))
+                .andExpect(header().string("Content-Disposition", startsWith("attachment; filename")))
+                .andExpect(header().string("Content-Disposition", containsString("EST-20260908-0077.pdf")));
+    }
+
+    @Test
+    void quote_pdf_is_409_before_the_estimate_finishes() throws Exception {
+        when(quotePdfService.render(77L, ADMIN)).thenThrow(new GlobalException(ErrorCode.ESTIMATE_NOT_FINISHED));
+
+        mvc.perform(get("/api/estimates/77/quote.pdf"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("EST409_2"));
+    }
+
+    @Test
+    void quote_email_is_accepted_after_the_check_and_sent_in_the_background() throws Exception {
+        QuoteSource source = new QuoteSource(DETAIL, null);
+        when(quotePdfService.checkRenderable(77L, ADMIN)).thenReturn(source);
+
+        mvc.perform(post("/api/estimates/77/quote/email"))
+                .andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.isSuccess").value(true));
+
+        verify(quoteMailService).sendToRequester(source, ADMIN);
+    }
+
+    @Test
+    void quote_email_is_503_when_the_converter_is_missing_and_nothing_is_sent() throws Exception {
+        when(quotePdfService.checkRenderable(77L, ADMIN)).thenThrow(new GlobalException(ErrorCode.QUOTE_PDF_UNAVAILABLE));
+
+        mvc.perform(post("/api/estimates/77/quote/email"))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.code").value("PDF503"));
+
+        verify(quoteMailService, never()).sendToRequester(any(), any());
+    }
 
     @Test
     void json_by_default() throws Exception {

@@ -5,7 +5,7 @@ EC2 에 상시로 떠서 host-orch 의 NCMD Start 를 받으면 (1) GPU 박스�
 (3) 전 로봇이 그 노드에 도착하면(틱 배리어) 다음 틱을 계산한다. Stop 이 오면 `cancelOrder` 를 보내고 DES 와 같은 산식의 KPI 를
 `biz/v1/event` kpi_summary 로 낸다 — host-orch 가 `sim.verify.result.kpi` 에 싣는다.
 규칙의 원본: [`../contracts/MQTT_CONTRACT.md`](../contracts/MQTT_CONTRACT.md) §4 (VDA 마스터) · §5 (Edge fms-core), [`../contracts/SIM_VERIFY_CONTRACT.md`](../contracts/SIM_VERIFY_CONTRACT.md) §3.
-짝: [`../host_orch/`](../host_orch/) (Host), [`2_Simulation/sim_runner/`](../../2_Simulation/sim_runner/) (로봇 쪽 Edge), [`1_Robot/amr_agent/`](../../1_Robot/amr_agent/) (order 수용자).
+짝: [`../host_orch/`](../host_orch/) (Host), 로봇 쪽 Edge 는 [`2_Simulation/t3_amr/`](../../2_Simulation/t3_amr/) 에 붙인다(구 sim_runner 는 -219 로 삭제), [`1_Robot/amr_agent/`](../../1_Robot/amr_agent/) (order 수용자).
 
 | 파일 | 역할 |
 |---|---|
@@ -17,7 +17,7 @@ EC2 에 상시로 떠서 host-orch 의 NCMD Start 를 받으면 (1) GPU 박스�
 | `scenario.py` | Start JSON → `RunSpec`(sha 대조), `scenario.orders` → 커널 주문(`window_start_s` 오프셋), DES pass-through(`capacity(토트/왕복) · tote_units · outbound_gap_s · inbound_gap_s · shifts · seed`) |
 | `kpi.py` | `cli/report.py` 고정 시간 산식 그대로 → 견적 워커 `to_kpi` 의 14개 키 (`test_kernel_planner` 가 report() 와 대조) |
 | `edge.py` · `app.py` | paho 연결부(유언 NDEATH · NBIRTH · ACL 과 1:1 구독) · CLI |
-| `spb.py` · `sparkplug_b_pb2.py` | `2_Simulation/sim_runner/` 와 **바이트 동일 복사본** (`tests/test_spb_copy.py`) |
+| `spb.py` · `sparkplug_b_pb2.py` | `../host_orch/` 와 **바이트 동일 복사본** (`tests/test_spb_copy.py`; 원본이던 sim_runner 는 -219 로 삭제) |
 | `tests/` | 브로커 없는 단위 테스트 123개 (1_Robot/amr_agent 의 `OrderBook` 을 오라클로 쓴다). `test_des_parity.py` 는 견적 워커·sim_v2 와 직접 대조한다 |
 
 ## 견적과 같은 조건으로 돈다 (S15P21A106-185)
@@ -30,9 +30,9 @@ EC2 에 상시로 떠서 host-orch 의 NCMD Start 를 받으면 (1) GPU 박스�
 | 조건 | 값 | 출처 |
 |---|---|---|
 | 통로차단 | ON | `run_once(aisle_block=1)` — `DES_AISLE_BLOCK` |
-| θ 비용 | `THETA_PATH` 또는 `infra/out/theta_wallA_r24_g15.json`, 없으면 중립 + 경고 | 워커 `THETA_PATH` |
+| θ 비용 | `THETA_PATH` 또는 `infra/out/theta_wallA_r20_c6_v36.json`, 없으면 중립 + 경고 | 워커 `THETA_PATH` 와 같은 값(`kernel_planner.DEFAULT_THETA`). r24_g15 로 적혀 있던 것은 오기 — 2026-09-16 정정 |
 | 차선·양보 | ON (`lane_gain = pocket_gain = 2.0`) | sim_v2 v3 기본 (헤딩 main) |
-| 적재 | `capacity` = 왕복당 토트 1~6, `tote_units` = 토트당 상품(기본 8), `svc_per_tote` = 5틱 | 워커 `_orders_flags` (계약 v2.6) |
+| 적재 | `capacity` = 왕복당 토트 1~6, `tote_units` = 토트당 상품(기본 10, 계약 v3.9 — 개인 주문 상한 10개 = 토트 1개; v2.6~v3.8 은 8), `svc_per_tote` = 5틱 | 워커 `_orders_flags` (계약 v2.6) |
 | 교대 | **출고 전용** (견적 기본은 `in,out,out`) | 의도된 차이 — 검증 창은 출고 구간 한 조각이라 창 길이에 in 교대를 다시 자르면 그 시각의 견적 모델과 달라진다 |
 
 바꿔 끼우려면 `--planner-opt aisle_block=0 · theta_path= · lanes=false · yield_rule=false` (전부 견적과 달라지는 방향이다).
@@ -52,7 +52,7 @@ cd 3_FMS
 python3 -m fms_core --env-file infra/emqx/.env -v                       # 상주 (MQTT_HOST · MQTT_PORT · MQTT_PW_FMS_CORE)
 python3 -m fms_core --env-file infra/emqx/.env --once start.json --once-window-s 120   # host-orch 없이 Start 1건 → 창 뒤 Stop → 결과 stdout
 python3 -m fms_core --spawn 3                                            # DES 와 같은 초기 배치 → Isaac WSIM_SPAWN 문자열
-python3 -m pytest fms_core/tests host_orch/tests sim_engine/tests -q   # MR CI(.gitlab-ci.yml fms-python-test)가 도는 것과 같은 묶음
+python3 -m pytest fms_core/tests host_orch/tests sim_engine/tests infra/worker -q   # MR CI(.gitlab-ci.yml fms-python-test)가 도는 것과 같은 묶음 (308; optuna 없으면 280)
 ```
 
 옵션: `--planner kernel` · `--tick-s`(틱 최소 길이, 기본 = DES 틱 길이 1 m ÷ 속도, 속도 0.9 → 1.11 s; `--planner-opt speed=` 로 속도 지정) · `--ack-timeout-s 30`(노드 하나 도착 상한) · `--ready-timeout-s 420` ·

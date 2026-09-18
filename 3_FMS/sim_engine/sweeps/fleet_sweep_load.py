@@ -11,12 +11,16 @@
 # 두 계열: cell(--cell) / heading(기본, --heading 은 호환 표기) — 둘 다 충전 존 기본, 동기화 맵, TURN_TICKS=1.
 # 지표: 처리량·리드타임 + 존 지표(복귀 대기, 재선택, 예약 무시, 체류 평균/p90, 비임무 밀림).
 # 산출: results/load_sweep.csv, load_throughput.png, load_zone.png
-# 사용: python sweeps/fleet_sweep_load.py                 (헤딩 28대·L2 가 실행당 1~2분, 전체 30분 안팎)
+# 사용: python sweeps/fleet_sweep_load.py                 (기본 병렬 — θ 48행 4분 16초 → 36초, -231)
+#       python sweeps/fleet_sweep_load.py --jobs=1          (순차. 프로파일링·재현 조사용)
+#       SWEEP_JOBS=4 python sweeps/fleet_sweep_load.py      (--jobs 와 같음, 환경변수 쪽)
 #       SWEEP_PLOT_ONLY=1 python sweeps/fleet_sweep_load.py
 #       SWEEP_LOADS=L1 python sweeps/fleet_sweep_load.py   (부하 하나만)
 #       SWEEP_SEEDS=101,102,103 SWEEP_OUT=load_sweep_eval.csv python sweeps/fleet_sweep_load.py
 #           — 다른 시드 집합을 **별도 CSV/PNG** 로 (기본 load_sweep.csv 는 동일성 검사 기준이라 덮어쓰지 않는다).
 #             θ 평가 시드 후보 기준선용 (2026-09-06, -145 후속; θ감도 실험 §6-3 미합의 항목). PNG 는 load_throughput<접미>.png 식.
+#       SWEEP_ENGINES=heading SWEEP_EXTRA=--footprint=exact,front SWEEP_OUT=load_sweep_front_v38.csv python sweeps/fleet_sweep_load.py
+#           — 실험 인자 스윕(-79 D3): 모든 런에 SWEEP_EXTRA 를 덧붙이고 계열을 헤딩만으로. 기준 CSV 와는 sweeps/compare_csv.py 로 비교.
 # ============================================================
 import csv
 import json
@@ -24,6 +28,7 @@ import os
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 ENGINE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ENGINE_DIR)
@@ -37,20 +42,28 @@ LOADS = {"L1": (80, 25), "L2": (120, 15)}          # name -> (n_orders, order_ga
 if os.environ.get("SWEEP_LOADS"):
     LOADS = {k: v for k, v in LOADS.items() if k in os.environ["SWEEP_LOADS"].split(",")}
 SERIES = [("cell", ("--flow=main", "--cell")), ("heading", ("--flow=main", "--heading"))]
+# SWEEP_EXTRA="--footprint=exact,front" 처럼 모든 런에 덧붙일 인자 (-79 D3: 실험 인자 스윕은 SWEEP_OUT 별도 CSV 로)
+EXTRA = tuple(os.environ.get("SWEEP_EXTRA", "").split())
+if os.environ.get("SWEEP_ENGINES"):                # SWEEP_ENGINES=heading — 계열 하나만 (칸 모델은 footprint 무관)
+    SERIES = [s for s in SERIES if s[0] in os.environ["SWEEP_ENGINES"].split(",")]
 env = dict(os.environ, SIM_NO_PLOT="1", PYTHONIOENCODING="utf-8")
+# 동시 실행 수 (-231). 런은 서로 독립이고 한 런 = 프로세스 하나(sim_v2_tasks.py)라 여기서는 기다리기만 한다.
+# 기본값은 sweeps/run_set.py 와 같은 규칙. --jobs=1 이면 옛 순차 실행과 완전히 같다.
+_jobs_arg = next((a.split("=", 1)[1] for a in sys.argv[1:] if a.startswith("--jobs=")), None)
+JOBS = int(_jobs_arg or os.environ.get("SWEEP_JOBS") or max(1, (os.cpu_count() or 2) - 1))
 
 
 def run_one(n, n_orders, gap, seed, extra):
     t0 = time.perf_counter()
     r = subprocess.run([PY, os.path.join(OUT, "sim_v2_tasks.py"), "load", str(n), str(n_orders),
-                        str(seed), str(AISLE_BLOCK), f"--order-gap={gap}", *extra],
+                        str(seed), str(AISLE_BLOCK), f"--order-gap={gap}", *extra, *EXTRA],
                        capture_output=True, text=True, encoding="utf-8", env=env)
     line = next((ln for ln in r.stdout.splitlines() if ln.startswith("[SUMMARY]")), None)
     if line is None:
         # STALL(계약 §3, exit 1) 은 정보다 — 스윕을 죽이지 말고 행에 stall=1 로 남기고 덤프는 results/stall_<...>.txt 에 보관 (2026-09-06).
         stall = next((ln for ln in r.stdout.splitlines() if ln.startswith("[STALL]")), None)
         assert stall, f"실행 실패 r{n} o{n_orders} g{gap} s{seed} {extra}:\n{r.stdout[-3000:]}\n{r.stderr[-2000:]}"
-        dump = os.path.join(RES, f"stall_load_r{n}_o{n_orders}_g{gap:g}_s{seed}_{'cell' if '--cell' in extra else 'heading'}.txt")
+        dump = os.path.join(RES, f"stall_load_r{n}_o{n_orders}_g{gap:g}_s{seed}_{'cell' if '--cell' in extra else 'heading'}{TAG}.txt")
         with open(dump, "w", encoding="utf-8") as f:
             f.write(r.stdout + r.stderr)
         print(f"  [STALL] r={n} seed={seed} gap={gap}: {stall[:60]} → {os.path.basename(dump)}", flush=True)
@@ -80,23 +93,38 @@ CSV_PATH = os.path.join(RES, os.path.basename(CSV_NAME))
 if os.environ.get("SWEEP_PLOT_ONLY") and os.path.exists(CSV_PATH):
     rows = read_csv(CSV_PATH)
 else:
+    # 옛 4중 루프와 **같은 순서**로 펼친 뒤 그 순서대로 소비한다 — ThreadPoolExecutor.map 은 제출 순서로 내놓으므로
+    # CSV 행 순서·표준 출력이 순차 실행과 한 줄도 다르지 않다. 프로세스 풀이 아니라 스레드인 이유: 실제 계산은
+    # 자식 프로세스가 하고 부모는 subprocess.run 에서 기다리기만 해(그동안 GIL 이 풀린다) 스레드로 충분하고,
+    # 프로세스 풀이면 Windows spawn 이 이 모듈을 다시 import 해 스윕이 재귀로 돌아간다(이 파일은 최상위 스크립트다).
+    items = [(load, n_orders, gap, engine, extra, n, seed)
+             for load, (n_orders, gap) in LOADS.items()
+             for engine, extra in SERIES
+             for n in ROBOTS
+             for seed in SEEDS]
+
+    def _one(item):
+        load, n_orders, gap, engine, extra, n, seed = item
+        rec = run_one(n, n_orders, gap, seed, extra)
+        rec["engine"], rec["load"] = engine, load
+        return rec
+
+    print(f"[{len(items)}행 · jobs={JOBS}]", flush=True)
     rows = []
-    for load, (n_orders, gap) in LOADS.items():
-        for engine, extra in SERIES:
-            for n in ROBOTS:
-                for seed in SEEDS:
-                    rec = run_one(n, n_orders, gap, seed, extra)
-                    rec["engine"], rec["load"] = engine, load
-                    rows.append(rec)
-                    if rec.get("stall"):
-                        continue
-                    more = (f", rot {rec['rot_steps']}, rev {rec['rev_steps']}, replan {rec['replan_steps']}"
-                            if engine == "heading" else "")
-                    print(f"  {load} {engine:8s} r={n:2d} seed={seed:2d}: {rec['tasks_per_h']:6.1f} tasks/h "
-                          f"({rec['orders_per_h']:5.1f} orders/h), makespan {rec['makespan_steps']:5d}, "
-                          f"lead {rec['lead_mean_s']:6.1f}s, util {rec['util']*100:3.0f}%, "
-                          f"zone wait {rec['zone_wait_steps']:4d} retarget {rec['zone_retargets']:2d} "
-                          f"occ {rec['zone_occ_mean']:4.1f}{more} ({rec['wall_s']}s)", flush=True)
+    with ThreadPoolExecutor(max_workers=JOBS) as pool:
+        for rec in pool.map(_one, items):
+            rows.append(rec)
+            if rec.get("stall"):
+                continue
+            more = (f", rot {rec['rot_steps']}, rev {rec['rev_steps']}, replan {rec['replan_steps']}"
+                    if rec["engine"] == "heading" else "")
+            # wall_s 는 병렬에서 경합만큼 부풀어 순차값과 다르다 — 결과 열이 아니라 진행 표시다(동일성 검사도 IGNORE).
+            print(f"  {rec['load']} {rec['engine']:8s} r={int(rec['n_robots']):2d} seed={int(rec['seed']):2d}: "
+                  f"{rec['tasks_per_h']:6.1f} tasks/h "
+                  f"({rec['orders_per_h']:5.1f} orders/h), makespan {rec['makespan_steps']:5d}, "
+                  f"lead {rec['lead_mean_s']:6.1f}s, util {rec['util']*100:3.0f}%, "
+                  f"zone wait {rec['zone_wait_steps']:4d} retarget {rec['zone_retargets']:2d} "
+                  f"occ {rec['zone_occ_mean']:4.1f}{more} ({rec['wall_s']}s)", flush=True)
     fields = sorted({k for r in rows for k in r})
     with open(CSV_PATH, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=fields)

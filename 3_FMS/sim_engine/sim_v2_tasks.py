@@ -20,12 +20,24 @@
 #                              [--horizon=<틱>] [--shifts=in,out,out]                     (고정 시간·교대, -145 §1)
 #                              [--battery] [--chargers=6] [--runtime-h=8] [--charge-h=1.5] [--soc=20,80,95]  (배터리, -145 §2)
 #                              [--orders-file=<json>] [--capacity=<토트 수>] [--tote-units=<상품 수>] [--svc-per-tote=<초>]
+#                              [--service-steps=<틱>]  (v3.15, -247: 도킹 틱. 기본 = round(SERVICE_TIME_S/dt) = v1 계보 상수)
+#                              [--rev-ticks=<틱>]     (v3.15, -247: 후진 1칸 틱. 기본 = 전진과 같은 MOVE_TICKS.
+#                              물리 팀 녹화 실측 0.260 m/s -> 12 가 speed 0.9 에서 정확히 후진 상한 0.300 m/s)
+#                              [--replan-max-extra=<칸>]  (v3.15, -247: 정체 재계획 우회 추가 비용 상한. 0 = 없음)
 #                              [--max-order-totes=24]  (v3.5: 토트 합계 초과 주문 = 팔레트 흐름 제외, 그 아래 큰 주문은 여러 왕복. 0 = 제한 없음)
 #                              [--speed=<m/s>]   (v3.3, -116: 틱 길이 = CELL_M / speed. 1칸 = 1틱은 그대로, 초 환산만 바뀐다)
 #                              [--footprint=exact|legacy|exact,front|exact,front_2cell] [--robot-dims=0.39,1.11,0.80]   (v3.4 -203, front 6칸 -79)
 #   --footprint: 회전할 때 차체가 실제로 쓸고 가는 자리. exact(기본) = 0.1 m 지도로 만든 정적 마스크(랙·벽 침범 금지),
-#              legacy = v3.3 과 비트 동일(뒤 3칸만), exact,front = 앞 2칸 축 규칙 + 양보 v2 까지(소싸움 미해결 — 실험용,
-#              양보 규칙 강제 ON). --robot-dims 는 구동축 앞·뒤·폭 [m](기종 카드). SUMMARY footprint·robot_dims·turn_masked.
+#              legacy = v3.3 과 비트 동일(뒤 3칸만, 양보 v1), exact,front = + 앞 4칸 soft 축 규칙(물리 팀 안전 규칙, 실험 인자 —
+#              처리량 −2~−15 %, 충전 존 매듭). --robot-dims 는 구동축 앞·뒤·폭 [m](기종 카드). SUMMARY footprint·robot_dims·turn_masked.
+#   --no-standoff: 대치 상태기계 V2(-79)를 끄고 양보 규칙 v1(v3.8 경로). v3.9 부터 헤딩 main exact·exact,front 기본 ON —
+#              6,000건/6h 에서 포장대 앞 회전 매듭을 풀어 완료 23~72 % → 99~100 %. SUMMARY standoff·standoffs·standoff_swaps.
+#   --no-turn-bias: 대기 상승을 대기에만(v3.10 경로). v3.11 부터 헤딩 main(legacy 외)은 '거리가 줄지 않는 제자리 회전'에도 붙여
+#              포장대 앞 헛회전(5틱 왕복)을 끊는다 — 6h 24대 p90 74 → 53분, 회전 36 → 20 %. --turn-bias 는 호환용 no-op.
+#   --no-goal-wait-free: 목표 상태(dist 0)의 대기 점수에 θ wait_cost 를 그대로(v3.11 경로). v3.12 부터 0 — θ wait_cost > 1.25 면
+#              도착한 유휴 로봇이 대기보다 싼 회전을 영원히 골랐다(6h 24대 비임무 회전 57,691회). 중립 θ 기준값은 불변.
+#   --no-turn-floor: 진전 없는 회전의 점수 하한(대기 점수)을 끔(v3.12 경로). v3.13 부터 θ wait_cost − TURN_COST 차(1.49)를 회전에도
+#              더해 d′ − d < 1.49 인 헛회전(포장대 앞 왕복 31 %)을 대기로 바꾼다. 중립 θ 기준값은 불변.
 #   기본 = 헤딩 모델 (상태 (r,c,h), 자기+뒤 칸 2칸 점유, 90° 회전 = TURN_TICKS 틱, 회전 중 스윙 칸
 #              예약, 라이브니스 장치 5종). docs/이동계층_PIBT.md#라이브니스-장치-5종
 #   --cell:    칸 모델(점로봇) opt-in — 기준선 CSV 재현·A/B 비교축. (--heading 은 호환용, 무시)
@@ -157,11 +169,21 @@ def _parse_model(a, argv):
     if not a.heading:
         a.footprint = "legacy"
     elif "front" in a.footprint and not a.yield_rule:
-        a.warnings.append(f"[WARN] --footprint={a.footprint} 는 양보 규칙이 유일한 정면 해소 장치 — --no-yield 무시")
+        a.warnings.append(f"[WARN] --footprint={a.footprint} 는 대치 상태기계(-79)가 정면 해소 장치 — --no-yield 무시")
         a.yield_rule = True
     assert a.lane_gain >= 1.0 and a.pocket_gain >= 1.0, f"--lane-gain/--pocket-gain 은 1.0 이상: {a.lane_gain}, {a.pocket_gain}"
     # 주문 도착 간격 평균 [틱] (지수분포). 기본 50 = B-0 이후 전 기준선. --order-gap=<틱> 으로 부하 조절
     # (고부하 스윕, docs/θ_경로_기준선.md#고부하-l1l2). v1compat 은 패리티 때문에 항상 50.
+    # 대치 상태기계 V2 (-79, 계약 v3.9 기본): 헤딩 main 의 exact·exact,front 는 양보 규칙 v1 대신 상태기계로 정면·회전 매듭을 푼다.
+    # 6,000건/6h 에서 exact 가 포장대 앞 회전 매듭으로 23~72 % 에 그쳤고 상태기계만 켜면 99~100 % (D3, 2026-09-15).
+    # --no-standoff 로 v3.8 경로(양보 v1). legacy 는 v3.3 비트 동일이라 항상 끔. --standoff 는 호환용 no-op.
+    a.standoff = ("--no-standoff" not in argv and a.heading and a.flow != "v1compat" and a.footprint != "legacy")
+    # 진전 없는 제자리 회전에도 대기 상승 (-223, 계약 v3.11 기본): --no-turn-bias 로 v3.10 경로. --turn-bias 는 호환용 no-op.
+    a.turn_bias = ("--no-turn-bias" not in argv and a.heading and a.flow != "v1compat" and a.footprint != "legacy")
+    # 목표 상태 대기 점수 0 (-90, 계약 v3.12 기본): θ wait_cost > TURN_COST 면 도착한 로봇이 영원히 도는 것을 막는다. --no-goal-wait-free 로 v3.11 경로.
+    a.goal_wait_free = "--no-goal-wait-free" not in argv and a.heading
+    # 진전 없는 회전 점수 하한 = 대기 점수 (-160, 계약 v3.13 기본): θ wait_cost − TURN_COST 차(1.49)를 회전에도. --no-turn-floor 로 v3.12 경로.
+    a.turn_floor = ("--no-turn-floor" not in argv and a.heading and a.flow != "v1compat" and a.footprint != "legacy")
     a.order_gap_arg = next((float(f.split("=", 1)[1]) for f in argv if f.startswith("--order-gap=")), None)
     if a.order_gap_arg is not None and a.flow == "v1compat":
         a.warnings.append("[WARN] --order-gap 은 v1compat 에서 무시 (패리티)")
@@ -224,6 +246,11 @@ def _parse_orders(a, argv):
     a.capacity = _opt(argv, "capacity", int, 1)
     a.tote_units = _opt(argv, "tote-units", int)
     a.svc_per_tote = _opt(argv, "svc-per-tote", int, 0)
+    # 도킹 틱 (-247): 기본은 SERVICE_TIME_S(=40/11 s, v1 기준선 계보) 환산. 물리 팀 대조판은 0 으로 준다
+    # — 「안 적은 인자가 기본값으로 조용히 들어간다」를 막으려고 SUMMARY 에도 낸다 (t3-30 §5-1).
+    a.service_steps = _opt(argv, "service-steps", int)
+    a.rev_ticks = _opt(argv, "rev-ticks", int)
+    a.replan_max_extra = _opt(argv, "replan-max-extra", int, 0)
     # 주문 단위 경계 (v3.5, 2026-09-14): 토트 합계 초과 주문 = 팔레트 흐름 제외. 그 아래 큰 주문은 여러 왕복. 0 = 제한 없음.
     a.max_order_totes = _opt(argv, "max-order-totes", int, MAX_ORDER_TOTES)
     assert a.max_order_totes >= 0, f"--max-order-totes 는 0 이상 (0 = 제한 없음): {a.max_order_totes}"
@@ -231,6 +258,9 @@ def _parse_orders(a, argv):
         assert a.flow == "main", "--orders-file 은 main 흐름만"
     assert 1 <= a.capacity <= 6, f"--capacity 는 1~6 토트: {a.capacity}"
     assert a.svc_per_tote >= 0, f"--svc-per-tote 는 0 이상: {a.svc_per_tote}"
+    assert a.service_steps is None or a.service_steps >= 0, f"--service-steps 는 0 이상: {a.service_steps}"
+    assert a.rev_ticks is None or a.rev_ticks >= 1, f"--rev-ticks 는 1 이상: {a.rev_ticks}"
+    assert a.replan_max_extra >= 0, f"--replan-max-extra 는 0 이상 (0 = 없음): {a.replan_max_extra}"
     if a.tote_units is not None:
         assert a.tote_units >= 1, f"--tote-units 는 1 이상: {a.tote_units}"
         if a.orders_file is None:
@@ -341,11 +371,18 @@ def build(a):
     if a.footprint != "legacy":
         mask = turn_mask(map_dir, a.robot_dims, FOOTPRINT_MARGIN_M)
         turn_masked = masked_turn_ratio(free, mask)
+    import pibt.heading as _hd
+    _hd.NO_PROGRESS_TURN_BIAS = bool(getattr(a, "turn_bias", False))
+    _hd.GOAL_WAIT_FREE = bool(getattr(a, "goal_wait_free", True))
+    _hd.TURN_FLOOR_WAIT = bool(getattr(a, "turn_floor", False))
     cfg = KernelConfig(heading=a.heading, zone=a.zone, theta=bool(a.theta_path or a.lanes), check=a.check,
-                       dock_prio=a.dock_prio, export=a.export, service_steps=round(SERVICE_TIME_S / a.dt),
+                       dock_prio=a.dock_prio, export=a.export,
+                       service_steps=round(SERVICE_TIME_S / a.dt) if a.service_steps is None else a.service_steps,
                        capacity=a.capacity, svc_per_tote=a.svc_per_tote,
-                       yield_rule=a.yield_rule, section_limit=a.section_limit,
+                       yield_rule=a.yield_rule, section_limit=a.section_limit, standoff=a.standoff,
                        turn_ticks=TURN_TICKS, move_ticks=MOVE_TICKS,
+                       rev_ticks=MOVE_TICKS if a.rev_ticks is None else a.rev_ticks,
+                       replan_max_extra=a.replan_max_extra,
                        stall_warn_only=a.horizon is not None,
                        footprint=a.footprint, robot_dims=a.robot_dims, **bat)
     kernel = FmsKernel(free, st_cell, edge_cost, wait_cost, homes, a.n_robots, cfg,

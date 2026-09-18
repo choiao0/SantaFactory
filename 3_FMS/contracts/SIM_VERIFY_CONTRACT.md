@@ -7,7 +7,7 @@
 > v0.2 (2026-09-09, 추가만): §2 `scenario.window_start_s`, §3 `kpi` 는 fms-core 가 채운다 + `verify.fms`, §4 fms-core 행, §6 ⑤ 해소.
 > v0.3 (2026-09-10, S15P21A106-185): §2 적재 필드를 [`SIM_RUN_CONTRACT.md`](SIM_RUN_CONTRACT.md) v2.6 에 맞춘다 —
 > `scenario.amr.capacity`(최상위 `scenario.capacity` 도 받는다)는 **왕복당 토트 수(1~6)**, 토트당 상품 수는
-> `scenario.amr.tote_units`(기본 8). 옛 뜻(상품 수)으로 보내면 거절된다. §3 `verify.fms.warnings` 추가 —
+> `scenario.amr.tote_units`(기본 10, v3.9; v2.6~v3.8 은 8). 옛 뜻(상품 수)으로 보내면 거절된다. §3 `verify.fms.warnings` 추가 —
 > null 이 아니면 그 런은 견적과 다른 조건에서 돌았다는 뜻이라 KPI 를 견적과 비교하면 안 된다.
 > 견적과 같은 조건으로 도는지는 `fms_core/tests/test_des_parity.py` 가 견적 워커 코드에서 기준을 읽어 대조한다.
 > v0.4 (2026-09-14, S15P21A106-197 반영): `scenario.orders` 의 원천은 **백엔드가 견적 생성 시 저장한 목록**(`estimates.outbound_orders_json`)이고
@@ -44,7 +44,7 @@
                                             "lines": [{"product_id": 3, "qty": 2, "rack_id": "A3"}]} ] },   // 백엔드가 견적 생성 시 저장한 목록 그대로 (estimates.outbound_orders_json = DES 스윕 outbound[] 와 같은 목록, -197)
     "spawn": "103.1,48.5;103.1,50.5",   // 선택. 로봇 초기 위치(m) → Isaac WSIM_SPAWN. DES 와 같은 배치는 `python3 -m fms_core --spawn N` 이 준다
     "window_start_s": 5400,             // 선택. 주문 시각을 이만큼 앞당겨 재생(창 오프셋, §6 ①). 음수가 되는 주문은 버린다
-    "amr": {"capacity": 3, "tote_units": 8, "speed_empty": 1.2, …},   // 선택. DES 요청 amr 블록 pass-through: capacity = 왕복당 토트 수 1~6, tote_units = 토트당 상품 수(기본 8). sim-runner 가 이 블록을 에이전트 `profile_overrides` 로 그대로 넘겨 속도·배터리·적재가 로봇 동작에 반영된다 (1_Robot/amr_agent README "파라미터")
+    "amr": {"capacity": 3, "tote_units": 8, "speed_empty": 1.2, …},   // 선택. DES 요청 amr 블록 pass-through: capacity = 왕복당 토트 수 1~6, tote_units = 토트당 상품 수(기본 10 — 2026-09-15 개인 주문 상한 10개·토트 10개들이). sim-runner 가 이 블록을 에이전트 `profile_overrides` 로 그대로 넘겨 속도·배터리·적재가 로봇 동작에 반영된다 (1_Robot/amr_agent README "파라미터")
     "outbound_gap_s": 50.0, "inbound_gap_s": 48.0, "shifts": "in,out,out"   // 선택. 없으면 **출고 전용** — 검증 런은 견적 지평선 안의 출고 창 한 조각만 재생한다 (§6 ①)
   }
 }
@@ -80,7 +80,9 @@ DES 요청의 `horizon_s · shifts · inbound_gap_s · outbound_gap_s · warehou
            "lead_time_mean_s": 61.2, "lead_time_p90_s": 90.0, "queue_time_mean_s": 3.1, "throughput_orders_per_h": 274.6,
            "throughput_tasks_per_h": 335.6, "amr_utilization": 0.71, "conflict_wait_ratio": 0.02, "distance_total_m": 140,
            "charge_downtime_s": 0 },       // fms-core 의 kpi_summary(MQTT_CONTRACT §4.4) — DES 견적 워커 to_kpi 와 같은 14개 키. 분모(makespan_s) = 실제로 돈 커널 틱 수. fms-core 가 없거나 플래너 전에 끝났으면 null
-  "artifacts": null,                    // 뒤에 {video, replay, heatmap} 키
+  "artifacts": { "video": "verify_77_n3/demo_verify_77_n3.mp4" },
+                                        // (-215/-233) 러너가 Runner/VideoUrl 로 준 mp4 의 **객체 키** `<run_id>/<파일>` — URL 이 아니고 버킷 이름도 안 붙는다(버킷은 양쪽 설정).
+                                        // 버킷은 비공개, 화면용 서명 URL 은 BE 가 조회 시 만든다(§7). 영상이 없으면 artifacts 는 null. replay·heatmap 키는 예정
   "source_run_id": "est_77_n3", "estimate_id": 77
 }
 ```
@@ -92,6 +94,9 @@ DES 요청의 `horizon_s · shifts · inbound_gap_s · outbound_gap_s · warehou
 | 상황 | 동작 |
 |---|---|
 | 요청 수신 | sim-runner 가 NBIRTH 로 보이고 IDLE/ERROR 면 NCMD Start. 다른 run_id 로 바쁘면 기다렸다가 start_timeout(180 s) 에 failed |
+| 같은 run_id 재요청 | 진행 중이면 그 잡(재전달 멱등, Start 한 번), `done` 으로 끝났으면 결과만 재발행(GPU 런 반복 안 함), **`failed` 로 끝났으면 새 런**(-241). BE 는 run_id 를 견적 id 로 고정한 채 재발행하면 된다 — 실패한 견적의 재검증이 옛 실패 결과로 되돌아오던 문제 (2026-09-17) |
+| 요청 파싱 실패 | 결과 `failed` 를 바로 발행. `estimate_id` · `source_run_id` 는 본문에서 그대로 옮긴다 — BE 가 어느 견적의 실패인지 알아 화면에 알릴 수 있게 (-235, 2026-09-16 verify_2 가 이것 없이 버려져 화면이 굳었다) |
+| `scenario.orders.outbound` | **창 밖 주문은 러너에 보내지 않는다.** 창 = [t0, t0 + window_s + 60], t0 = `window_start_s`(있으면) 아니면 첫 주문 시각(§6 ① 의 저장 주문 기준). 잘라낸 scenario 에 `window_start_s = t0` 와 `orders.window {start_s, end_s, kept, total}` 를 적고 sha 도 그 기준으로 낸다. 512 KiB 상한은 자른 뒤에 잰다 — 하루 6,000 건(586 KB)을 통째로 보내던 요청이 거절되던 문제 (-235) |
 | sim-runner RUNNING (fms-core 켜짐, `--fms-node`) | 같은 Start 를 fms-core 에 NCMD (15 s 마다 재전송). `Fms/State` RUNNING · `Fms/RunId` 일치일 때 창 시작(결정 11). fms-core ERROR/IDLE · `bad Start` · start_timeout → failed |
 | RUNNING 중 fms-core NDEATH · ERROR/IDLE · NDATA 15 s 없음 | Stop 둘 다 → failed (`fms-core NDEATH` · `fms-core ended the run` · `fms-core heartbeat lost`) |
 | Start 반영 없음 | 15 s 마다 재전송 (sim-runner 는 같은 run_id 멱등, QoS 0 유실 대비) |
@@ -106,10 +111,34 @@ DES 요청의 `horizon_s · shifts · inbound_gap_s · outbound_gap_s · warehou
 ## 5. BE 쪽 (제안, 미구현)
 
 - 견적 상태에 `VERIFYING` 추가 (미결 ③). `sim.verify.result` 의 `status` 로 `VERIFIED` / `VERIFY_FAILED`.
-- 재시도: `failed` + `reason` 이 `start timeout` · `runner NDEATH` · `heartbeat lost` 면 재발행 가능(같은 run_id 는 sim-runner 가 멱등 처리). `runner ended the run` 은 원인(`error`) 확인 후.
+- 재시도: `failed` + `reason` 이 `start timeout` · `runner NDEATH` · `heartbeat lost` 면 재발행 가능(같은 run_id 는 sim-runner 가 멱등 처리). `runner ended the run` 은 원인(`error`) 확인 후. host-orch 는 `failed` 였던 run_id 의 재요청을 새 런으로 돌린다(-241, §4) — `done` 이었던 run_id 는 결과만 다시 온다.
 
 ## 6. 미결 (로드맵 §04)
 
 ① 창 길이 — DES 6 h 대비 Isaac 10~20 분 창, 같은 창의 DES KPI 와 비교하는 정의. 지금은 요청의 `window_s` 로 열어 둔다. 실측(2026-09-09, 명세 예시 조건 seed 42): DES 창의 첫 10 분에는 주문 2건, 10~20 분에 124건(wave) — "첫 W 분" 은 쓸 수 없고 `scenario.window_start_s` 로 안정 구간을 잘라야 한다(제안: 출고 시작 + 90 분, 600 s). 실 로봇 1 칸 ≈ 2.2 s · 90° ≈ 2.5 s 라 커널 틱(1 s)보다 느리다 — `verify.fms.ticks` 가 그 창에서 돈 DES 초이고 KPI 분모다.
 ② 20 분 초과 창과 `consumer_timeout` — 큐 정책(`consumer_timeout`)을 늘릴지, 꺼내자마자 ack 하고 BE 의 TIMEOUT 재시도로 갈지.
 ③ `VERIFYING` 상태값. ④ 주문 스크립트 전달 — **해소(2026-09-14, -197)**: 백엔드 `OutboundOrderGenerator` 가 견적 생성 시 1회 만들어 저장하고 DES 요청 `outbound[]` 와 여기 `scenario.orders` 에 같은 목록을 싣는다. 워커 자체 생성(-158)·3_FMS `order_gen` 은 제거. 남은 제안: 워커가 `sim.result` 에 `orders_sha256` 에코(저장본 대조). ⑤ `kpi` 산출 주체 — **해소(2026-09-09)**: fms-core 가 DES 와 같은 산식(`fms_core/kpi.py` = `sim_engine/cli/report.py`)으로 계산해 `kpi_summary` 로 내고 host-orch 는 그대로 싣는다.
+
+
+## 7. `artifacts.video` 를 화면 URL 로 (백엔드, -233)
+
+러너가 주는 값은 URL 이 아니라 **객체 키** `<run_id>/<파일>` 이다 — 버킷 이름은 안 붙는다(버킷 `verify-videos` 는 양쪽 설정 `MINIO_BUCKET`). 버킷은 비공개라 키만으로는 아무도 못 연다.
+백엔드는 `estimates.verify_video_url` 에 키를 그대로 저장하고, 견적 조회·검증 SSE 에서 **그때그때** 짧은 만료의 presigned GET 을 만들어
+`video_url` 로 준다. 화면(`<video src>`)은 무변경. 견적 번호만 바꿔 남의 영상을 여는 일은 API 의 소유권 검사가 막는다.
+구현: 4_Web `VerifyVideoPresigner`(-89, 2026-09-16 develop) — `objectKey()` 가 URL 이 아닌 값을 통째로 키로 보고, 215 시절 공개 URL 형식은 `/verify-videos/` 뒤를 키로 뽑아 재서명한다. TTL 30 분, 만료 뒤 구간 이동 403 은 FE 가 상세를 다시 불러 새 URL 로 이어 간다.
+
+| 항목 | 값 |
+|---|---|
+| 계정 | `santa-be` — 읽기 전용(정책 `santa-be-read`: `verify-videos/*` GetObject + GetBucketLocation). 비밀은 EC2 `~/minio-keys/santa-be.env`, 환경변수로 주입, git 밖 |
+| 서명 엔드포인트 | `https://j15a106.p.ssafy.io` (secure), region `us-east-1`, 경로 `/verify-videos/<키>` |
+| 브라우저에 주는 URL | 서명한 뒤 경로 **앞에 `/media` 를 끼운다** → `https://j15a106.p.ssafy.io/media/verify-videos/<키>?X-Amz-…` |
+| 만료 | 짧게(예 10 분). 조회마다 새로 만든다 — DB 에는 키만 둔다 |
+
+왜 `/media` 를 서명 뒤에 끼우나: nginx 가 `location /media/ { proxy_pass http://127.0.0.1:9002/; proxy_set_header Host $host; }` 라
+`/media` 를 떼고 Host 는 그대로 넘긴다. SigV4 는 Host 와 경로를 서명하므로 MinIO 가 실제로 보는 조합(`j15a106.p.ssafy.io` + `/verify-videos/…`)으로
+서명해야 맞는다. 내부 주소(`http://minio:9000`)나 `/media` 를 포함한 경로로 서명하면 브라우저 요청에서 403 이다.
+서명은 네트워크 없이 계산된다 — minio-java 는 `MinioClient.builder().endpoint("https://j15a106.p.ssafy.io").region("us-east-1").credentials(…)` 뒤
+`getPresignedObjectUrl(GetPresignedObjectUrlArgs … method(GET).bucket("verify-videos").object(키).expiry(10, MINUTES))`. region 을 명시하면
+GetBucketLocation 호출도 없어 BE 컨테이너가 MinIO 에 닿을 필요가 없다.
+
+실측 2026-09-16(minio-py 로 같은 절차): 서명 URL(`/media` 삽입) → **200**, video/mp4 2.5 MB · 서명 없이 → **403** · `/media` 없이 → FE 의 index.html(200, text/html — MinIO 가 아니다).

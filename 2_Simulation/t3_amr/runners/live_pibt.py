@@ -162,11 +162,12 @@ MAP = os.environ.get("PIBT_MAP", os.path.join(
 N = int(os.environ.get("PIBT_N", "12"))
 PITCH = float(os.environ.get("PIBT_PITCH", "1.2"))
 SEED = int(os.environ.get("PIBT_SEED", "9"))
-MAX_STEPS = int(os.environ.get("PIBT_MAX_STEPS", "400"))
+MAX_STEPS = int(os.environ.get("PIBT_MAX_STEPS", "1600"))  # -211: x4
 # 기본값 "oneshot" 은 사실상 죽은 값이다 — amr/path/pibt_h.py 가 항상
 # PIBT_MODE=lifelong 을 넣는다. one-shot 은 시드를 타므로 직접 켜지 말 것.
 MODE = os.environ.get("PIBT_MODE", "oneshot")          # oneshot | lifelong
-HORIZON = int(os.environ.get("PIBT_HORIZON", "315"))   # 315틱 = 계획 420 s
+HORIZON = int(os.environ.get("PIBT_HORIZON", "1260"))  # -211 틱 모델 정합으로
+                                                      # 315 -> 1260. 1260 x (pitch/0.9/MOVE_TICKS) = 350 s
 BATTERY = os.environ.get("PIBT_BATTERY", "0") not in ("0", "", "false")
 DISPATCH = os.environ.get("PIBT_DISPATCH", "fms")      # fms | robot_first
 # 충전존 복귀. 기본 ON — PIBT_ZONE=0 이면 FREED 가 시작 칸으로 돌아가던
@@ -180,7 +181,7 @@ ORDER_END = float(_OE) if _OE else None
 # 도착하고 13건만 완료돼 적체 8건이 남는다. 그러면 주문을 끊어도 로봇이 계속
 # 일하므로 복귀가 안 된다. 전원 복귀를 보려면 25 이상으로 부하를 낮춘다.
 # 실측(12대·seed 1·업무 315틱·horizon 550): gap 15 → 4/12, gap 25 → **12/12**.
-ORDER_GAP = int(os.environ.get("PIBT_ORDER_GAP", "15"))
+ORDER_GAP = int(os.environ.get("PIBT_ORDER_GAP", "60"))   # -211: 틱 단위라 x4
 CAMERA = os.environ.get("PIBT_CAMERA", "/World/Cameras/Cam_Top")
 SPAWN_Z = float(os.environ.get("PIBT_SPAWN_Z", "0.081"))   # build_amr_scene 의 WHEEL_R
 LEFT_IDX, RIGHT_IDX = 0, 1
@@ -555,17 +556,62 @@ def _rec_setup(drivers, arts):
             keys = sorted(drivers, key=str)
         rec = {"path": path, "hz": hz, "next": 0.0, "keys": keys,
                "drivers": drivers, "arts": arts,
-               "t": [], "pose": [], "alt": [], "off": False,
+               # ★ 명령 (v, w) 도 같이 남긴다 (-224). pose 만 있으면 「명령은
+               #   정상인데 안 따라왔나, 명령 자체가 이상했나」를 못 가른다.
+               #   2026-09-16 agent6 회전 교착에서 실제로 여기서 막혔다 —
+               #   궤적으로 옆미끄러짐까지는 확인했는데 명령값이 없었다.
+               "t": [], "pose": [], "alt": [], "cmd": [], "off": False,
+               # ★ 관절 속도 (-224). 명령과 pose 사이의 **가운데 층**이다.
+               #   명령 != 관절 이면 드라이브가 못 따라온 것이고,
+               #   관절 != pose 이면 바퀴가 미끄러진 것이다. 둘은 다른 문제다.
+               #   이름은 첫 샘플에서 한 번만 잡는다 (`initialize()` 뒤여야 한다).
+               "joint": [], "dof": None, "joint_off": False,
                "flush": flush, "flush_next": flush if flush > 0 else float("inf"),
                "nflush": 0}
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        # ★ 실제로 한 번 써 본다 (2026-09-13). 위 `makedirs(exist_ok=True)` 는
+        #   **폴더가 있기만 하면 통과**한다 — 쓰기 권한을 안 본다. 그래서 못 쓰는
+        #   경로를 줘도 여기서는 `자세 기록 ON` 이 찍히고, 첫 주기저장(기본 60초)
+        #   에서야 PermissionError 가 난다. 주행은 멀쩡히 계속되므로 **기록만
+        #   조용히 빠진 채 20분이 흐른다.**
+        #
+        #   실제로 당했다 (jupyter04): `source paths.sh` 없이
+        #   `PIBT_RECORD=$OUT/...` 를 주면 부모 셸에서 `$OUT` 이 비어
+        #   `/rec_pibt12.npz` 가 된다. 루트에 쓸 수 있을 리 없다.
+        probe = path + ".probe"
+        try:
+            with open(probe, "wb") as fp:
+                # ★ 한 바이트를 **실제로 쓴다.** 여는 것만으로는 부족하다 —
+                #   쿼터가 찼거나 읽기 전용으로 리마운트된 경우 `open` 은
+                #   통과하고 `write` 에서 막힌다. 빈 블록으로 두면 그 경우를
+                #   놓치고, 읽는 사람에게는 빠뜨린 코드처럼 보인다.
+                fp.write(b"0")
+        finally:
+            try:
+                os.remove(probe)
+            except OSError:
+                pass
         carb.log_warn(f"[pibt] 자세 기록 ON: {path}  {hz:g} Hz · "
                       f"로봇 {len(keys)}대 · 주기저장 "
                       f"{('%g초' % flush) if flush > 0 else '없음'}")
         return rec
     except Exception as e:
-        carb.log_error(f"[pibt] 자세 기록 준비 실패 — 기록 없이 진행합니다: {e!r}")
+        carb.log_error(f"[pibt] ★ 자세 기록 준비 실패 — 기록 없이 진행합니다: {e!r}")
+        carb.log_error(f"[pibt]   경로: {os.environ.get('PIBT_RECORD', '')!r}")
+        if isinstance(e, PermissionError):
+            carb.log_error("[pibt]   못 쓰는 경로입니다. `$OUT` 이 비어서 / 로 간 것이")
+            carb.log_error("[pibt]   흔합니다 — `source paths.sh` 를 먼저 하거나 절대경로를 주세요.")
         return None
+
+
+def _jkw(rec, _np):
+    """관절 배열을 저장 인자로 — 길이가 `t` 와 맞을 때만."""
+    j = rec.get("joint") or []
+    if not j or len(j) != len(rec["t"]):
+        return {}
+    return {"joint": _np.asarray(j, dtype=_np.float32),
+            # 유니코드 배열로 둔다 — object dtype 은 저장·적재에 pickle 이 든다.
+            "dof_names": _np.array([str(s) for s in (rec.get("dof") or [])])}
 
 
 # [patch_pibt_record_flush] 원자적 쓰기 — .tmp 에 쓰고 replace. 쓰는 중에 죽어도 이전 파일이 온전하다.
@@ -577,20 +623,63 @@ def _rec_write(rec, tag):
         t=_np.asarray(rec["t"], dtype=_np.float32),
         pose=_np.asarray(rec["pose"], dtype=_np.float32),
         pose_alt=_np.asarray(rec["alt"], dtype=_np.float32),
+        # (N, R, 2) = 그 프레임에 나간 명령 (v m/s, w rad/s). -224.
+        cmd=_np.asarray(rec["cmd"], dtype=_np.float32),
+        # (N, R, D) = 관절 속도. 중간에 꺼졌으면 길이가 안 맞으므로 **빼고**
+        #   쓴다 — 길이가 어긋난 배열을 남기면 읽는 쪽이 조용히 틀린다.
+        **_jkw(rec, _np),
         stage=_np.array(str(rec.get("stage", ""))))
     os.replace(tmp + ".npz", rec["path"])          # savez 가 .npz 를 붙인다
     carb.log_warn(f"[pibt] 자세 기록 {tag}: {len(rec['t'])} 프레임 · "
                   f"{rec['t'][-1]:.1f} s → {rec['path']}")
 
 
-def _rec_sample(rec, t_sim):
-    """시뮬 시각 기준으로 샘플한다. 실패하면 스스로 꺼진다."""
+def _rec_joints(rec):
+    """관절 속도 한 줄 — 로봇마다 전 DOF. 실패하면 **관절만** 끈다.
+
+    자세 기록 전체를 끄지 않는다. 관절은 덤이고 pose 가 본체다. 그리고
+    articulation 종류에 따라 없을 수 있는 API 라 조용히 빠지는 편이 낫다.
+    """
+    if rec["joint_off"]:
+        return None
+    try:
+        rows = []
+        for a in rec["keys"]:
+            v = rec["arts"][a].get_joint_velocities()
+            rows.append([float(u) for u in v])
+        n = len(rows[0]) if rows else 0
+        if n == 0 or any(len(r) != n for r in rows):
+            raise ValueError(f"DOF 수가 로봇마다 다르다: {[len(r) for r in rows]}")
+        if rec["dof"] is None:
+            names = list(getattr(rec["arts"][rec["keys"][0]], "dof_names", None)
+                         or [f"dof{i}" for i in range(n)])
+            rec["dof"] = names
+            carb.log_warn(f"[pibt] 관절 기록 ON: DOF {n}개 {names}")
+        return rows
+    except Exception as e:
+        rec["joint_off"] = True
+        rec["joint"] = []
+        carb.log_warn(f"[pibt] 관절 기록 끔 (자세 기록은 계속): {e!r}")
+        return None
+
+
+def _rec_sample(rec, t_sim, fleet=None):
+    """시뮬 시각 기준으로 샘플한다. 실패하면 스스로 꺼진다.
+
+    `fleet` 을 주면 그 스텝에 나간 명령 `(v, w)` 도 같이 남긴다 (-224).
+    """
     if rec is None or rec["off"] or t_sim < rec["next"]:
         return
     rec["next"] += 1.0 / rec["hz"]
     try:
         import math as _m
         row_p, row_a = [], []
+        # 붙이는 것은 아래에서 t·pose 와 **같이** 한다 — 중간에 예외가 나면
+        # 배열 길이가 어긋나고, 그러면 뒤에 읽는 도구가 조용히 틀린다.
+        last = getattr(fleet, "_last_cmd", None) or {}
+        row_c = [(float(last.get(a, (0.0, 0.0))[0]),
+                  float(last.get(a, (0.0, 0.0))[1])) for a in rec["keys"]]
+        row_j = _rec_joints(rec)
         for a in rec["keys"]:
             # 1순위 — 링크 프레임. 렌더러가 쓰는 prim op 에 가장 가깝다.
             pos, quat = rec["arts"][a].get_world_pose()
@@ -605,6 +694,9 @@ def _rec_sample(rec, t_sim):
         rec["t"].append(float(t_sim))
         rec["pose"].append(row_p)
         rec["alt"].append(row_a)
+        rec["cmd"].append(row_c)
+        if row_j is not None:
+            rec["joint"].append(row_j)
     except Exception as e:
         rec["off"] = True
         carb.log_error(f"[pibt] ★ 자세 기록 중단 (주행은 계속): {e!r}")
@@ -680,7 +772,7 @@ def _tick(f, dt):
 
     # [patch_pibt_record] 자세 기록 — 스크린샷과 같은 이유로 f.step 뒤에 둔다.
     #   스텝 수가 아니라 **시뮬 시각**으로 샘플한다 (physics dt 와 무관하게 Hz 유지).
-    _rec_sample(state.get("rec"), state["t"])
+    _rec_sample(state.get("rec"), state["t"], f)
 
     # 개루프 — 명령은 나가는데 pose 가 안 변한다. probe 를 통과했는데도 나오면
     # 주행 중에 pose 소스가 끊긴 것이다 (타임라인 정지, prim 재로드 등).
@@ -692,13 +784,27 @@ def _tick(f, dt):
         state["done"] = True
         return
 
-    # 차체 겹침은 브리지 버그다. 조용히 넘기지 않는다.
+    # 칸 겹침은 조용히 넘기지 않는다. 다만 **심각도는 거리로 가른다.**
     #   overlap_events 는 **정수 카운터**다 (리스트가 아니다 — FleetStats 참조).
-    #   쌍은 overlap_pairs(set), 최악값은 worst_overlap 에 있다.
-    if f.stats.overlap_events:
-        carb.log_error(f"[pibt] ★ 차체 겹침 {f.stats.overlap_events}건  "
-                       f"쌍 {sorted(f.stats.overlap_pairs)}  "
-                       f"최악 {f.stats.worst_overlap}  — 플랜과 실제 기하가 어긋났다는 뜻")
+    #   쌍은 overlap_pairs(set), 공유 칸 수는 worst_overlap 에 있다.
+    #
+    #   ★ `overlap_events` 는 **칸** 공유다. 접촉이 아니다. 1.2 m 칸을 공유
+    #     단위로 쓰면 0.5 m 넘게 떨어진 두 대도 걸린다 — 2026-09-14 실측:
+    #     대각선 이웃이 칸 하나를 각각 5.1 mm · 2.7 mm 씩 스쳤는데 차체
+    #     간격은 **0.568 m** 였다. 예전에는 이 셋을 전부 같은 문구
+    #     ("플랜과 실제 기하가 어긋났다")로 찍어서 오탐을 심각하게 읽었다.
+    #     판정은 `worst_gap`(차체 최소거리)이 한다.
+    #   ★★ **칸 공유로는 주행을 멈추지 않는다** (2026-09-14). 예전에는 멈췄다.
+    #     실측에서 차체 간격 0.568 m 짜리 오탐 하나가 300초짜리 주행을 죽였다 —
+    #     2.7 mm 스침 때문에. ADG 는 **이상적 칸 중심 자세**로 스윕을 계산하는데
+    #     실행은 그만큼 정확하지 않으므로(실측 어긋남 0.051 m) 칸 공유는
+    #     구조적으로 계속 난다. 멈추는 기준은 **접촉**이다.
+    # ★ 회전 교착 (-224). 원인을 몰라도 **끊는다** — `complete()` 가 영영
+    #   참이 될 수 없는 상태여서 두면 20분을 통째로 날린다 (2026-09-16 실제).
+    if getattr(f, "stall", None):
+        carb.log_error("[pibt] ★★ 회전 교착 — 각도 오차가 줄지 않는다. 중단한다")
+        for line in str(f.stall).splitlines():
+            carb.log_error("   " + line)
         try:
             for line in str(f.diagnose()).splitlines()[:25]:
                 carb.log_error("   " + line)
@@ -707,6 +813,28 @@ def _tick(f, dt):
         _shot_report()
         state["done"] = True
         return
+
+    if f.stats.contact_events:
+        carb.log_error(f"[pibt] ★★ 차체 접촉 {f.stats.contact_events}건  "
+                       f"쌍 {sorted(f.stats.overlap_pairs)}  "
+                       f"차체 최소거리 {f.stats.worst_gap:.3f} m  — 브리지 버그")
+        try:
+            for line in str(f.diagnose()).splitlines()[:25]:
+                carb.log_error("   " + line)
+        except Exception as e:
+            carb.log_error(f"   diagnose 실패: {e}")
+        _shot_report()
+        state["done"] = True
+        return
+
+    # 접촉이 아닌 칸 공유 — **한 번만** 알리고 주행은 계속한다.
+    if f.stats.overlap_events and not state.get("cell_warned"):
+        state["cell_warned"] = True
+        carb.log_warn(f"[pibt] 칸 겹침 {f.stats.overlap_events}건  "
+                      f"쌍 {sorted(f.stats.overlap_pairs)}  "
+                      f"공유칸 최대 {f.stats.worst_overlap}  →  "
+                      f"{f.stats.overlap_grade()}")
+        carb.log_warn("[pibt]   주행은 계속합니다 — 멈추는 기준은 접촉입니다.")
 
     if f.finished:
         carb.log_warn(f"[pibt] 전원 완주 — 시뮬 {state['t']:.1f}s")
@@ -834,6 +962,13 @@ async def _run():
                   f"quat_order={'O' if hasattr(_id, 'QUAT_ORDERS') else 'X'} "
                   f"verify_start={'O' if hasattr(_id.FleetController, 'verify_start') else 'X'} "
                   f"open_loop={'O' if hasattr(_id.FleetController, '_watch_open_loop') else 'X'}")
+    # ★ 흔들 수 있는 값은 **실제 값을 찍는다** (-224). 환경변수를 줬는지 안
+    #   줬는지 로그만 보고 알 수 있어야 A/B 표가 어느 쪽인지 안 헷갈린다.
+    _tolv = _id.Tolerance()
+    carb.log_warn(f"[pibt] 주행 상수: K_CROSS={_id.K_CROSS} K_HEAD={_id.K_HEAD} "
+                  f"(비율 {_id.K_CROSS / _id.K_HEAD:.2f}) · "
+                  f"tol pos={_tolv.pos} yaw={_tolv.yaw} cross={_tolv.cross} · "
+                  f"stall_timeout={os.environ.get('PIBT_STALL_TIMEOUT', '') or 20.0}")
 
     carb.log_warn(f"[pibt] 계획 시작  n={N} pitch={PITCH} seed={SEED} mode={MODE}")
     if MODE == "lifelong":

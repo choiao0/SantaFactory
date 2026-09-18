@@ -22,6 +22,7 @@ STATE, RUN_ID, HEARTBEAT, RTF = "Runner/State", "Runner/RunId", "Runner/Heartbea
 RAM, VRAM, LAST_ERROR = "Runner/RamMB", "Runner/VramMB", "Runner/LastError"
 ISAAC = "Runner/IsaacInstances"
 SCENARIO_SHA = "Runner/ScenarioSha"
+VIDEO_URL = "Runner/VideoUrl"          # t3_amr 엣지(-215)가 런 종료 NDATA 에 싣는 mp4 공개 URL → artifacts.video
 FMS_STATE, FMS_RUN_ID, FMS_LAST_ERROR, FMS_TICK = "Fms/State", "Fms/RunId", "Fms/LastError", "Fms/Tick"
 KPI_EVENT = "kpi_summary"
 CMD_START, CMD_STOP, REBIRTH = "Run Control/Start", "Run Control/Stop", "Node Control/Rebirth"
@@ -31,7 +32,8 @@ SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 MAX_ROBOTS = 64
 DEFAULT_WINDOW_S = 600.0
 START_MARGIN_S = 300.0          # sim-runner 쪽 timeout_s = window + 여유(기동 + 정지)
-MAX_SCENARIO_BYTES = 512 * 1024   # sim-runner 와 같은 상한 (MQTT 패킷 1 MB 아래)
+MAX_SCENARIO_BYTES = 512 * 1024   # sim-runner 와 같은 상한 (MQTT 패킷 1 MB 아래). 창으로 자른 뒤에 잰다(-235)
+ORDER_WINDOW_MARGIN_S = 60.0      # 창 뒤 여유 — 러너의 계획 여유(t3_amr edge/recorder HORIZON_MARGIN_S)와 같다
 
 
 def iso(ts: float) -> str:
@@ -39,12 +41,34 @@ def iso(ts: float) -> str:
 
 
 def canonical_json(obj: Any) -> bytes:
-    """sha 정규형 — sim_runner.procs.canonical_json 과 같은 규칙이어야 sha 가 맞는다."""
+    """sha 정규형 — 이 함수가 기준. fms_core.scenario.canonical_json 과 같은 규칙이어야 sha 가 맞는다 (구 sim_runner.procs 도 같았다, -219 로 삭제)."""
     return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
 
 def scenario_sha256(obj: Any) -> str:
     return hashlib.sha256(canonical_json(obj)).hexdigest()
+
+
+def slice_orders_to_window(scenario: dict, window_s: float) -> dict:
+    """`scenario.orders.outbound` 를 창 [t0, t0 + window_s + ORDER_WINDOW_MARGIN_S] 로 자른 **새** scenario (-235).
+
+    러너는 창만 재현하므로 하루치 주문(6,000 건 ≈ 586 KB)을 통째로 NCMD 에 실을 이유가 없다 — 2026-09-16 첫 버튼이
+    MAX_SCENARIO_BYTES 에 걸려 거절된 원인. t0 = `window_start_s`(있으면) 아니면 첫 주문 시각(SIM_VERIFY §6 ① 의
+    "저장 주문 기준"). 잘라낸 scenario 에는 `window_start_s = t0` 와 `orders.window` {start_s, end_s, kept, total} 를
+    적는다. outbound 가 없거나 형식이 다르면 손대지 않는다(러너·fms-core 가 판단). 입력은 바꾸지 않는다.
+    """
+    orders = scenario.get("orders")
+    if not isinstance(orders, dict) or not isinstance(orders.get("outbound"), list):
+        return scenario
+    outbound = orders["outbound"]
+    if not all(isinstance(o, dict) and _is_num(o.get("ordered_at_s")) for o in outbound):
+        return scenario
+    ws = scenario.get("window_start_s")
+    t0 = float(ws) if _is_num(ws) else (float(min(o["ordered_at_s"] for o in outbound)) if outbound else 0.0)
+    t1 = t0 + float(window_s) + ORDER_WINDOW_MARGIN_S
+    kept = [o for o in outbound if t0 <= o["ordered_at_s"] <= t1]
+    window = {"start_s": t0, "end_s": t1, "kept": len(kept), "total": len(outbound)}
+    return {**scenario, "window_start_s": t0, "orders": {**orders, "outbound": kept, "window": window}}
 
 
 @dataclass(frozen=True)
@@ -103,6 +127,7 @@ class VerifyRequest:
         if scenario is not None:
             if not isinstance(scenario, dict):
                 raise ValueError("scenario must be a JSON object")
+            scenario = slice_orders_to_window(scenario, float(window))
             size = len(canonical_json(scenario))
             if size > MAX_SCENARIO_BYTES:
                 raise ValueError(f"scenario too large: {size} B > {MAX_SCENARIO_BYTES}")
@@ -155,9 +180,13 @@ class Stats:
     vram_mb_max: int = 0
     isaac_max: int = 0
     runner_scenario_sha: str = ""
+    video_url: str = ""
 
     def observe(self, node: Node) -> None:
         self.robots_online = max(self.robots_online, len(node.alive_devices()))
+        url = node.get(VIDEO_URL)
+        if isinstance(url, str) and url:
+            self.video_url = url
         sha = node.get(SCENARIO_SHA)
         if isinstance(sha, str) and sha:
             self.runner_scenario_sha = sha
@@ -372,7 +401,8 @@ class Job:
 
     # ---- 결과 -------------------------------------------------------------------
     def result(self) -> dict:
-        """sim.verify.result 본문 (SIM_VERIFY_CONTRACT §3). kpi 는 fms-core 의 kpi_summary, 없으면 null. artifacts 는 아직 null."""
+        """sim.verify.result 본문 (SIM_VERIFY_CONTRACT §3). kpi 는 fms-core 의 kpi_summary, 없으면 null.
+        artifacts.video 는 러너가 Runner/VideoUrl 로 준 mp4 URL(-215), 없으면 artifacts 는 null."""
         s = self.stats
         elapsed = (self.ended_at - self.started_at) if self.started_at is not None and self.ended_at is not None else 0.0
         return {"run_id": self.req.run_id, "status": "done" if self.phase == "DONE" else "failed",
@@ -388,7 +418,7 @@ class Job:
                            "scenario_ack": (self.req.scenario_sha256 is not None
                                             and s.runner_scenario_sha == self.req.scenario_sha256),
                            "reason": self.reason, "fms": self._fms_block()},
-                "kpi": self.kpi, "artifacts": None,
+                "kpi": self.kpi, "artifacts": {"video": s.video_url} if s.video_url else None,
                 "source_run_id": self.req.source_run_id, "estimate_id": self.req.estimate_id}
 
     def _fms_block(self) -> Optional[dict]:
@@ -402,14 +432,20 @@ class Job:
 
 
 class FailedRequest:
-    """파싱 실패한 요청 — 결과 큐에 failed 로 바로 내보낸다(명세 §1-2: 실패도 정상 발행)."""
+    """파싱 실패한 요청 — 결과 큐에 failed 로 바로 내보낸다(명세 §1-2: 실패도 정상 발행).
 
-    def __init__(self, run_id: Optional[str], error: str):
+    estimate_id · source_run_id 는 본문에서 그대로 옮긴다 — 없으면 BE 가 어느 견적의 실패인지 몰라 결과를 버리고
+    화면이 "검증 중" 으로 굳는다 (2026-09-16 verify_2, -235).
+    """
+
+    def __init__(self, run_id: Optional[str], error: str, estimate_id: Optional[int] = None,
+                 source_run_id: Optional[str] = None):
         self.run_id, self.error, self.phase, self.done = run_id, error, "FAILED", True
+        self.estimate_id, self.source_run_id = estimate_id, source_run_id
 
     def result(self) -> dict:
         return {"run_id": self.run_id, "status": "failed", "error": self.error, "verify": None,
-                "kpi": None, "artifacts": None}
+                "kpi": None, "artifacts": None, "source_run_id": self.source_run_id, "estimate_id": self.estimate_id}
 
 
 class Commands:
@@ -430,18 +466,34 @@ class Busy(ValueError):
     """다른 run_id 의 잡이 진행 중 — 호출자는 요청을 들고 있다가 다시 submit 한다."""
 
 
-def run_id_of(body: Any) -> Optional[str]:
+def _raw_fields(body: Any) -> dict:
+    """파싱에 실패한 본문에서도 식별자는 건진다 — JSON 객체가 아니면 빈 dict."""
     try:
-        return _opt_str(json.loads(body).get("run_id"))
+        d = json.loads(body)
     except Exception:  # noqa: BLE001
-        return None
+        return {}
+    return d if isinstance(d, dict) else {}
+
+
+def run_id_of(body: Any) -> Optional[str]:
+    return _opt_str(_raw_fields(body).get("run_id"))
+
+
+def failed_request(body: Any, error: str) -> "FailedRequest":
+    """본문을 못 읽어도 식별자(run_id · estimate_id · source_run_id)는 건져 실패 결과에 싣는다 (-235)."""
+    raw = _raw_fields(body)
+    return FailedRequest(run_id_of(body), error, _opt_int(raw.get("estimate_id")), _opt_str(raw.get("source_run_id")))
 
 
 class Coordinator:
     """tracker + 현재 잡 하나 (prefetch 1). MQTT 스레드와 AMQP 루프가 같은 락으로 부른다.
 
-    재전달(채널 단절 뒤 RabbitMQ 가 unacked 를 다시 줌)에 멱등: 진행 중인 같은 run_id 는 그 잡을, 이미 끝난 run_id(최근 50개)는
+    재전달(채널 단절 뒤 RabbitMQ 가 unacked 를 다시 줌)에 멱등: 진행 중인 같은 run_id 는 그 잡을, **done 으로 끝난** run_id(최근 50개)는
     끝난 잡을 돌려줘 결과만 다시 발행한다 — GPU 런을 두 번 돌리지 않는다.
+
+    failed 로 끝난 run_id 는 다시 돌린다(-241). BE 는 run_id 를 견적 id 로 고정하므로, 실패한 견적의 재검증 요청이 여기서
+    옛 실패 결과로 되돌아오면 host-orch 를 재시작하는 것 말고는 길이 없었다 (2026-09-17 verify_7 09:08 실측). 재전달로
+    실패 런이 한 번 더 도는 경우는 어차피 결과가 필요한 상황이라 받아들인다.
     """
     RECENT_MAX = 50
 
@@ -464,13 +516,14 @@ class Coordinator:
         try:
             req = VerifyRequest.from_json(body)
         except ValueError as e:
-            return FailedRequest(run_id_of(body), f"bad request: {e}")
+            return failed_request(body, f"bad request: {e}")
         if self.job is not None and not self.job.done:
             if self.job.req.run_id == req.run_id:
                 return self.job
             raise Busy(f"busy with {self.job.req.run_id}")
-        if req.run_id in self.recent:
-            return self.recent[req.run_id]
+        prior = self.recent.get(req.run_id)
+        if prior is not None and prior.phase == "DONE":
+            return prior                                   # 결과만 재발행. FAILED 는 아래로 — 새 런 (-241)
         self.job = Job(req, self.node_id, self.cfg, self.clock(), self.fms_node_id)
         self.recent[req.run_id] = self.job
         while len(self.recent) > self.RECENT_MAX:

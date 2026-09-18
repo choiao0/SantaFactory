@@ -1,6 +1,8 @@
 package com.ssafy.santafactory.support;
 
 import org.springframework.boot.test.context.TestComponent;
+import com.ssafy.santafactory.service.auth.EmailVerificationService;
+import java.time.Duration;
 import org.springframework.data.redis.core.StringRedisTemplate;
 
 /**
@@ -20,5 +22,12 @@ public class RedisSupport {
 
     public void flush() {
         redis.getConnectionFactory().getConnection().serverCommands().flushDb();
+    }
+
+    /** 코드 발송·확인을 건너뛰고 "이 이메일은 확인됐다" 상태를 만든다. 가입 요청의 email_token 으로 쓴다. */
+    public String verifiedToken(String email) {
+        String token = "test-token-" + email;
+        redis.opsForValue().set(EmailVerificationService.verifiedKey(email), token, Duration.ofMinutes(5));
+        return token;
     }
 }

@@ -2,12 +2,29 @@
 # numpy·matplotlib 는 개발 로컬(python 3.11.9)과 같은 버전이어야 한다 —
 # 버전이 다르면 float 누적 순서가 달라져 B-0 기준선(처리량 713 / 48대)이
 # 흔들리고, 그러면 B0 vs B1 비교 자체가 무의미해진다.
-numpy==2.4.6
+numpy==2.3.5
 matplotlib==3.11.1
+# 헤딩 거리장 증분 복구 커널 (sim_engine/pibt/hgraph.py, S15P21A106-225) — 결과 비트 동일, 재계획 경로 10배.
+# 첫 실행에 컴파일 캐시(__pycache__/*.nbi·nbc)를 만든다. 캐시는 numba 버전별이라 버전을 바꾸면 한 번 다시 컴파일한다.
+#
+# ★ 천장이 있다 — 올리지 말 것 (S15P21A106-234, 물리 팀 답신 13 §7).
+#   `pibt/hgraph.py` 는 우리만 쓰는 파일이 아니다. 물리 팀(t3_amr)이 Isaac 주행 경로에서 그대로 import 한다
+#   (live_pibt → isaac_drive → pibt_core_v2 → hgraph). 그런데 Isaac 6.0.1.0 이 llvmlite==0.46.0 을 못박아,
+#   numba 0.67(llvmlite >= 0.49)을 깔면 Isaac 이 깨진다 — 실제로 한 번 깨뜨렸다.
+#   그래서 우리가 그쪽 핀에 맞춘다. 대가는 0 이다: 기준값 5개·동일성 80행·거리장 [1]~[4]·six 6h KPI 전부
+#   비트 동일, 6h 런 시간도 구분 불가(46.7~54.1 s 로 겹침). 측정 docs/2026-09-16_numba버전_물리팀맞춤_측정.md.
+#   numba 0.63.1 은 numpy < 2.4 를 요구한다 — 위 numpy 핀이 2.4.6 에서 2.3.5 로 내려온 이유가 이것이다.
+#   Isaac 핀이 새 llvmlite 로 움직이면 그때 같이 올린다(종속이 아니라 동조).
+#   @njit 은 지연 컴파일이라, 0.67 전용 기능을 쓰면 import 는 통과하고 물리 팀의 첫 호출에서 죽는다.
+numba==0.63.1
+llvmlite==0.46.0
 
-# BO 탐색
+# BO 탐색 (θ 탐색 워커 run_study.py — Postgres storage 로 여러 대가 같은 study 를 나눠 돈다).
+# psycopg2 를 import 하는 코드는 없다. optuna 가 --storage/OPTUNA_STORAGE 의 URL 을 보고 쓴다 —
+# 시뮬·테스트 경로와 무관하다. 2.9.10 은 cp314 휠이 없어 Python 3.14 로컬에서 소스 빌드로 떨어졌다
+# (Windows 는 libpq 헤더·MSVC 필요). 2.9.13 은 휠이 있다 (S15P21A106-234).
 optuna==4.1.0
-psycopg2-binary==2.9.10
+psycopg2-binary==2.9.13
 
 # 견적 워커 (infra/worker/estimate_worker.py, S15P21A106-155) — RabbitMQ 소비
 pika==1.3.2

@@ -2,6 +2,8 @@ package com.ssafy.santafactory.service.estimate;
 
 import com.ssafy.santafactory.dto.estimate.EstimateCreateRequest;
 import com.ssafy.santafactory.dto.estimate.EstimateCreateResponse;
+import com.ssafy.santafactory.dto.estimate.EstimateDetailResponse;
+import com.ssafy.santafactory.dto.estimate.VerifyNoticeCode;
 import com.ssafy.santafactory.dto.simulation.SimulationRequest;
 import com.ssafy.santafactory.dto.simulation.SimulationResponse;
 import com.ssafy.santafactory.dto.simulation.VerifyRequest;
@@ -10,6 +12,7 @@ import com.ssafy.santafactory.entity.estimate.Estimate;
 import com.ssafy.santafactory.entity.estimate.EstimateStatus;
 import com.ssafy.santafactory.entity.estimate.ReasonCode;
 import com.ssafy.santafactory.entity.estimate.RunStatus;
+import com.ssafy.santafactory.entity.simulation.RunKpiDetail;
 import com.ssafy.santafactory.entity.simulation.SimScenario;
 import com.ssafy.santafactory.entity.warehouse.Warehouse;
 import com.ssafy.santafactory.global.auth.OwnershipGuard;
@@ -19,6 +22,7 @@ import com.ssafy.santafactory.repository.EstimateRepository;
 import com.ssafy.santafactory.repository.SimScenarioRepository;
 import com.ssafy.santafactory.repository.WarehouseRepository;
 import com.ssafy.santafactory.service.SimulationService;
+import com.ssafy.santafactory.service.estimate.EstimateEvents.RunsQueued;
 import com.ssafy.santafactory.service.estimate.ordergen.OutboundOrderGenerator;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -45,6 +49,7 @@ import static org.assertj.core.api.Assertions.within;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -56,7 +61,7 @@ import static org.mockito.Mockito.when;
 class EstimateServiceTest {
 
     private static final EstimateProperties PROPS =
-            new EstimateProperties(15_000_000L, 5_000_000L, 500_000L, 28, 6, 4, 1, Duration.ofMinutes(30), Duration.ofHours(6), "out", false, Duration.ofMinutes(10));
+            new EstimateProperties(15_000_000L, 5_000_000L, 500_000L, 28, 6, 4, 1, Duration.ofMinutes(30), Duration.ofHours(6), "out", false, Duration.ofMinutes(10), 10, 10, 6, null);
 
     @Mock
     EstimateRepository estimateRepository;
@@ -71,6 +76,8 @@ class EstimateServiceTest {
     ApplicationEventPublisher eventPublisher;
     @Mock
     OutboundOrderGenerator outboundOrderGenerator;
+    @Mock
+    VerifyVideoPresigner videoPresigner;
 
     private final CostCalculator costCalculator = new CostCalculator(PROPS);
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -89,7 +96,9 @@ class EstimateServiceTest {
                 new OwnershipGuard(),
                 eventPublisher,
                 outboundOrderGenerator,
-                objectMapper
+                objectMapper,
+                videoPresigner,
+                new VerifyComparator(new VerifyCompareProperties(0.10, 0.01))
         );
     }
     return service;
@@ -101,7 +110,6 @@ class EstimateServiceTest {
     void creates_runs_for_one_up_to_the_affordable_fleet_size() {
         givenWarehouse(1L);
         givenSavedEstimateId(77L);
-        when(simulationService.publishRuns(any(), any())).thenReturn(List.of("est_77_n1"));
 
         EstimateCreateResponse response = service().create(
                 new EstimateCreateRequest(1L, null, null, null, null, null, null), ADMIN);
@@ -111,11 +119,9 @@ class EstimateServiceTest {
         assertThat(response.maxAmrCount()).isEqualTo(20);
         verify(scenarioRepository, times(20)).save(any());
 
-        ArgumentCaptor<List<Integer>> counts = ArgumentCaptor.captor();
-        ArgumentCaptor<SimulationRequest> base = ArgumentCaptor.captor();
-        verify(simulationService).publishRuns(base.capture(), counts.capture());
-        assertThat(counts.getValue()).containsExactlyElementsOf(IntStream.rangeClosed(1, 20).boxed().toList());
-        assertThat(base.getValue().runId()).isEqualTo("est_77");
+        RunsQueued queued = queuedEvent();
+        assertThat(queued.amrCounts()).containsExactlyElementsOf(IntStream.rangeClosed(1, 20).boxed().toList());
+        assertThat(queued.request().runId()).isEqualTo("est_77");
     }
 
     @Test
@@ -125,14 +131,12 @@ class EstimateServiceTest {
         List<SimulationRequest.Outbound> orders = List.of(
                 new SimulationRequest.Outbound(1L, 120L, List.of(new SimulationRequest.Line(5L, "A1", 2))));
         when(outboundOrderGenerator.generate(any(), anyLong(), anyInt(), anyLong())).thenReturn(orders);
-        when(simulationService.publishRuns(any(), any())).thenReturn(List.of("est_77_n1"));
 
         service().create(new EstimateCreateRequest(1L, null, null, null, null, null, null), ADMIN);
 
         // 대수별로 다시 생성하지 않고, 스윕 전체가 같은 리스트를 그대로 싣는다
-        ArgumentCaptor<SimulationRequest> base = ArgumentCaptor.captor();
-        verify(simulationService).publishRuns(base.capture(), any());
-        assertThat(base.getValue().outbound()).isEqualTo(orders);
+        RunsQueued queued = queuedEvent();
+        assertThat(queued.request().outbound()).isEqualTo(orders);
 
         // 그 리스트가 estimates.outbound_orders_json 에도 그대로 저장된다
         ArgumentCaptor<Estimate> saved = ArgumentCaptor.captor();
@@ -148,14 +152,12 @@ class EstimateServiceTest {
     void a_fleet_range_from_the_request_replaces_the_budget_based_sweep() {
         givenWarehouse(1L);
         givenSavedEstimateId(77L);
-        when(simulationService.publishRuns(any(), any())).thenReturn(List.of());
 
         EstimateCreateResponse response = service().create(
                 new EstimateCreateRequest(1L, null, null, null, null, 3, 8), ADMIN);
 
-        ArgumentCaptor<List<Integer>> counts = ArgumentCaptor.captor();
-        verify(simulationService).publishRuns(any(), counts.capture());
-        assertThat(counts.getValue()).containsExactly(3, 4, 5, 6, 7, 8);
+        RunsQueued queued = queuedEvent();
+        assertThat(queued.amrCounts()).containsExactly(3, 4, 5, 6, 7, 8);
         assertThat(response.maxAmrCount()).isEqualTo(8);
         verify(scenarioRepository, times(6)).save(any());
     }
@@ -164,15 +166,13 @@ class EstimateServiceTest {
     void a_fleet_range_is_cut_at_the_charging_zone_cap() {
         givenWarehouse(1L);
         givenSavedEstimateId(77L);
-        when(simulationService.publishRuns(any(), any())).thenReturn(List.of());
 
         // 상한 28 을 넘는 29~35 는 발행하면 시뮬이 배치에서 죽으므로 잘라낸다
         EstimateCreateResponse response = service().create(
                 new EstimateCreateRequest(1L, null, null, null, null, 25, 35), ADMIN);
 
-        ArgumentCaptor<List<Integer>> counts = ArgumentCaptor.captor();
-        verify(simulationService).publishRuns(any(), counts.capture());
-        assertThat(counts.getValue()).containsExactly(25, 26, 27, 28);
+        RunsQueued queued = queuedEvent();
+        assertThat(queued.amrCounts()).containsExactly(25, 26, 27, 28);
         assertThat(response.maxAmrCount()).isEqualTo(28);
     }
 
@@ -186,14 +186,13 @@ class EstimateServiceTest {
                 .isInstanceOf(GlobalException.class)
                 .extracting(e -> ((GlobalException) e).getErrorCode())
                 .isEqualTo(ErrorCode.VALIDATION_ERROR);
-        verify(simulationService, never()).publishRuns(any(), any());
+        verify(eventPublisher, never()).publishEvent(any(RunsQueued.class));
     }
 
     @Test
     void run_rows_carry_the_queue_key_and_the_cost_of_their_fleet_size() {
         givenWarehouse(1L);
         givenSavedEstimateId(77L);
-        when(simulationService.publishRuns(any(), any())).thenReturn(List.of());
 
         service().create(new EstimateCreateRequest(1L, null, null, null, 50_000_000L, null, null), ADMIN);
 
@@ -210,19 +209,19 @@ class EstimateServiceTest {
     void the_request_pins_the_fixed_time_run_and_keeps_the_real_arrival_rate() {
         givenWarehouse(1L);
         givenSavedEstimateId(77L);
-        when(simulationService.publishRuns(any(), any())).thenReturn(List.of());
 
         service().create(new EstimateCreateRequest(1L, null, null, null, null, null, null), ADMIN);
 
-        ArgumentCaptor<SimulationRequest> base = ArgumentCaptor.captor();
-        verify(simulationService).publishRuns(base.capture(), any());
-        SimulationRequest sent = base.getValue();
+        RunsQueued queued = queuedEvent();
+        SimulationRequest sent = queued.request();
         // 실행 시간을 명시하지 않으면 시뮬이 유한 주문 모드로 돌아 처리율이 전 대수 100 % 가 된다
         assertThat(sent.seed()).isEqualTo(101L);                          // 평가 시드, API 로 받지 않는다
         assertThat(sent.horizonS()).isEqualTo(21600L);                    // 6시간
         assertThat(sent.shifts()).isEqualTo("out");                        // 출고 전용 — 팀 결정(2026-09-11) 견적 부하 = 출고만 (S15P21A106-214)
         assertThat(sent.inboundGapS()).isEqualTo(48.0);                   // 600건 / 8시간
         assertThat(sent.outboundGapS()).isEqualTo(22.5);                  // 800건 / 5시간
+        // 왕복당 토트 수. 안 보내면 시뮬 기본 1 로 돌아 처리율이 3~4배 비관적으로 나온다 (S15P21A106-218)
+        assertThat(sent.amr().capacity()).isEqualTo(6);
     }
 
     @Test
@@ -237,14 +236,12 @@ class EstimateServiceTest {
         lenient().when(nightShift.getOutboundAvg()).thenReturn(800L);
         when(warehouseRepository.findById(1L)).thenReturn(Optional.of(nightShift));
         givenSavedEstimateId(77L);
-        when(simulationService.publishRuns(any(), any())).thenReturn(List.of());
 
         service().create(new EstimateCreateRequest(1L, null, null, null, null, null, null), ADMIN);
 
-        ArgumentCaptor<SimulationRequest> base = ArgumentCaptor.captor();
-        verify(simulationService).publishRuns(base.capture(), any());
+        RunsQueued queued = queuedEvent();
         // 800건 / 8시간 = 36초. 24시간으로 폴백하면 108초가 되어 부하가 3배 과소 추정된다
-        assertThat(base.getValue().outboundGapS()).isEqualTo(36.0);
+        assertThat(queued.request().outboundGapS()).isEqualTo(36.0);
     }
 
     @Test
@@ -252,7 +249,6 @@ class EstimateServiceTest {
         givenWarehouse(1L);
         ArgumentCaptor<Estimate> saved = ArgumentCaptor.captor();
         when(estimateRepository.save(saved.capture())).thenAnswer(call -> withId(call.getArgument(0), 77L));
-        when(simulationService.publishRuns(any(), any())).thenReturn(List.of());
 
         service().create(new EstimateCreateRequest(1L, "geek.p40", 88.0, 70.0, 100_000_000L, null, null), ADMIN);
 
@@ -296,7 +292,7 @@ class EstimateServiceTest {
     void ignores_a_second_result_for_a_run_already_finished() {
         Estimate estimate = estimate(85.0, 90.0, 1_000_000_000L);
         SimScenario run = run(estimate, 4);
-        run.markDone(85.0, 95.0, 85L);
+        run.markDone(85.0, 95.0, 85L, null);
         when(scenarioRepository.findByRunId(run.getRunId())).thenReturn(Optional.of(run));
 
         service().applyResult(done(run.getRunId(), 100, 10, 0.1));   // 다른 값으로 재전달
@@ -304,6 +300,54 @@ class EstimateServiceTest {
         assertThat(run.getThroughput()).isEqualTo(85.0);             // 첫 결과가 유지된다
         assertThat(run.getUtilization()).isEqualTo(95.0);
         verify(scenarioRepository, never()).findByEstimateIdOrderByAmrCountAsc(any());
+    }
+
+    @Test
+    void a_running_message_marks_the_run_running_and_notifies_without_finishing() {
+        Estimate estimate = estimate(85.0, 90.0, 1_000_000_000L);
+        SimScenario run = run(estimate, 4);
+        when(scenarioRepository.findByRunId(run.getRunId())).thenReturn(Optional.of(run));
+
+        service().applyResult(new SimulationResponse(run.getRunId(), "running", null, null, null));
+
+        assertThat(run.getStatus()).isEqualTo(RunStatus.RUNNING);
+        assertThat(run.getThroughput()).isNull();
+        ArgumentCaptor<Object> event = ArgumentCaptor.captor();
+        verify(eventPublisher).publishEvent(event.capture());
+        assertThat(((EstimateEvents.RunUpdated) event.getValue()).run().status()).isEqualTo(RunStatus.RUNNING);
+        verify(scenarioRepository, never()).findByEstimateIdOrderByAmrCountAsc(any());
+    }
+
+    @Test
+    void a_running_message_after_the_result_is_ignored() {
+        Estimate estimate = estimate(85.0, 90.0, 1_000_000_000L);
+        SimScenario run = run(estimate, 4);
+        run.markDone(85.0, 95.0, 85L, null);
+        when(scenarioRepository.findByRunId(run.getRunId())).thenReturn(Optional.of(run));
+
+        service().applyResult(new SimulationResponse(run.getRunId(), "running", null, null, null));
+
+        assertThat(run.getStatus()).isEqualTo(RunStatus.DONE);
+        verify(eventPublisher, never()).publishEvent(any());
+    }
+
+    @Test
+    void unpublished_runs_are_failed_and_the_estimate_is_finalized_from_the_rest() {
+        Estimate estimate = estimate(85.0, 90.0, 1_000_000_000L);
+        SimScenario published = run(estimate, 2);
+        published.markDone(100.0, 95.0, 100L, null);
+        SimScenario third = run(estimate, 3);
+        SimScenario fourth = run(estimate, 4);
+        when(scenarioRepository.findByEstimateIdOrderByAmrCountAsc(any()))
+                .thenReturn(List.of(published, third, fourth));
+
+        service().failUnpublished(1L, List.of(3, 4), "큐 연결 불가");
+
+        assertThat(third.getStatus()).isEqualTo(RunStatus.FAILED);
+        assertThat(fourth.getStatus()).isEqualTo(RunStatus.FAILED);
+        assertThat(third.getError()).isEqualTo("큐 연결 불가");
+        assertThat(published.getStatus()).isEqualTo(RunStatus.DONE);
+        assertThat(estimate.getStatus()).isEqualTo(EstimateStatus.PARTIAL);
     }
 
     @Test
@@ -327,16 +371,17 @@ class EstimateServiceTest {
         SimScenario twoAmr = run(estimate, 2);
         SimScenario fourAmr = run(estimate, 4);
         SimScenario sixAmr = run(estimate, 6);
-        twoAmr.markDone(60.0, 98.0, 60L);
-        fourAmr.markDone(85.0, 95.0, 85L);
+        twoAmr.markDone(60.0, 98.0, 60L, null);
+        fourAmr.markDone(85.0, 95.0, 85L, null);
         when(scenarioRepository.findByRunId(sixAmr.getRunId())).thenReturn(Optional.of(sixAmr));
         when(scenarioRepository.findByEstimateIdOrderByAmrCountAsc(any()))
                 .thenReturn(List.of(twoAmr, fourAmr, sixAmr));
 
         service().applyResult(done(sixAmr.getRunId(), 100, 95, 0.93));
 
-        // 4대가 처리율 85 % · 가동률 95 % 로 3조건을 처음 만족한다
-        assertThat(estimate.getRecommendedCount()).isEqualTo(4);
+        // 4·6대가 조건을 만족하고, 그중 효율 점수가 높은 6대가 권장이다
+        // (4대 85 × 95 = 80.8, 6대 100 × 93 = 93.0)
+        assertThat(estimate.getRecommendedCount()).isEqualTo(6);
         assertThat(estimate.getReasonCode()).isNull();
         assertThat(estimate.getStatus()).isEqualTo(EstimateStatus.DONE);
         assertThat(estimate.getCompletedAt()).isNotNull();
@@ -348,8 +393,8 @@ class EstimateServiceTest {
         SimScenario twoAmr = run(estimate, 2);
         SimScenario fourAmr = run(estimate, 4);
         SimScenario sixAmr = run(estimate, 6);
-        twoAmr.markDone(60.0, 98.0, 60L);
-        fourAmr.markDone(85.0, 95.0, 85L);
+        twoAmr.markDone(60.0, 98.0, 60L, null);
+        fourAmr.markDone(85.0, 95.0, 85L, null);
         when(scenarioRepository.findByRunId(sixAmr.getRunId())).thenReturn(Optional.of(sixAmr));
         when(scenarioRepository.findByEstimateIdOrderByAmrCountAsc(any()))
                 .thenReturn(List.of(twoAmr, fourAmr, sixAmr));
@@ -487,15 +532,19 @@ class EstimateServiceTest {
     void stores_the_video_url_and_publishes_the_result() {
         Estimate estimate = withId(estimate(85.0, 90.0, 1_000_000_000L), 77L);
         when(estimateRepository.findById(77L)).thenReturn(Optional.of(estimate));
+        when(videoPresigner.sign("verify_77/v1.mp4"))
+                .thenReturn("https://host/media/verify-videos/verify_77/v1.mp4?X-Amz-Signature=s");
 
-        service().applyVerifyResult(verifyDone("v1", 77L, "https://minio/v1.mp4"));
+        service().applyVerifyResult(verifyDone("v1", 77L, "verify_77/v1.mp4"));
 
-        assertThat(estimate.getVerifyVideoUrl()).isEqualTo("https://minio/v1.mp4");
+        // DB 에는 받은 값 그대로, 브라우저로 나가는 이벤트에는 서명 URL
+        assertThat(estimate.getVerifyVideoUrl()).isEqualTo("verify_77/v1.mp4");
         ArgumentCaptor<EstimateEvents.EstimateVerified> event = ArgumentCaptor.captor();
         verify(eventPublisher).publishEvent(event.capture());
         assertThat(event.getValue().estimateId()).isEqualTo(77L);
         assertThat(event.getValue().status()).isEqualTo("done");
-        assertThat(event.getValue().videoUrl()).isEqualTo("https://minio/v1.mp4");
+        assertThat(event.getValue().videoUrl())
+                .isEqualTo("https://host/media/verify-videos/verify_77/v1.mp4?X-Amz-Signature=s");
     }
 
     @Test
@@ -503,7 +552,7 @@ class EstimateServiceTest {
         Estimate estimate = withId(estimate(85.0, 90.0, 1_000_000_000L), 77L);
         when(estimateRepository.findById(77L)).thenReturn(Optional.of(estimate));
 
-        service().applyVerifyResult(new VerifyResultResponse("v1", "failed", "start timeout", 77L, null));
+        service().applyVerifyResult(new VerifyResultResponse("v1", "failed", "start timeout", 77L, null, null, null, null));
 
         assertThat(estimate.getVerifyVideoUrl()).isNull();
         ArgumentCaptor<EstimateEvents.EstimateVerified> event = ArgumentCaptor.captor();
@@ -511,6 +560,120 @@ class EstimateServiceTest {
         assertThat(event.getValue().status()).isEqualTo("failed");
         assertThat(event.getValue().videoUrl()).isNull();
         assertThat(event.getValue().error()).isEqualTo("start timeout");
+    }
+
+    // ── 상세 지표·검증 결과 저장 (S15P21A106-236) ────────────────────────────
+
+    @Test
+    void apply_result_persists_kpi_detail_on_the_run() {
+        Estimate estimate = estimate(85.0, 90.0, 1_000_000_000L);
+        SimScenario run = run(estimate, 4);
+        when(scenarioRepository.findByRunId(run.getRunId())).thenReturn(Optional.of(run));
+        when(scenarioRepository.findByEstimateIdOrderByAmrCountAsc(any())).thenReturn(List.of(run));
+
+        service().applyResult(new SimulationResponse(run.getRunId(), "done", null, fullKpi(100, 96, 0.8), null));
+
+        assertThat(run.getKpiDetail().getOrdersTotal()).isEqualTo(100);
+        assertThat(run.getKpiDetail().getOrdersCompleted()).isEqualTo(96);
+        assertThat(run.getKpiDetail().getLeadTimeMeanS()).isEqualTo(212.0);
+        assertThat(run.getKpiDetail().getQueueTimeMeanS()).isEqualTo(48.0);
+        assertThat(run.getKpiDetail().getThroughputOrdersPerH()).isEqualTo(159.0);
+        assertThat(run.getKpiDetail().getConflictWaitRatio()).isEqualTo(0.068);
+        assertThat(run.getKpiDetail().getDistanceTotalM()).isEqualTo(171_400L);
+    }
+
+    @Test
+    void apply_verify_result_persists_snapshot_and_still_publishes_video_event() {
+        Estimate estimate = withId(estimate(85.0, 90.0, 1_000_000_000L), 77L);
+        when(estimateRepository.findById(77L)).thenReturn(Optional.of(estimate));
+        when(videoPresigner.sign("verify_77/v1.mp4")).thenReturn("https://host/signed");
+
+        service().applyVerifyResult(verifyFull("verify_77", 77L, "verify_77/v1.mp4", VerifyShape.normal(14), fullKpi(30, 29, 0.7)));
+
+        assertThat(estimate.getVerify().getRunId()).isEqualTo("verify_77");
+        assertThat(estimate.getVerify().getStatus()).isEqualTo("done");
+        assertThat(estimate.getVerify().getReason()).isEqualTo("window elapsed");
+        assertThat(estimate.getVerify().getNRobots()).isEqualTo(14);
+        assertThat(estimate.getVerify().getRobotsOnline()).isEqualTo(14);
+        assertThat(estimate.getVerify().getWindowS()).isEqualTo(600);
+        assertThat(estimate.getVerify().getWarningsJson()).isNull();
+        assertThat(estimate.getVerify().getThroughputOrdersPerH()).isEqualTo(159.0);
+        assertThat(estimate.getVerify().getLeadTimeP90S()).isEqualTo(384.0);
+        assertThat(estimate.getVerify().getConflictWaitRatio()).isEqualTo(0.068);
+        assertThat(estimate.getVerify().getVerifiedAt()).isNotNull();
+        assertThat(estimate.getVerifyVideoUrl()).isEqualTo("verify_77/v1.mp4");
+        ArgumentCaptor<EstimateEvents.EstimateVerified> event = ArgumentCaptor.captor();
+        verify(eventPublisher).publishEvent(event.capture());
+        assertThat(event.getValue().videoUrl()).isEqualTo("https://host/signed");
+    }
+
+    @Test
+    void apply_verify_result_keeps_fms_warnings_as_json() throws Exception {
+        Estimate estimate = withId(estimate(85.0, 90.0, 1_000_000_000L), 77L);
+        when(estimateRepository.findById(77L)).thenReturn(Optional.of(estimate));
+        JsonNode warnings = new ObjectMapper().readTree("[\"theta file missing\"]");
+
+        service().applyVerifyResult(verifyFull("verify_77", 77L, null,
+                new VerifyShape("window elapsed", 14, 14, warnings), fullKpi(30, 29, 0.7)));
+
+        assertThat(estimate.getVerify().getWarningsJson()).isEqualTo("[\"theta file missing\"]");
+    }
+
+    @Test
+    void detail_omits_verification_before_any_verify_result() {
+        Estimate estimate = withId(estimate(85.0, 90.0, 1_000_000_000L), 77L);
+        when(estimateRepository.findById(77L)).thenReturn(Optional.of(estimate));
+        when(scenarioRepository.findByEstimateIdOrderByAmrCountAsc(77L)).thenReturn(List.of(run(estimate, 4)));
+
+        EstimateDetailResponse detail = service().detail(77L, ADMIN);
+
+        assertThat(detail.verification()).isNull();
+        assertThat(detail.runs().get(0).kpi()).isNull();
+    }
+
+    @Test
+    void detail_compares_verify_kpi_against_recommended_run() {
+        Estimate estimate = withId(estimate(85.0, 90.0, 1_000_000_000L), 77L);
+        SimScenario two = run(estimate, 2);
+        SimScenario four = run(estimate, 4);
+        four.markDone(96.0, 80.0, 96L, 384.0);
+        four.applyKpiDetail(new RunKpiDetail(100, 96, 212.0, 48.0, 159.0, 0.068, 171_400L));
+        ReflectionTestUtils.setField(estimate, "createdAt", LocalDateTime.now());   // @PrePersist 가 없어 직접
+        estimate.complete(4, null, null, false);
+        when(estimateRepository.findById(77L)).thenReturn(Optional.of(estimate));
+        when(scenarioRepository.findByEstimateIdOrderByAmrCountAsc(77L)).thenReturn(List.of(two, four));
+
+        // 검증: 시간당 152건, p90 414초(+7.8 %), 혼잡 0.081(+1.3 %p) → 혼잡이 기준을 넘는다
+        service().applyVerifyResult(verifyFull("verify_77", 77L, null, VerifyShape.normal(4),
+                new SimulationResponse.Kpi(30, 29, null, null, null, 230.0, 414.0, 50.0,
+                        152.0, null, 0.72, 0.081, 30_000L, 0L)));
+        EstimateDetailResponse detail = service().detail(77L, ADMIN);
+
+        EstimateDetailResponse.Verification verification = detail.verification();
+        assertThat(verification.notice()).isEqualTo(VerifyNoticeCode.SLOWER_AT_PEAK);
+        assertThat(verification.comparison().throughputOrdersPerH().expected()).isEqualTo(159.0);
+        assertThat(verification.comparison().throughputOrdersPerH().verified()).isEqualTo(152.0);
+        assertThat(verification.comparison().throughputOrdersPerH().diff()).isEqualTo(-7.0);
+        assertThat(verification.comparison().leadTimeP90S().expected()).isEqualTo(384.0);
+        assertThat(verification.comparison().leadTimeP90S().diff()).isEqualTo(30.0);
+        assertThat(verification.comparison().conflictWaitRatio().diff()).isCloseTo(0.013, within(1e-9));
+        assertThat(detail.runs().get(1).kpi().throughputOrdersPerH()).isEqualTo(159.0);
+    }
+
+    @Test
+    void verify_result_never_changes_the_verdict() {
+        Estimate estimate = withId(estimate(85.0, 90.0, 1_000_000_000L), 77L);
+        estimate.complete(4, 6, null, false);
+        when(estimateRepository.findById(77L)).thenReturn(Optional.of(estimate));
+
+        service().applyVerifyResult(new VerifyResultResponse("verify_77", "failed", "runner NDEATH", 77L,
+                null, null, null, null));
+
+        assertThat(estimate.getRecommendedCount()).isEqualTo(4);
+        assertThat(estimate.getKneeCount()).isEqualTo(6);
+        assertThat(estimate.getStatus()).isEqualTo(EstimateStatus.DONE);
+        assertThat(estimate.getVerify().getStatus()).isEqualTo("failed");
+        assertThat(estimate.getVerify().getError()).isEqualTo("runner NDEATH");
     }
 
     // ── 물리 검증 요청 발행 ──────────────────────────────────────────────────
@@ -605,8 +768,8 @@ class EstimateServiceTest {
         SimScenario twoAmr = run(estimate, 2);
         SimScenario fourAmr = run(estimate, 4);
         SimScenario sixAmr = run(estimate, 6);
-        twoAmr.markDone(60.0, 98.0, 60L);
-        fourAmr.markDone(85.0, 95.0, 85L);
+        twoAmr.markDone(60.0, 98.0, 60L, null);
+        fourAmr.markDone(85.0, 95.0, 85L, null);
         when(scenarioRepository.findByStatusInAndPublishedAtBefore(any(), any())).thenReturn(List.of(sixAmr));
         when(scenarioRepository.findByEstimateIdOrderByAmrCountAsc(any()))
                 .thenReturn(List.of(twoAmr, fourAmr, sixAmr));
@@ -687,6 +850,15 @@ class EstimateServiceTest {
         return SimScenario.queued(estimate, "est_1_n" + amrCount, amrCount, costCalculator.cost(amrCount));
     }
 
+    /** 생성이 커밋 뒤 발행용으로 남긴 이벤트. 발행 자체는 {@link SimRequestDispatcher} 가 한다. */
+    private RunsQueued queuedEvent() {
+        ArgumentCaptor<Object> events = ArgumentCaptor.captor();
+        verify(eventPublisher, atLeastOnce()).publishEvent(events.capture());
+        return events.getAllValues().stream()
+                .filter(RunsQueued.class::isInstance).map(RunsQueued.class::cast)
+                .findFirst().orElseThrow();
+    }
+
     private SimulationResponse done(String runId, int ordersTotal, int ordersCompleted, double amrUtilization) {
         SimulationResponse.Kpi kpi = new SimulationResponse.Kpi(
                 ordersTotal, ordersCompleted, null, null,
@@ -765,7 +937,34 @@ class EstimateServiceTest {
     }
 
     private VerifyResultResponse verifyDone(String runId, Long estimateId, String videoUrl) {
+        return new VerifyResultResponse(runId, "done", null, estimateId, null,
+                new VerifyResultResponse.Artifacts(videoUrl), null, null);
+    }
+
+    /** 검증 런의 모양 — 종료 사유, 로봇 수, 가동 수, fms 경고. */
+    private record VerifyShape(String reason, int nRobots, int robotsOnline, JsonNode warnings) {
+        static VerifyShape normal(int robots) {
+            return new VerifyShape("window elapsed", robots, robots, null);
+        }
+    }
+
+    /** 계약 §3 전체 모양 — verify 블록과 kpi 까지 온 결과. */
+    private VerifyResultResponse verifyFull(String runId, Long estimateId, String videoUrl, VerifyShape shape,
+                                            SimulationResponse.Kpi kpi) {
         return new VerifyResultResponse(runId, "done", null, estimateId,
-                new VerifyResultResponse.Artifacts(videoUrl));
+                "est_%d_n%d".formatted(estimateId, shape.nRobots()),
+                videoUrl == null ? null : new VerifyResultResponse.Artifacts(videoUrl),
+                new VerifyResultResponse.Verify(shape.nRobots(), shape.robotsOnline(), 600, shape.reason(),
+                        new VerifyResultResponse.Fms("done", null, shape.warnings())),
+                kpi);
+    }
+
+    /** 14개 키가 전부 채워진 kpi. 시간당 159건 · 평균 212초 · p90 384초 · 대기 48초 · 혼잡 6.8 % · 171.4 km. */
+    private SimulationResponse.Kpi fullKpi(int ordersTotal, int ordersCompleted, double amrUtilization) {
+        return new SimulationResponse.Kpi(
+                ordersTotal, ordersCompleted, 0, 0,
+                21_600L, 212.0, 384.0, 48.0,
+                159.0, 167.0,
+                amrUtilization, 0.068, 171_400L, 0L);
     }
 }

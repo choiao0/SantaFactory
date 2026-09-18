@@ -54,7 +54,7 @@ export default function WarehouseStep({ form, onChange, models, modelsError, mod
             </div>
 
             <div className="span2">
-              <label htmlFor="target">목표 출고 처리율 · 접수 주문 중 완료 비율</label>
+              <label htmlFor="target">목표 출고 처리율</label>
               <div className="field">
                 <input id="target" type="number" value={form.targetThroughput} min={1} max={100} onChange={number('targetThroughput')} />
                 <span className="suffix">%</span>

@@ -91,6 +91,22 @@ if [ "$PIBT_N" -lt 1 ] 2>/dev/null; then
 fi
 export PIBT_N
 
+# ★ 격자·규칙을 **계획보다 먼저** 정한다 (2026-09-17, S15P21A106-224).
+#
+#   예전에는 이 두 줄이 187행쯤, 즉 REPLAN 계획 블록(105행) **뒤에** 있었다.
+#   그래서 `REPLAN=1 bash run_record.sh` 가
+#
+#       계획   pibt_h.PITCH 기본값 1.2 로 선다 (PIBT_PITCH 가 아직 없다)
+#       주행   PIBT_PITCH=1.0
+#
+#   로 갈렸다. 충전존 시작 슬롯이 pitch 에서 나오므로 (x [103.8, 106.2] vs
+#   [103.5, 105.5, 107.5]) **무대 스폰이 주행 계획과 다른 자리**가 된다.
+#   추종기가 자기 경로를 못 잡는 그 실패 모드다. 오류는 안 난다.
+#
+#   자세한 값·근거는 아래 원래 주석에 그대로 둔다.
+export PIBT_FRONT_RULE="${PIBT_FRONT_RULE:-4}"
+export PIBT_PITCH="${PIBT_PITCH:-1.0}"
+
 # [patch_record_n] 계획과 대수가 일치해야 한다 — 계획 디렉터리 이름에 대수가 박혀 있다.
 #   안 맞으면 35초 부팅하고 계획 로드까지 간 뒤에야 죽는다. 0초에 막는다.
 # [patch_record_n_fix] 계획 디렉터리는 0 패딩이다 — pibt_h.py 의 f"fleet_{n:02d}"
@@ -157,6 +173,46 @@ export PIBT_SHOT_STRIDE="$SHOT_STRIDE"
 export PIBT_SHOT_FPS="$SHOT_FPS"
 export PIBT_SHOT_EXT="$SHOT_EXT"
 
+# ── ADG 앞 칸 규칙 · 격자 (S15P21A106-204) ──────────────────
+#   ★ `pibt_h.py:launch()` 의 env 목록에 **있는 이름만** Isaac 까지 간다.
+#     `PIBT_FRONT_RULE` 과 `PIBT_PITCH` 는 거기 `_e(...)` 로 들어 있어 여기
+#     값이 이긴다. 목록에 없는 이름은 export 해도 전달조차 안 된다
+#     (README 「함정」· pibt_h.py:120 실측).
+#
+#   규칙은 계획기와 ADG 가 **같은 칸**을 보게 만든다. 전에는 계획기가 3칸
+#   모델로 풀고 ADG 는 실제 스윕으로 지어서, pitch 1.0 에서 ADG 에 순환이
+#   생겼다 (= 주행 전 데드락). 20시드 측정: 규칙 없이 순환 10/20, 규칙을
+#   켜면 0/20.
+#
+#   ★ 규칙은 **pitch 게이팅**을 받는다. 1.2 에서는 무엇을 넣든 꺼진다 —
+#     칸이 넓어 규칙이 필요 없기 때문이다. 규칙이 사는 곳은 1.0~1.1 이다.
+#
+#   ── 기본 격자를 1.0 으로 둔다 ────────────────────────────
+#   바뀐 ADG 로 주행하는 것이 지금의 기본 동작이다. 1.2 로 두면 규칙이 게이팅에
+#   걸려 꺼지므로, 기본값으로는 **바뀐 ADG 를 영영 못 본다.**
+#
+#   ★ 1.0 은 2칸 점유 + 스윙 3칸 모델의 **유효 구간(1.117~2.220) 밖**이다.
+#     `RobotGeom.describe()` 가 로그에 「★구간 밖」과 함께
+#     「회전 스윙 : ★모델 밖 [(5,6), (6,5)]」 을 찍는다. 그 두 칸이 바로
+#     4칸 규칙이 덮는 칸이다 — front_cells = [(4,6),(5,6),(6,4),(6,5)].
+#     즉 경고는 "규칙 없이 쓰면 안 된다" 는 뜻이지 설정 오류가 아니다.
+#
+#   ★ 1.0 채택은 **아직 확정이 아니다.** 1.0 vs 1.2 포화 처리량이 남아 있고
+#     거기서 1.2 로 되돌아갈 수 있다. 그때는 이 한 줄만 1.2 로 바꾸면 된다.
+#     1.2 로 한 판 돌리려면:  PIBT_PITCH=1.2 bash run_record.sh
+#
+# ★ 이 두 줄은 위(계획 블록 앞)로 옮겼다 — 여기 두면 REPLAN 계획이 기본값
+#   1.2 로 서고 주행만 1.0 이 된다 (2026-09-17). 값·근거는 위 주석 그대로다.
+
+# 규칙을 켜 달라고 했는데 격자가 게이팅 구간이면, 29분을 쓰고 나서 "규칙이
+# 안 걸렸네" 를 깨닫는 것이 가장 나쁘다. 0초에 알린다.
+RULE_LIVE="예"
+case "$PIBT_FRONT_RULE" in
+    off|0|no|"") RULE_LIVE="아니오 (규칙 없음)" ;;
+    *) awk -v p="$PIBT_PITCH" 'BEGIN{exit !(p >= 1.15)}' && \
+           RULE_LIVE="아니오 — pitch $PIBT_PITCH 는 게이팅 구간" ;;
+esac
+
 SPEED=$(awk -v s="$SHOT_STRIDE" -v f="$SHOT_FPS" 'BEGIN{printf "%.1f", s*f/60}')
 EXPN=$(awk -v s="$SHOT_STRIDE" 'BEGIN{printf "%d", 43800/s}')
 EXPSEC=$(awk -v n="$EXPN" -v f="$SHOT_FPS" 'BEGIN{printf "%d", n/f}')
@@ -167,6 +223,16 @@ echo "  인자        ${ARGS[*]}"
 # [patch_record_n] 플래그가 걸렸는지 로그로 증명한다 (규칙 1번)
 echo "  대수        ${PIBT_N}대"
 echo "  계획        $PLAN_DIR"
+# 플래그가 실제로 걸렸는지 로그로 증명한다 (규칙 1번).
+#   '규칙 적용' 이 '아니오' 인데 규칙을 기대했다면 지금 끊는 편이 낫다.
+echo "  격자        pitch $PIBT_PITCH   (기본 1.0 — 바뀐 ADG 가 사는 격자)"
+echo "  앞 칸 규칙  PIBT_FRONT_RULE=$PIBT_FRONT_RULE   규칙 적용 $RULE_LIVE"
+case "$RULE_LIVE" in
+    아니오*게이팅*)
+        echo "              ※ pitch $PIBT_PITCH 는 칸이 넓어 규칙이 필요 없는 구간입니다."
+        echo "                옛 ADG 로 도는 판이고, 그게 의도였다면 그대로 두세요."
+        ;;
+esac
 if [ "$PIBT_N" -gt 16 ]; then
     echo "  ※ 충전존의 서쪽헤딩 슬롯이 2.4 m 간격에서 16개입니다."
     echo "    ${PIBT_N}대면 CHARGE_STEP_Y=1.2 로 계획해야 할 수 있습니다."

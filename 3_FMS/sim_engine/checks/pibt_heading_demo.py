@@ -25,7 +25,7 @@ sys.path.insert(0, ENGINE_DIR)
 
 import numpy as np
 
-from pibt_core import DIRS, TURN_TICKS, run_h, valid_state
+from pibt_core import DIRS, MOVE_TICKS, TURN_TICKS, run_h, valid_state
 
 
 def _check_occupancy(t, cells, free):
@@ -75,23 +75,27 @@ def n_turns(history, a):
 
 def scenario_turn_cost():
     free = np.ones((5, 5), dtype=bool)
-    hist, cells = run_h(free, {0: (2, 2, 2)}, {0: (4, 2)}, max_steps=30)   # 남향 시작
+    hist, cells = run_h(free, {0: (2, 2, 2)}, {0: (4, 2)}, max_steps=120)   # 남향 시작
     check_collisions_h(hist, cells, free)
     steps = len(hist) - 1
-    expect = 2 * TURN_TICKS + 2
+    # 틱 모델 정합(2026-09-15): 전진도 MOVE_TICKS 틱. 마지막 전진은 첫 틱에 도착 판정이라 진행 틱(MOVE_TICKS-1)은 안 센다.
+    expect = 2 * TURN_TICKS + MOVE_TICKS + 1
     assert hist[-1][0][:2] == (4, 2) and steps == expect, \
         f"회전 비용 반영 안 됨: {steps}스텝 (기대 {expect}) {hist}"
     assert n_turns(hist, 0) == 2
-    print(f"[1] 회전 비용: 남향→북쪽 목표, 90° 회전 2회 × {TURN_TICKS}틱 + 전진 2 = {steps}스텝 OK")
+    print(f"[1] 회전 비용: 남향→북쪽 목표, 90° 회전 2회 × {TURN_TICKS}틱 + 전진 {MOVE_TICKS}틱 + 도착 1 = {steps}스텝 OK")
 
 
 def scenario_convoy():
     free = np.ones((3, 10), dtype=bool)
     starts = {0: (1, 4, 1), 1: (1, 2, 1)}          # 동향, 한 칸 간격 (0의 뒤 칸 = (1,3))
     goals = {0: (1, 9), 1: (1, 7)}
-    hist, cells = run_h(free, starts, goals, max_steps=30)
+    hist, cells = run_h(free, starts, goals, max_steps=120)
     check_collisions_h(hist, cells, free)
-    waits1 = sum(1 for p, c in zip(hist, hist[1:]) if p[1] == c[1] and c[1][:2] != goals[1])
+    # 대기 = 상태가 안 바뀐 틱 중 이동·회전의 진행 틱(전진 MOVE_TICKS-1, 회전 TURN_TICKS-1)을 뺀 것
+    same = sum(1 for p, c in zip(hist, hist[1:]) if p[1] == c[1] and c[1][:2] != goals[1])
+    moves = sum(1 for p, c in zip(hist, hist[1:]) if p[1][:2] != c[1][:2] and c[1][:2] != goals[1])   # 도착 이동은 진행 틱이 기록에 없다
+    waits1 = same - moves * (MOVE_TICKS - 1) - n_turns(hist, 1) * (TURN_TICKS - 1)
     assert hist[-1][0][:2] == goals[0] and hist[-1][1][:2] == goals[1]
     assert waits1 == 0, f"컨보이 뒤차가 대기함: {waits1}틱"
     print(f"[2] 컨보이 추종: 2칸 점유로 한 칸 간격 추종, 뒤차 대기 0, {len(hist)-1}스텝 OK")
@@ -106,7 +110,7 @@ def _swing_setup():
 
 def scenario_swing_conflict():
     free, starts, goals = _swing_setup()
-    hist, cells = run_h(free, starts, goals, max_steps=40)
+    hist, cells = run_h(free, starts, goals, max_steps=160)
     check_collisions_h(hist, cells, free)
     assert hist[-1][0][:2] == goals[0] and hist[-1][1][:2] == goals[1], hist[-1]
     # A가 회전한 틱에 B가 A의 스윙 칸에 들어오지 않았는지는 check_collisions_h의
@@ -127,7 +131,7 @@ def _corridor_grid_h():
 
 def scenario_narrow_corridor():
     free = _corridor_grid_h()
-    hist, cells = run_h(free, {0: (1, 4, 1)}, {0: (1, 0)}, max_steps=60)   # 동향, 목표는 서쪽
+    hist, cells = run_h(free, {0: (1, 4, 1)}, {0: (1, 0)}, max_steps=240)   # 동향, 목표는 서쪽
     check_collisions_h(hist, cells, free)
     assert hist[-1][0][:2] == (1, 0)
     turn_cols = [p[0][1] for p, c in zip(hist, hist[1:]) if p[0][2] != c[0][2]]
@@ -141,7 +145,7 @@ def scenario_narrow_corridor():
 def scenario_wall_lane_escape():
     free = np.ones((6, 5), dtype=bool)
     free[:, 4] = False                             # 동쪽 벽 → 열 3이 벽 레인
-    hist, cells = run_h(free, {0: (2, 3, 0)}, {0: (2, 0)}, max_steps=40)   # 북향, 목표 서쪽
+    hist, cells = run_h(free, {0: (2, 3, 0)}, {0: (2, 0)}, max_steps=160)   # 북향, 목표 서쪽
     check_collisions_h(hist, cells, free)
     assert hist[-1][0][:2] == (2, 0)
     rev = sum(1 for p, c in zip(hist, hist[1:])
@@ -153,8 +157,8 @@ def scenario_wall_lane_escape():
 
 def scenario_determinism():
     free, starts, goals = _swing_setup()
-    h1, _ = run_h(free, starts, goals, max_steps=40)
-    h2, _ = run_h(free, starts, goals, max_steps=40)
+    h1, _ = run_h(free, starts, goals, max_steps=160)
+    h2, _ = run_h(free, starts, goals, max_steps=160)
     assert h1 == h2, "동일 입력인데 결과가 다름"
     print(f"[5] 결정론: 동일 설정 2회 실행 {len(h1)-1}스텝 전부 일치 OK")
 

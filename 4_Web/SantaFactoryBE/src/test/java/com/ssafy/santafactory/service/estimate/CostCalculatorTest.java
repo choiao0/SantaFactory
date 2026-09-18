@@ -13,7 +13,7 @@ class CostCalculatorTest {
      * 충전기 1대당 AMR 4대. → 대당 비용 1,550만.
      */
     private final CostCalculator calculator = new CostCalculator(
-            new EstimateProperties(15_000_000L, 5_000_000L, 500_000L, 28, 6, 4, 1, Duration.ofMinutes(30), Duration.ofHours(6), "in,in,out,out,out,out", false, Duration.ofMinutes(10)));
+            new EstimateProperties(15_000_000L, 5_000_000L, 500_000L, 28, 6, 4, 1, Duration.ofMinutes(30), Duration.ofHours(6), "in,in,out,out,out,out", false, Duration.ofMinutes(10), 10, 10, 6, null));
 
     @Test
     void chargers_round_up_one_per_four_amrs() {
@@ -71,7 +71,7 @@ class CostCalculatorTest {
     @Test
     void undecided_charger_price_simply_drops_out_of_the_cost() {
         CostCalculator noChargerPrice = new CostCalculator(
-                new EstimateProperties(15_000_000L, 0L, 500_000L, 28, 6, 4, 1, Duration.ofMinutes(30), Duration.ofHours(6), "in,in,out,out,out,out", false, Duration.ofMinutes(10)));
+                new EstimateProperties(15_000_000L, 0L, 500_000L, 28, 6, 4, 1, Duration.ofMinutes(30), Duration.ofHours(6), "in,in,out,out,out,out", false, Duration.ofMinutes(10), 10, 10, 6, null));
 
         assertThat(noChargerPrice.cost(6)).isEqualTo(93_000_000L);
     }
@@ -79,7 +79,7 @@ class CostCalculatorTest {
     @Test
     void undecided_prices_fall_back_to_the_fleet_cap() {
         CostCalculator undecided = new CostCalculator(
-                new EstimateProperties(0L, 0L, 0L, 28, 6, 4, 1, Duration.ofMinutes(30), Duration.ofHours(6), "in,in,out,out,out,out", false, Duration.ofMinutes(10)));
+                new EstimateProperties(0L, 0L, 0L, 28, 6, 4, 1, Duration.ofMinutes(30), Duration.ofHours(6), "in,in,out,out,out,out", false, Duration.ofMinutes(10), 10, 10, 6, null));
 
         assertThat(undecided.maxAmrCount(1_000L)).isEqualTo(28);
         assertThat(undecided.cost(6)).isZero();

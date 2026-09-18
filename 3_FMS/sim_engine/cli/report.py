@@ -13,6 +13,21 @@ from .common import OUT, SPEED
 from .export_isaac import export_isaac
 
 
+# 포화 구간 [초] (-229). six 는 도착이 웨이브라(첫 30분에 38 %) 6h 평균 tasks_per_h 에 뒤 3h 의 수요 제한이
+# 섞여 용량 지표가 못 된다. 30~180분은 활동 태스크가 함대 상한(대수 × 동승)에 붙어 있는 완전 포화 구간이라
+# 라우팅 변경이 실제로 움직인 몫이 여기서 보인다 (docs/2026-09-15_6h병목진단_포장대_헛회전.md §8-3).
+SAT_FROM_S, SAT_TO_S = 1800.0, 10800.0
+
+
+def _saturated_tph(tasks_done, T_END, dt, lifelong):
+    """포화 구간 완료/h. 구간을 다 못 채운 런(고정 주문 수·짧은 horizon)에는 뜻이 없어 키를 안 붙인다."""
+    if not lifelong or T_END * dt < SAT_TO_S:
+        return {}
+    lo, hi = SAT_FROM_S / dt, SAT_TO_S / dt
+    n_sat = sum(1 for tk in tasks_done if lo <= tk["completed"] < hi)
+    return dict(saturated_tph=round(n_sat / ((SAT_TO_S - SAT_FROM_S) / 3600), 1))
+
+
 def _mean(x):
     return float(x.mean()) if len(x) else 0.0
 
@@ -114,7 +129,10 @@ def _tote_section(a, kernel, stream):
     """토트 적재 SUMMARY(v2.6). 명시 주문 전용 키만 조건부로 덧붙인다."""
     extra = dict(capacity=int(a.capacity), tote_units=a.tote_units,
                  totes=int(stream.totes_total), trips=int(kernel.trips),
-                 orders_oversize=int(stream.orders_oversize))
+                 orders_oversize=int(stream.orders_oversize),
+                 # 서비스(한쪽) = service_steps + 토트수 x svc_per_tote, 양 끝 2회 (-247).
+                 # 둘 다 내는 이유: 안 적은 인자가 기본값으로 조용히 들어가 대조가 어긋났다 (t3-30 §5-1).
+                 svc_per_tote=int(kernel.cfg.svc_per_tote), service_steps=int(kernel.cfg.service_steps))
     if stream.explicit_orders is not None:
         extra.update(orders_file=1, orders_skipped=int(stream.orders_skipped), max_order_totes=int(a.max_order_totes))
     return extra
@@ -167,9 +185,18 @@ def report(a, kernel, stream, ctx):
         # v3.4 (-203): 회전 발자국. turn_masked = legacy 가 허용하던 (칸,회전) 중 마스크가 금지한 비율 (legacy 는 0)
         footprint=a.footprint, robot_dims=list(a.robot_dims), turn_masked=round(float(ctx.turn_masked), 4),
         # -79 (조건부, exact,front 만): 대치 상태기계 계수
-        **({"standoffs": int(kernel.standoffs), "standoff_swaps": int(kernel.standoff_swaps)}
-           if "front" in a.footprint else {}),
+        # -79 대치 상태기계: v3.9 부터 헤딩 main 기본(standoff=1). 계수 두 키는 상태기계가 켜진 런에만
+        standoff=int(bool(getattr(a, "standoff", False)) or "front" in a.footprint),
+        # 정체 로봇·틱: 대치 상태기계가 없는 호출자도 낼 수 있는 대리 지표(물리 팀 t3-27 합의). 항상 붙인다 —
+        # 상태기계와 무관하고, standoff_ticks 가 없는 런에서도 혼잡을 비교할 수 있어야 한다.
+        stag_robot_ticks=int(kernel.stag_robot_ticks),
+        stag_robot_ticks_all=int(kernel.stag_robot_ticks_all),
+        # standoff_ticks (-229): 건수는 짧은 대치 100건과 긴 대치 1건을 구분 못 한다 — 묶인 로봇·틱이 처리량에 닿는 몫
+        **({"standoffs": int(kernel.standoffs), "standoff_swaps": int(kernel.standoff_swaps),
+            "standoff_ticks": int(kernel.standoff_ticks)}
+           if "front" in a.footprint or getattr(a, "standoff", False) else {}),
         tasks_per_h=round(n_tasks / sim_hours, 1),
+        **_saturated_tph(tasks_done, T_END, dt, lifelong),
         orders_per_h=round(orders_ph, 1),
         lead_mean_s=round(_mean(lat_total), 1),
         lead_p90_s=round(_p90(lat_total), 1),

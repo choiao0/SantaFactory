@@ -25,16 +25,114 @@ makespan 이 없으면 `stretch`(실행/계획 비율)로 추정치를 낸다. �
 이다. `--stretch` 로 갱신하라. 계획 격자·대수·맵이 바뀌면 다시 재야 한다.
 """
 
-STRETCH_MEASURED = 1.72      # 2026-09-06 Isaac 12대 실측 (325 s / 189 s)
+# 틱 모델 상수(MOVE_TICKS)는 FMS 원본에서 온다 — lifelong 과 같은 로더를 쓴다.
+# 사본을 두면 상류가 바뀔 때 조용히 갈린다 (S15P21A106-141).
+import pibt_core_v2 as _pc
+
+# ★ stretch 는 상수가 아니라 **조건에 딸린 실측값**이다. 격자·실행속도가
+#   바뀌면 같이 바뀐다. 기본값은 셸 기본 설정(pitch 1.0 · v_exec 미지정=0.9)에
+#   맞춘다 — `run_record.sh` 가 PIBT_PITCH 를 1.0 으로, PIBT_V_EXEC 를 빈 값
+#   (= geom.v_max 0.9) 으로 두기 때문이다.
+#
+#   ★ 그리고 **틱 모델에도 딸린다** (2026-09-15, -211). 전진이 MOVE_TICKS 틱이
+#     되며 계획이 같은 350 초에 태스크를 더 담게 됐다 — 실행이 더 많은 일을
+#     하므로 makespan 이 늘고 stretch 도 올라간다. 계획 초는 그대로 350 s 다.
+#
+#     틱 모델   pitch  v_exec   계획 s   실측 s   stretch   측정일
+#       옛       1.2     0.9      189     325      1.72     2026-09-06
+#       옛       1.0     0.9      350     461.1    1.32     2026-09-15  <- 아래 값
+#       옛       1.0     1.6      350     367.6    1.05     2026-09-15
+#       옛       1.0     2.2      350     362.8    1.04     2026-09-15
+#      정합후    1.0     1.6      350     394.0    1.13     2026-09-15
+#
+#   ☹ **지금 기본값 1.32 는 「옛 틱 모델 · v_exec 0.9」 값이라 어느 쪽과도
+#     안 맞는다.** 정합 후 v_exec 0.9 를 아직 안 쟀다. 실행 속도 채택(1.6 잠정)
+#     과 함께 정하는 것이 맞아 남겨 둔다 — 그때까지 `horizon_for(clock="wall")`
+#     은 믿지 말 것. 정합 후 v1.6 을 쓰려면 `stretch=1.13` 을 명시로 넘긴다.
+STRETCH_MEASURED = 1.32
 
 
 def tick_seconds(geom):
-    """직선 주행에서 한 칸에 드는 시간. FMS 틱과 같은 정의.
+    """**한 틱**이 몇 초인가. FMS 틱과 같은 정의.
 
-    가감속을 무시한 명목값이다 (직선 구간에서는 칸마다 멈추지 않으므로
-    ``pitch / v_max`` 가 맞고, 매 칸 정지하는 경우의 값이 아니다).
+    ★ 2026-09-15 (S15P21A106-211): 전진 1칸이 ``MOVE_TICKS`` 틱이 되면서
+    **틱 ≠ 칸**이 됐다. 전에는 전진이 1틱이라 이 함수가 「한 칸에 드는 시간」
+    이기도 했지만 이제는 아니다.
+
+        한 칸  = pitch / v_max                 = 1.1111 s  (pitch 1.0)
+        한 틱  = pitch / (v_max x MOVE_TICKS)  = 0.2778 s
+
+    호출부가 ``horizon x tick_seconds`` 로 계획 초를 내므로 **틱** 쪽이 맞다.
+    ``HORIZON`` 도 같이 4배가 되어야 곱이 보존된다 — 한쪽만 바꾸면 릴리스
+    지평이 4배 틀어지고 **아무 에러도 안 난다**. 아래 :func:`plan_seconds`
+    불변식으로 막는다.
+
+    가감속을 무시한 명목값이다 (직선 구간에서는 칸마다 멈추지 않는다).
     """
+    return float(geom.pitch) / (float(geom.v_max) * _pc.MOVE_TICKS)
+
+
+def cell_seconds(geom):
+    """전진 **한 칸**에 드는 시간. ``tick_seconds x MOVE_TICKS``."""
     return float(geom.pitch) / float(geom.v_max)
+
+
+def plan_seconds(horizon, geom):
+    """``horizon`` 틱이 몇 초인가 — `HORIZON` 과 `tick_s` 의 **짝 불변식**.
+
+    이 값은 틱 모델을 바꿔도 **변하지 않아야 한다.** pitch 1.0 · 12대 기준
+    315틱 x 1.1111 = 1260틱 x 0.2778 = 350.0 s 다. 달라졌으면 둘 중 하나만
+    고친 것이다.
+    """
+    return horizon * tick_seconds(geom)
+
+
+# FMS 「시나리오 재현 절차」(2026-09-16) §7-4 의 포화 창. 초 단위로 둔다 —
+# 틱으로 박으면 틱 모델이 바뀔 때 조용히 다른 구간을 잰다.
+SATURATED_WINDOW_S = (1800.0, 10800.0)
+
+
+def windowed(done_ticks, geom, window_s=SATURATED_WINDOW_S, horizon=None):
+    """**창 안 완료**로 낸 처리량. FMS `saturated_tph` 와 맞대는 값이다.
+
+    왜 따로 필요한가
+    ----------------
+    `throughput` 은 `horizon` 전체로 나눈다. 그런데 배정표의 도착 분포는
+    앞 10분과 뒤 50분이 거의 비어 있어(답신 21 §4), 6h 전체로 나누면
+    **낮게 나온다.** 창이 다르면 숫자가 비교 불능이라, 창을 명시한 값을
+    따로 낸다.
+
+    `done_ticks` 는 `lifelong` 의 `info["done_ticks"]` 다. 없으면 None.
+    """
+    if done_ticks is None:
+        return None
+    ts = tick_seconds(geom)
+    lo, hi = window_s
+    lo_t, hi_t = round(lo / ts), round(hi / ts)
+    if horizon is not None and horizon < hi_t:
+        # 창이 판보다 길면 **그 창이 아니다.** 조용히 잘라 쓰면 다른 구간을
+        # 같은 이름으로 부르게 된다.
+        return {"window_s": (lo, hi), "covered": False,
+                "horizon_tick": int(horizon), "need_tick": int(hi_t)}
+    n = sum(1 for t in done_ticks if lo_t <= t < hi_t)
+    span_h = (hi - lo) / 3600.0
+    return {"window_s": (lo, hi), "covered": True,
+            "window_tick": (int(lo_t), int(hi_t)),
+            "done_in_window": int(n),
+            "tasks_per_h": round(n / span_h, 1) if span_h > 0 else 0.0}
+
+
+def fmt_windowed(w):
+    if w is None:
+        return "[포화창] done_ticks 가 없다 — 옛 판이다"
+    lo, hi = w["window_s"]
+    if not w["covered"]:
+        return (f"[포화창] 판이 짧아 못 잰다 — 창 {lo:.0f}~{hi:.0f}s "
+                f"= {w['need_tick']:,}틱 필요, horizon {w['horizon_tick']:,}틱")
+    a, b = w["window_tick"]
+    return (f"[포화창] {lo:.0f}~{hi:.0f}s (틱 {a:,}~{b:,}) 완료 "
+            f"{w['done_in_window']:,}개 = **{w['tasks_per_h']} tasks/h** "
+            f"(FMS saturated_tph 와 같은 창)")
 
 
 def throughput(tasks_done, horizon, geom, makespan=None,
@@ -67,12 +165,19 @@ def throughput(tasks_done, horizon, geom, makespan=None,
 
 
 def horizon_for(seconds, geom, clock="plan", stretch=STRETCH_MEASURED):
-    """"420초 돌린다" -> 틱 수. **어느 420초인지**를 반드시 정해야 한다.
+    """"N초 돌린다" -> 틱 수. **어느 N초인지**를 반드시 정해야 한다.
 
-        clock="plan"  계획 시간 420 s  -> 315틱. Isaac 에서는 1.72배 더 걸린다.
-        clock="wall"  Isaac 벽시계 420 s -> 183틱. 계획으로는 244 s 짜리.
+        clock="plan"  계획 시간. Isaac 에서는 stretch 배 더 걸린다.
+        clock="wall"  Isaac 벽시계. 틱당 시간에 stretch 를 곱해서 센다.
+
+    pitch 1.0 · stretch 1.32 기준 예시:
+
+        horizon_for(350, geom, "plan")  -> 315틱  (계획 350 s = 실측 461 s)
+        horizon_for(350, geom, "wall")  -> 239틱  (실측 350 s = 계획 266 s)
 
     FMS 와 숫자를 맞출 때는 plan, 심사 영상 길이를 맞출 때는 wall 이다.
+    ``stretch`` 기본값의 조건은 STRETCH_MEASURED 옆 표를 볼 것 — 격자나
+    실행 속도를 바꿨으면 그 값도 같이 줘야 한다.
     """
     ts = tick_seconds(geom)
     if clock == "wall":
@@ -96,14 +201,16 @@ def action_seconds(geom, action, blend=True):
     """액션 하나의 소요 시간.
 
     ``blend=True`` 는 직선 구간에서 칸마다 멈추지 않는다고 보고 전진을
-    ``pitch / v_max`` 로 센다 (`tick_seconds` 와 같은 명목값). False 면
-    액션마다 정지-정지 사다리꼴을 쓴다 — ADG 가 매번 대기하는 최악의 경우.
+    ``cell_seconds`` 로 센다. False 면 액션마다 정지-정지 사다리꼴을 쓴다 —
+    ADG 가 매번 대기하는 최악의 경우.
+
+    ★ 액션 하나 = **한 칸**이지 한 틱이 아니다 (전진은 MOVE_TICKS 틱).
     """
     if action.frm[:2] == action.to[:2]:                       # 제자리 회전
         import math
         return _ramp_seconds(math.pi / 2.0, geom.w_max, geom.a_ang)
     if blend:
-        return geom.pitch / geom.v_max
+        return cell_seconds(geom)
     return _ramp_seconds(geom.pitch, geom.v_max, geom.a_lin)
 
 

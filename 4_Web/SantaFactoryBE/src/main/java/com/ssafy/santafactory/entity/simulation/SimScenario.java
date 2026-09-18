@@ -3,6 +3,7 @@ package com.ssafy.santafactory.entity.simulation;
 import com.ssafy.santafactory.entity.estimate.Estimate;
 import com.ssafy.santafactory.entity.estimate.RunStatus;
 import jakarta.persistence.Column;
+import jakarta.persistence.Embedded;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
@@ -84,11 +85,22 @@ public class SimScenario {
     private Long totalCost;
 
     /**
+     * 주문 리드타임 p90(초) — 명세 §1-2 {@code kpi.lead_time_p90_s} (S15P21A106-97).
+     * 시뮬이 안 주면 null 이고, 그 run 은 리드타임 조건을 건너뛴다.
+     */
+    @Column(name = "lead_time_p90")
+    private Double leadTimeP90;
+
+    /**
      * 이 run 의 앞 구간 궤적 (S15P21A106-205). 시뮬이 준 JSON 을 그대로 담는다.
      * 맵({@code scene})은 대수와 무관하게 같으므로 여기가 아니라 견적 쪽에 한 벌만 둔다.
      */
     @Column(name = "replay_json")
     private String replayJson;
+
+    /** 판정 밖 상세 지표 7개 (S15P21A106-236). 전부 NULL 이면 Hibernate 가 null 로 읽는다. */
+    @Embedded
+    private RunKpiDetail kpiDetail;
 
     private SimScenario(Estimate estimate, String runId, int amrCount, long totalCost) {
         this.estimate = estimate;
@@ -104,17 +116,24 @@ public class SimScenario {
         return new SimScenario(estimate, runId, amrCount, totalCost);
     }
 
+    /** 워커가 이 run 을 집었다 ({@code status: running} 수신). 재전달로 두 번 와도 그대로 RUNNING. */
+    public void markRunning() {
+        this.status = RunStatus.RUNNING;
+    }
+
     /**
      * 결과 수신 — KPI 를 채우고 DONE 으로 넘긴다.
      *
-     * @param throughput  출고 처리율 %
-     * @param utilization AMR 가동률 %
-     * @param outbound    출고 처리 건수
+     * @param throughput   출고 처리율 %
+     * @param utilization  AMR 가동률 %
+     * @param outbound     출고 처리 건수
+     * @param leadTimeP90  주문 리드타임 p90(초). 시뮬이 안 주면 null
      */
-    public void markDone(Double throughput, Double utilization, Long outbound) {
+    public void markDone(Double throughput, Double utilization, Long outbound, Double leadTimeP90) {
         this.throughput = throughput;
         this.utilization = utilization;
         this.outbound = outbound;
+        this.leadTimeP90 = leadTimeP90;
         this.error = null;
         this.status = RunStatus.DONE;
         this.completedAt = LocalDateTime.now();
@@ -127,6 +146,13 @@ public class SimScenario {
     public void applyReplay(String replayJson) {
         if (replayJson != null) {
             this.replayJson = replayJson;
+        }
+    }
+
+    /** 상세 지표를 붙인다. 없으면 그대로 둔다 — 판정에 쓰는 KPI 와 별개라 DONE 전이에 영향이 없다. */
+    public void applyKpiDetail(RunKpiDetail detail) {
+        if (detail != null) {
+            this.kpiDetail = detail;
         }
     }
 

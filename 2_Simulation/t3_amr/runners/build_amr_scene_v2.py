@@ -9,6 +9,12 @@ v1의 build_amr_scene.py를 팀 씬에 맞게 다시 쓴 것. 두 가지가 다�
     v1처럼 내가 붙일 필요가 없다. racks 에는 없는데, 궤적이 렉을 피하도록
     계획돼 있고(장애물 침범 0건) 메시가 많아 PhysX 부하가 크므로 그대로 둔다.
 
+    ★ 2026-09-17 정정. 「부하가 크다」는 **참조 에셋 메시**(프레임 176 +
+      데크 264) 기준이었다. 격자 값2 를 사각형으로 접으면 **전부 24개**다.
+      그리고 그 참조는 서버에서 **하나도 안 풀린다** — 랙 자리 48,420칸이
+      물리적으로 비어 있었다. `build_scene.py` 가 이제 투명 박스를 세운다
+      (`RACK_COLLIDER=0` 으로 끈다). 씬을 다시 구워야 반영된다.
+
 [2] **/World/ground 는 v1과 똑같은 함정이다**
       단위 Cube 를 (125.1, 116.1, 0.1) 로 비균일 스케일 → 비율 1251:1.
       v1에서 (99.8, 66, 0.1) = 1000:1 짜리 바닥에 콜리전을 줬다가 중심에서
@@ -20,9 +26,11 @@ v1의 build_amr_scene.py를 팀 씬에 맞게 다시 쓴 것. 두 가지가 다�
 """
 import argparse, json, math, os
 
+HERE = os.path.dirname(os.path.abspath(__file__))
+
 ap = argparse.ArgumentParser()
-ap.add_argument("--warehouse",
-                default=os.path.expanduser("../../t3_warehouse/warehouse_scene.usd"))
+ap.add_argument("--warehouse",   # paths.sh 의 $SCENE 과 같은 값 (옛 ../../t3_warehouse 는 -219 로 삭제)
+                default=os.environ.get("SCENE") or os.path.join(HERE, "..", "warehouse", "scene", "warehouse_scene.usd"))
 ap.add_argument("--robot",
                 default=os.path.expanduser("../robots/iwhub/iw_hub.usd"))
 ap.add_argument("--traj", default=os.path.expanduser("<t3_amr>/traj_v59/fleet_02/trajectories.json"))
@@ -92,6 +100,45 @@ gp.CreateDoubleSidedAttr(False)
 UsdGeom.Imageable(gp.GetPrim()).MakeInvisible()
 UsdPhysics.CollisionAPI.Apply(gp.GetPrim())
 print("[s] GroundPlane 생성 (무한 평면 콜라이더, z=0)", flush=True)
+
+# ★ 바닥 물리 재질 (S15P21A106-224) — 기본은 **끔**
+#
+#   2026-09-17 실측: 창고 씬 전체에 `physics:*Friction` 을 가진 prim 이
+#   **0 개**다 (콜라이더는 3,973개). 로봇이 실제로 달리는 이 평면에도 없다.
+#   `/World/floor` 에 묶인 것은 MDL — 렌더 재질이지 물리가 아니다.
+#   바퀴 쪽 0.9 는 `iw_hub.usd` 저작값이고, 짝이 되는 바닥은 **PhysX 기본
+#   재질**이다. 그 값을 우리는 고른 적도 재 본 적도 없다.
+#
+#   Isaac 공식 트러블슈팅이 「바퀴 마찰이 너무 적으면 미끄러진다」고 적고,
+#   MIR100 이 90도 명령에 10도만 돈 사례가 **PhysicsMaterial 이 없던** 경우다.
+#   회전 중 접지 상실 1/89 (2026-09-16 a6) 의 후보로 남는다.
+#
+#   ★ 그래도 기본을 안 바꾼다. 마찰을 주면 주행 결과가 **바뀐다** — 지금까지
+#     잰 기준선(시드 2 = 560.0s · 시드 5 = 541.5s)이 비교 불능이 된다.
+#     값을 정하는 것은 측정이지 짐작이 아니다. A/B 로 연다.
+#
+#       GROUND_FRICTION=0.9          정적·동적 같이 0.9
+#       GROUND_FRICTION=0.9,0.7      정적 0.9 · 동적 0.7
+_gf = os.environ.get("GROUND_FRICTION", "").strip()
+if _gf:
+    # ★ 최상단이 아니라 여기서 import 한다. 기본 경로는 이 모듈을 안 쓰는데
+    #   위에 두면 import 하나가 **모든 주행**을 죽인다. 이 파일은 주행 경로다.
+    from pxr import UsdShade
+    _v = [float(x) for x in _gf.split(",")]
+    _static, _dynamic = _v[0], (_v[1] if len(_v) > 1 else _v[0])
+    _m = UsdShade.Material.Define(st, "/World/PhysicsMaterials/Ground")
+    _api = UsdPhysics.MaterialAPI.Apply(_m.GetPrim())
+    _api.CreateStaticFrictionAttr(_static)
+    _api.CreateDynamicFrictionAttr(_dynamic)
+    _api.CreateRestitutionAttr(0.0)
+    UsdShade.MaterialBindingAPI.Apply(gp.GetPrim())
+    UsdShade.MaterialBindingAPI(gp.GetPrim()).Bind(
+        _m, UsdShade.Tokens.weakerThanDescendants, "physics")
+    print(f"[s] ★ 바닥 물리 재질 정적 {_static} · 동적 {_dynamic} "
+          f"(GROUND_FRICTION) — 기준선과 비교 불가", flush=True)
+else:
+    print("[s] 바닥 물리 재질 없음 (PhysX 기본값). 주려면 "
+          "GROUND_FRICTION=0.9 또는 0.9,0.7", flush=True)
 
 # --- 충전존 (stations.json charger 6 + charge_q 6 = 파란 장판 12개, x=107.8/105.5 y=50~65) ---
 # 궤적 시작점 대신 여기서 로봇을 스폰한다. PathFollower._closest_forward()는

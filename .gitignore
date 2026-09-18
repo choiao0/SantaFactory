@@ -6,12 +6,16 @@ __pycache__/
 4_Web/SantaFactoryBE/.env
 3_FMS/infra/.env
 3_FMS/infra/.env.estimate
+3_FMS/infra/firewall/allow.env
 
 server-setup/
 
 # 레포 루트를 IDE로 열 때 생기는 개인 작업물 (모듈 구성·플러그인 세션 상태).
 # 공유가 필요한 IDE 설정은 4_Web/SantaFactoryBE/.idea 에 이미 추적돼 있다.
 /.idea/
+
+# Claude Code 개인 설정·세션 산출물 (dev 서버 기동용 launch.json, 권한 설정 등).
+/.claude/
 
 # sim_v2 Isaac 리플레이 내보내기 산출물 (SIM_EXPORT_ISAAC=1) — 재생성 가능, 커밋하지 않음
 3_FMS/sim_engine/isaac_export_*/
@@ -31,6 +35,15 @@ server-setup/
 !3_FMS/docs/2026-09-14_θ탐색조건_v36.md
 !3_FMS/docs/2026-09-15_θ학습_판정.md
 !3_FMS/docs/api_response_schema_v1.html
+
+# t3_amr 날짜 기록도 로컬 보관 (3_FMS 와 같은 방식).
+# 팀 공유용만 계속 추적한다 — README 가 링크하고 있다.
+# 날짜 없는 파일(ADG_축규칙.md 등)은 20* 에 안 걸려 그대로 추적된다.
+2_Simulation/t3_amr/docs/20*
+2_Simulation/t3_amr/docs/*.png
+2_Simulation/t3_amr/docs/*.html
+!2_Simulation/t3_amr/docs/2026-09-13_격자_1.2m_근거.md
+!2_Simulation/t3_amr/docs/2026-09-13_이동회전_실측시간.md
 
 # from_theta·개별 실행이 다시 만드는 검증 산출물
 3_FMS/sim_engine/results/b2_from_theta_dirflow.png

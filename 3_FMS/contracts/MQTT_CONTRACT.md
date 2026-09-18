@@ -119,7 +119,7 @@ FMS ↔ AMR 에이전트 ↔ sim-runner ↔ Host ↔ 시뮬 WMS 가 한 브로�
 | `biz/v1/event` | `eventId` · `runId` · `at` · `type` ∈ task_assigned · task_done · order_shipped · robot_error · stall · **kpi_summary** · `tick` · `orderId` · `taskId` · `robot{manufacturer, serial}` |
 | `biz/v1/event` `type = kpi_summary` (v1.1, fms-core → Host, Stop 뒤 1건) | + `status` ∈ done · failed · `error` · `ticks` · `elapsed_s` · `planner` · `counters{open_tasks, done_tasks, orders_done, orders_total}` · `kpi` = SIM_VERIFY_CONTRACT §3 의 14개 키 블록(플래너가 없었으면 null) · `warnings`(v1.2, 없으면 null — 견적과 다른 조건으로 돌았다는 신호). host-orch 가 `sim.verify.result.kpi` 와 `verify.fms.warnings` 에 그대로 싣는다 |
 
-## 5. Sparkplug B 3.0 (`spBv1.0`, protobuf) — sim-runner 적용 2026-09-08 (`2_Simulation/sim_runner/`) · host-orch 적용 2026-09-09 (`3_FMS/host_orch/`, 잡 큐는 `SIM_VERIFY_CONTRACT.md`) · fms-core 적용 2026-09-09 (`3_FMS/fms_core/`)
+## 5. Sparkplug B 3.0 (`spBv1.0`, protobuf) — sim-runner 적용 2026-09-08 (`2_Simulation/sim_runner/`, -219 로 삭제 — 코덱 참조 구현은 `3_FMS/host_orch/spb.py`) · host-orch 적용 2026-09-09 (`3_FMS/host_orch/`, 잡 큐는 `SIM_VERIFY_CONTRACT.md`) · fms-core 적용 2026-09-09 (`3_FMS/fms_core/`)
 
 ### 5.1 아이덴티티
 
@@ -141,6 +141,7 @@ FMS ↔ AMR 에이전트 ↔ sim-runner ↔ Host ↔ 시뮬 WMS 가 한 브로�
 | `Runner/RTF` · `IsaacInstances` · `RamMB` · `VramMB` | Double · Int32 | 5 s 샘플, 변화 시 |
 | `Runner/LastError` | String | ERROR 이유 |
 | `Runner/ScenarioSha` | String | 받은 scenario 의 sha256 (정규형). 런 없으면 `""`. Host 가 요청의 sha 와 대조 |
+| `Runner/VideoUrl` | String | (-215, 2026-09-15) 런이 끝나 IDLE 로 돌아가는 **같은 NDATA** 에 실리는 녹화 mp4 의 **객체 키** `<run_id>/<파일>`(-233, 2026-09-16 — 공개 URL 이 아니고 버킷 이름도 안 붙는다. 버킷 `verify-videos` 는 양쪽 설정이고 비공개. 화면용 서명 URL 은 백엔드 VerifyVideoPresigner(-89)가 만든다). 없으면 `""`. Host 가 `sim.verify.result.artifacts.video` 로 그대로 옮긴다 |
 | `Run Control/Start` · `Run Control/Stop` | Text(JSON) · Boolean | NCMD 용. NBIRTH 에 `""` · `false` 로 선언 |
 | **Device amr01… (state 거울)** | | |
 | `Robot/Model` · `Robot/Connection` · `Robot/LastNodeId` | String | factsheet seriesName / ONLINE · OFFLINE · CONNECTIONBROKEN / 틱 ack |
@@ -168,7 +169,7 @@ FMS ↔ AMR 에이전트 ↔ sim-runner ↔ Host ↔ 시뮬 WMS 가 한 브로�
 
 - Will = NDEATH(bdSeq) QoS1 → 접속 후 NBIRTH(bdSeq, seq 0, 전 메트릭). 재접속마다 bdSeq +1. seq 0~255 순환, 갭이면 Host 가 Rebirth NCMD.
 - Host STATE online 갱신을 보면 Edge 는 NBIRTH · DBIRTH 재발행. Host 는 NDEATH(bdSeq 일치)의 노드를 offline, 그 디바이스 전부 stale.
-- 하트비트 5 s, 3회 결측 = 런 실패 → Stop. timeout_s 경과 · Host STATE offline 15 s · 런 프로세스 사망 → sim-runner 스스로 정지하고 `Runner/State` ERROR + `LastError`(사유). ERROR 는 IDLE 처럼 다음 Start 를 받고, Start 가 `LastError` 를 비운다.
+- 하트비트 5 s, 3회 결측 = 런 실패 → Stop. timeout_s 경과 · Host STATE offline 15 s · 런 프로세스 사망 → sim-runner 스스로 정지하고 `Runner/State` ERROR + `LastError`(사유). ERROR 는 IDLE 처럼 다음 Start 를 받고, Start 가 `LastError` 를 비운다. Start 직전 GPU 프로브가 실패하면(`LastError` `gpu unavailable: …`) 런을 시작하지 않고 ERROR 를 낸 뒤 sim-runner 가 스스로 내려간다(NDEATH) — 컨테이너 재시작이 장치를 되살린다 (-241). Host 는 NDEATH 로 그 런을 failed 로 접는다.
 - Stop 순서(적용): DDEATH ×N 즉시 → 에이전트 SIGINT(브리지가 OFFLINE 발행) → 5 s 뒤 SIGTERM → 3 s 뒤 SIGKILL → Isaac 같은 사다리(유예 20 s) → IDLE. bdSeq 는 `~/.local/state/sim_runner/bdseq` 에 보존.
 - Host(적용): `spBv1.0/santa/#` 구독. seq 갭 · BIRTH 없는 노드 → Rebirth NCMD (노드당 5 s 에 1회). NDEATH 는 bdSeq 가 마지막 NBIRTH 와 같을 때만 offline(디바이스 stale), 아니면 stale death 로 무시. NDATA 가 15 s 없으면(하트비트 3회) 런 실패로 Stop. STATE 의 timestamp 는 접속마다 새로 — Edge 는 증가를 보고 BIRTH 재발행.
 - Start 의 `models[]` 가 비면 `amr01…` 순번 시리얼 · manufacturer `idealworks` · model `iw_hub`. sim-runner 는 factsheet 를 못 보므로(ACL) `Robot/Model` 은 이 목록에서 온다. 같은 run_id 는 무시하고 상태만 재보고, 다른 run_id 는 `LastError` "busy" 로 거절(상태 불변).

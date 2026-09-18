@@ -75,7 +75,7 @@ def _grid_char(free0, zmask, free, r, c):
 
 
 def _grid_rows(ctx):
-    """1 m 격자 행 문자열 (results/fleet_replay.html 범용 플레이어용, 추가 키 — isaac_replay.py 는 무시):
+    """1 m 격자 행 문자열 (results/fleet_replay.html 범용 플레이어용, 추가 키 — 구 2_Simulation/isaac_replay.py(-219 로 삭제)는 무시했다):
     '#' 장애물 · '.' 통행 가능 · 'a' 랙 사이 통로(aisle_block 으로 막힌 피커 전용 칸) · 'z' 충전 존 칸"""
     free0 = load_map(aisle_block=False)[0]
     zmask = load_charge_zone(ctx.free)
@@ -117,7 +117,7 @@ def _build_trajectories(kernel, model, dt):
 
 def export_isaac(a, kernel, ctx):
     """sim_v1 포맷(scene.json + trajectories.json, 크롭 기준 m, z-up) 유지 + headings(틱별 yaw)·actions(이동 외 틱)·
-    model·zones 추가 키. 2_Simulation/isaac_replay.py 는 robots 의 [t, x, y] 3원소만 읽으므로 그대로 재생되고,
+    model·zones 추가 키. 구 2_Simulation/isaac_replay.py(-219 로 삭제, 커밋 ac10c76)는 robots 의 [t, x, y] 3원소만 읽었으므로 그대로 재생됐고,
     yaw 사용은 Isaac 파트가 headings 를 읽도록 한 줄 추가. 좌표: x = (c+0.5)·CELL_M − OFFSET_M, y = (r+0.5)·CELL_M.
     헤딩 모델의 pos 는 앞축 칸 → x, y 는 앞축 중심 (구동축까지 0.39 m — 리플레이 쪽 오프셋 선택)."""
     exp_dir = os.path.join(OUT, f"isaac_export_{a.variant}")

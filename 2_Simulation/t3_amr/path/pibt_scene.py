@@ -84,6 +84,25 @@ for _d in (os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__
         import config as _CFG                                  # noqa: E402
         break
 
+# ★ 못 찾으면 **조용히 다른 격자가 만들어진다** — 아래 `build_free` 가
+#   `apply_aisle_block` 을 건너뛰어 랙 사이 통로가 열린다. 계획이 달라지는데
+#   아무 표시가 없다.
+#
+#   실제로 당했다 (2026-09-15). FMS 가 우리 도구를 재현하려고 `path/` ·
+#   `warehouse/map` · `tools/` 만 꺼내 가고 이 파일을 빠뜨렸다. 통로가 열린
+#   격자(9425칸 vs 8919칸)에서 계획이 돌아 시드별 틱 수가 전부 달랐고, 그것을
+#   플랫폼 차이(Windows · Python 3.14 · numpy 2.5)로 의심하며 하루를 썼다.
+#   파일을 넣자 우리 표가 **틱 수까지** 재현됐다.
+#
+#   그래서 조용히 넘어가지 않는다. stderr 로 낸다 — stdout 을 비교하는
+#   도구들(지문·측정표)의 출력은 건드리지 않기 위해서다.
+if _CFG is None:
+    print("★ pibt_scene: amr/make_path/config.py 를 못 찾았습니다.\n"
+          "  랙 사이 통로 차단(AISLE_BLOCK)이 꺼진 채로 격자가 만들어집니다 —\n"
+          "  통로가 열려 **계획이 조용히 달라집니다** (실측 8919 -> 9425칸).\n"
+          "  저장소 일부만 복사해 쓰는 경우 이 파일을 반드시 같이 가져오세요.",
+          file=sys.stderr)
+
 from isaac_drive import RobotGeom                      # noqa: E402
 from pibt_core_v2 import valid_state, dist_map_h       # noqa: E402
 
@@ -115,6 +134,30 @@ GEOM_KW = dict(
 )
 WHEEL_RADIUS = 0.08          # iw_hub.usd 조인트 저작값
 WHEEL_BASE = 0.5796          # localPos0 = ±0.28963
+# ★ 2026-09-16 검증 (-224). 두 값을 USD 원본과 주행 기록 양쪽에서 다시 쟀다
+#   (`tools/usd_wheels.py` · `tools/wheel_calib.py`).
+#
+#       R  저작 0.08     /iw_hub/left_wheel/Cylinder 반지름 0.5 x 스케일 0.16
+#          역산 0.0800   12대 · 흩어짐 1e-5                      ★ 맞다
+#
+#       L  저작 0.57926  localPos0 ±0.28963 (스케일은 메시에만 걸려 조인트
+#                        좌표와 무관하다)                        ★ 맞다
+#          실효 0.6759   12대 · 흩어짐 0.00279 (0.4%)            ★ 1.166 배
+#
+#   저작값은 맞는데 **실효 트랙폭이 16.6% 넓다.** 제자리 회전에서 타이어가
+#   옆으로 긁히는 저항 때문이고, 12대가 0.4% 안에 모이므로 로봇별 결함이
+#   아니라 상수 성질이다.
+#
+#   [무엇이 달라지나] 드라이버가 이 `L` 로 역기구학을 풀어 바퀴 속도를 낸다.
+#   그래서 `w` 를 명령해도 실제로는 **0.857 배만** 돈다 (0.5796/0.6759).
+#   회전이 모델보다 16.6% 오래 걸린다는 뜻이다.
+#
+#   ★ **일부러 안 고쳤다.** 여기를 0.676 으로 바꾸면 회전이 빨라지는 대신
+#     꼬리 스윕과 ADG 타이밍이 같이 움직인다. 주행 전체가 바뀌는 변경이라
+#     측정을 붙여서 따로 해야 한다. 지금은 기록만 남긴다.
+#
+#   [옆 효과] `tools/swivel_sweep.py` 의 접지비 중앙 0.91 은 미끄러짐이
+#   아니라 이 차이였다 — 0.5796/0.6759 = 0.857 로 같은 자리다.
 
 # 씬 빌더(build_amr_scene_v2.py)와 같은 충전존. 여기서 출발한다.
 # [patch_charge_start] 충전존 시작 슬롯을 좌측 하단부터 일정 간격으로 생성
@@ -168,15 +211,88 @@ def charge_slots(rect=None, lat=None, step_x=None, step_y=None):
 
 CHARGE_ZONE_LEGACY = [(105.5, y) for y in (50, 53, 56, 59, 62, 65)] + \
                      [(107.8, y) for y in (50, 53, 56, 59, 62, 65)]
-CHARGE_ZONE = (CHARGE_ZONE_LEGACY
-               if os.environ.get("CHARGE_START", "auto").lower() == "legacy"
-               else charge_slots())
+
+
+def charge_zone(lat=None):
+    """충전존 슬롯 — **호출 시점에** 격자를 받아 만든다.
+
+    ★ 예전에는 `CHARGE_ZONE` 을 모듈 import 시점에 `PIBT_PITCH` 로 굳혔다.
+      그런데 도구들(`adg_cycles` · `goal_oscillation` 등)은 격자를 **`PITCH`**
+      라는 다른 이름으로 준다. `PITCH=1.0` 만 주면 계획은 1.0 격자인데 충전존은
+      1.2 격자로 만들어져 **시나리오가 조용히 달라졌다.**
+
+          PIBT_PITCH=1.0   충전 x [103.5, 105.5, 107.5]   starts 103·105·107
+          PIBT_PITCH 없음   충전 x [103.8, 106.2, 108.6]   starts 103·106·108
+
+      2026-09-15 FMS 와 지문을 대조하다 드러났다. 양쪽 다 `PIBT_PITCH` 없이
+      돌려 **같은 방식으로 틀린** 시나리오를 재현해 왔다.
+
+      이제 `geom.pitch` 에서 받는다 — 계획과 충전존이 같은 값을 쓰므로 어긋날
+      수가 없다. 이름이 둘이던 문제가 사라진다.
+    """
+    if os.environ.get("CHARGE_START", "auto").lower() == "legacy":
+        return CHARGE_ZONE_LEGACY
+    return charge_slots(lat=lat)
 GOAL_CATS = ["packing", "consol", "handoff", "aisle_buf", "inbound_buf"]
+
+
+def front_rule(pitch):
+    """앞 칸 규칙(S15P21A106-204)을 정하고 (front_swing, front_diag) 를 돌려준다.
+
+    왜 여기인가
+    -----------
+    규칙은 **스위치가 둘**이다 — 계획기 쪽 `pibt.geometry.configure(...)` 와
+    `RobotGeom` 의 필드. 한쪽만 켜지면 `isaac_drive._check_front_swing` 이
+    주행 전에 죽인다. 둘을 같이 정하는 자리가 없어서 지금까지 **주행 경로에서는
+    규칙이 통째로 꺼진 채** 돌았다 (`geo.configure` 를 부르는 곳이 도구
+    하나뿐이었다). 그 두 스위치를 여기 한 곳에서 맞춘다.
+
+    `PIBT_FRONT_RULE`
+        4      앞 2칸 + 섞임 대각 2칸  {f0, f1, mA, mB}   <- 채택한 규칙
+        2      앞 2칸만               {f0, f1}
+        off    규칙 없음 (대조군)
+        (없음) **계획기에 이미 설정된 상태를 그대로 읽는다.** 도구가 자기
+               `geo.configure(...)` 를 먼저 부르는 경우가 있어서, 그걸 덮으면
+               `adg_cycles.py` 의 RULE=off 대조군이 망가진다.
+
+    ★ 규칙은 pitch 게이팅을 받는다. 1.2 에서는 무엇을 넣든 꺼진다 (차체가
+      이미 충분히 떨어져 규칙이 필요 없다). 그래서 **요청값이 아니라 계획기가
+      실제로 켠 값**(`front_swing_on()`)을 읽어 돌려준다. 요청과 결과가 다르면
+      한 줄 찍는다 — 켠 줄 알고 1.2 로 돌리는 것을 막기 위해서다.
+    """
+    try:
+        import pibt.geometry as geo
+    except ImportError:
+        return False, False                     # 계획기 기하가 없는 환경
+
+    want = os.environ.get("PIBT_FRONT_RULE")
+    if want is not None:
+        want = want.strip().lower()
+        geo.configure(front_swing=(want not in ("off", "0", "no", "")),
+                      front_diag=(want == "4"),
+                      robot_dims=(GEOM_KW["front_len"], GEOM_KW["rear_len"],
+                                  GEOM_KW["width"]),
+                      pitch=pitch)
+    on, diag = bool(geo.front_swing_on()), bool(geo.front_diag_on())
+    if want is not None:
+        if diag:
+            got = "4칸"
+        elif on:
+            got = "앞2칸"
+        else:
+            got = "꺼짐"
+        note = ""
+        if want not in ("off", "0", "no", "") and not on:
+            note = f"  ★ pitch {pitch} 는 게이팅 구간이라 규칙이 꺼졌습니다"
+        print(f"[scene] 앞 칸 규칙 PIBT_FRONT_RULE={want} -> {got}{note}")
+    return on, diag
 
 
 def make_geom(pitch):
     """우리 로봇 기하 + 격자. origin 은 셀 (0,0) **중심**의 world 좌표."""
-    return RobotGeom(pitch=pitch, origin=(pitch / 2.0, pitch / 2.0), **GEOM_KW)
+    on, diag = front_rule(pitch)
+    return RobotGeom(pitch=pitch, origin=(pitch / 2.0, pitch / 2.0),
+                     front_swing=on, front_diag=diag, **GEOM_KW)
 
 
 def _pick(map_dir, *names):
@@ -365,10 +481,11 @@ def _assign_slots(free, geom, n, verbose=True, tag="scene"):
     막힌 슬롯은 `_nearest_free` 로 밀지 않고 **건너뛴다** — 밀면 간격이 깨진다.
     """
     H, W = free.shape
+    zone = charge_zone(geom.pitch)          # ★ 격자는 geom 에서 받는다
 
     def sweep(strict):
         st, used, skipped = {}, set(), []
-        for (x, y) in CHARGE_ZONE:
+        for (x, y) in zone:
             if len(st) >= n:
                 break
             cell = _cell_of(geom, x, y)
@@ -397,7 +514,7 @@ def _assign_slots(free, geom, n, verbose=True, tag="scene"):
     if len(starts) < n:
         raise SystemExit(
             f"★ 충전존에 {n}대를 놓을 자리가 없습니다 — {len(starts)}대만 가능.\n"
-            f"  슬롯 {len(CHARGE_ZONE)}개 중 {len(skipped)}개를 걸렀습니다:\n  "
+            f"  슬롯 {len(zone)}개 중 {len(skipped)}개를 걸렀습니다:\n  "
             + "\n  ".join(f"({x:.1f},{y:.1f}) {w}" for x, y, w in skipped[:8])
             + f"\n  CHARGE_STEP_Y 를 줄이면(예: 1.2) 행이 늘어납니다. "
               f"CHARGE_STEP_X 는 pitch 의 2배 미만으로 줄일 수 없습니다.")
@@ -529,8 +646,9 @@ def charge_docks(free, geom, n=None):
     보통 시작 칸과 같은 칸들이 나온다.
     """
     H, W = free.shape
+    zone = charge_zone(geom.pitch)          # ★ 격자는 geom 에서 받는다
     out, used = [], set()
-    for (x, y) in (CHARGE_ZONE if n is None else CHARGE_ZONE[:n]):
+    for (x, y) in (zone if n is None else zone[:n]):
         want = _cell_of(geom, x, y)
         cell = want if (0 <= want[0] < H and 0 <= want[1] < W
                         and free[want] and want not in used) else             _nearest_free(free, want, used)
@@ -634,7 +752,8 @@ def main():
     ap.add_argument("--lifelong", action="store_true",
                     help="주문 스트림으로 T틱 순환 (one-shot 대신)")
     ap.add_argument("--horizon", type=int, default=315,
-                    help="lifelong 틱 수. 315틱 = 계획 420 s (1.2/0.9 s/틱)")
+                    help="lifelong 틱 수. 초는 격자에 딸린다 — 315틱 x (pitch/0.9) "
+                         "= 350 s (pitch 1.0, 기본) / 420 s (pitch 1.2)")
     ap.add_argument("--seconds", type=float, default=None,
                     help="틱 대신 초로 지정. --clock 과 함께 쓴다")
     ap.add_argument("--clock", choices=("plan", "wall"), default="plan",
@@ -653,6 +772,30 @@ def main():
                          "치운 로봇이 충전존으로 복귀한다. "
                          "1 이하면 horizon 비율(예: 0.7), 1 초과면 틱 수. "
                          "생략하면 horizon 끝까지 주문이 들어온다(이전 동작)")
+    # ★ **환경변수로 켜지지 않는다** (2026-09-17 정정).
+    #
+    #   처음에는 `default=os.environ.get("ASSIGN")` 이었다. 그런데 주행은
+    #   계획을 파일에서 읽지 않고 `live_pibt.py` 가 **in-process 로 다시
+    #   세운다.** 그쪽은 `ASSIGN` 도 `--orders` 도 안 본다. 그래서 `ASSIGN`
+    #   이 셸에 남아 있으면
+    #
+    #       main.py plan -> pibt_scene   ASSIGN 을 주워 배정표로 계획
+    #       live_pibt                    난수 스트림으로 주행
+    #
+    #   **계획과 주행이 다른 주문으로 돈다 — 오류도 경고도 없이.**
+    #   `fms_stream.py` 의 자체 점검이 `ASSIGN` 을 쓰라고 안내하므로 같은
+    #   셸에서 이어 돌리면 바로 밟는다.
+    #
+    #   배정표로 **주행**까지 하려면 `live_pibt.py` 에도 같은 스위치를 심어
+    #   둘이 어긋날 수 없게 만들어야 한다. 그 전까지는 명시 인자만 받는다.
+    ap.add_argument("--orders",
+                    help="FMS 배정표 CSV (`packing_assign_s*.csv`). 주면 주문을 "
+                         "난수로 만들지 않고 **그 파일 그대로** 읽는다 — 언제 · "
+                         "어느 버퍼 · 어느 포장대가 FMS 와 같아진다. "
+                         "`--seed`·`--order-gap` 은 주문에 안 쓰인다. "
+                         "★ 계획 전용이다. 주행(live_pibt)은 이 파일을 안 읽고 "
+                         "다시 계획하므로, 이걸로 주행까지 바꾸려 하면 둘이 "
+                         "갈린다")
     args = ap.parse_args()
 
     map_dir = os.path.abspath(args.map)
@@ -691,11 +834,23 @@ def main():
                 oe = int(round(horizon * oe)) if oe <= 1.0 else int(round(oe))
                 print(f"[scene] 업무 종료 {oe}틱 / horizon {horizon}틱 "
                       f"— 남은 {horizon - oe}틱은 복귀 시간")
+            # ★ FMS 배정표를 주면 주문을 난수로 만들지 않는다. 태스크 생성이
+            #   비트 단위로 같아져야 배차·주행 차이만 남는다.
+            fstream = None
+            if args.orders:
+                from fms_stream import FileOrderStream
+                fstream = FileOrderStream(args.orders, geom, free, args.map,
+                                          horizon, order_end=oe)
+                bad = fstream.verify()
+                if bad:
+                    print(f"[scene] ★ 스테이션 인덱스가 밀린 데 {len(bad)}곳 — "
+                          f"{bad[:3]}")
             adg, order, history, info = plan_and_build_lifelong(
                 free, starts, goals, geom, horizon=horizon, seed=args.seed,
                 order_gap=args.order_gap, battery=args.battery,
                 dispatch=args.dispatch, zone_cells=zone, order_end=oe,
-                docks=charge_docks(free, geom) if args.battery else ())
+                docks=charge_docks(free, geom) if args.battery else (),
+                **({"stream": fstream} if fstream is not None else {}))
         else:
             from isaac_drive import plan_and_build
             adg, order, history, info = plan_and_build(free, starts, goals, geom,
@@ -709,6 +864,11 @@ def main():
             li = info["lifelong"]
             print(f"[scene] 태스크 생성 {li['tasks_spawned']} · "
                   f"완료 {li['tasks_done']} · 대기 {li['waiting']}")
+            # ★ FMS `saturated_tph` 와 맞댈 값. 전체 horizon 으로 나눈 위
+            #   숫자는 배정표의 빈 앞머리·꼬리 때문에 낮게 나온다 (-224).
+            print(metrics.fmt_windowed(
+                metrics.windowed(li.get("done_ticks"), geom,
+                                 horizon=horizon)))
             if li.get("zone"):
                 print(f"[scene] 존 복귀 대기 {li['zone_wait_steps']}틱 · "
                       f"재선택 {li['zone_retargets']}회 · "

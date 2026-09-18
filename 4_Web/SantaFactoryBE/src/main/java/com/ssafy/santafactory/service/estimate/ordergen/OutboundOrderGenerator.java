@@ -4,6 +4,8 @@ import com.ssafy.santafactory.dto.simulation.SimulationRequest;
 import com.ssafy.santafactory.entity.store.Product;
 import com.ssafy.santafactory.entity.warehouse.Warehouse;
 import com.ssafy.santafactory.repository.ProductRepository;
+import com.ssafy.santafactory.service.estimate.EstimateProperties;
+import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -30,6 +32,21 @@ import java.util.stream.IntStream;
  * <p>상품 인기도(popularity)는 {@code order_rules.json}의 누적곡선을, 매장 가중치(store factor)는
  * {@code Store.outboundCount}를 쓴다. ABC 등급은 원본에서도 진단용일 뿐 추첨에 안 쓰여 포팅하지 않는다.
  *
+ * <p>개인 소비자 창고 전제(S15P21A106-146): 한 줄 수량은 {@code estimate.max-line-qty}(기본 10) 아래만 뽑는다 —
+ * 참조 통계표의 도매 꼬리를 추첨 대상에서 아예 뺀다({@link #capQuantities}).
+ *
+ * <p>그 위에 <b>주문 하나의 수량 합</b> 상한이 있다({@code estimate.max-order-qty}, 기본 10 — 시나리오 결정
+ * 2026-09-15 "개인 주문은 수량 합 10개 이하"). 넘으면 <b>주문을 통째로 다시 뽑는다</b> — 줄 수부터 다시
+ * 뽑는다는 뜻이다 (S15P21A106-232).
+ *
+ * <p>수량만 다시 뽑아도 지금 상품 마스터에서는 상한을 맞출 수 있다 — 주문은 한 매장 안에서만 뽑고
+ * 매장당 상품이 6개뿐이라 줄 수가 6에서 잘리기 때문이다. 그래도 주문 전체를 다시 뽑는 이유는 둘이다:
+ * (1) 수량만 다시 뽑으면 줄 수 분포가 그대로 남아 FMS 기준선의 주문 분포와 어긋난다, (2) 매장당 상품이
+ * 상한보다 많아지면 줄 수가 많은 주문은 각 줄 최소 1개만으로도 합이 상한을 넘어 영원히 빠져나오지 못한다.
+ *
+ * <p>이 상한은 FMS 가 six 기준선·θ 를 뽑을 때 쓴 주문 규칙과 같다. 백엔드가 다른 규칙으로 주문을 만들면
+ * 같은 시뮬 코드인데도 견적이 기준선과 다른 주문 분포 위에서 나와 처리량·리드타임이 어긋난다.
+ *
  * <p>생성 직후 시각은 하루 전체([0, 86400)초, 프로파일의 참조 창고 분포)다. DES는 {@code ordered_at_s}를
  * horizon 시작 기준 상대 초로 읽어 horizon 밖은 버리므로, 그대로 보내면 대부분 버려진다(파이썬 쪽
  * {@code slice_orders.rescale_orders}/{@code slice_orders}와 정확히 같은 문제) — 그래서 창고의 실제
@@ -41,21 +58,25 @@ import java.util.stream.IntStream;
 public class OutboundOrderGenerator {
 
     private static final long SECONDS_PER_DAY = 86_400L;
-    /**
-     * 토트 하나에 담는 상품 수 — 견적 워커({@code amr.tote_units} 없을 때)·시뮬 {@code --tote-units} 기본값과
-     * 같은 가정값이다. 실제값은 팀 미확인(16 이면 총 토트가 약 19 % 준다). 바꾸면 워커 기본값도 같이 바꿀 것.
-     */
-    static final int TOTE_UNITS = 8;
-    /**
-     * 주문 하나의 토트 합계 상한 — 시뮬 {@code --max-order-totes} 기본값({@code order_stream.MAX_ORDER_TOTES})과
-     * 같다. 개인 소비자 창고 전제라 업자(팔레트) 주문은 없다.
-     */
-    static final int MAX_ORDER_TOTES = 24;
-    /** 상한을 넘는 주문의 수량 재추첨 한도 — 파이썬 원본과 같은 값. */
+    /** 상한을 넘는 주문의 재추첨 한도 — 파이썬 원본과 같은 값. */
     private static final int MAX_CAP_ATTEMPTS = 1_000;
 
     private final ProductRepository productRepository;
     private final OrderRuleProfileLoader profileLoader;
+    private final EstimateProperties properties;
+
+    /** 상한 설정 오류(상한 이하 수량 값 없음)는 첫 견적 요청의 500 이 아니라 부팅 실패로 드러나게 한다. */
+    @PostConstruct
+    void validateQtyCaps() {
+        OrderRuleProfile.Histogram capped = capQuantities(profileLoader.getProfile().quantity(), properties.maxLineQty());
+        // 가장 작은 수량조차 주문 상한을 넘으면 1줄 주문도 못 만든다 — 재추첨이 1,000회 돌고 죽는다
+        int minQty = java.util.Arrays.stream(capped.values()).min().orElseThrow();
+        if (properties.maxOrderQty() < minQty) {
+            throw new IllegalStateException(String.format(
+                    "estimate.max-order-qty=%d 가 프로파일 최소 수량 %d 보다 작아 주문을 만들 수 없음",
+                    properties.maxOrderQty(), minQty));
+        }
+    }
 
     public List<SimulationRequest.Outbound> generate(Warehouse warehouse, long horizonSeconds, int orderCount, long seed) {
         List<Product> products = productRepository.findAllWithStoreAndRack();
@@ -81,8 +102,9 @@ public class OutboundOrderGenerator {
 
         List<Integer> lineValues = box(profile.lineCount().values());
         List<Double> lineWeights = box(profile.lineCount().weights());
-        List<Integer> qtyValues = box(profile.quantity().values());
-        List<Double> qtyWeights = box(profile.quantity().weights());
+        OrderRuleProfile.Histogram quantity = capQuantities(profile.quantity(), properties.maxLineQty());
+        List<Integer> qtyValues = box(quantity.values());
+        List<Double> qtyWeights = box(quantity.weights());
         List<Integer> minuteIndices = IntStream.range(0, 1440).boxed().toList();
         List<Double> minuteWeights = java.util.Arrays.stream(profile.minuteWeights()).asDoubleStream().boxed().toList();
 
@@ -91,24 +113,10 @@ public class OutboundOrderGenerator {
 
         List<Draft> drafts = new ArrayList<>(orderCount);
         int cappedOrders = 0;
+        DrawContext ctx = new DrawContext(contentRng, lineValues, lineWeights, sortedProducts, globalWeights,
+                productsByStore, popularity, qtyValues, qtyWeights);
         for (int sequence = 0; sequence < orderCount; sequence++) {
-            int originalK = weightedChoice(contentRng, lineValues, lineWeights);
-            Product first = weightedChoice(contentRng, sortedProducts, globalWeights);
-            List<Product> candidates = productsByStore.get(first.getStore().getId());
-            int effectiveK = Math.min(originalK, candidates.size());
-
-            List<Product> selected = new ArrayList<>();
-            selected.add(first);
-            List<Product> remaining = new ArrayList<>(candidates);
-            remaining.remove(first);
-            while (selected.size() < effectiveK) {
-                List<Double> weights = remaining.stream().map(p -> popularity.get(p.getId())).toList();
-                Product choice = weightedChoice(contentRng, remaining, weights);
-                selected.add(choice);
-                remaining.remove(choice);
-            }
-
-            LineDraw draw = drawWithinToteCap(selected, contentRng, qtyValues, qtyWeights, sequence);
+            LineDraw draw = drawWithinOrderQty(ctx, sequence);
             cappedOrders += draw.redraws() > 0 ? 1 : 0;
             List<SimulationRequest.Line> lines = draw.lines();
 
@@ -127,56 +135,102 @@ public class OutboundOrderGenerator {
         }
 
         List<SimulationRequest.Outbound> window = mapToOutboundWindow(warehouse, outbound, horizonSeconds);
-        log.info("출고 주문 생성: 하루 {}건 중 실행 창 {}건 (seed {}), {}토트 상한 재추첨 {}건",
-                orderCount, window.size(), seed, MAX_ORDER_TOTES, cappedOrders);
+        log.info("출고 주문 생성: 하루 {}건 중 실행 창 {}건 (seed {}), 수량 합 {} 상한 재추첨 {}건",
+                orderCount, window.size(), seed, properties.maxOrderQty(), cappedOrders);
         return window;
+    }
+
+    /**
+     * 한 줄 수량 히스토그램에서 {@code maxLineQty} 를 넘는 값을 뺀 사본 (S15P21A106-146). 참조 통계표(신발 물류센터
+     * 피킹 로그)는 1~11 까지 매끈하게 줄다가 12 에서 다시 튀고 24·36·48·72 에 봉우리가 선다 — 다스·케이스로 사는
+     * 도매 흔적이다. 개인은 온라인몰 1회 최대 구매 수량이 10 안팎이라 그 아래만 쓴다. 가중치는 다시 정규화하지
+     * 않는다({@link #weightedChoice} 가 매번 남은 합으로 나눈다). 남는 값이 없으면 설정 오류로 바로 실패한다.
+     */
+    static OrderRuleProfile.Histogram capQuantities(OrderRuleProfile.Histogram quantity, int maxLineQty) {
+        int[] values = quantity.values();
+        double[] weights = quantity.weights();
+        int kept = (int) java.util.Arrays.stream(values).filter(v -> v <= maxLineQty).count();
+        if (maxLineQty < 1 || kept == 0) {
+            throw new IllegalStateException(String.format(
+                    "estimate.max-line-qty=%d 이하인 수량 값이 프로파일에 없음 (최소 %d)", maxLineQty, java.util.Arrays.stream(values).min().orElse(0)));
+        }
+        int[] cappedValues = new int[kept];
+        double[] cappedWeights = new double[kept];
+        for (int i = 0, j = 0; i < values.length; i++) {
+            if (values[i] <= maxLineQty) {
+                cappedValues[j] = values[i];
+                cappedWeights[j] = weights[i];
+                j++;
+            }
+        }
+        return new OrderRuleProfile.Histogram(cappedValues, cappedWeights);
     }
 
     /** 한 주문의 라인과, 그걸 상한 안에 넣느라 수량을 다시 뽑은 횟수. */
     private record LineDraw(List<SimulationRequest.Line> lines, int redraws) {
     }
 
+    /** 주문 하나를 뽑는 데 필요한 추첨 재료 — 인자 아홉 개를 메서드마다 끌고 다니지 않으려고 묶었다. */
+    private record DrawContext(Random rng,
+                               List<Integer> lineValues, List<Double> lineWeights,
+                               List<Product> sortedProducts, List<Double> globalWeights,
+                               Map<Long, List<Product>> productsByStore, Map<Long, Double> popularity,
+                               List<Integer> qtyValues, List<Double> qtyWeights) {
+    }
+
     /**
-     * 상품·줄 수는 그대로 두고 수량만 뽑되, 토트 합계가 {@link #MAX_ORDER_TOTES} 를 넘으면 수량을 다시 뽑는다
-     * (S15P21A106-214). 참조 데이터의 수량 꼬리(한 줄 1,000·2,400개)가 6,000건에 몇 줄 섞이는데, 시뮬은
-     * {@code --max-order-totes 24} 로 그런 주문을 빼 버리므로 백엔드가 저장한 목록과 시뮬이 실제로 돈 목록이
-     * 시드당 3~7건 어긋났다. 여기서 막으면 두 목록이 같아지고 검증 런(Isaac)에도 같은 목록이 간다.
-     * 파이썬 원본({@code generate_with_context})과 같은 규칙·한도다.
+     * 수량 합이 {@code estimate.max-order-qty} 를 넘으면 <b>주문을 통째로 다시 뽑는다</b> (S15P21A106-232).
+     *
+     * <p>줄 수부터 다시 뽑는다. 줄 수가 상한보다 많은 주문은 각 줄 최소 1개만으로도 합이 상한을 넘어,
+     * 수량만 다시 뽑아서는 영원히 빠져나오지 못하기 때문이다. 지금 상품 마스터(매장당 6개)에서는 줄 수가
+     * 6에서 잘려 그 상황이 오지 않지만, 규칙 자체를 안전한 쪽으로 둔다.
+     *
+     * <p>1줄 주문이 72.7 % 이고 그 수량은 {@link #capQuantities} 가 이미 상한 아래로 잘라 두므로 한 번에
+     * 성공하는 경우가 대부분이다 — 한도(1,000회)에 닿는 일은 없다시피 하다.
      */
-    private LineDraw drawWithinToteCap(List<Product> selected, Random rng,
-                                       List<Integer> qtyValues, List<Double> qtyWeights, int sequence) {
-        List<Product> chosen = selected.stream().sorted(Comparator.comparing(Product::getId)).toList();
-        List<SimulationRequest.Line> lines = drawLines(chosen, rng, qtyValues, qtyWeights);
+    private LineDraw drawWithinOrderQty(DrawContext ctx, int sequence) {
+        int maxOrderQty = properties.maxOrderQty();
+        List<SimulationRequest.Line> lines = drawOrder(ctx);
         int redraws = 0;
-        while (orderTotes(lines, TOTE_UNITS) > MAX_ORDER_TOTES) {
+        while (sumQty(lines) > maxOrderQty) {
             if (++redraws > MAX_CAP_ATTEMPTS) {
                 throw new IllegalStateException(String.format(
-                        "주문 %d: %d줄이 %d토트 안에 안 들어감 (토트당 %d개, %d회 재추첨)",
-                        sequence, lines.size(), MAX_ORDER_TOTES, TOTE_UNITS, MAX_CAP_ATTEMPTS));
+                        "주문 %d: 수량 합 %d 이하인 주문을 %d회 재추첨으로 만들지 못함",
+                        sequence, maxOrderQty, MAX_CAP_ATTEMPTS));
             }
-            lines = drawLines(chosen, rng, qtyValues, qtyWeights);
+            lines = drawOrder(ctx);
         }
         return new LineDraw(lines, redraws);
     }
 
-    private List<SimulationRequest.Line> drawLines(List<Product> chosen, Random rng,
-                                                   List<Integer> qtyValues, List<Double> qtyWeights) {
-        return chosen.stream()
+    /** 줄 수 → 첫 상품 → 같은 매장에서 나머지 상품 → 줄마다 수량. 재추첨은 이 전체를 다시 돌린다. */
+    private List<SimulationRequest.Line> drawOrder(DrawContext ctx) {
+        int originalK = weightedChoice(ctx.rng(), ctx.lineValues(), ctx.lineWeights());
+        Product first = weightedChoice(ctx.rng(), ctx.sortedProducts(), ctx.globalWeights());
+        List<Product> candidates = ctx.productsByStore().get(first.getStore().getId());
+        int effectiveK = Math.min(originalK, candidates.size());
+
+        List<Product> selected = new ArrayList<>();
+        selected.add(first);
+        List<Product> remaining = new ArrayList<>(candidates);
+        remaining.remove(first);
+        while (selected.size() < effectiveK) {
+            List<Double> weights = remaining.stream().map(p -> ctx.popularity().get(p.getId())).toList();
+            Product choice = weightedChoice(ctx.rng(), remaining, weights);
+            selected.add(choice);
+            remaining.remove(choice);
+        }
+
+        return selected.stream()
+                .sorted(Comparator.comparing(Product::getId))
                 .map(p -> new SimulationRequest.Line(p.getId(), p.getRack().getField(),
-                        weightedChoice(rng, qtyValues, qtyWeights)))
+                        weightedChoice(ctx.rng(), ctx.qtyValues(), ctx.qtyWeights())))
                 .toList();
     }
 
-    /**
-     * 주문의 토트 수 — 시뮬({@code order_stream._order_totes})과 같은 셈: 같은 랙(버퍼) 수량을 합쳐
-     * ceil(합 / toteUnits) 을 랙별로 더한다. 라인마다 따로 올림하면 시뮬보다 크게 세어 상한이 어긋난다.
-     */
-    static int orderTotes(List<SimulationRequest.Line> lines, int toteUnits) {
-        Map<String, Integer> byRack = new HashMap<>();
-        for (SimulationRequest.Line line : lines) {
-            byRack.merge(line.rackId(), line.qty(), Integer::sum);
-        }
-        return byRack.values().stream().mapToInt(qty -> (qty + toteUnits - 1) / toteUnits).sum();
+    /** 주문 하나의 수량 합 — 토트 10개들이 기준으로 이 값이 곧 "주문 1건 = 토트 1개" 여부를 가른다. */
+    static int sumQty(List<SimulationRequest.Line> lines) {
+        return lines.stream().mapToInt(SimulationRequest.Line::qty).sum();
     }
 
     /**

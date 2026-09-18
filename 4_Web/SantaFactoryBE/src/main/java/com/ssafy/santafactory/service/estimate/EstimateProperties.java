@@ -30,8 +30,23 @@ import java.time.Duration;
  *                          백엔드가 만든 주문 목록의 시각을 따르므로(명시 주문 모드) 토큰의 영향을 받지 않는다.
  *                          팀 결정(2026-09-11) 견적 부하 = 출고만이라 기본 out (S15P21A106-214)
  * @param verifyWindow      물리 검증(Isaac) 창 길이. SIM_VERIFY_CONTRACT.md 기본값(600s)과 같다
+ * @param maxLineQty        출고 주문 한 줄(상품 하나)의 수량 상한 — 개인 온라인몰 1회 구매 기준(S15P21A106-146).
+ *                          참조 통계표의 도매 꼬리(12·24·36·48… 다스·케이스 봉우리)를 추첨 대상에서 뺀다
+ * @param maxOrderQty       출고 주문 하나의 <b>수량 합</b> 상한 — 넘으면 주문을 통째로 다시 뽑는다
+ *                          (시나리오 결정 2026-09-15 "개인 주문은 수량 합 10개 이하", S15P21A106-232).
+ *                          FMS 가 six 기준선·θ 를 뽑을 때 쓴 주문 규칙과 같은 값이라야 견적이 그 기준선과
+ *                          같은 주문 분포 위에서 나온다
+ * @param amrCapacity       로봇이 한 왕복에 싣는 토트 수(1~6, 시뮬 {@code --capacity}). 안 보내면 시뮬 기본 1 로 돌아
+ *                          처리율이 3~4배 비관적으로 나온다 — 6,000건/6h 20대: 1토트 283건/h vs 6토트 1,000건/h (S15P21A106-218).
+ *                          로봇 시드의 capacity(200)는 단위가 달라 쓰지 않는다
  * @param exportReplay      run 마다 앞 구간 궤적을 함께 받을지 (S15P21A106-205). 워커 시간이 run 당 약
  *                          35 % 늘고 견적당 약 1 MB 를 저장한다. 끄면 대수별 재생 화면이 비어 보인다
+ * @param leadTimeP90Limit  주문 리드타임 p90 상한. 넘는 대수는 권장에서 제외한다 — "주문은 다 나가지만
+ *                          한 건이 오래 걸리는" 구성을 거른다 (명세 v0.4 "결과 판정에는 주문
+ *                          lead_time_p90_s 상한이 필요하다", S15P21A106-97).
+ *                          <b>기본값 없음(null)</b> — 설정하지 않으면 리드타임을 보지 않아 기존 동작과 같다.
+ *                          값을 정하려면 실측이 필요하다: 조건이 같은 대수들의 p90 이 어디에 모이는지 보고
+ *                          그보다 위에 둬야 정상 구성은 통과하고 병목 구성만 걸린다. θ 가 바뀌면 다시 본다
  */
 @ConfigurationProperties(prefix = "estimate")
 public record EstimateProperties(
@@ -46,8 +61,17 @@ public record EstimateProperties(
         @DefaultValue("6h") Duration horizon,
         @DefaultValue("out") String shifts,
         @DefaultValue("true") boolean exportReplay,
-        @DefaultValue("10m") Duration verifyWindow
+        @DefaultValue("10m") Duration verifyWindow,
+        @DefaultValue("10") int maxLineQty,
+        @DefaultValue("10") int maxOrderQty,
+        @DefaultValue("6") int amrCapacity,
+        Duration leadTimeP90Limit
 ) {
+
+    /** 리드타임 상한(초) — 미설정이면 null 이고 판정이 이 조건을 건너뛴다. */
+    public Double leadTimeP90LimitSeconds() {
+        return leadTimeP90Limit == null ? null : (double) leadTimeP90Limit.toSeconds();
+    }
 
     /** 대수에 비례하는 1대당 비용 — 단가 + 구축·설치비. 충전기는 대수의 계단 함수라 여기 넣지 않는다. */
     public long perUnitCost() {
