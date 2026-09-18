@@ -1243,10 +1243,35 @@ def build_adg(chains: list[list[Action]], geom: "RobotGeom | None" = None) -> AD
     #   되돌리려면 `PIBT_ADG_SLIM=0`. 간선 수가 달라지므로
     #   `tools/adg_fingerprint.py` 의 `edges_sig` 도 달라진다 — 그래서 지문에
     #   스위치 값을 같이 적는다.
+    # ★★ 규칙 ②를 **몸**까지 넓힌다 (-240, 2026-09-18). 기본 꺼짐.
+    #
+    #   위 주석이 「`soft(p) & hard(q)` 는 간선을 만들지 않는다 — q 의 뒤 칸이
+    #   p 의 앞 칸에 걸치는 배치(열 대기 줄)이고, **172 배치 전부 접촉 0**」
+    #   이라고 적는다. **그 배치가 2.5 h 판에서 접촉을 냈다.**
+    #
+    #       쌍 (0,8) · 공유칸 (45,103) · 최소거리 0.000 m · t=2,986 s
+    #       agent0 이 (46,103) 에서 2->3 으로 돌 때 front(2)=(45,103) 이
+    #       agent8 의 **꼬리 칸**이었다
+    #
+    #   172 배치는 **짧은 판의 표본**이었다. 설계 여유가 41.3 mm 인데
+    #   도착 허용오차가 한 대당 50 mm 라(로봇은 늘 그 원의 가장자리에 선다)
+    #   두 대가 서로를 향하면 예산을 넘는다 — 드물 뿐 반드시 난다.
+    #
+    #   계획 층에서는 못 닫힌다: `PIBT_SWING_HARD` 로 빈 칸을 미리 잡아도
+    #   **회전 시작 때 이미 있던 꼬리**(계획 층 실측 51건 중 17건)는 못
+    #   쫓아낸다. 그래서 **실행 층이 순서로** 집행한다 — 남의 몸이 스윙
+    #   칸에서 빠진 **뒤에** 회전이 시작되게 간선을 건다.
+    #
+    #   ☹ 간선이 는다. `by_hard` 는 `by_axle` 의 상위 집합이고, 열 대기 줄이
+    #     흔해서 대기가 늘 수 있다. **순환이 나는지 반드시 확인할 것**
+    #     (`tools/swing_overlap.py` 의 「ADG 비순환」).
+    _ADG_BODY = os.environ.get("PIBT_ADG_BODY", "0") not in ("0", "", "false")
+    _src = by_hard if _ADG_BODY else by_axle
+
     if os.environ.get("PIBT_ADG_SLIM", "1") in ("1", "true", "True"):
         import bisect as _bi
         ax = {}
-        for s, qs in by_axle.items():
+        for s, qs in _src.items():
             qs2 = sorted(qs, key=lambda a: _key(a, s))
             ax[s] = (qs2, [_key(a, s) for a in qs2])
         for p in actions:
@@ -1265,7 +1290,7 @@ def build_adg(chains: list[list[Action]], geom: "RobotGeom | None" = None) -> AD
     else:
         for p in actions:
             for s in p.guard:
-                for q in by_axle.get(s, ()):
+                for q in _src.get(s, ()):
                     lo, hi = sorted((p, q), key=lambda a: _key(a, s))
                     t2 += _link(lo, hi)
 

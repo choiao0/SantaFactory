@@ -473,7 +473,58 @@ class Kernel(object):
         agents = list(self.states)
         # 우선순위: 일의 계급 우선, 같으면 age (run_h 와 같은 단조 증가 규칙)
         prio = sorted(agents, key=lambda a: (RANK[self.rb[a]["state"]], -self.age[a], a))
-        extra = {a: self.swing[a] for a in agents if self.busy[a] > 0}
+        # ★★ 스윙 앞칸을 **hard 로 올린다** (-240, 2026-09-18). 기본 꺼짐.
+        #
+        #   왜. `front_cells`(soft)는 상대의 **축**만 막고 **몸**은 안 막는다.
+        #   그래서 남의 **꼬리**가 내 스윙 칸에 있는 채로 회전이 시작될 수
+        #   있고, 그때 설계 여유가
+        #
+        #       pitch - 폭/2 - 코반경 = 1.0 - 0.400 - 0.5587 = **41.3 mm**
+        #
+        #   뿐이다. 도착 허용오차가 한 대당 50 mm 라(로봇은 늘 그 원의
+        #   가장자리에 선다) 두 대가 서로를 향하면 예산을 넘는다.
+        #   2.5 h 판에서 실제로 났다 — 쌍 (0,8) · 공유칸 (45,103) ·
+        #   최소거리 0.000 m · t=2,986 s. agent0 이 (46,103) 에서 2->3 으로
+        #   돌 때 front(2) = (45,103) 이 agent8 의 **꼬리 칸**이었다.
+        #
+        #   허용오차로는 못 닫는다 — 기하가 요구하는 상한(20.6 mm)이
+        #   제어가 요구하는 하한(20~26 mm, 15 mm 에서 교착 실측)과 안 만난다.
+        #   그러니 **예산 쪽을 늘려야** 하고, hard 로 올리면 여유가 200 mm 가
+        #   된다 (= pitch - width). FMS `geometry.py` 주석의 「5칸 hard(286)」와
+        #   같은 취지다.
+        #
+        #   ☹ 공짜가 아니다. 합법쌍이 314 -> 286 (-9 %) 로 줄어 대기가 는다.
+        #     **처리량을 내주고 안전을 사는 선택**이라 기본은 꺼 둔다.
+        #   ★★ hard 는 **쫓아내지 못한다. 빈 칸을 미리 잡을 뿐이다** (실측).
+        #     처음에 `swing_soft` 를 통째로 `extra` 에 합쳤더니 계획기가
+        #     `AssertionError: 시작 점유 겹침 (49,100) agent 1 & 2` 로 죽었다.
+        #     `extra` 의 뜻이 「지금 내가 점유한다」라, 남의 몸이 이미 있는 칸을
+        #     넣으면 두 대가 같은 칸을 점유하는 상태가 된다.
+        #     `soft_hold` 가 「신규 진입만 막고 기존 주차는 못 쫓아낸다」와
+        #     같은 성질이다 — **이미 들어온 꼬리는 못 내보낸다.**
+        #     그래서 **남이 안 쓰는 칸만** 잡고, 동시에 도는 두 대가 같은 칸을
+        #     노리면 낮은 rid 가 갖는다 (결정적 순서).
+        #   ★ 빼야 할 것이 **셋**이다 (2026-09-18, 어서션 두 번 맞고 알았다).
+        #     `now_cells[a] = occupied(state) | extra[a]` 이고 계획기는 그것들이
+        #     에이전트끼리 **서로 겹치지 않는다**고 단언한다. 그래서 남의 몸만
+        #     빼서는 모자라고, 남의 hard 스윙과 앞서 잡힌 것까지 빼야 한다.
+        _swing_hard = os.environ.get("PIBT_SWING_HARD", "0") not in ("0", "", "false")
+        if _swing_hard:
+            busy = [a for a in sorted(agents) if self.busy[a] > 0]
+            own = {a: frozenset(occupied(self.states[a])) for a in agents}
+            bodies = set().union(*own.values()) if own else set()
+            hard = {a: set(self.swing[a]) for a in busy}
+            hard_all = set().union(*hard.values()) if hard else set()
+            extra, claimed = {}, set()
+            for a in busy:
+                blocked = ((bodies - set(own[a]))        # 남의 몸 — 못 쫓아낸다
+                           | (hard_all - hard[a])        # 남의 hard 스윙
+                           | claimed)                    # 앞선 로봇이 잡은 것
+                got = set(self.swing_soft[a]) - blocked
+                extra[a] = hard[a] | got
+                claimed |= got
+        else:
+            extra = {a: self.swing[a] for a in agents if self.busy[a] > 0}
         bias = {a: wait_bias(self.stag.get(a)) for a in agents}
 
         d_now = {}
@@ -685,6 +736,10 @@ def run_lifelong(free, starts, cells_by_cat, horizon=600, seed=0, order_gap=15,
             #   구현판을 헷갈리는 일이 실제로 있었다.
             "soft_hold": os.environ.get("PIBT_SOFT_HOLD", "1")
                          not in ("0", "", "false"),
+            # ★ 기본과 다른 값은 결과에 남아야 한다 (-240). 회전 관문이 셸에
+            #   남은 값으로 꺼진 채 세 판이 돌았던 일을 되풀이하지 않는다.
+            "swing_hard": os.environ.get("PIBT_SWING_HARD", "0")
+                          not in ("0", "", "false"),
             # ★ 교착 지표 (-224). `soft_hold` 는 제약을 늘리므로 위험이 접촉이
             #   아니라 **처리량·교착**이다. FMS 답신 12 §3: 위상 잠금은
             #   6대·시드 42 에서 실측된 사후 기록이고, **밀도가 아니라 배치**가
