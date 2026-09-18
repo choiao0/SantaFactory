@@ -56,7 +56,7 @@ import sys
 import numpy as np
 
 import pibt_core_v2 as _pc
-from pibt_core_v2 import (Replanner, Stagnation, dist_map_h, front_cells,
+from pibt_core_v2 import (DIRS, Replanner, Stagnation, dist_map_h, front_cells,
                           occupied, stay_map_h, step_h, swing_cells,
                           valid_state, wait_bias)
 
@@ -103,6 +103,59 @@ SERVICE_TICKS = 3          # 픽/드롭 서비스 시간. FMS SERVICE_STEPS 와 
 #   켜든 끄든 `guard_flipped`(가드가 답을 바꾼 횟수)는 **항상 센다.** 그 수가
 #   0 이면 이 차이는 이 판에서 없었던 것이고, 크면 A 의 남은 물음이 여기다.
 DROP_GUARD = os.environ.get("PIBT_DROP_GUARD", "1") not in ("0", "", "off", "no")
+
+# ★★ 회전 옆 이웃 규칙 — pitch 1.0 에서 옆 칸에 남이 있으면 제자리 회전 금지 (-240).
+#
+#   `tools/turn_pair_margin.py` 가 차체 치수와 pitch 에서 **위치 불변 상수표**를 굽는다
+#   (여유 0.05 = tol.pos 를 기하로 옮긴 값).  pitch 1.0 -> **20개**, 1.2 -> **0개**.
+#
+#       PIBT_TURN_PAIR=1   켠다
+#       (기본 꺼짐)        비트 동일
+TURN_PAIR = os.environ.get("PIBT_TURN_PAIR", "0") not in ("0", "", "off", "no")
+_PAIR_TAB = None
+
+
+def _pair_table():
+    """{회전방향: {(상대칸, 상대헤딩)}} — A 의 헤딩을 0 으로 놓은 좌표계. 한 번만 굽는다."""
+    global _PAIR_TAB
+    if _PAIR_TAB is None:
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))), "tools"))
+        import pibt_scene as PS
+        from turn_pair_margin import build_table, MARGIN
+        _PAIR_TAB = build_table(PS.make_geom(PS.CHARGE_LAT), MARGIN)
+    return _PAIR_TAB
+
+
+def _turn_pair_veto(states, new, agents):
+    """`step_h` 가 낸 회전 중 **금지 조합에 걸리는 것**을 제자리 대기로 되돌린다.
+
+    돌려준 수 = 막은 회전 수. 0 이면 이 틱에 규칙이 안 걸린 것이다.
+    """
+    tab = _pair_table()
+    if not any(tab.values()):
+        return 0                                   # pitch 1.2 등 — 표가 비었다
+    n = 0
+    for a in agents:
+        s0, s1 = states[a], new[a]
+        if s1[:2] != s0[:2] or s1[2] == s0[2]:
+            continue                               # 회전이 아니다
+        sgn = 1 if (s1[2] - s0[2]) % 4 == 1 else -1
+        hit = tab.get(sgn) or ()
+        if not hit:
+            continue
+        c, s = DIRS[s0[2]]                         # s0 의 헤딩을 +r 로 되돌리는 회전
+        for b in agents:
+            if b == a:
+                continue
+            q = states[b]
+            dr, dc = q[0] - s0[0], q[1] - s0[1]
+            key = ((dr * c + dc * s, -dr * s + dc * c), (q[2] - s0[2]) % 4)
+            if key in hit:
+                new[a] = s0                        # ★ 제자리 대기로 되돌린다
+                n += 1
+                break
+    return n
 
 
 def shift_windows(horizon, shifts=("in", "out", "out")):
@@ -253,6 +306,9 @@ class Kernel(object):
         #   이 가드가 FMS 원본과의 **유일한 차이**다(`dispatch` 주석). 세어 두면
         #   「회전 +2.3회/왕복」의 남은 물음이 이 한 줄 탓인지가 갈린다.
         self.guard_flipped = 0
+        # ★★ 회전 옆 이웃 규칙이 **막은 회전 수** (PIBT_TURN_PAIR).
+        #   대가를 「사후 27.9 %」가 아니라 **계획을 다시 세운 뒤**로 재려는 것이다.
+        self.pair_blocked = 0
 
         # --- 충전존 복귀 (FMS core.py:72-75). 비우면 고정 홈 = 이전 동작 ---
         self.zone_cells = [tuple(rc) for rc in zone_cells if free[tuple(rc)]]
@@ -642,6 +698,24 @@ class Kernel(object):
                                      None, 0, (), None, None,
                                      soft_hold if soft_on else None)
 
+        # ★★ 회전 옆 이웃 규칙 (-240, 2026-09-18). `PIBT_TURN_PAIR` 로 켠다.
+        #
+        #   pitch 1.0 에서 옆 칸에 남이 있을 때 제자리 회전을 하면 **몸이 닿는다.**
+        #   `tools/turn_pair_margin.py` 가 여유 0.05 로 금지 조합 **20개**를 구웠다
+        #   (위치 불변 — 상대 칸 · 상대 헤딩 · 회전 방향만 본다). pitch 1.2 에서는 **0개**다.
+        #
+        #   ☹ 지금까지 이 규칙의 대가를 「회전의 27.9 %」로 말해 왔는데 그건
+        #     **이미 만들어진 계획을 사후에 훑은 수**다. 규칙을 계획기에 넣으면
+        #     계획기가 **애초에 그 자리에서 안 돈다** — 한 칸 더 가서 돌거나 다른
+        #     길을 고른다. 그래서 진짜 대가는 여기서 다시 재야 한다.
+        #
+        #   왜 `extra` 가 아니라 후처리인가 — `extra` 의 뜻은 「내가 이 칸을 점유한다」다.
+        #   우리 규칙은 「상대가 저기 있으면 **내 회전을 금지**」라 칸 점유로 못 옮긴다.
+        #   그래서 `step_h` 가 낸 답에서 위반 회전만 **제자리 대기로 되돌린다.**
+        #   대기는 언제나 합법이다 (그 칸에 이미 자기가 서 있다).
+        if TURN_PAIR:
+            self.pair_blocked += _turn_pair_veto(self.states, new, agents)
+
         for a in agents:
             s0, s1 = self.states[a], new[a]
             if s1[:2] == s0[:2] and s1[2] != s0[2]:          # 회전 시작
@@ -687,7 +761,8 @@ class Kernel(object):
         """`run_lifelong` 이 info 에 합친다. 존이 꺼져 있으면 한 줄만."""
         zs = self.zone_stats
         # ★ 존을 꺼도 `guard_flipped` 은 낸다 — FMS 패리티 지표라 판마다 필요하다.
-        g = {"guard_flipped": self.guard_flipped, "drop_guard": DROP_GUARD}
+        g = {"guard_flipped": self.guard_flipped, "drop_guard": DROP_GUARD,
+             "pair_blocked": self.pair_blocked, "turn_pair": TURN_PAIR}
         if not self.zone:
             return {"zone": False, **g}
         occ = zs["occ"]
