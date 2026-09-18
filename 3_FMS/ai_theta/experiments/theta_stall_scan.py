@@ -47,6 +47,9 @@ from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 
 def _fms_root(start):
     """3_FMS 를 찾아 올라간다 — 이 파일을 ai_theta/experiments 에 두든 infra 에 두든 같게 돈다."""
@@ -77,6 +80,13 @@ CAT_VALUES = {"aisle_period": (1, 2, 3), "aisle_phase": (0, 1), "loop_dir": (0, 
 CONT = list(RANGES)
 CATS = list(CAT_VALUES)
 FEATS = ["aisles", "pitch", "length", "free", "fleet", "load_frac"]
+# 차단(운영) 모드는 기존 차단 sweep(theta_sweep.py)과 조건을 맞춘다 — 그래야 나중에 합친다.
+REF_ROBOTS, REF_ARRIVAL_S = 20, 4.0          # 20대 = 900건/h. 대수당 부하를 고정한다
+BLOCKED_ORDERS = 250                         # theta_sweep.py --orders 기본값
+# 통로를 막으면 이 4축은 비용판에 한 비트도 안 닿는다(계약 §5). 무작위로 뿌리면 순수
+# 노이즈 입력이 돼 분류 모델이 헛것을 배운다 — 중립에 못 박는다.
+DEAD_WHEN_BLOCKED = {"aisle_alt_gain": 1.0, "aisle_alt_boost": 1.0,
+                     "aisle_period": 1, "aisle_phase": 0}
 
 
 def orders_for(rate, orders_max=250, hours=1.0, floor=100):
@@ -99,12 +109,21 @@ def lhs(n, rng):
     return lo + u * (hi - lo)
 
 
-def sim(w, theta_path, seed, timeout):
-    """완주하면 (1, 처리량), 못 하면 (0, None). rc!=0 · 타임아웃 · SUMMARY 없음이 전부 교착."""
-    rate = w["cap"] * w["load_frac"]
-    cmd = [sys.executable, "sim_v2_tasks.py", "vf", str(int(w["fleet"])),
-           str(orders_for(rate)), str(seed), "0",          # 마지막 0 = 랙 통로 개방
-           "--order-gap=%.4f" % ((3600.0 / rate) / DT), "--capacity=%d" % CAPACITY,
+def sim(w, theta_path, seed, timeout, block=0):
+    """완주하면 (1, 처리량), 못 하면 (0, None). rc!=0 · 타임아웃 · SUMMARY 없음이 전부 교착.
+
+    차단(block=1)은 기존 차단 sweep 과 같은 조건으로 돈다 — 주문 250건 고정, 도착 간격은
+    대수당 부하를 고정하는 식(REF_ARRIVAL_S x REF_ROBOTS / 대수). 개방은 용량 대비 상대부하다.
+    """
+    fleet = int(w["fleet"])
+    if block:
+        orders, gap = BLOCKED_ORDERS, (REF_ARRIVAL_S * REF_ROBOTS / fleet) / DT
+    else:
+        rate = w["cap"] * w["load_frac"]
+        orders, gap = orders_for(rate), (3600.0 / rate) / DT
+    cmd = [sys.executable, "sim_v2_tasks.py", "vf", str(fleet),
+           str(orders), str(seed), str(block),
+           "--order-gap=%.4f" % gap, "--capacity=%d" % CAPACITY,
            "--speed=%g" % SPEED, "--map-dir=" + os.path.join(SYNTH, w["name"]),
            "--theta=" + theta_path]
     env = dict(os.environ, SIM_NO_PLOT="1", PYTHONIOENCODING="utf-8",
@@ -131,8 +150,13 @@ def main():
     p.add_argument("--timeout", type=int, default=900)
     p.add_argument("--rng", type=int, default=0)
     p.add_argument("--design", default=os.path.join(OUT, "theta_open", "design.json"))
-    p.add_argument("--out", default=os.path.join(OUT, "theta_stall_v36.csv"))
+    p.add_argument("--aisle-block", type=int, default=0, choices=(0, 1), dest="block",
+                   help="1 = 차단(운영). aisle_* 4축을 중립에 고정하고 주문 250건 고정으로 돈다")
+    p.add_argument("--out", default=None)
     a = p.parse_args()
+    if a.out is None:
+        a.out = os.path.join(OUT, "theta_stall_blocked_v36.csv" if a.block
+                             else "theta_stall_v36.csv")
 
     design = json.load(open(a.design, encoding="utf-8"))
     design = [d for d in design if all(k in d for k in FEATS + ["cap"])]
@@ -140,6 +164,10 @@ def main():
     design.sort(key=lambda d: (d["aisles"], d["pitch"], d["length"]))
     step = max(1, len(design) // a.maps)
     maps = design[::step][:a.maps]
+    if a.block:
+        # 차단 sweep 은 README 권장 대수(free / 81)를 썼다. design.json 의 fleet 는 개방 LHS 로
+        # 뽑은 값이라 다르다 — 기존 차단 데이터와 합치려면 rec_fleet 으로 맞춘다.
+        maps = [dict(w, fleet=w.get("rec_fleet", w["fleet"])) for w in maps]
 
     rng = np.random.default_rng(a.rng)
     work_dir = os.path.join(OUT, "theta_stall_tmp")
@@ -151,19 +179,22 @@ def main():
         for i in range(a.thetas):
             th = {c: float(cont[i, k]) for k, c in enumerate(CONT)}
             th.update({c: int(rng.choice(CAT_VALUES[c])) for c in CATS})
+            if a.block:
+                th.update(DEAD_WHEN_BLOCKED)      # 차단에서 무효인 4축은 중립에 못 박는다
             path = os.path.join(work_dir, "th_%s_%03d.json" % (w["name"], i))
             json.dump(th, open(path, "w", encoding="utf-8"), ensure_ascii=False)
             jobs.append((w, th, path))
 
-    print("맵 %d개 x θ %d개 = 런 %d개 · 동시 %d · 시드 %d · 개방 조건"
-          % (len(maps), a.thetas, len(jobs), a.jobs, a.seed))
+    print("맵 %d개 x θ %d개 = 런 %d개 · 동시 %d · 시드 %d · %s"
+          % (len(maps), a.thetas, len(jobs), a.jobs, a.seed,
+             "차단(운영) · 주문 250건 고정 · aisle_* 중립" if a.block else "개방"))
     print("  맵 통로 수 %d~%d · 대수 %d~%d"
           % (min(w["aisles"] for w in maps), max(w["aisles"] for w in maps),
              min(w["fleet"] for w in maps), max(w["fleet"] for w in maps)))
 
     t0 = time.time()
     with ThreadPoolExecutor(max_workers=a.jobs) as pool:
-        res = list(pool.map(lambda j: sim(j[0], j[2], a.seed, a.timeout), jobs))
+        res = list(pool.map(lambda j: sim(j[0], j[2], a.seed, a.timeout, a.block), jobs))
     mins = (time.time() - t0) / 60
 
     rows = []
