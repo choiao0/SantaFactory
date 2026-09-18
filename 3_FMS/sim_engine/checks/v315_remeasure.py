@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
 # ============================================================
-# 계약 v3.15 재측정 — 후진 실행 틱 rev_ticks 를 켜기 전/후를 한 번에 뜬다 (S15P21A106-247)
+# 계약 기준값 게이트 — 지금 코드가 §5 기준값과 맞는지 + 플래그 A/B (S15P21A106-247, -250)
 #
-# v3.15 가 바꾸는 것은 **하나**다: 후진 1칸이 전진과 같은 MOVE_TICKS 였던 것을
+# v3.15(-250)가 바꾼 것은 **하나**다: 후진 1칸이 전진과 같은 MOVE_TICKS 였던 것을
 # REVERSE_FACTOR(3.0) 배 = 12틱 으로. speed 0.9 에서 정확히 0.300 m/s 이고
-# 물리 팀 녹화의 후진 p99 와 같다 (t3-31 §2).
+# 물리 팀 녹화의 후진 p99 와 같다 (t3-31 §2). **지금은 그게 기본값**이라
+# 아래 기대값이 v3.15 값이고, 비교축 플래그는 v3.14 로 **되돌리는** --rev-ticks=4 다.
 #
 # 이 스크립트가 하는 일 셋:
 #   1) 게이트   플래그 없이 돌려 **지금 기준값과 한 자리도 안 틀리는지** 본다.
@@ -14,11 +15,11 @@
 #               바뀌면 rev_ticks 가 새는 것이다.
 #
 # 사용 (3_FMS/sim_engine):
-#   python checks/v315_remeasure.py                # 기준값 5개, 게이트 + 측정 (~1분)
-#   python checks/v315_remeasure.py --gate         # 게이트만 (켜기 전 회귀 확인)
+#   python checks/v315_remeasure.py                # 기준값 5개, 게이트 + v3.14 되돌림 비교 (~1분)
+#   python checks/v315_remeasure.py --gate         # 게이트만 (회귀 확인 — 계약 변경 전후 둘 다)
 #   python checks/v315_remeasure.py --six          # + 운영 six 6런 (24·28대 × 시드 셋, 오래 걸림)
-#   python checks/v315_remeasure.py --flags=--rev-ticks=12,--replan-max-extra=16
-#                                                  # 켤 것이 바뀌면 여기만 고친다
+#   python checks/v315_remeasure.py --flags=--rev-ticks=4,--replan-max-extra=16
+#                                                  # 비교축이 바뀌면 여기만 고친다
 # 종료 코드 0 = 게이트 통과, 1 = 게이트 실패(= 켜기 전에 고칠 것이 있다).
 # ============================================================
 import json
@@ -32,15 +33,15 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ENG = os.path.dirname(HERE)
 ENV = dict(os.environ, SIM_NO_PLOT="1", MPLBACKEND="Agg", PYTHONIOENCODING="utf-8")
 
-# v3.15 에서 켜는 것. 늘어나면 여기에 더한다.
-V315_FLAGS = ["--rev-ticks=12"]
+# 비교축 — 지금 기본(v3.15)에서 **v3.14 로 되돌리는** 인자. 다음 계약 변경 때 여기를 바꾼다.
+V315_FLAGS = ["--rev-ticks=4"]
 
-# 계약 §5 기준값 — (이름, 인자, 기대 makespan, 기대 tasks/h, 헤딩 모델인가)
-# 헤딩이 아닌 둘(v1compat·cell)은 후진 개념이 없으므로 **켠 뒤에도 같아야 한다.**
+# 계약 §5 기준값 (v3.15) — (이름, 인자, 기대 makespan, 기대 tasks/h, 헤딩 모델인가)
+# 헤딩이 아닌 둘(v1compat·cell)은 후진 개념이 없으므로 **어느 쪽으로 바꿔도 같아야 한다.**
 BASELINES = [
-    ("기본 exact",     ["base", "6", "40", "42", "1"],                         10533, 143.5, True),
-    ("legacy",         ["base", "6", "40", "42", "1", "--footprint=legacy"],   10442, 144.8, True),
-    ("exact,front",    ["base", "6", "40", "42", "1", "--footprint=exact,front"], 10590, 142.8, True),
+    ("기본 exact",     ["base", "6", "40", "42", "1"],                         11782, 128.3, True),
+    ("legacy",         ["base", "6", "40", "42", "1", "--footprint=legacy"],   11069, 136.6, True),
+    ("exact,front",    ["base", "6", "40", "42", "1", "--footprint=exact,front"], 11455, 132.0, True),
     ("v1compat",       ["base", "6", "40", "42", "1", "--flow=v1compat"],       2317, 186.4, False),
     ("cell",           ["base", "6", "40", "42", "1", "--cell"],                2866, 131.9, False),
 ]
@@ -67,7 +68,7 @@ def main(argv):
     with_six = "--six" in argv
     flags = next((a.split("=", 1)[1].split(",") for a in argv if a.startswith("--flags=")), V315_FLAGS)
 
-    print("계약 v3.15 재측정 — 켜는 것: %s\n" % " ".join(flags))
+    print("계약 기준값 게이트 (v3.15) — 비교축: %s\n" % " ".join(flags))
 
     # ---- 1) 게이트 : 플래그 없이 = 지금과 같아야 한다 ----
     print("[1] 게이트 — 플래그 없이 돌려 기준값과 맞는가")
@@ -89,7 +90,7 @@ def main(argv):
         return 0
 
     # ---- 2) 측정 : 플래그를 켜고 ----
-    print("[2] 측정 — %s 를 켜고 같은 판" % " ".join(flags))
+    print("[2] 비교 — %s 로 같은 판" % " ".join(flags))
     with ThreadPoolExecutor(max_workers=5) as pool:
         after = list(pool.map(lambda b: run(b[1] + flags), BASELINES))
 
@@ -114,7 +115,7 @@ def main(argv):
         print("\n☹ **칸 모델이 바뀌었다** (%s) — rev_ticks 가 헤딩 밖으로 샌다. 켜기 전에 봐야 한다."
               % ", ".join(leak))
 
-    print("\n    ★ 새 기준값 — 계약 §5 표와 검증 커맨드 주석을 이 값으로 고친다")
+    print("\n    비교축 값 — 계약 §5 표의 옛 세대 열과 맞는지 본다")
     for (name, a, _e, _t, _h), d in zip(BASELINES, after):
         mk, th = kpi(d)
         print("      %-14s %s   ->   %s / %s" % (name, " ".join(a[5:]) or "(기본)", mk, th))
@@ -134,7 +135,7 @@ def main(argv):
             print("    -> results/set_v314_before.csv 와 set_v315_after.csv 를")
             print("       sweeps/compare_csv.py 로 맞댄다.")
 
-    print("\n남은 것: 계약 문서 v3.14 -> v3.15 · 검증 커맨드 주석 · 워커/코어 이미지 재배포")
+    print("\n※ 계약을 또 바꿀 때: BASELINES 기대값과 V315_FLAGS 를 새 세대로 고친다.")
     return 0
 
 

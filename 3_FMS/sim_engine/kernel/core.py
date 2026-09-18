@@ -24,7 +24,7 @@ from map_loader import ROBOT_DIMS, front_swing, zone_cells
 from pibt.geometry import configure as configure_footprint
 from pibt.geometry import front_cells, front_swing_on
 from pibt.liveness import WAIT_ESC_GRACE
-from pibt_core import (DIRS, MOVE_TICKS, TURN_COST, TURN_TICKS, Replanner, Stagnation, candidates_h,
+from pibt_core import (DIRS, MOVE_TICKS, REV_TICKS, TURN_COST, TURN_TICKS, Replanner, Stagnation, candidates_h,
                        dist_map, dist_map_h, occupied, stay_map_h, step,
                        step_h, swing_cells, valid_state, wait_bias)
 
@@ -59,10 +59,8 @@ class KernelConfig:
     yield_after: int = 16         # 이 틱 이상 실제로 막힌 정면 조우만 양보 (-194: 8 → 16)
     turn_ticks: int = TURN_TICKS  # 90° 회전에 쓰는 틱 (실행)
     move_ticks: int = MOVE_TICKS  # 전진 1칸에 쓰는 틱 (실행, -194)
-    rev_ticks: int = MOVE_TICKS   # 후진 1칸에 쓰는 틱 (-247). 기본 = move_ticks -> 지금과 비트 동일.
-                                  # REVERSE_FACTOR(3.0) 는 계획 비용에만 걸려 있었고 실행 틱에는 없었다
-                                  # (물리 팀 녹화 t3-31: 전진 0.818 · 후진 0.260 m/s = 3.11~3.14배).
-                                  # move_ticks x 3 = 12틱 이 speed 0.9 에서 정확히 0.300 m/s = 후진 상한.
+    rev_ticks: int = REV_TICKS    # 후진 1칸에 쓰는 틱 (계약 v3.15, -250: MOVE_TICKS -> 12).
+                                  # 근거·출처는 geometry.REV_TICKS 주석. v3.14 로 되돌리려면 --rev-ticks=4.
     replan_max_extra: int = 0     # 정체 재계획 우회 추가 비용 상한 [칸] (-247). 0 = 없음 -> 비트 동일.
                                   # 없으면 반경 3 안의 로봇 하나 때문에 +200칸 우회를 받고,
                                   # stag 는 평소 거리장으로 재이므로 그 내내 안 풀린다 (liveness.REPLAN_MAX_EXTRA)

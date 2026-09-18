@@ -21,8 +21,8 @@
 #                              [--battery] [--chargers=6] [--runtime-h=8] [--charge-h=1.5] [--soc=20,80,95]  (배터리, -145 §2)
 #                              [--orders-file=<json>] [--capacity=<토트 수>] [--tote-units=<상품 수>] [--svc-per-tote=<초>]
 #                              [--service-steps=<틱>]  (v3.15, -247: 도킹 틱. 기본 = round(SERVICE_TIME_S/dt) = v1 계보 상수)
-#                              [--rev-ticks=<틱>]     (v3.15, -247: 후진 1칸 틱. 기본 = 전진과 같은 MOVE_TICKS.
-#                              물리 팀 녹화 실측 0.260 m/s -> 12 가 speed 0.9 에서 정확히 후진 상한 0.300 m/s)
+#                              [--rev-ticks=<틱>]     (계약 v3.15, -250: 후진 1칸 틱. 기본 REV_TICKS=12
+#                              = speed 0.9 에서 0.300 m/s = 물리 팀 녹화 후진 p99. v3.14 로 되돌리려면 4)
 #                              [--replan-max-extra=<칸>]  (v3.15, -247: 정체 재계획 우회 추가 비용 상한. 0 = 없음)
 #                              [--max-order-totes=24]  (v3.5: 토트 합계 초과 주문 = 팔레트 흐름 제외, 그 아래 큰 주문은 여러 왕복. 0 = 제한 없음)
 #                              [--speed=<m/s>]   (v3.3, -116: 틱 길이 = CELL_M / speed. 1칸 = 1틱은 그대로, 초 환산만 바뀐다)
@@ -74,7 +74,7 @@ from map_loader import (load_map, make_homes, CELL_M, OFFSET_M, MAP_DIR, ROBOT_D
                         make_homes_zone, load_rack_map, load_topology_spec, masked_turn_ratio, turn_mask)
 from pibt.geometry import FOOTPRINT_MARGIN_M
 from order_stream import MAX_ORDER_TOTES, OrderStream
-from pibt_core import DIRS, MOVE_TICKS, TURN_TICKS
+from pibt_core import DIRS, MOVE_TICKS, REV_TICKS, TURN_TICKS
 
 SERVICE_TIME_S = 40 / 11            # v1과 동일 (docs/θ_경로_기준선.md#기준선-계보)
 SERVICE_STEPS = round(SERVICE_TIME_S / DT)
@@ -381,7 +381,7 @@ def build(a):
                        capacity=a.capacity, svc_per_tote=a.svc_per_tote,
                        yield_rule=a.yield_rule, section_limit=a.section_limit, standoff=a.standoff,
                        turn_ticks=TURN_TICKS, move_ticks=MOVE_TICKS,
-                       rev_ticks=MOVE_TICKS if a.rev_ticks is None else a.rev_ticks,
+                       rev_ticks=REV_TICKS if a.rev_ticks is None else a.rev_ticks,
                        replan_max_extra=a.replan_max_extra,
                        stall_warn_only=a.horizon is not None,
                        footprint=a.footprint, robot_dims=a.robot_dims, **bat)
