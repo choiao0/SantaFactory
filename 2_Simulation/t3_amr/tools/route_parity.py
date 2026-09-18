@@ -109,14 +109,24 @@ def edges(free, r, c, h):
 def shortest(free, start_cell, goal_cell):
     """start 칸의 어느 헤딩에서든 출발해 goal 칸에 닿는 최소 비용 경로.
 
-    돌려주는 것: (비용, [(r,c,h)...]) 또는 (None, None).
+    돌려주는 것: (비용, 경로, 사유). 못 가면 (None, None, 사유).
+
+    ★ **사유를 갈라 돌려준다** (-240, 2026-09-18). 초판은 「못감」 하나로
+      뭉쳤는데, 그 대부분이 **목표 칸 자체가 막힌 것**이었다. 스테이션
+      물리 좌표를 두 규약으로 칸에 넣으면 0.4 m 옵셋 때문에 한쪽에서만
+      막힌 칸에 떨어진다 — **통로가 끊긴 것이 아니다.** 실제 계획기는
+      옆 칸을 쓴다. 둘을 뭉쳐 세면 「격자가 창고를 조각낸다」는 없는
+      결론이 나온다.
     """
     H, W = free.shape
+    if not (0 <= goal_cell[0] < H and 0 <= goal_cell[1] < W and free[goal_cell]):
+        return None, None, "도착칸막힘"
+    if not (0 <= start_cell[0] < H and 0 <= start_cell[1] < W and free[start_cell]):
+        return None, None, "출발칸막힘"
     starts = [(start_cell[0], start_cell[1], h) for h in range(4)
               if PC.valid_state(free, (start_cell[0], start_cell[1], h))]
-    if not starts or not (0 <= goal_cell[0] < H and 0 <= goal_cell[1] < W
-                          and free[goal_cell]):
-        return None, None
+    if not starts:
+        return None, None, "출발헤딩없음"
     dist, prev = {}, {}
     pq = []
     for s in starts:
@@ -137,11 +147,11 @@ def shortest(free, start_cell, goal_cell):
                 prev[nxt] = s
                 heapq.heappush(pq, (nd, nxt))
     if goal is None:
-        return None, None
+        return None, None, "**경로없음**"
     path = [goal]
     while path[-1] in prev:
         path.append(prev[path[-1]])
-    return dist[goal], list(reversed(path))
+    return dist[goal], list(reversed(path)), "ok"
 
 
 # ---------------------------------------------------------------------------
@@ -206,16 +216,17 @@ def main():
     print("   {:>26} {:>9} {:>9} {:>9} {:>9} {:>10}".format(
         "출발 -> 도착", "우리 틱", "FMS 틱", "우리 m", "FMS m", "**이탈 m**"))
 
-    rows, bad, unreach = [], 0, 0
+    rows, bad = [], 0
+    fails = {}                     # 사유별 — **칸 막힘과 경로 없음을 갈라 센다**
     for (ca, ia, xa, ya), (cb, ib, xb, yb) in pairs:
         name = f"{ca}[{ia}] -> {cb}[{ib}]"
         c1 = shortest(ours, our_cell(xa, ya), our_cell(xb, yb))
         c2 = shortest(theirs, fms_cell(xa, ya, cell_m, off_m),
                       fms_cell(xb, yb, cell_m, off_m))
         if c1[0] is None or c2[0] is None:
-            unreach += 1
-            w = "우리 못감" if c1[0] is None else ""
-            w += " FMS 못감" if c2[0] is None else ""
+            w = f"우리 {c1[2]}" if c1[0] is None else ""
+            w += (" " if w else "") + f"FMS {c2[2]}" if c2[0] is None else ""
+            fails[w] = fails.get(w, 0) + 1
             print(f"   {name:>26}  ☹ {w}")
             continue
         A = polyline(c1[1], our_world)
@@ -233,17 +244,23 @@ def main():
         dt = [abs(a - b) / max(a, 1) for a, b, _, _, _ in rows]
         dl = [abs(a - b) for _, _, a, b, _ in rows]
         dv = [d for *_, d in rows]
-        print(f"\n  비교된 쌍 {len(rows)}개 · 도달 실패 {unreach}개")
-        print(f"    비용 차   평균 {100 * sum(dt) / len(dt):.1f}% · "
-              f"최대 {100 * max(dt):.1f}%")
-        print(f"    길이 차   평균 {sum(dl) / len(dl):.2f} m · 최대 {max(dl):.2f} m")
-        print(f"    **이탈**  평균 {sum(dv) / len(dv):.2f} m · **최대 {max(dv):.2f} m**")
-        print(f"    ☹☹ 2 m 넘게 갈린 쌍 **{bad}개**")
+        print(f"\n  비교된 쌍 {len(rows)}개 · 실패 {sum(fails.values())}개")
+        for w, n in sorted(fails.items(), key=lambda kv: -kv[1]):
+            print(f"      {w:>28}  {n}개")
+        print(f"\n    ★ **비용 차   평균 {100 * sum(dt) / len(dt):.1f}% · "
+              f"최대 {100 * max(dt):.1f}%**   <- 이게 비교되는 유일한 양이다")
+        print(f"      길이 차   평균 {sum(dl) / len(dl):.2f} m · 최대 {max(dl):.2f} m")
+        print(f"      이탈      평균 {sum(dv) / len(dv):.2f} m · 최대 {max(dv):.2f} m "
+              f"(2 m 초과 {bad}개)")
     print("\n  읽는 법")
-    print("    이탈 <= 0.5 m   같은 통로다. 칸 규약 0.4 m 차이 수준")
-    print("    0.5 ~ 2 m       같은 통로인데 칸이 밀렸다")
-    print("    > 2 m           **다른 통로로 돌았다** — 같은 주문에 다른 길이 나온다")
-    print("    ☹ 이건 **정적 최단경로**다. 함대 혼잡은 안 들어 있다")
+    print("    ★ **비용(틱)** 이 비교되는 양이다 — 격자가 달라도 정의가 같다")
+    print("    ☹ **이탈은 경로 「모양」이라 비교 대상이 아니다.** 동점이면 어느 쪽을")
+    print("      집는지가 힙 순서로 갈리고, 실제 PIBT 는 HGraph 거리장 + 제 타이브레이크를")
+    print("      쓴다. 이탈이 커도 **비용이 같으면 동점 두 통로**일 뿐이다")
+    print("    ☹ **도착칸막힘/출발칸막힘은 통로가 끊긴 것이 아니다.** 스테이션 물리 좌표가")
+    print("      0.4 m 옵셋 때문에 한쪽에서만 막힌 칸에 떨어진 것이고, 계획기는 옆 칸을 쓴다")
+    print("      -> 통로 단절은 **「경로없음」** 만 센다")
+    print("    ☹ 정적 최단경로다. 함대 혼잡은 안 들어 있다")
 
 
 if __name__ == "__main__":
