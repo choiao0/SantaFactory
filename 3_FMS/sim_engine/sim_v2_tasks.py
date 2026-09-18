@@ -23,6 +23,7 @@
 #                              [--service-steps=<틱>]  (v3.15, -247: 도킹 틱. 기본 = round(SERVICE_TIME_S/dt) = v1 계보 상수)
 #                              [--rev-ticks=<틱>]     (v3.15, -247: 후진 1칸 틱. 기본 = 전진과 같은 MOVE_TICKS.
 #                              물리 팀 녹화 실측 0.260 m/s -> 12 가 speed 0.9 에서 정확히 후진 상한 0.300 m/s)
+#                              [--replan-max-extra=<칸>]  (v3.15, -247: 정체 재계획 우회 추가 비용 상한. 0 = 없음)
 #                              [--max-order-totes=24]  (v3.5: 토트 합계 초과 주문 = 팔레트 흐름 제외, 그 아래 큰 주문은 여러 왕복. 0 = 제한 없음)
 #                              [--speed=<m/s>]   (v3.3, -116: 틱 길이 = CELL_M / speed. 1칸 = 1틱은 그대로, 초 환산만 바뀐다)
 #                              [--footprint=exact|legacy|exact,front|exact,front_2cell] [--robot-dims=0.39,1.11,0.80]   (v3.4 -203, front 6칸 -79)
@@ -249,6 +250,7 @@ def _parse_orders(a, argv):
     # — 「안 적은 인자가 기본값으로 조용히 들어간다」를 막으려고 SUMMARY 에도 낸다 (t3-30 §5-1).
     a.service_steps = _opt(argv, "service-steps", int)
     a.rev_ticks = _opt(argv, "rev-ticks", int)
+    a.replan_max_extra = _opt(argv, "replan-max-extra", int, 0)
     # 주문 단위 경계 (v3.5, 2026-09-14): 토트 합계 초과 주문 = 팔레트 흐름 제외. 그 아래 큰 주문은 여러 왕복. 0 = 제한 없음.
     a.max_order_totes = _opt(argv, "max-order-totes", int, MAX_ORDER_TOTES)
     assert a.max_order_totes >= 0, f"--max-order-totes 는 0 이상 (0 = 제한 없음): {a.max_order_totes}"
@@ -258,6 +260,7 @@ def _parse_orders(a, argv):
     assert a.svc_per_tote >= 0, f"--svc-per-tote 는 0 이상: {a.svc_per_tote}"
     assert a.service_steps is None or a.service_steps >= 0, f"--service-steps 는 0 이상: {a.service_steps}"
     assert a.rev_ticks is None or a.rev_ticks >= 1, f"--rev-ticks 는 1 이상: {a.rev_ticks}"
+    assert a.replan_max_extra >= 0, f"--replan-max-extra 는 0 이상 (0 = 없음): {a.replan_max_extra}"
     if a.tote_units is not None:
         assert a.tote_units >= 1, f"--tote-units 는 1 이상: {a.tote_units}"
         if a.orders_file is None:
@@ -379,6 +382,7 @@ def build(a):
                        yield_rule=a.yield_rule, section_limit=a.section_limit, standoff=a.standoff,
                        turn_ticks=TURN_TICKS, move_ticks=MOVE_TICKS,
                        rev_ticks=MOVE_TICKS if a.rev_ticks is None else a.rev_ticks,
+                       replan_max_extra=a.replan_max_extra,
                        stall_warn_only=a.horizon is not None,
                        footprint=a.footprint, robot_dims=a.robot_dims, **bat)
     kernel = FmsKernel(free, st_cell, edge_cost, wait_cost, homes, a.n_robots, cfg,

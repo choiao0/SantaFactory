@@ -63,6 +63,9 @@ class KernelConfig:
                                   # REVERSE_FACTOR(3.0) 는 계획 비용에만 걸려 있었고 실행 틱에는 없었다
                                   # (물리 팀 녹화 t3-31: 전진 0.818 · 후진 0.260 m/s = 3.11~3.14배).
                                   # move_ticks x 3 = 12틱 이 speed 0.9 에서 정확히 0.300 m/s = 후진 상한.
+    replan_max_extra: int = 0     # 정체 재계획 우회 추가 비용 상한 [칸] (-247). 0 = 없음 -> 비트 동일.
+                                  # 없으면 반경 3 안의 로봇 하나 때문에 +200칸 우회를 받고,
+                                  # stag 는 평소 거리장으로 재이므로 그 내내 안 풀린다 (liveness.REPLAN_MAX_EXTRA)
     hd_after: int = 16            # -79 대치(standoff) 감지: 같은 칸을 다투는 두 로봇이 둘 다 이 틱 이상 무진전 (v3.9 부터 헤딩 기본; -194 다틱 후 4 → 16)
     hd_timeout: int = 80          # -79 대치 상한(틱): 넘으면 역할 교대 1회, 그래도 넘으면 해제. V2: 240 → 80 (교대 전엔 매 틱 재판정, R5)
     standoff: bool = False        # 대치 상태기계 V2 (-79). 계약 v3.9 부터 헤딩 main exact·exact,front 기본 True(호출자가 켠다: sim_v2 --no-standoff, fms_core). legacy 는 False(양보 v1, v3.3 비트 동일)
@@ -122,7 +125,8 @@ class FmsKernel(BatteryMixin, MetricsMixin):
         # 거리장 캐시 (θ 는 실행 중 고정이라 무효화 불필요)
         self._dist_cache, self._dist_cache_h, self._stay_cache = {}, {}, {}
         self._stag = Stagnation()               # 헤딩: 거리 개선 없는 연속 틱 (우선순위·대기 상승·재계획)
-        self._replan = Replanner(free, edge_cost, self.turn_cost) if self.heading else None
+        self._replan = (Replanner(free, edge_cost, self.turn_cost, max_extra=cfg.replan_max_extra)
+                        if self.heading else None)
         self._trace = []                        # STALL 진단용 링버퍼 (t, rid -> (상태, busy, 액션))
         self.stall_warning_ticks = []            # 고정 시간 모드 무진전 경고 시각(계속 실행)
         self._init_robots(homes, n_robots)
