@@ -665,6 +665,12 @@ def _overlaps_rect(poly: Sequence[tuple[float, float]],
 # SECTION 2 — 액션 추출
 # ===========================================================================
 
+# ★ soft 칸을 완료 판정에서 빼나 (S15P21A106-240). `Action.released` 가 읽는다.
+#   기본 켬. `PIBT_SOFT_RELEASE=0` 이면 옛 정의(`cells - rest`)로 돌아간다 —
+#   대책 전/후를 같은 시드로 대조할 때 쓴다. 근거는 `Action.released` 독스트링.
+_SOFT_RELEASE = os.environ.get("PIBT_SOFT_RELEASE", "1") not in (
+    "0", "off", "false", "False")
+
 
 @dataclass
 class Action:
@@ -677,10 +683,21 @@ class Action:
     cells: frozenset[Cell]        # 동작 내내 잡고 있는 칸 (실제 스윕)
     uid: int = -1
     # [patch_axle] 코만 스치고 몸은 안 들어가는 칸 — 회전에만, pitch 의존.
-    #   `cells` 는 **건드리지 않는다.** 이 필드는 `build_adg` 의 간선 조건
-    #   하나에만 쓰인다. `can_start`(장애물)·`released`(완료 판정)·`_check`
-    #   (겹침 감시)는 지금도 `cells` 전체를 본다 — 그게 이 변경의 안전 논거
-    #   절반이다. 설계서 `docs/2026-09-14_ADG_축규칙_구조변경_설계.md` §1-3.
+    #   `cells` 는 **건드리지 않는다.** 설계서
+    #   `docs/2026-09-14_ADG_축규칙_구조변경_설계.md` §1-3.
+    #
+    #   ★ 2026-09-17 (-240) 갱신. 예전에는 「`can_start`(장애물)·`released`
+    #     (완료 판정)·`_check`(겹침 감시)가 지금도 `cells` 전체를 본다 — 그게
+    #     이 변경의 안전 논거 절반」이라고 적었다. 셋을 읽어 보니 이렇다.
+    #
+    #       can_start   `released` 를 **안 쓴다.** `blocked_cells`(정적 장애물)와
+    #                   ADG `preds` 만 본다. 손대지 않았다
+    #       released    ★ soft 를 뺐다. 그게 a6 교착의 대책이다
+    #       _check      `released` 를 **안 쓴다.** 순수 몸-겹침 감시다.
+    #                   검출은 그대로 두고 `soft_overlap_events` 로 분류만 했다
+    #
+    #     빠진 「안전 논거 절반」은 측정으로 다시 세웠다 —
+    #     `tools/soft_release_safety.py`, 밀림 105 mm 까지 여유 100 mm.
     #
     #   스위치가 꺼져 있으면 항상 빈 집합이고, 그러면 `hard == cells` 라
     #   간선이 오늘과 비트 단위로 같다 (§7 항목 1, tools/adg_fingerprint.py).
@@ -745,8 +762,37 @@ class Action:
 
     @property
     def released(self) -> frozenset[Cell]:
-        """완료 시 놓아주는 칸 — ★이 칸들이 비었는지가 완료 조건이다."""
-        return self.cells - self.rest
+        """완료 시 놓아주는 칸 — ★이 칸들이 비었는지가 완료 조건이다.
+
+        ★ soft 를 뺀다 (S15P21A106-240). soft 는 「상대의 **축**만 금지, 몸은
+          와도 된다」이므로, 내 몸이 아직 그 칸에 남아 있어도 놓아주는 것이
+          **규칙 자체와 일관된다.** 예전에는 `cells` 전체를 봐서 몸이 빠질
+          때까지 기다렸고, 축이 밀린 채 회전이 끝나면 **영원히 못 끝냈다**
+          (2026-09-16 a6, `docs/…a6교착.md` §8-1).
+
+          회전은 `v = 0` 이라 축을 되돌릴 수단이 없다. 그래서 이건 「느리다」가
+          아니라 「나갈 길이 없다」였다.
+
+        [안전 논거] 예전 주석이 「`released` 가 `cells` 전체를 보는 것이 이
+        변경의 안전 논거 절반」이라고 적었다. 그 절반을 **측정으로 다시
+        세웠다** (`tools/soft_release_safety.py`):
+
+            앞차가 회전을 끝낸 자세에서 축을 밀고, 그 칸에 몸/스윕이 들어올
+            수 있는 뒤차 자세 전부와 차체 간격을 잰다.
+
+            밀림   0 mm   여유 200.0 mm   (= pitch - width)
+            밀림 105 mm   여유 100.0 mm   예산 끝까지 **안 닿는다**
+            12가지 회전 전부 같다
+
+        실측 밀림은 중앙 5.32 · p95 11.70 mm 다 (바닥 마찰 0.9). p95 에서도
+        여유가 188 mm 남는다.
+
+        `PIBT_SOFT_RELEASE=0` 이면 옛 정의로 돌아간다 — 대책 전/후를 같은
+        시드로 대조할 때 쓴다.
+        """
+        if not _SOFT_RELEASE:
+            return self.cells - self.rest
+        return self.cells - self.soft - self.rest
 
     @property
     def acquired(self) -> frozenset[Cell]:
@@ -834,6 +880,23 @@ def extract_actions(history: list[dict[int, State]], geom: RobotGeom,
             chains[i].append(act)
             uid += 1
     return chains, agents, stats
+
+
+def _soft_why(a: "Action") -> str:
+    """`soft` 가 빈 이유를 **종류에 맞게** 한 줄로 (2026-09-17).
+
+    이유가 셋인데 셋이 뜻이 전혀 다르다. 하나로 뭉뚱그리면 진단이 거짓말을
+    한다 — 실제로 `reverse` 교착 로그가 「앞 칸 규칙이 꺼진 판」으로 읽혔다.
+
+        회전이 아니다        정상. 전진·후진은 guard 를 안 만든다
+        규칙이 꺼졌다        soft 해제 대책이 이 판에 없다는 뜻
+        스윕 밖만 나왔다     규칙은 켰는데 교집합이 비었다. 기하를 봐야 한다
+    """
+    if a.kind != TURN:
+        return f"없음 ({a.kind} 라 앞 칸이 없다 — 정상)"
+    if not a.guard:
+        return "없음 (★ 앞 칸 규칙이 꺼진 판이다)"
+    return f"없음 (★ guard {sorted(a.guard)} 가 전부 스윕 밖이다)"
 
 
 def _check_soft(a: Action) -> None:
@@ -1041,6 +1104,61 @@ def build_adg(chains: list[list[Action]], geom: "RobotGeom | None" = None) -> AD
     #     `front_cells()` 가 FMS 로 위임하므로 ADG 쪽에 별도 정의가 없다.
     if geom is not None:
         _check_front_swing(actions, geom)
+
+    # ★ soft 해제(-240)가 **실제로 걸렸는지**를 로그로 증명한다 (규칙 1번).
+    #
+    #   2026-09-17 에 `rec_s7_fix_on` 한 판이 이것 때문에 날아갔다. 대책을 켠
+    #   줄 알고 돌렸는데 `released` 가 옛 집합 그대로였고, 같은 자리에서 같은
+    #   교착이 났다. 원인은 **스위치가 둘**이라는 것이다:
+    #
+    #       PIBT_SOFT_RELEASE   빼겠다는 의사
+    #       PIBT_FRONT_RULE     뺄 것(`soft`)이 존재하는가
+    #
+    #   뒤엣것이 꺼지면 `front_cells()` 가 빈 집합 -> `guard` 가 빔 -> `soft` 가
+    #   빔 -> `cells - soft - rest` 가 옛 정의와 **글자 그대로 같아진다.**
+    #   오류도 경고도 안 난다. `_check_front_swing` 도 못 잡는다 — 그건 계획기와
+    #   ADG 가 **서로** 같은지만 보고, 둘 다 꺼진 상태는 합법이기 때문이다.
+    #
+    #   그래서 「켰다」가 아니라 **「몇 칸이 실제로 일찍 풀리나」**를 센다.
+    #   0 이면 대책은 없는 것과 같다.
+    _turns = [a for a in actions if a.kind == TURN]
+    _early_cells = sum(len((a.cells - a.rest) & a.soft) for a in _turns)
+    _early_turns = sum(1 for a in _turns if (a.cells - a.rest) & a.soft)
+    try:
+        import carb
+        _say = carb.log_warn
+    except Exception:                                   # pragma: no cover
+        _say = print
+    _rule_on = bool(geom.front_swing) if geom is not None \
+        else any(a.guard for a in actions)
+    _say(f"[adg] soft 해제 PIBT_SOFT_RELEASE="
+         f"{'1 -> 켬' if _SOFT_RELEASE else '0 -> 옛 정의 (cells - rest)'}"
+         f"  ·  앞 칸 규칙 {'켬' if _rule_on else '끔'}"
+         f"  ·  회전 {len(_turns):,}건 중 일찍 놓는 회전 {_early_turns:,}건"
+         f"  ·  일찍 놓는 칸 {_early_cells:,}개")
+    # ★ 경고는 **격자가 규칙을 필요로 할 때만** 운다.
+    #
+    #   pitch 1.2 는 코가 옆 칸에 안 닿아 규칙이 게이팅으로 꺼지고, 그 판에서
+    #   `soft` 가 0 인 것은 **정상**이다 (a6 버그가 존재할 수 없는 격자다).
+    #   조건 없이 울리면 셀프테스트마다 가짜 경고가 나고, 그러면 진짜일 때
+    #   아무도 안 읽는다.
+    _needs_rule = (geom is not None
+                   and geom.pitch < geom.nose_clears_cell_pitch)
+    if _SOFT_RELEASE and _turns and _early_cells == 0 and _needs_rule:
+        if _rule_on:
+            _say("      ★ 규칙은 켜졌는데 **일찍 놓는 칸이 0 개**다 — "
+                 "`front_cells()` 가 스윕 밖만 내놓았다는 뜻이다. 기하를 보라.")
+        else:
+            _say(f"      ★ 해제를 켰지만 **이 판에는 효과가 없다** — pitch "
+                 f"{geom.pitch:.2f} 는 코가 칸을 벗어나는 격자인데\n"
+                 "        (한계 "
+                 f"{geom.nose_clears_cell_pitch:.4f}) 앞 칸 규칙이 꺼져 "
+                 "`soft` 가 비어 있다.\n"
+                 "        `cells - soft - rest` 가 옛 정의와 글자 그대로 같다. "
+                 "a6 대책을 시험하는 판이면 지금 끊어라.\n"
+                 "        원인: `PIBT_FRONT_RULE` 이 off 이거나 주행 프로세스에 "
+                 "안 갔다.\n"
+                 "        위쪽 `[scene] 앞 칸 규칙 …` 줄이 답을 갖고 있다.")
 
     preds: dict[int, set[int]] = {a.uid: set() for a in actions}
     succs: dict[int, set[int]] = {a.uid: set() for a in actions}
@@ -1530,6 +1648,93 @@ class Tolerance:
     pos: float = field(default_factory=lambda: _tol_env("PIBT_TOL_POS", 0.05))
     yaw: float = field(default_factory=lambda: _tol_env("PIBT_TOL_YAW", 0.05))
     cross: float = field(default_factory=lambda: _tol_env("PIBT_TOL_CROSS", 0.06))
+    # ★ 회전 완료의 **위치 관문** (S15P21A106-240, 2026-09-17).
+    #
+    #   [이건 대책이 아니라 계측이다] 이 값이 막는 것은 교착이 아니라 **오염**
+    #   이다. 넘으면 회전이 그 자리에서 실패하고 워치독이 끊는다. 판은 똑같이
+    #   죽는다 — 다만 **원인 지점에서** 죽는다.
+    #
+    #   왜 필요한가: `at_target` 이 회전에서 `return True` 로 위치를 아예 안
+    #   봤다. 전진·후진은 `tol.pos` 로 걸리는데 회전만 안 걸리니, 밀린 자세가
+    #   회전을 통과해 다음 액션으로 넘어간다. 그리고 다음 액션은 그걸
+    #   **구조적으로 못 고친다** (아래 ③). 2026-09-17 A6#86 이 그 경로였다 —
+    #   회전은 대책으로 통과했는데 바로 다음 `reverse` 가 214 mm 밖에서 섰다.
+    #   그날 「왜 멀쩡한 reverse 가 못 끝내나」를 쫓는 데 반나절이 들었다.
+    #
+    #   [값의 근거 — 셋을 재서 골랐다]
+    #
+    #     ① 옛 released 예산   `cells - rest` 를 몸이 무는 거리   최소 100 mm
+    #     ② 새 released 예산   `cells - soft - rest` (대책 뒤)    최소 100 mm
+    #     ③ 하류 흡수 한계     다음 액션이 한 칸에 흡수하는 횡오차  **50 mm**
+    #                          (`tools/crab_gain.py`: q0 50 완료 · 100 멈춤)
+    #
+    #   ② 를 골랐다. ③ 이 더 엄하지만 **50 mm 로 조이면 새 실패가 는다** —
+    #   축 밀림 중 다음 액션의 진행축과 나란한 성분은 쉽게 흡수되므로, `hypot`
+    #   전체를 50 으로 자르는 것은 과하다. ② 는 「남의 칸을 물기 시작하는 선」
+    #   이라 물리적 의미가 분명하다.
+    #
+    #   ★★ 여유에 대한 초판 주장을 **정정한다** (2026-09-17, 실측 뒤).
+    #
+    #     초판   「평상 분포(중앙 5.32 · p95 11.70 · 최대 ~18 mm)와 5.6배」
+    #     실제   **다른 양을 갖다 댔다.** 저 값은 `swivel_sweep` 의 **축 밀림**
+    #            = 회전 구간의 축 이동(`hypot(끝 - 시작)`)이다. 이 관문이 보는
+    #            것은 **목표 칸 중심에서의 거리**라, 앞 액션에서 물려받은 도착
+    #            오차(`tol.pos` 50 mm 까지)가 통째로 더 들어 있다.
+    #
+    #     실측 (시드 2 · μ 0.9 · 회전 53건, `turn_hist`)
+    #         중앙 **45.91** · p95 **61.26** · 최대 **62.99** mm
+    #         -> 관문 100 mm 는 최대의 **1.6배**다. 5.6배가 아니다
+    #
+    #   결론은 유지되고 **근거가 더 강해진다.** ③(50 mm)이었으면 회전의
+    #   **35.8 %** 가 실패했을 것이다(50~80 칸) — 그런데 그 회전들의 다음
+    #   액션은 멀쩡히 끝난다. 「나란한 성분은 흡수된다」가 실측으로 선다.
+    #
+    #   ★★★ 그리고 「1.6배라 얇다」도 **약한 논거였다.** 정상 회전의 상한은
+    #   표본이 아니라 **구조가 정한다**:
+    #
+    #       회전은 제자리다 -> 목표 = 회전 시작 칸의 중심
+    #       회전 시작 자세 = **앞 액션의 끝 자세** -> `tol.pos`(50 mm) 안
+    #       따라서   위치오차 <= tol.pos + (회전 중 밀림)
+    #                         <= 50 + 18 = **68 mm**      (평상 밀림 최대 ~18)
+    #
+    #   ☹ **그 68 mm 도 반만 맞았다** (2026-09-17, 같은 판이 끝나며 정정).
+    #
+    #   시드 2 완주 판의 최종 분포가 **최대 85.37 mm** 였다 — 68 을 넘는다.
+    #   전제가 「앞 액션이 전진·후진」일 때만 서기 때문이다. **앞 액션이 회전
+    #   이면** 그 회전은 (관문이 꺼져 있으면) 위치를 안 보므로 밀린 자세를
+    #   그대로 넘기고, 다음 회전이 거기서 또 밀린다.
+    #
+    #   회전이 연달아 나온다 — `candidates_h` 가 헤딩을 ±1 씩만 주므로
+    #   180도를 돌려면 **회전 두 개**가 필요하다. 실측 (12시드 · 252 회전):
+    #
+    #       앞이 회전인 회전   27건 (10.7 %)
+    #       연속 길이          1개 200회 · 2개 23회 · 3개 2회
+    #
+    #   그래서 천장은 사슬 길이를 탄다:
+    #
+    #       사슬 1번째   50 + 18 = **68 mm**    <- 앞이 전진·후진
+    #       사슬 2번째   68 + 18 = **86 mm**    <- 실측 최대 85.37 이 여기다
+    #       사슬 3번째   86 + 18 = **104 mm**   <- ★ 관문 100 을 넘는다
+    #
+    #   ★ 3연속 회전의 최악값이 관문보다 크다. 밀림 셋이 **같은 방향으로
+    #     최대**여야 하는 값이라 실제로는 거의 안 나오고(252 중 3연속이 2건,
+    #     실측 최대는 85.37), 나면 워치독이 끊어 준다. 다만 「원리적으로 못
+    #     넘는다」는 **틀린 말**이므로 그렇게 읽지 말 것.
+    #
+    #   그리고 이건 pitch 1.0 이 빡빡하다는 또 하나의 증거다 — ② (놓아줄 칸을
+    #   무는 선)가 100 인데 사슬 천장이 104 다. **두 값이 교차한다.**
+    #
+    #   `turn_hist` 의 `80~100` 칸은 **2연속 회전 자리**다. 거기가 조금 차는
+    #   것은 정상이고(시드 2에서 1건, 0.6 %), `100~150` 이 차기 시작하면
+    #   3연속이 관문에 걸리고 있다는 뜻이다.
+    #
+    #   더 엄하게 보려면 `PIBT_TOL_TURN_POS=0.05` 로 ③ 에 맞춘다.
+    #   **0 이면 관문을 끈다** (이 변경 전 동작 — 회전이 위치를 안 본다).
+    #
+    #   ★ D 는 A(복구 기동)·C(재계획)를 **대체하지 않는다.** 밀린 판은 여전히
+    #     못 쓴다. 진단을 싸게 만들 뿐이다. 문서 §8-4 에 못 박아 뒀다.
+    turn_pos: float = field(
+        default_factory=lambda: _tol_env("PIBT_TOL_TURN_POS", 0.100))
 
 
 class MotionController:
@@ -1635,9 +1840,53 @@ class MotionController:
         x, y, yaw = pose
         if abs(wrap(self.tyaw - yaw)) > self.tol.yaw:
             return False
-        if a.kind == TURN:
+        # ★ 회전도 위치를 본다 (-240). 예전에는 여기서 `return True` 였다 —
+        #   전진·후진만 걸리고 회전은 임의로 밀린 채 통과했다. 근거와 값은
+        #   `Tolerance.turn_pos` 주석. `turn_pos <= 0` 이면 옛 동작이다.
+        lim = self.tol.turn_pos if a.kind == TURN else self.tol.pos
+        if lim <= 0.0:
             return True
-        return math.hypot(self.tx - x, self.ty - y) <= self.tol.pos
+        return math.hypot(self.tx - x, self.ty - y) <= lim
+
+    def residual(self, pose: tuple[float, float, float],
+                 body: frozenset[Cell] | None = None) -> float:
+        """완료까지 얼마나 남았나 — **종류에 무관한 하나의 수** (-240).
+
+        `complete()` 가 참이 되려면 둘이 필요하다. 그 둘을 각자의 허용오차로
+        나눠 **차원 없는 값**으로 만든다.
+
+            at_target   max(위치오차/tol.pos, 각오차/tol.yaw)   <= 1 이면 통과
+            released    몸이 놓아줄 칸을 물고 있으면 +1
+
+        그래서 `residual <= 1` 이 곧 `complete()` 다. 회전은 위치를 안 보므로
+        (`at_target` 과 같은 규칙) 각도만 쓴다.
+
+        [왜 이게 필요한가] 워치독이 **회전만** 보고 있었다. 2026-09-17 마찰
+        A/B 에서 `reverse` 가 축이탈 54 mm(허용 50) 로 못 끝내는 판이 나왔는데,
+        각도가 아니라 **위치**가 막은 것이라 회전 판정에 안 걸렸다. 10분을
+        통째로 날리고도 안 끊겼다. 종류마다 다른 양을 보면 종류마다 구멍이
+        생긴다 — 하나로 합친다.
+
+        단위를 섞는 것이 걸리지만, 이 값은 **크기가 아니라 「줄고 있나」**에만
+        쓰인다. 허용오차로 나눠 두었으므로 1 을 넘는지도 함께 읽힌다.
+        """
+        a = self.action
+        if a is None:
+            return 0.0
+        x, y, yaw = pose
+        r = abs(wrap(self.tyaw - yaw)) / max(self.tol.yaw, 1e-9)
+        # ★ `at_target` 과 **같은 한계**를 써야 한다 (-240). 회전에 위치 관문이
+        #   생겼으므로 여기도 같이 본다 — 안 그러면 `residual <= 1` 과
+        #   `complete()` 가 갈려서 워치독이 「잔차 0.4 인데 안 끝난다」를 찍는다.
+        lim = self.tol.turn_pos if a.kind == TURN else self.tol.pos
+        if lim > 0.0:
+            r = max(r, math.hypot(self.tx - x, self.ty - y) / lim)
+        if a.released:
+            if body is None:
+                body = self.g.footprint_cells(x, y, yaw)
+            if body & a.released:
+                r += 1.0
+        return r
 
     def complete(self, pose: tuple[float, float, float],
                  body: frozenset[Cell] | None = None) -> bool:
@@ -1674,6 +1923,36 @@ class FleetStats:
     overlap_events: int = 0
     carried: int = 0           # [patch_carry] 정지 없이 다음 칸으로 이어간 횟수
     overlap_pairs: set[tuple[int, int]] = field(default_factory=set)
+    # ★ `overlap_events` 중 **일찍 놓아준 soft 칸으로 설명되는** 것 (-240).
+    #   `overlap_events` 는 전체를 그대로 센다 — 여기서 빼지 않는다.
+    #   같은 이름으로 다른 것을 세면 안 된다 (2026-09-17 worst_gap 교훈).
+    #
+    #   `released` 에서 soft 를 뺀 뒤로 뒤차가 그 칸에 몸을 들이는 일이 생기는데,
+    #   그건 **규칙상 합법**이다. 그런데 감시선은 여전히 「몸이 겹쳤다」로 센다.
+    #   숫자만 보면 나빠진 것처럼 읽히므로 갈라 둔다. 합불 기준은 여전히
+    #   `contact_events`(gap <= 0) 다.
+    soft_overlap_events: int = 0
+    # ★ 회전이 **각도를 맞춘 순간**의 축 위치오차 [mm] (-240, 2026-09-17).
+    #
+    #   [왜 카운터가 아니라 분포인가] 「위치 관문에 걸린 횟수」만 세면 **이미
+    #   죽은 판의 수**만 안다. 그리고 관문에 막힌 회전은 `complete()` 를 통과
+    #   못 하므로 완료 시점에 재면 표본에서 통째로 빠진다 — 관문이 클수록
+    #   히스토그램이 깨끗해 보이는 **거꾸로 된 지표**가 된다.
+    #
+    #   그래서 `|각도오차| <= tol.yaw` 가 **처음 성립한 시점**에 잰다.
+    #   「회전은 기하적으로 끝났다. 얼마나 밀렸나」이고, 관문 통과 여부와
+    #   무관하게 회전마다 정확히 한 번 남는다.
+    #
+    #   [이 분포가 무엇을 정하나]
+    #       이봉 (평상 ~18 mm · 사고 ~380)   드문 사고다. 시드를 버리는 게 싸다
+    #       연속 (30~80 mm 에 꼬리)          관문을 조금만 조여도 자주 걸린다
+    #                                       -> 복구 수단(A·C)이 실제로 필요하다
+    #
+    #   ★ `repr=False` 다. 안 그러면 6시간 판에서 수천 개 실수가 매 10초 로그에
+    #     통째로 찍힌다 — `FleetStats` 는 `print(stats)` 로 나간다.
+    turn_pos_mm: list[float] = field(default_factory=list, repr=False)
+    # 그중 위치 관문(`tol.turn_pos`)을 넘은 회전 수. 분포의 요약값이라 이건 찍는다.
+    turn_gate_over: int = 0
     worst_overlap: int = 0
     # 겹침 중 관측된 **차체 사이 최소 거리** [m]. 겹침이 없으면 inf.
     #   ★ `worst_overlap`(공유 칸 수)만으로는 심각도를 못 잰다. 1.2 m 칸을
@@ -1707,6 +1986,39 @@ class FleetStats:
     def contact(self) -> bool:
         """차체가 **실제로 닿았는가.** 칸 공유(보수적 감시선)와 구별된다."""
         return self.worst_gap <= 0.0
+
+    def turn_hist(self, gate_mm: float | None = None) -> str:
+        """회전 위치오차 분포 — **이봉인가 연속인가**를 눈으로 가른다.
+
+        A·C(복구 수단)를 만들지가 이 모양으로 갈린다. `turn_pos_mm` 주석 참조.
+        경계는 평상 분포(중앙 5.32 · p95 11.70 · 최대 ~18 mm)와 관문 100 mm
+        사이를 촘촘히 두었다 — **그 사이에 무엇이 있나**가 물음이기 때문이다.
+        """
+        v = self.turn_pos_mm
+        if not v:
+            return "[회전분포] 표본 없음"
+        edges = (0, 5, 10, 20, 30, 50, 80, 100, 150, 300, float("inf"))
+        n = len(v)
+        cnt = [0] * (len(edges) - 1)
+        for x in v:
+            for i in range(len(edges) - 1):
+                if edges[i] <= x < edges[i + 1]:
+                    cnt[i] += 1
+                    break
+        s = sorted(v)
+        out = [f"[회전분포] 회전 {n:,}건 · 중앙 {s[n // 2]:.2f} · "
+               f"p95 {s[min(n - 1, int(n * 0.95))]:.2f} · 최대 {s[-1]:.2f} mm"
+               + (f" · 관문 {gate_mm:.0f} 초과 {self.turn_gate_over}건"
+                  if gate_mm else "")]
+        for i in range(len(edges) - 1):
+            hi = "inf" if edges[i + 1] == float("inf") else f"{edges[i + 1]:.0f}"
+            bar = "#" * min(40, int(40.0 * cnt[i] / max(cnt)))
+            mark = ""
+            if gate_mm and edges[i] <= gate_mm < edges[i + 1]:
+                mark = "  <- 관문"
+            out.append(f"[회전분포]   {edges[i]:>4.0f}~{hi:<4} "
+                       f"{cnt[i]:>6,} {100.0 * cnt[i] / n:5.1f}%  {bar}{mark}")
+        return "\n".join(out)
 
     def overlap_grade(self) -> str:
         """겹침 심각도 한 줄. 거리로 가른다."""
@@ -1805,6 +2117,26 @@ class FleetController:
         #   확실히 이상이다. 그래서 회전만 본다.
         self.turn_best: dict[int, float] = {}    # 액션별 지금까지 최소 |err|
         self.turn_idle: dict[int, float] = {}    # 그 최소가 안 갱신된 시간
+        # ★ **일찍 놓아준** soft 칸 — 겹침을 분류하는 데 쓴다 (-240).
+        #
+        #   겹침이 나는 시점에 앞차는 **이미 다음 액션을 실행 중**이다. 그 칸을
+        #   놓아준 액션은 끝났으므로 `self.running[a].soft` 를 읽으면 엉뚱한
+        #   집합이 나온다. 놓아준 **그 순간의** 집합을 따로 들고 있어야 한다.
+        #
+        #   기준은 **놓아준 쪽**이다. 겹침은 쌍의 성질인데 soft 는 액션의
+        #   성질이라, 「양쪽 다 soft」로 잡으면 실제 케이스가 안 걸려 분류가
+        #   헛돈다. 우리가 완화한 조건이 「놓아준 쪽의 soft」이므로 그게 맞다.
+        self.soft_freed: dict[int, frozenset[Cell]] = {}
+        # 회전 위치오차를 액션마다 한 번만 담기 위한 표시 (-240).
+        self._turn_logged: set[int] = set()
+        # `turn_gate_over` 를 세는 **기준선** [mm]. 관문(`tol.turn_pos`)과 일부러
+        # 분리했다 — 분포를 모을 때는 관문을 끄는데(그래야 판이 안 죽는다),
+        # 세는 기준까지 같이 꺼지면 「끄면 안 세지는」 지표가 된다.
+        self._gate_ref = float(os.environ.get("PIBT_TURN_GATE_REF", "100"))
+        # 회전 분포를 주기적으로 찍는다. `[adg-why]` 와 같은 자리에서 읽히도록
+        # 기본 주기를 맞췄다. 0 이면 주기 출력을 끈다 (끝에 한 번은 나온다).
+        self._hist_every = float(os.environ.get("PIBT_TURN_HIST_EVERY", "120"))
+        self._hist_next = self._hist_every if self._hist_every > 0 else float("inf")
         self.stall: str | None = None            # 채워지면 호출자가 멈춘다
         self.starts = starts
         # 개루프 감지 — 명령은 나가는데 pose 가 안 변하는 상태
@@ -1963,14 +2295,54 @@ class FleetController:
             pend = self.rt.blocking(act)
         except Exception:
             pend = "?"
+        # ★ **무엇이 막는지**를 여기서 갈라 준다 (-240). 워치독이 이제 종류를
+        #   안 가리므로, 읽는 사람이 「54 mm 인데 허용이 50」을 손으로 계산하게
+        #   두면 안 된다 — 2026-09-17 reverse 교착에서 실제로 그랬다.
+        why = []
+        d_yaw = abs(wrap(c.tyaw - yaw))
+        if d_yaw > c.tol.yaw:
+            why.append(f"각도 {math.degrees(d_yaw):.2f}도 > 허용 "
+                       f"{math.degrees(c.tol.yaw):.2f}")
+        _lim = c.tol.turn_pos if act.kind == TURN else c.tol.pos
+        if _lim > 0.0:
+            d_pos = math.hypot(dx, dy)
+            if d_pos > _lim:
+                why.append(f"위치 {d_pos * 1000:.1f} mm > 허용 "
+                           f"{_lim * 1000:.0f}"
+                           + ("  ★ 회전 위치 관문 (-240)" if act.kind == TURN
+                              else ""))
+        if left:
+            why.append(f"놓아줄 칸 {left} 를 몸이 문다")
+        blk = " · ".join(why) if why else "없음 (곧 끝나야 한다)"
         return (
             f"agent{a} {act} 가 {self.elapsed[a]:.0f}s 동안 완료되지 않음\n"
             f"       pose=({x:.3f}, {y:.3f}, {math.degrees(yaw):.1f}deg)"
             f"   목표=({c.tx:.3f}, {c.ty:.3f}, {math.degrees(c.tyaw):.1f}deg)\n"
             f"       err={err:+.1f}deg  w={w:+.3f}rad/s"
-            f"  축이탈=({dx * 1000:+.0f}, {dy * 1000:+.0f})mm\n"
+            f"  축이탈=({dx * 1000:+.0f}, {dy * 1000:+.0f})mm"
+            f"  잔차={c.residual(pose, mine):.2f}\n"
+            f"       ★ 막는 조건: {blk}\n"
             f"       놓아줄 칸에 남은 몸={left or '없음'}"
             f"  (released={sorted(rel) or '없음'})\n"
+            # ★ `soft` 를 같이 찍는다 (2026-09-17). 이 줄이 없어서 "대책이
+            #   안 먹었다" 와 "대책이 안 걸렸다" 를 로그만 보고 못 갈랐다.
+            #     soft 가 비었다        -> 규칙이 꺼진 판. 대책은 시험도 안 됐다
+            #     soft 에 막은 칸이 있다 -> PIBT_SOFT_RELEASE=0 으로 돈 판
+            #     soft 에 없는 칸이 막는다 -> 대책이 걸렸는데도 막혔다. 진짜 새 건
+            # ★ 「왜 비었나」를 종류에 맞게 말한다 (2026-09-17 정정).
+            #   전진·후진은 `extract_actions` 가 `guard` 를 아예 안 만든다
+            #   (코가 목표 칸을 안 벗어난다). 그래서 soft 가 비는 것이
+            #   **정상**인데, 앞서 넣은 문구가 「앞 칸 규칙이 꺼진 판이다」라고
+            #   단정해서 reverse 교착 로그가 규칙 설정 문제처럼 읽혔다.
+            #   거짓말하는 진단은 없느니만 못하다.
+            f"       soft={sorted(act.soft) or _soft_why(act)}"
+            f"  · 해제 {'켬' if _SOFT_RELEASE else '끔'}\n"
+            # ★ `cells` 와 `uid` 도 찍는다 (2026-09-17). 위 세 집합은 전부
+            #   `cells` 에서 파생되는데 그걸 안 찍어서, released 만 보고
+            #   「cells 에 그 칸이 없다」고 읽는 오독이 실제로 났다.
+            #   released = cells - soft - rest 를 **눈으로 검산**할 수 있게 둔다.
+            f"       uid={act.uid} cells={sorted(act.cells)}"
+            f"  rest={sorted(act.rest)}\n"
             f"       선행 미완={pend}  (-1 = 릴리스 바닥 대기)")
 
     def _straight_run(self, a: int, act: Action) -> int:
@@ -2020,10 +2392,28 @@ class FleetController:
         run = self._straight_run(a, act) * self.g.pitch
         return min(cap, math.sqrt(2.0 * self.a_exec * run)) if run > 0.0 else 0.0
 
+    def turn_report(self) -> None:
+        """회전 위치오차 분포를 찍는다. Isaac 안에서는 `carb` 로 나간다."""
+        try:
+            import carb
+            say = carb.log_warn
+        except Exception:                                # pragma: no cover
+            say = print
+        # 막대에 표시하는 선은 **기준선**이다 — 관문을 꺼도 그림이 안 바뀌어야
+        # 판끼리 비교된다. 관문 자체는 배너에 따로 적는다.
+        gate = (self.ctrl[self.agents[0]].tol.turn_pos * 1000.0
+                if self.agents else 0.0)
+        say(f"[회전분포] 기준선 {self._gate_ref:.0f} mm · 관문 "
+            + (f"{gate:.0f} mm" if gate > 0 else "꺼짐 (PIBT_TOL_TURN_POS=0)"))
+        say(self.stats.turn_hist(self._gate_ref))
+
     def step(self, dt: float) -> None:
         self.stats.steps += 1
         self.stats.sim_time += dt
         self.rt.advance(dt)
+        if self.stats.sim_time >= self._hist_next:
+            self._hist_next += self._hist_every
+            self.turn_report()
         moved = False
         occ: dict[int, frozenset[Cell]] = {}
         poses: dict[int, tuple[float, float, float]] = {}
@@ -2040,7 +2430,34 @@ class FleetController:
             if act is not None:
                 c = self.ctrl[a]
                 self.elapsed[a] += dt
+                # ★ 회전이 **각도를 맞춘 순간**의 위치오차를 남긴다 (-240).
+                #   완료 시점에 재면 관문에 막힌 회전이 표본에서 빠진다 —
+                #   근거는 `FleetStats.turn_pos_mm` 주석. 액션 uid 로 걸어
+                #   회전마다 정확히 한 번만 담는다.
+                if act.kind == TURN and act.uid not in self._turn_logged:
+                    if abs(wrap(c.tyaw - pose[2])) <= c.tol.yaw:
+                        self._turn_logged.add(act.uid)
+                        _e = math.hypot(c.tx - pose[0], c.ty - pose[1]) * 1000.0
+                        self.stats.turn_pos_mm.append(_e)
+                        # ★ 세는 기준을 **관문과 분리한다** (2026-09-17).
+                        #   분포를 모으려면 관문을 꺼야 한다 (`PIBT_TOL_TURN_POS=0`)
+                        #   — 관문이 켜져 있으면 첫 초과에서 판이 죽어 표본이
+                        #   거기서 끊긴다. 그런데 세는 것을 `tol.turn_pos` 에
+                        #   묶어 두면 관문을 끈 순간 카운터도 0 이 되어
+                        #   **끄면 안 세지는** 지표가 된다.
+                        #   기준선(`_gate_ref`)은 관문과 무관하게 고정한다.
+                        if _e > self._gate_ref:
+                            self.stats.turn_gate_over += 1
                 if c.complete(pose, body):
+                    # ★ 이 액션이 **일찍 놓아준** 칸을 기억한다 (-240).
+                    #   옛 정의로는 기다렸을 칸 = (cells - rest) ∩ soft.
+                    #   몸이 아직 안 빠진 것만 담는다 — 이미 빠졌으면 겹칠
+                    #   일이 없고, 안 지우면 집합이 영영 안 비운다.
+                    _early = (act.cells - act.rest) & act.soft & body
+                    if _early:
+                        self.soft_freed[a] = frozenset(_early)
+                    else:
+                        self.soft_freed.pop(a, None)
                     self.rt.complete(self.slot[a], act)
                     self.running[a] = None
                     self.elapsed[a] = 0.0
@@ -2065,16 +2482,21 @@ class FleetController:
                         drv.command(0.0, 0.0)
                         self._last_cmd[a] = (0.0, 0.0)
                 else:
-                    if act.kind == TURN:
-                        # ★ 회전 정체 판정 (-224). |err| 가 줄고 있으면 느려도
-                        #   진행 중이다. **안 줄면** 이상이다.
-                        err = abs(wrap(c.tyaw - pose[2]))
-                        best = self.turn_best.get(a)
-                        if best is None or err < best - 1e-3:
-                            self.turn_best[a] = err
-                            self.turn_idle[a] = 0.0
-                        else:
-                            self.turn_idle[a] = self.turn_idle.get(a, 0.0) + dt
+                    # ★ 정체 판정 (-224, -240 에서 **모든 종류**로 넓힘).
+                    #   잔차가 줄고 있으면 느려도 진행 중이다. **안 줄면**
+                    #   이상이다.
+                    #
+                    #   예전에는 `act.kind == TURN` 일 때 각도만 봤다. 그래서
+                    #   `reverse` 가 위치 54 mm(허용 50)로 못 끝내는 판을
+                    #   **안 끊고 10분을 날렸다** (2026-09-17 마찰 A/B).
+                    #   종류마다 다른 양을 보면 종류마다 구멍이 생긴다.
+                    err = c.residual(pose, body)
+                    best = self.turn_best.get(a)
+                    if best is None or err < best - 1e-3:
+                        self.turn_best[a] = err
+                        self.turn_idle[a] = 0.0
+                    else:
+                        self.turn_idle[a] = self.turn_idle.get(a, 0.0) + dt
                     if self.elapsed[a] > self.action_timeout:
                         self.timeouts.append(self._why_stuck(a, act, pose, c))
                         self.elapsed[a] = 0.0
@@ -2082,13 +2504,30 @@ class FleetController:
                     cmd = c.update(pose, dt)
                     drv.command(*cmd)
                     self._last_cmd[a] = cmd
-                    # ★ 회전이 `stall_timeout` 동안 한 번도 안 가까워지면 중단한다.
+                    # ★ 잔차가 `stall_timeout` 동안 한 번도 안 줄면 중단한다.
                     #   원인을 몰라도 여기서 끊어야 20분이 아니라 2분에 안다.
                     #   `PIBT_STALL_TIMEOUT=0` 이면 안 끊는다 — 오발동했을 때
                     #   코드를 안 고치고 주행을 살릴 구멍이다.
-                    if (act.kind == TURN and self.stall_timeout > 0
+                    #
+                    #   ★ 종류를 안 가린다 (-240). 예전 주석이 「회전은 w 만
+                    #     주면 되므로 각도가 안 줄면 확실히 이상」이라고 적고
+                    #     회전만 봤는데, 그 논리는 **잔차 일반에 그대로 선다** —
+                    #     잔차가 stall_timeout 동안 한 번도 안 줄면 그 액션은
+                    #     자력으로 못 끝낸다. 전진·후진이 남까지 막는 것은
+                    #     회전과 똑같다.
+                    #
+                    #   저부하 오발동 걱정은 여기 안 걸린다. 대기 중인 로봇은
+                    #   `act is None` 이라 이 분기에 오지 않는다 — 실행 중인
+                    #   액션만 본다.
+                    if (self.stall_timeout > 0
                             and self.turn_idle.get(a, 0.0) > self.stall_timeout):
                         self.stall = self._why_stuck(a, act, pose, c)
+                        # ★ 끊기기 **전에** 분포를 한 번 더 찍는다 (2026-09-17).
+                        #   주기 출력이 `PIBT_TURN_HIST_EVERY` 마다인데, 사고는
+                        #   그 사이에 난다. 시드 7 실측: 마지막 출력이 t=240s,
+                        #   사고가 t=283s, 중단이 t=290s — **사고를 담은 분포가
+                        #   한 번도 안 찍혔다.** 정작 재려던 그 값이 사라진다.
+                        self.turn_report()
                 moved = True
                 continue
 
@@ -2168,12 +2607,24 @@ class FleetController:
           다시 돌려야 한다 (2026-09-13, 쌍 7-8 에서 실제로 그랬다).
         """
         ags = self.agents
+        # ★ 몸이 빠져나간 `soft_freed` 는 버린다. 안 버리면 한참 뒤의 무관한
+        #   겹침까지 「soft 로 설명된다」고 잘못 분류한다 (-240).
+        for _a in list(self.soft_freed):
+            if not (occ.get(_a, frozenset()) & self.soft_freed[_a]):
+                self.soft_freed.pop(_a, None)
         for i, a in enumerate(ags):
             oa = occ[a]
             for b in ags[i + 1:]:
                 shared = oa & occ[b]
                 if shared:
                     self.stats.overlap_events += 1
+                    # ★ 공유 칸이 전부 **놓아준 쪽의** soft 로 덮이면 합법이다.
+                    #   `overlap_events` 에서 빼지는 않는다 — 사실은 그대로 두고
+                    #   해석만 붙인다.
+                    _sf = (self.soft_freed.get(a, frozenset())
+                           | self.soft_freed.get(b, frozenset()))
+                    if _sf and shared <= _sf:
+                        self.stats.soft_overlap_events += 1
                     self.stats.overlap_pairs.add((a, b))
                     self.stats.worst_overlap = max(self.stats.worst_overlap, len(shared))
                     if poses:
