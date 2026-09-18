@@ -135,6 +135,10 @@ def _rel(cell_a, h0, cell_b, h_b):
 def scan_pairs(geom, history, table):
     """회전 **5틱 창 내내** 표에 걸리는 이웃이 있나 — `scan_guard` 와 같은 창."""
     hits, kinds = [], {}
+    # ★ **회전 단위**로 센다 (-240). 초판은 틱마다 셌더니 회전 하나가 5틱 창
+    #   내내 같은 이웃에 걸려 최대 5번 세졌고, 「회전당 1.17건」이라는 1 을
+    #   넘는 비율이 나왔다. 규칙이 막는 것은 틱이 아니라 **회전**이다.
+    blocked, blocked_stay, turns = set(), set(), 0
     for t in range(len(history) - 1):
         st0, st1 = history[t], history[t + 1]
         agents = sorted(st0)
@@ -142,6 +146,7 @@ def scan_pairs(geom, history, table):
             s0, s1 = st0[a], st1[a]
             if s0[:2] != s1[:2] or s0[2] == s1[2]:       # 회전만
                 continue
+            turns += 1
             sgn = 1 if (s1[2] - s0[2]) % 4 == 1 else -1
             tab = table[sgn]
             for dt in range(TURN_TICKS):
@@ -161,7 +166,10 @@ def scan_pairs(geom, history, table):
                              f"{'(상주)' if stay else ''}")
                         kinds[k] = kinds.get(k, 0) + 1
                         hits.append((tt, a, b, key, dt, stay))
-    return hits, kinds
+                        blocked.add((t, a))               # **회전 하나**로 센다
+                        if stay:
+                            blocked_stay.add((t, a))
+    return hits, kinds, len(blocked), len(blocked_stay), turns
 
 
 def run_history(seed):
@@ -213,31 +221,29 @@ def main():
                       + " ".join(f"{c}h{h}" for c, h in s))
     print()
 
-    tot_hit = tot_tick = tot_task = tot_turn = 0
+    tot_blk = tot_stay = tot_tick = tot_task = tot_turn = 0
     allk = {}
     for seed in SO.SEEDS:
         g2, history, li = run_history(seed)
-        hits, kinds = scan_pairs(g2, history, table)
-        turns = sum(1 for t in range(len(history) - 1)
-                    for a in history[t]
-                    if history[t][a][:2] == history[t + 1][a][:2]
-                    and history[t][a][2] != history[t + 1][a][2])
+        hits, kinds, blk, stay, turns = scan_pairs(g2, history, table)
         tasks = li.get("tasks_done") or 0
         ticks = len(history) - 1
         print(f"  seed {seed:>2}  틱 {ticks:,} · 태스크 {tasks:,} · 회전 {turns:,}"
-              f"  ->  **걸림 {len(hits):,}건**"
-              f"  (회전당 {len(hits) / max(turns, 1):.3f})")
+              f"  ->  **막히는 회전 {blk:,}개 ({100 * blk / max(turns, 1):.1f}%)**"
+              f"  그중 상대가 서 있던 것 {stay:,}")
         for k, v in kinds.items():
             allk[k] = allk.get(k, 0) + v
-        tot_hit += len(hits)
+        tot_blk += blk
+        tot_stay += stay
         tot_tick += ticks
         tot_task += tasks
         tot_turn += turns
 
-    print(f"\n  합계  틱 {tot_tick:,} · 태스크 {tot_task:,} · 회전 {tot_turn:,}"
-          f"  ->  **걸림 {tot_hit:,}건**")
+    print(f"\n  합계  틱 {tot_tick:,} · 태스크 {tot_task:,} · 회전 {tot_turn:,}")
     if tot_turn:
-        print(f"        회전 {tot_hit / tot_turn * 100:.1f}% 가 이 규칙에 걸린다")
+        print(f"        **막히는 회전 {tot_blk:,}개 = {100 * tot_blk / tot_turn:.1f}%**"
+              f"   (상대가 서 있던 것 {tot_stay:,}개 = "
+              f"{100 * tot_stay / tot_turn:.1f}%)")
     if allk:
         print("\n  어느 배치에서 (상대칸 h상대헤딩):")
         for k, v in sorted(allk.items(), key=lambda kv: -kv[1])[:12]:
