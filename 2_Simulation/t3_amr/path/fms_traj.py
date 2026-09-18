@@ -215,6 +215,51 @@ def build(path, geom, verbose=True):
     return adg, order, history, info
 
 
+def find_cycle(adg, limit=3):
+    """의존 고리를 **실제로** 뽑는다 — 「순환이다」만으로는 원인을 못 고른다.
+
+    위상정렬로 남는 노드(진입차수가 0 이 안 되는 것)에서 DFS 로 되돌아오는
+    간선을 찾는다. `topological_order()` 와 같은 자료(`preds`/`succs`)를 쓴다.
+    """
+    indeg = {a.uid: len(adg.preds[a.uid]) for a in adg.actions}
+    q = [u for u, d in indeg.items() if d == 0]
+    seen = set()
+    while q:
+        u = q.pop()
+        seen.add(u)
+        for v in adg.succs[u]:
+            indeg[v] -= 1
+            if indeg[v] == 0:
+                q.append(v)
+    left = [a.uid for a in adg.actions if a.uid not in seen]   # 고리에 갇힌 것들
+    if not left:
+        return []
+    inside = set(left)
+    out, color, stack = [], {}, []
+
+    def dfs(u):
+        color[u] = 1
+        stack.append(u)
+        for v in adg.succs[u]:
+            if v not in inside:
+                continue
+            if color.get(v, 0) == 1:                 # 되돌아오는 간선 = 고리
+                out.append(stack[stack.index(v):] + [v])
+                if len(out) >= limit:
+                    return True
+            elif color.get(v, 0) == 0 and dfs(v):
+                return True
+        stack.pop()
+        color[u] = 2
+        return False
+
+    sys.setrecursionlimit(max(10000, len(left) + 1000))
+    for u in left:
+        if color.get(u, 0) == 0 and dfs(u):
+            break
+    return out
+
+
 def _main():
     if len(sys.argv) < 2:
         print(__doc__)
@@ -257,6 +302,18 @@ def _main():
     adg = D.build_adg(chains)
     cyc = adg.topological_order() is None
     print(f"\n── build_adg ── {'☹☹ **순환**' if cyc else '★ 비순환'}")
+    if cyc:
+        # ★ 고리를 **실제로 뽑는다.** 「순환이다」만으로는 원인을 못 고른다 —
+        #   회전 교대(PIBT 가 한 틱에 자리를 맞바꾸는 것)인지, 스윙 칸인지,
+        #   앞 칸 규칙인지가 갈려야 다음 수가 정해진다.
+        for row in find_cycle(adg)[:1] or [None]:
+            if row is None:
+                print("   ☹ 고리를 못 찾았다 (위상정렬은 실패했는데)")
+                break
+            print(f"   고리 길이 **{len(row)}**:")
+            for uid in row:
+                act = adg.actions[uid] if hasattr(adg, "actions") else None
+                print(f"     {uid}  {act}")
     print("   -> 비순환이면 우리 실행층에 **그대로** 먹일 수 있다")
     return 1 if (bad or cyc) else 0
 
