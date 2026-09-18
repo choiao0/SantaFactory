@@ -709,6 +709,12 @@ def setup_lifelong(map_dir, n, pitch, seed, mode="cross", verbose=True):
     #   순서가 뒤집히면 `configure` 가 `_TURN_MASK` 를 None 으로 되돌린다.
     import turn_sweep_mask
     turn_sweep_mask.apply(free, geom, map_dir, verbose=verbose)
+    # ★★ 정적 접촉 감시 준비 (L, -240). 마스크와 **무관하게 늘** 한다 —
+    #   합불 기준이 랙을 안 보는 것이 이 판의 옵션이 아니라 결함이었다.
+    try:
+        turn_sweep_mask.prepare_contact(geom, map_dir, verbose=verbose)
+    except Exception as e:                    # 감시가 주행을 죽이면 안 된다
+        print(f"[static] ☹ 정적 접촉 감시 준비 실패(주행은 계속): {e!r}")
     starts = pick_starts(free, geom, n, verbose)
     cells = station_cells(free, geom, map_dir)
     if verbose:

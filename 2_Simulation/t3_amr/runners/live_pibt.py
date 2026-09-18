@@ -841,6 +841,23 @@ def _tick(f, dt):
         state["done"] = True
         return
 
+    # ★★ 랙 접촉 (L, -240). 로봇끼리와 **갈라** 본다 — 원인도 대책도 다르다.
+    #   기본은 **세기만 하고 안 멈춘다.** 빈도를 먼저 알아야 하기 때문이다.
+    #   `PIBT_STATIC_ABORT=1` 이면 로봇 접촉과 같이 판을 세운다.
+    if f.stats.static_contact_events and not state.get("_static_said"):
+        state["_static_said"] = True
+        carb.log_error(
+            f"[pibt] ★★ **랙 접촉** {f.stats.static_contact_events:,}스텝  "
+            f"최대 침투 {f.stats.static_worst_pen * 1000:.1f} mm  "
+            f"— 합불 `clean` 이 거짓이다"
+            + ("  (PIBT_STATIC_ABORT=1 — 중단한다)"
+               if os.environ.get("PIBT_STATIC_ABORT", "0") not in ("0", "", "false")
+               else "  (세기만 한다. 멈추려면 PIBT_STATIC_ABORT=1)"))
+        if os.environ.get("PIBT_STATIC_ABORT", "0") not in ("0", "", "false"):
+            _shot_report()
+            state["done"] = True
+            return
+
     if f.stats.contact_events:
         # ★ **접촉 쌍**을 찍는다 (-240, 2026-09-18). 여기가 `overlap_pairs`(칸 공유)를
         #   찍고 있어서, 접촉 1건인데 목록에 30쌍이 나와 어느 쌍인지 못 골랐다.

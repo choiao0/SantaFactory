@@ -1690,6 +1690,20 @@ K_HEAD = _tol_env("PIBT_K_HEAD", 2.2)
 #     반면 한 스텝 변화는 2.07 -> 0.33 rad/s 로 **6배 작아진다.**
 W_ACCEL = _tol_env("PIBT_W_ACCEL", 0.0)
 
+# ★★ 회전 대기 게이트 (-240, 2026-09-18). 기본 **꺼짐**.
+#
+#   남의 **몸**이 내 스윙 칸에 있으면 회전을 시작하지 않는다. 계획(`SWING_HARD`)도
+#   ADG(`ADG_BODY`)도 이 배치를 못 막기 때문이다 — 둘 다 **액션**을 보는데
+#   상대는 **액션 없이 서 있다.** 실측 두 건이 전부 그 모양이었다.
+#
+#       t=2,986s  쌍 (0,8)   agent8 대기 중 · 꼬리가 (45,103)
+#       t=1,660s  쌍 (6,9)   agent6 대기 중 · 꼬리가 (46, 26)
+#
+#   ☹ 회전이 남을 기다리므로 **서로 기다리면 멈춘다.** 한도를 두고, 넘으면
+#     그냥 시작한다 — 접촉 위험보다 영구 교착이 나쁘다. 포기할 때는 로그를 남긴다.
+TURN_BODY_GATE = os.environ.get("PIBT_TURN_BODY_GATE", "0") not in ("0", "", "off")
+TURN_BODY_MAX = _tol_env("PIBT_TURN_BODY_MAX", 10.0)      # 초
+
 
 def pivot_in_body(pa: tuple[float, float, float],
                   pb: tuple[float, float, float]) -> tuple[float, float] | None:
@@ -2260,13 +2274,27 @@ class FleetStats:
     # ★ **어느 쌍이** 닿았나 (-240). `overlap_pairs` 는 칸 공유라 30쌍씩 나온다 —
     #   중단 메시지가 그걸 찍고 있어서 접촉 쌍을 못 골라냈다 (2026-09-18).
     contact_pairs: set[tuple[int, int]] = field(default_factory=set, repr=False)
+    # ★★ **정적 기하와의 접촉** (L, -240, 2026-09-18). 위 `contact_events` 는
+    #   `body_gap(poses[a], poses[b])` 로 **로봇끼리만** 본다. 그래서 차체가
+    #   랙에 58 mm 박혀 있는 동안에도 「깨끗함」이었고 합불이 그 값으로 갈렸다.
+    #   원인이 어느 지표에도 안 잡히니 증상 쪽을 오래 만졌다.
+    static_contact_events: int = 0
+    static_worst_pen: float = 0.0      # 최대 침투 [m]. 0 이면 한 번도 안 닿았다
+    # ★ 회전 대기 게이트 (-240). 대기 스텝 수와 **한도를 넘겨 그냥 간 횟수**.
+    #   뒤엣것이 0 이 아니면 그만큼 접촉 위험을 그대로 안고 간 것이다.
+    turn_body_waits: int = 0
+    turn_body_gaveup: int = 0
     stall_steps: int = 0
     sim_time: float = 0.0
 
     @property
     def clean(self) -> bool:
-        """**차체가 닿지 않았는가.** 칸 공유는 합불에 넣지 않는다 (위 주석)."""
-        return self.contact_events == 0
+        """**차체가 닿지 않았는가.** 칸 공유는 합불에 넣지 않는다 (위 주석).
+
+        ★ 정적 기하(랙)와의 접촉도 **같이 본다** (-240). 「로봇끼리 안 닿았다」는
+          깨끗함의 절반이고, 나머지 절반이 오늘 판을 죽였다.
+        """
+        return self.contact_events == 0 and self.static_contact_events == 0
 
     @property
     def cells_clean(self) -> bool:
@@ -2438,6 +2466,24 @@ class FleetController:
         self.stats = FleetStats()
         self._reported: set[tuple[int, int]] = set()   # 겹침 상세를 찍은 쌍
         self._contacted: set[tuple[int, int]] = set()  # **접촉**을 찍은 쌍 (따로 센다)
+        # ★★ 정적 접촉 감시 (L, -240). `pibt_scene.setup_lifelong` 이 준비해 둔다.
+        #   준비가 안 됐으면(도구 경로 등) 조용히 끈다 — 감시가 주행을 죽이면 안 된다.
+        #   `PIBT_STATIC_CONTACT=0` 으로 끌 수 있다.
+        self._obst_cells = None
+        self._static_log_next = 0.0
+        # ★ 회전 대기 게이트 상태 (-240). agent -> 기다린 시간 [s].
+        self._turn_wait: dict[int, float] = {}
+        self._occ_last: dict[int, frozenset] = {}
+        self._last_dt = 0.0
+        if os.environ.get("PIBT_STATIC_CONTACT", "1") not in ("0", "", "false"):
+            try:
+                import turn_sweep_mask as _TSM
+                self._obst_cells = _TSM.obstacle_cells()
+                if self._obst_cells is None:
+                    print("[static] ☹ 정적 접촉 감시가 **꺼진 채** 돕니다 — "
+                          "prepare_contact 가 안 불렸습니다 (합불이 랙을 못 봅니다)")
+            except Exception as e:
+                print(f"[static] ☹ 감시 비활성: {e!r}")
         # [patch_carry] 이어달리기 ------------------------------------------
         #   칸마다 정지하면 1.2 m 의 84%가 가감속 램프다. 0.9 m/s 를 쓰는 시간이
         #   한 칸당 0.21 s(8.5%)뿐이다 (2026-09-14 실측 2.367 s/칸).
@@ -2732,6 +2778,7 @@ class FleetController:
     def step(self, dt: float) -> None:
         self.stats.steps += 1
         self.stats.sim_time += dt
+        self._last_dt = dt              # 회전 대기 게이트가 누적에 쓴다
         self.rt.advance(dt)
         if self.stats.sim_time >= self._hist_next:
             self._hist_next += self._hist_every
@@ -2746,7 +2793,16 @@ class FleetController:
             self._watch_open_loop(a, pose, dt)
             body = self.g.footprint_cells(*pose)         # 스텝당 로봇당 딱 한 번
             occ[a] = body
+            # ★ 회전 대기 게이트용 (-240). `occ` 는 이번 스텝에서 **앞 순번만**
+            #   채워져 있어 뒤 순번을 못 본다. 여기에 늘 최신을 남겨 두면
+            #   최악이라도 **한 스텝 전** 값이고, 스텝당 이동이 2 cm 미만이라
+            #   판정이 안 바뀐다.
+            self._occ_last[a] = body
             poses[a] = pose
+            # ★★ 정적 기하(랙)와 닿았나 (L, -240). 칸으로 먼저 거르므로 통로
+            #   한가운데서는 공짜다 — SAT 는 장애물 칸에 걸쳤을 때만 돈다.
+            if self._obst_cells and (body & self._obst_cells):
+                self._check_static(a, pose, body)
             act = self.running[a]
 
             if act is not None:
@@ -2898,7 +2954,7 @@ class FleetController:
                 drv.command(0.0, 0.0)
                 self._last_cmd[a] = (0.0, 0.0)
                 continue
-            if self.rt.can_start(nxt):
+            if self.rt.can_start(nxt) and self._turn_body_clear(a, nxt, occ):
                 self.ctrl[a].begin(nxt)
                 self.running[a] = nxt
                 self.elapsed[a] = 0.0
@@ -3011,6 +3067,87 @@ class FleetController:
                         if (a, b) not in self._reported:
                             self._reported.add((a, b))
                             self._report_overlap(a, b, shared, poses, gap)
+
+    def _turn_body_clear(self, a: int, act: "Action", occ: dict) -> bool:
+        """회전을 **지금 시작해도 되나** — 남의 **몸**이 스윙 칸에 있으면 안 된다.
+
+        ★★ 왜 실행 층인가 (-240, 2026-09-18). 계획·ADG 둘 다 이 배치를 못 막는다.
+
+            계획(`PIBT_SWING_HARD`)   빈 스윙 칸을 미리 잡는다.
+                                     ☹ **이미 들어온 몸은 못 쫓아낸다** (hard 는 예약이지 퇴거가 아니다)
+            ADG(`PIBT_ADG_BODY`)     액션 순서로 묶는다.
+                                     ☹ **주차한 로봇은 액션이 없어** by_hard 에 안 들어간다
+                                     ☹ 그리고 38,880틱에서 **순환**이 난다 (폐기)
+
+        그래서 두 번 다 같은 자리에서 접촉이 났다.
+
+            t=2,986s  쌍 (0,8)  agent8 이 **대기** 중 · 꼬리가 (45,103)
+            t=1,660s  쌍 (6,9)  agent6 이 **대기** 중 · 꼬리가 (46, 26)
+
+        둘 다 상대가 **액션 없이 서 있었다.** 계획 순서로는 잡을 수 없고, 지금
+        자세를 보는 수밖에 없다. 여기는 `occ`(이 스텝의 실제 점유 칸)를 이미
+        들고 있으므로 **주차든 주행이든 가리지 않는다.**
+
+        ☹ 대가 — 회전이 남을 기다린다. 서로 기다리면 멈추므로 **한도**를 둔다.
+          한도를 넘으면 그냥 시작한다 (접촉 위험 < 영구 교착 위험).
+        """
+        if not TURN_BODY_GATE or act.kind != TURN or not act.guard:
+            return True
+        view = dict(self._occ_last); view.update(occ)
+        blocked = [b for b, cells in view.items()
+                   if b != a and (cells & act.guard)]
+        if not blocked:
+            self._turn_wait.pop(a, None)
+            return True
+        w = self._turn_wait.get(a, 0.0) + self._last_dt
+        self._turn_wait[a] = w
+        self.stats.turn_body_waits += 1
+        if w >= TURN_BODY_MAX:
+            # 한도 초과 — 그냥 간다. **다만 남긴다.** 조용히 포기하면 나중에
+            # 「대책을 켰는데 접촉이 났다」의 원인을 못 찾는다.
+            self._turn_wait.pop(a, None)
+            self.stats.turn_body_gaveup += 1
+            msg = (f"[회전대기] agent{a} 가 {w:.1f}s 기다리다 **그냥 시작한다** — "
+                   f"{act}  스윙 칸 {sorted(act.guard)} 에 agent{blocked} 의 몸")
+            try:
+                getattr(self, "_say", print)(msg)
+            except Exception:
+                print(msg, flush=True)
+            return True
+        return False
+
+    def _check_static(self, a, pose, body) -> None:
+        """차체가 **랙**을 파고들었나 (L, -240).
+
+        로봇끼리의 `contact_events` 와 **갈라 센다.** 원인이 다르고 대책도 다르다 —
+        저쪽은 ADG 순서, 이쪽은 계획이 낸 동작 자체가 불가능하다는 뜻이다.
+        """
+        try:
+            import turn_sweep_mask as TSM
+            pen = TSM.pose_penetration(self.g, pose[0], pose[1], pose[2])
+        except Exception as e:                  # 감시가 주행을 죽이면 안 된다
+            self._obst_cells = None             # 한 번 실패하면 끈다
+            print(f"[static] ☹ 감시 실패 — 이후 끕니다: {e!r}")
+            return
+        if pen <= 0.0:
+            return
+        self.stats.static_contact_events += 1
+        first = pen > self.stats.static_worst_pen
+        self.stats.static_worst_pen = max(self.stats.static_worst_pen, pen)
+        # 60 Hz 라 매 스텝 찍으면 로그가 수천 줄이 된다. **더 깊어질 때만** 찍는다 —
+        # 「처음 한 번만」으로 두면 얕게 스친 뒤 깊이 박은 것을 못 본다.
+        if first and pen > self._static_log_next:
+            self._static_log_next = pen
+            act = self.running.get(a)
+            msg = (f"★★ 랙 접촉  agent{a}  침투 {pen * 1000:.1f} mm  "
+                   f"t={self.stats.sim_time:.1f}s\n"
+                   f"   pose ({pose[0]:.3f}, {pose[1]:.3f}, "
+                   f"{math.degrees(pose[2]):.1f}도)  몸 {sorted(body)}\n"
+                   f"   {act if act is not None else '액션 없음(대기)'}")
+            try:
+                getattr(self, "_say", print)(msg)
+            except Exception:
+                print(msg, flush=True)
 
     def _report_contact(self, a, b, shared, poses, gap) -> None:
         """★★ **실제로 닿은** 순간 — 쌍·자세·그때 하던 액션까지.

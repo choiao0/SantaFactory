@@ -36,13 +36,18 @@
 원본 0.1 m 마스크의 픽셀을 **0.1 m 정사각형**으로 두고, 회전 48 샘플마다 차체
 직사각형과 **분리축 정리(SAT)** 로 맞댄다.
 
-비용 (2026-09-17 실측, pitch 1.0 · 우리 맵)
--------------------------------------------
-    금지되는 회전       60,192건 중 **1,800건 (3.0 %)** · 최대 침투 471 mm
-    도달 가능 상태      7,198 -> 7,178   **-20개 (0.28 %)**
-    경로 길이           평균 +1.4~3.1틱 · p95 +5~10틱 ~ **왕복의 1 % 미만**
+비용 (pitch 1.0 · 우리 맵 · 시드 103)
+-------------------------------------
+    금지되는 회전   60,192건 중 **1,800건 (3.0 %)** · 최대 침투 471 mm
+                    (pitch 1.2 면 **0.3 %** — 이 대가는 pitch 에 매여 있다)
 
-☹ 정적 그래프 기준이다. PIBT 는 함대 알고리즘이라 혼잡이 더해져 **이보다 나쁘다.**
+    ☹ **정적 그래프 추정이 한 자릿수 낮았다** (2026-09-18 정정)
+        추정   도달 -0.28 % · 경로 +1 % 미만      <- 전 상태 평균이라 통행 분포를 못 본다
+        실측   칸 이동 총수는 **같다**(101,771 -> 101,783). move 7,148건이 reverse 로.
+               주행비용(move + 3 x reverse)  **+11.9 %**
+               왕복 환산(주행이 왕복의 87.5 %) **+10.4 %**
+               실행(같은 sim 시각 완료 액션)   **-3.3 ~ -5.7 %**
+        셋은 **서로 다른 자다.** 가부는 여기서, 값은 주행에서 잰다.
 """
 import hashlib
 import math
@@ -54,6 +59,7 @@ TURN_SWEEP_ON = os.environ.get("PIBT_TURN_SWEEP", "0") not in ("0", "", "no", "o
 BAN_MM = float(os.environ.get("PIBT_TURN_SWEEP_MM", "0"))
 SAMPLES = int(os.environ.get("PIBT_TURN_SWEEP_SAMPLES", "48"))
 DIRS = [(1, 0), (0, 1), (-1, 0), (0, -1)]
+# (이 모듈은 마스크만 만든다. 회전 대기 게이트 상수는 `isaac_drive` 에 있다.)
 
 
 def load_obstacle_mask(map_dir):
@@ -75,7 +81,7 @@ def load_obstacle_mask(map_dir):
 
 
 def penetrate(obst, geom, r, c, h0, h1, samples=SAMPLES):
-    """회전 중 차체가 장애물을 몇 m 파고드나. 반환 (최대침투, 그때 각도 deg, 최소여유).
+    """회전 중 차체가 장애물을 몇 m 파고드나. 반환 (최대침투, 그때 각도 deg, 여유는 안 낸다).
 
     픽셀은 **점이 아니라 0.1 m 사각형**이다. 중심만 보면 최대 50 mm 를 덜 센다 —
     실제로 a6 의 회전이 「2 mm」로 나와 애매하다고 읽힐 뻔했고, SAT 로 바꾸니
@@ -86,34 +92,93 @@ def penetrate(obst, geom, r, c, h0, h1, samples=SAMPLES):
     y0, y1 = YAW[geom.phys_heading(h0)], YAW[geom.phys_heading(h1)]
     dth = wrap(y1 - y0)
 
-    rad = math.hypot(geom.rear_len, geom.width / 2.0) + 0.15
-    i0 = max(0, int((cy - rad) / 0.1)); i1 = min(obst.shape[0], int((cy + rad) / 0.1) + 1)
-    j0 = max(0, int((cx - rad) / 0.1)); j1 = min(obst.shape[1], int((cx + rad) / 0.1) + 1)
+    best_pen, best_ang = 0.0, 0.0
+    for s in range(samples + 1):
+        yaw = y0 + dth * (s / samples)
+        pen = pose_penetration(geom, cx, cy, yaw, obst=obst)
+        if pen > best_pen:
+            best_pen, best_ang = pen, math.degrees(dth * (s / samples))
+    # 여유(안 닿을 때의 최소 거리)는 이제 안 낸다 — `pose_penetration` 이
+    # 겹침만 돌려준다. 쓰는 곳이 「닿나/얼마나」뿐이라 뺐다.
+    return best_pen, best_ang, (float("inf") if best_pen <= 0.0 else 0.0)
+
+
+# ===========================================================================
+# 정적 접촉 감시 (L, 2026-09-18) — 합불 기준이 **랙을 안 봤다**
+# ===========================================================================
+#
+#   `FleetController` 는 접촉을 이렇게 센다.
+#
+#       gap = self.g.body_gap(poses[a], poses[b])   # 로봇 a 와 로봇 b 사이
+#       if gap <= 0.0: self.stats.contact_events += 1
+#
+#   **로봇끼리만 본다.** 그래서 차체가 랙에 58 mm 박혀 있는 동안에도
+#   `contact_events=0 · worst_gap=0.297 m` 로 「깨끗함」이었고, 판의 합불이
+#   그 값으로 갈렸다. 원인(랙 침투)은 어느 지표에도 안 잡혔다.
+#
+#   그 구멍을 메운다. 같은 0.1 m 마스크와 같은 SAT 를 쓴다 — 정의가 두 벌이
+#   되면 「도구는 닿는다는데 주행은 아니라고 한다」가 난다.
+#
+#   ☹ 싸야 한다. 12대 x 60 Hz 다. 그래서 **칸 단위로 먼저 거른다** —
+#     장애물 픽셀이 하나라도 있는 1 m 칸을 미리 모아 두고, 차체가 덮는 칸이
+#     거기 안 닿으면 SAT 를 아예 안 돌린다. 통로 한가운데서는 공짜다.
+
+_OBST = None            # (0.1 m bool 배열, 장애물이 있는 1 m 칸 집합, 출처)
+
+
+def prepare_contact(geom, map_dir, verbose=True):
+    """정적 접촉 감시 준비. `setup_lifelong` 이 판마다 한 번 부른다."""
+    global _OBST
+    obst, src = load_obstacle_mask(map_dir)
+    k = int(round(geom.pitch / 0.1))
+    R, C = obst.shape[0] // k, obst.shape[1] // k
+    hit = obst[:R * k, :C * k].reshape(R, k, C, k).any(axis=(1, 3))
+    cells = frozenset((int(r), int(c)) for r, c in zip(*np.nonzero(hit)))
+    _OBST = (obst, cells, src)
+    # ★ 이것도 **항상** 찍는다. 이 줄이 없으면 합불(`clean`)이 랙을 보고 있는지
+    #   모르는 채로 「완주했다」를 쓰게 된다 — 그게 L 을 만든 이유다.
+    print(f"[static] ★ 랙 접촉 감시 켬 — {src} · 장애물 칸 {len(cells):,}개",
+          flush=True)
+    return _OBST
+
+
+def obstacle_cells():
+    """장애물이 있는 1 m 칸 집합. 준비 전이면 None."""
+    return None if _OBST is None else _OBST[1]
+
+
+def pose_penetration(geom, x, y, yaw, obst=None):
+    """이 **자세 하나**에서 차체가 정적 장애물을 몇 m 파고드나 (0 이면 안 닿는다).
+
+    ★ `penetrate()`(회전 스윕)도 **이 함수를 샘플마다 부른다.** 식이 두 벌이
+      되면 「도구는 닿는다는데 주행은 아니라고 한다」가 나기 때문이다.
+      회전 직사각형 대 축정렬 정사각형의 분리축 정리 — 축 넷이면 된다.
+    """
+    if obst is None:
+        if _OBST is None:
+            return 0.0
+        obst = _OBST[0]
+    rad = math.hypot(geom.rear_len, geom.width / 2.0) + 0.02
+    i0 = max(0, int((y - rad) / 0.1)); i1 = min(obst.shape[0], int((y + rad) / 0.1) + 1)
+    j0 = max(0, int((x - rad) / 0.1)); j1 = min(obst.shape[1], int((x + rad) / 0.1) + 1)
+    if i1 <= i0 or j1 <= j0:
+        return 0.0
     ii, jj = np.nonzero(obst[i0:i1, j0:j1])
     if len(ii) == 0:
-        return 0.0, 0.0, float("inf")
-    px = (jj + j0 + 0.5) * 0.1 - cx
-    py = (ii + i0 + 0.5) * 0.1 - cy
-
+        return 0.0
+    px = (jj + j0 + 0.5) * 0.1 - x
+    py = (ii + i0 + 0.5) * 0.1 - y
     hv = geom.width / 2.0
     hu = (geom.rear_len + geom.front_len) / 2.0
     cu = (geom.front_len - geom.rear_len) / 2.0
     q = 0.05
-    best_pen, best_ang, best_gap = 0.0, 0.0, float("inf")
-    for s in range(samples + 1):
-        yaw = y0 + dth * (s / samples)
-        f, l = math.cos(yaw), math.sin(yaw)
-        dx, dy = px - cu * f, py - cu * l
-        o1 = (hu + q * (abs(f) + abs(l))) - np.abs(dx * f + dy * l)
-        o2 = (hv + q * (abs(l) + abs(f))) - np.abs(-dx * l + dy * f)
-        o3 = (q + hu * abs(f) + hv * abs(l)) - np.abs(dx)
-        o4 = (q + hu * abs(l) + hv * abs(f)) - np.abs(dy)
-        pen = float(np.minimum(np.minimum(o1, o2), np.minimum(o3, o4)).max())
-        if pen > best_pen:
-            best_pen, best_ang = pen, math.degrees(dth * (s / samples))
-        if pen <= 0.0:
-            best_gap = min(best_gap, -pen)
-    return max(best_pen, 0.0), best_ang, best_gap
+    f, l = math.cos(yaw), math.sin(yaw)
+    dx, dy = px - cu * f, py - cu * l
+    o1 = (hu + q * (abs(f) + abs(l))) - np.abs(dx * f + dy * l)
+    o2 = (hv + q * (abs(l) + abs(f))) - np.abs(-dx * l + dy * f)
+    o3 = (q + hu * abs(f) + hv * abs(l)) - np.abs(dx)
+    o4 = (q + hu * abs(l) + hv * abs(f)) - np.abs(dy)
+    return max(float(np.minimum(np.minimum(o1, o2), np.minimum(o3, o4)).max()), 0.0)
 
 
 def _cache_path(free, geom, ban_mm):
@@ -188,6 +253,10 @@ def apply(free, geom, map_dir, verbose=True):
     geo.configure(turn_mask=m,
                   front_swing=bool(geo.front_swing_on()),
                   front_diag=bool(geo.front_diag_on()))
-    if verbose:
-        print(f"[turn_sweep] ★ 계획기에 걸었다 — 회전 {int((~m).sum()):,}건 금지")
+    # ★ `verbose` 와 무관하게 **항상** 찍는다 (트러블슈팅 (더), 2026-09-18).
+    #   `live_pibt` 가 `setup_lifelong(..., verbose=False)` 로 부르는 바람에
+    #   이 줄이 통째로 묻혔다 — 마스크가 걸렸는지를 **액션 수로 역추적**해서
+    #   확인해야 했다. 기본과 다른 상태는 보여야 한다.
+    print(f"[turn_sweep] ★ 계획기에 걸었다 — 회전 {int((~m).sum()):,}건 금지 "
+          f"(PIBT_TURN_SWEEP=1 · 문턱 {BAN_MM:.0f} mm)", flush=True)
     return m
