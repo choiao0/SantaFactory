@@ -52,8 +52,13 @@ import sys
 sys.path.insert(0, os.path.join(os.environ["W"], "path"))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import isaac_drive as D                                 # noqa: E402
+# ★ 순서가 중요하다. `pibt_core` 는 `$W/path` 가 아니라 `3_FMS/sim_engine` 에
+#   있고, **`pibt_core_v2` 를 import 해야 그게 `sys.path` 에 들어간다**
+#   (`isaac_drive.py:533` 이 같은 사실을 적어 뒀다). `isaac_drive` 를 먼저
+#   부르면 그 안의 `from pibt_core import ...` 가 터진다.
+import pibt_core_v2 as _pc                              # noqa: E402,F401
 from pibt_core import TURN_TICKS                        # noqa: E402
+import isaac_drive as D                                 # noqa: E402
 import swing_overlap as SO                              # noqa: E402
 
 MARGIN = float(os.environ.get("MARGIN", "0.05"))
