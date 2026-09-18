@@ -58,6 +58,36 @@ import numpy as np
 TURN_SWEEP_ON = os.environ.get("PIBT_TURN_SWEEP", "0") not in ("0", "", "no", "off")
 BAN_MM = float(os.environ.get("PIBT_TURN_SWEEP_MM", "0"))
 SAMPLES = int(os.environ.get("PIBT_TURN_SWEEP_SAMPLES", "48"))
+# ★★ 마스크 여유 (M′, FMS-32 §2). **기본 0 이다 — 아직 안 맞췄다.**
+#
+#   그쪽은 `-203` 부터 0.05 로 돌았고, 여유가 다르면 양쪽이 마스크를 켜도 경로가
+#   갈린다. 그래서 0.05 로 맞춰 보았다. **그런데 안 같아졌다** (2026-09-18 실측).
+#
+#       우리 여유 0      금지 1,800건 = 3.0 %
+#       우리 여유 0.05   금지 3,298건 = **5.5 %**
+#       FMS  여유 0.05   turn_masked  = **3.54 %**
+#
+#   같은 여유인데 5.5 vs 3.54 다 — **여유는 차이의 일부였을 뿐이다.** 남은 후보 셋:
+#       격자 원점    그쪽 왼쪽 OX=4 픽셀(0.4 m) 패딩 · 우리 자르기
+#       맵           우리 warehouse/map · 그쪽 3_FMS/map (통로 차단도 각자)
+#       래스터화     우리 SAT(픽셀=사각형) · 그쪽 0.05 m 점 표본 — 우리가 더 보수적
+#
+#   지금 0.05 로 두면 **양쪽이 여전히 다른 마스크를 쓰면서 우리만 6.3 % 를 잃는다**
+#   (태스크 696 -> 652). 그래서 **차이를 좁히기 전까지 0 으로 둔다.**
+#   맞대 볼 때만 `PIBT_TURN_SWEEP_MARGIN=0.05` 로 켠다.
+#
+#   ☹ **그쪽 함수를 직접 못 쓴다 — 좌표계가 다르다** (2026-09-18 실측).
+#       그쪽 `_padded_obstacles`  raw 를 **왼쪽 OX=4 픽셀(0.4 m)** 패딩한 뒤 K 로 묶는다
+#       우리 `build_free`         패딩 없이 **자른다**
+#       -> shape (107,116) vs (106,115). 그대로 걸면 마스크가 한 칸 밀려
+#          금지가 1,800 -> **141,734건**(78배)이 되고 태스크가 696 -> 657 로 준다.
+#     실제로 한 번 걸었다가 그 수를 보고 알았다 — `masked_turn_ratio` 가
+#     브로드캐스트 에러를 낸 덕에 **조용히 안 지나갔다.**
+#
+#   그래서 **여유만 우리 구현에 넣는다.** 의미는 같고 좌표계 결합이 없다.
+#   `IMPL=fms` 는 나중에 정렬을 맞춘 뒤 비교용으로 남겨 둔다.
+IMPL = os.environ.get("PIBT_TURN_SWEEP_IMPL", "local").strip().lower()
+MARGIN_M = float(os.environ.get("PIBT_TURN_SWEEP_MARGIN", "0"))
 DIRS = [(1, 0), (0, 1), (-1, 0), (0, -1)]
 # (이 모듈은 마스크만 만든다. 회전 대기 게이트 상수는 `isaac_drive` 에 있다.)
 
@@ -95,7 +125,7 @@ def penetrate(obst, geom, r, c, h0, h1, samples=SAMPLES):
     best_pen, best_ang = 0.0, 0.0
     for s in range(samples + 1):
         yaw = y0 + dth * (s / samples)
-        pen = pose_penetration(geom, cx, cy, yaw, obst=obst)
+        pen = pose_penetration(geom, cx, cy, yaw, obst=obst, margin=MARGIN_M)
         if pen > best_pen:
             best_pen, best_ang = pen, math.degrees(dth * (s / samples))
     # 여유(안 닿을 때의 최소 거리)는 이제 안 낸다 — `pose_penetration` 이
@@ -147,7 +177,7 @@ def obstacle_cells():
     return None if _OBST is None else _OBST[1]
 
 
-def pose_penetration(geom, x, y, yaw, obst=None):
+def pose_penetration(geom, x, y, yaw, obst=None, margin=0.0):
     """이 **자세 하나**에서 차체가 정적 장애물을 몇 m 파고드나 (0 이면 안 닿는다).
 
     ★ `penetrate()`(회전 스윕)도 **이 함수를 샘플마다 부른다.** 식이 두 벌이
@@ -158,7 +188,9 @@ def pose_penetration(geom, x, y, yaw, obst=None):
         if _OBST is None:
             return 0.0
         obst = _OBST[0]
-    rad = math.hypot(geom.rear_len, geom.width / 2.0) + 0.02
+    # ★ 창 반지름은 **여유까지** 세야 한다. 안 그러면 부풀린 모서리가 창 밖으로
+    #   나가 픽셀을 놓친다 (margin 0.05 에서 44 mm 모자랐다).
+    rad = math.hypot(geom.rear_len + margin, geom.width / 2.0 + margin) + 0.02
     i0 = max(0, int((y - rad) / 0.1)); i1 = min(obst.shape[0], int((y + rad) / 0.1) + 1)
     j0 = max(0, int((x - rad) / 0.1)); j1 = min(obst.shape[1], int((x + rad) / 0.1) + 1)
     if i1 <= i0 or j1 <= j0:
@@ -168,8 +200,10 @@ def pose_penetration(geom, x, y, yaw, obst=None):
         return 0.0
     px = (jj + j0 + 0.5) * 0.1 - x
     py = (ii + i0 + 0.5) * 0.1 - y
-    hv = geom.width / 2.0
-    hu = (geom.rear_len + geom.front_len) / 2.0
+    # ★ 여유(M′) — 차체를 사방 `MARGIN_M` 만큼 부풀린다. 그쪽 `_sweep_offsets` 의
+    #   `[-rear-m, front+m] x [-w/2-m, w/2+m]` 과 같은 뜻이다.
+    hv = geom.width / 2.0 + margin
+    hu = (geom.rear_len + geom.front_len) / 2.0 + margin
     cu = (geom.front_len - geom.rear_len) / 2.0
     q = 0.05
     f, l = math.cos(yaw), math.sin(yaw)
@@ -185,11 +219,58 @@ def _cache_path(free, geom, ban_mm):
     key = hashlib.sha1(
         free.tobytes()
         + repr((round(geom.pitch, 6), geom.rear_len, geom.front_len,
-                geom.width, ban_mm, SAMPLES)).encode()
+                geom.width, ban_mm, SAMPLES, MARGIN_M)).encode()
     ).hexdigest()[:16]
     base = os.environ.get("PIBT_CACHE") or os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".cache")
     return os.path.join(base, f"turnmask_{key}.npy")
+
+
+def build_fms(geom, map_dir, verbose=True):
+    """★★ **FMS 의 `turn_mask_from_grid` 를 그대로 부른다** (M′, 2026-09-18).
+
+    FMS-32 §2 로 알게 된 것 — 그쪽 마스크는 `-203` 부터 켜져 있었고 **여유가
+    다르다.**
+
+        우리   margin = 0       기하 침투 > 0 만 금지      -> 3.00 %
+        그쪽   margin = 0.05 m  차체를 사방 5 cm 부풀린다  -> 3.54 %
+
+    켜기만 해서는 경로가 또 갈린다. 그리고 **0.05 가 맞다** — 근거가 우리
+    자신의 관측이다(t3-31 §3): 도착 판정이 `hypot <= pos` 라 로봇은 늘 허용오차
+    원의 **가장자리**에 서고, 그래서 설계 여유 41.3 mm 가 실제로 물렸다.
+    5 cm 는 그 정지 오차다.
+
+    그래서 우리 구현을 버리고 **그쪽 함수를 부른다.** 여유·표본 간격(0.05 m)·
+    회전 샘플(1도 91개)·패딩 규칙이 자동으로 같아진다 — 우리가 t3-31 §1-6 에
+    「식이 두 벌이면 『그쪽은 닿는다는데 우리는 아니라고 한다』가 난다」고 썼고,
+    M′ 가 정확히 그 두 벌 때문에 생긴 건이다.
+    """
+    import map_loader as ML                      # 3_FMS/sim_engine (로더가 경로를 넣는다)
+    import pibt_scene as PS
+    src = PS._pick(map_dir, "occupancy_grid.npy", "obstacle_mask.npy",
+                   "obstacle_mask_wallA.npy")
+    grid01 = np.load(src)
+    cfg = getattr(PS, "_CFG", None)
+    if cfg is not None and getattr(cfg, "AISLE_BLOCK", False):
+        # 통로 차단은 우리 쪽 설정이다. 그쪽 3.54 % 도 「통로 차단 적용 지도」 기준이다.
+        grid01 = cfg.apply_aisle_block(grid01.copy())
+    dims = (geom.front_len, geom.rear_len, geom.width)   # FMS ROBOT_DIMS 순서
+    m = ML.turn_mask_from_grid(grid01, dims=dims, margin=MARGIN_M)
+    # ★ 교차 검증 — 그쪽이 CSV 로 보낸 `turn_masked` 와 같은 정의로 다시 센다.
+    #   FMS-32: 통로 차단 지도 **0.0354** · 원본 0.0331 · 우리(여유 0) 0.0300.
+    #   같은 함수를 같은 인자로 부르니 **같은 수가 나와야 한다.**
+    ratio = ""
+    try:
+        k = int(round(geom.pitch / 0.1))
+        H, W = grid01.shape[0] // k, grid01.shape[1] // k
+        free_c = grid01[:H * k, :W * k].reshape(H, k, W, k).max(axis=(1, 3)) == 0
+        ratio = f" · turn_masked = **{ML.masked_turn_ratio(free_c, m):.4f}**"
+    except Exception as e:
+        ratio = f" · turn_masked 못 쟀다: {e!r}"
+    print(f"[turn_sweep] FMS `turn_mask_from_grid` 사용 — {os.path.basename(src)} "
+          f"· 여유 {MARGIN_M * 1000:.0f} mm · 금지 {int((~m).sum()):,}건{ratio}",
+          flush=True)
+    return m
 
 
 def build(free, geom, map_dir, ban_mm=None, verbose=True):
@@ -249,7 +330,19 @@ def apply(free, geom, map_dir, verbose=True):
     if not hasattr(geo, "configure"):
         print("[turn_sweep] ☹ 이 계획기에는 configure 가 없다 — 상류가 낡았다")
         return None
-    m = build(free, geom, map_dir, verbose=verbose)
+    # ★ 기본은 FMS 구현이다 (M′). 실패하면 우리 것으로 떨어지되 **조용히 말고**
+    #   — 여유가 달라지면 경로가 갈리므로 어느 쪽으로 돌았는지 반드시 보여야 한다.
+    m = None
+    if IMPL == "fms":
+        try:
+            m = build_fms(geom, map_dir, verbose=verbose)
+        except Exception as e:
+            print(f"[turn_sweep] ☹ FMS 구현을 못 썼다 — 우리 것으로 떨어진다 "
+                  f"(**여유가 0 이라 경로가 갈린다**): {e!r}", flush=True)
+    if m is None:
+        m = build(free, geom, map_dir, verbose=verbose)
+        print(f"[turn_sweep] 우리 구현 사용 — 여유 0 mm (PIBT_TURN_SWEEP_IMPL={IMPL})",
+              flush=True)
     geo.configure(turn_mask=m,
                   front_swing=bool(geo.front_swing_on()),
                   front_diag=bool(geo.front_diag_on()))

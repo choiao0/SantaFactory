@@ -19,7 +19,10 @@ export SIM="$(cd "$W/.." && pwd)"                    # 2_Simulation
 #   맵은 새 창고인데 화면은 옛 창고인 상태가 여기서 나왔다.
 #   `build_scene.py` 가 덮어쓰는 대상도 아래 경로다. 둘을 어긋나게 두면
 #   "다시 구웠는데 안 바뀐다" 가 반복된다.
-export SCENE=$W/warehouse/scene/warehouse_scene.usd  # 구운 T3 창고 씬 (build_scene.py 산출)
+# ★ 미리 준 값을 존중한다 (-240, 2026-09-18). 기본은 그대로다.
+#   `SCENE=…_rack.usd bash run.sh` 로 **다른 씬을 한 판만** 쓰기 위해서다
+#   (RACK_COLLIDER 실험). 안 주면 종전과 같다.
+export SCENE=${SCENE:-$W/warehouse/scene/warehouse_scene.usd}  # 구운 T3 창고 씬
 # ★ 계획 맵은 t3_amr 안의 것이 **단일 소스**다 (occupancy_grid sha 563e6aeb…).
 #   팀 기본 맵(t3_warehouse_map/map, v6.0)은 격자가 다르고 stations.json 에
 #   `handoff` 가 없다 — GOAL_CATS 다섯 중 하나가 조용히 빠진다. 씬을 v6.0
