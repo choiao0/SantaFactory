@@ -708,7 +708,7 @@ def charge_zone_cells(free, geom, rect=None):
 #       (없음)             종전과 **비트 동일**
 #
 #   ☹ `CELL_M` 이 1.0 고정이라 **pitch 1.0 에 묶인다.** 그게 그쪽이 쓰는 격자다.
-def _fms_setup(n, pitch, verbose):
+def _fms_setup(n, pitch, verbose, map_dir_for_contact=None):
     """FMS `sim_v2_tasks._build` 가 하는 것을 그대로 따라간다."""
     import re
     import pibt_core_v2 as _pc          # ★ 먼저 — 이것이 sim_engine 을 sys.path 에 넣는다
@@ -769,6 +769,15 @@ def _fms_setup(n, pitch, verbose):
         cells.setdefault(m.group(1), []).append((int(m.group(2)), tuple(rc)))
     cells = {k: [rc for _i, rc in sorted(v)] for k, v in cells.items()}
 
+    # ★★ 정적 접촉 감시 — 격자를 바꿔도 **끄면 안 된다** (L, -240). 합불 기준이
+    #   랙을 안 보는 것이 이 판의 옵션이 아니라 결함이었다. 0.1 m 마스크를 보므로
+    #   격자와 무관하지만, `geom.origin` 이 바뀌었으니 그 geom 으로 넘긴다.
+    try:
+        import turn_sweep_mask
+        turn_sweep_mask.prepare_contact(geom, map_dir_for_contact, verbose=verbose)
+    except Exception as e:                    # 감시가 주행을 죽이면 안 된다
+        print(f"[static] ☹ 정적 접촉 감시 준비 실패(주행은 계속): {e!r}")
+
     if verbose:
         print(f"[scene] ★★ **FMS 격자** {free.shape} (max 풀링 · OFFSET {ML.OFFSET_M} m)"
               f" · 통행 {int(free.sum()):,}칸 · 통로차단 {ab}")
@@ -787,7 +796,7 @@ def setup_lifelong(map_dir, n, pitch, seed, mode="cross", verbose=True):
     if FMS_GRID:
         # ★★ 격자·홈·헤딩·마스크가 전부 그쪽 것이 된다. `keep_station_component`
         #    도 안 한다 — max 풀링이라 애초에 조각이 안 생긴다(그쪽 주석).
-        return _fms_setup(n, pitch, verbose)
+        return _fms_setup(n, pitch, verbose, map_dir)
     geom = make_geom(pitch)
     free, k = build_free(map_dir, pitch, mode)
     raw = int(free.sum())
