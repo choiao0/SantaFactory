@@ -1705,6 +1705,29 @@ TURN_BODY_GATE = os.environ.get("PIBT_TURN_BODY_GATE", "0") not in ("0", "", "of
 TURN_BODY_MAX = _tol_env("PIBT_TURN_BODY_MAX", 10.0)      # 초
 
 
+def _emit(obj, msg: str) -> None:
+    """진단 한 줄을 **지금** 내보낸다 (-240, 2026-09-18).
+
+    ☹ 이걸로 실제로 한 건을 잃었다. `s103_gate2` 에서 `turn_body_gaveup=1` 이
+      찍혔는데 `[회전대기]` 줄이 로그에 **없었다.** `print` 만 쓰면 Isaac 안에서
+      표준출력이 블록 버퍼라 판이 끝날 때까지 파일에 안 닿는다 — 앞선 판들에서
+      `★★ 차체 접촉` 이 보였던 건 그 직후 **중단되며 버퍼가 비워졌기** 때문이고,
+      완주하는 판에서는 주행 중에 못 읽는다.
+
+    나머지 진단(`[회전분포]`·`[adg-why]`)이 전부 `carb` 로 나가므로 여기도 맞춘다.
+    `obj._say` 가 있으면 그걸 존중한다 — `tools/lag_budget.py` 가 이걸로 입을 막는다.
+    """
+    say = getattr(obj, "_say", None)
+    if say is not None:
+        say(msg)
+        return
+    try:
+        import carb
+        carb.log_warn(msg)
+    except Exception:                                    # pragma: no cover
+        print(msg, flush=True)
+
+
 def pivot_in_body(pa: tuple[float, float, float],
                   pb: tuple[float, float, float]) -> tuple[float, float] | None:
     """두 자세를 잇는 **강체 회전의 중심**을 시작 시점 차체 좌표로 돌려준다.
@@ -3110,7 +3133,7 @@ class FleetController:
             msg = (f"[회전대기] agent{a} 가 {w:.1f}s 기다리다 **그냥 시작한다** — "
                    f"{act}  스윙 칸 {sorted(act.guard)} 에 agent{blocked} 의 몸")
             try:
-                getattr(self, "_say", print)(msg)
+                _emit(self, msg)
             except Exception:
                 print(msg, flush=True)
             return True
@@ -3145,7 +3168,7 @@ class FleetController:
                    f"{math.degrees(pose[2]):.1f}도)  몸 {sorted(body)}\n"
                    f"   {act if act is not None else '액션 없음(대기)'}")
             try:
-                getattr(self, "_say", print)(msg)
+                _emit(self, msg)
             except Exception:
                 print(msg, flush=True)
 
@@ -3182,7 +3205,7 @@ class FleetController:
         except Exception as e:                     # 진단이 주행을 죽이면 안 된다
             lines.append(f"   ☹ 상세 실패(주행은 계속): {e!r}")
         try:
-            getattr(self, "_say", print)("\n".join(lines))
+            _emit(self, "\n".join(lines))
         except Exception:
             print("\n".join(lines), flush=True)
 
@@ -3190,7 +3213,9 @@ class FleetController:
         """쌍마다 첫 겹침의 자세·거리·심각도. 이 숫자로 접촉 여부가 판정된다."""
         try:
             pa, pb = poses[a], poses[b]
-            say = getattr(self, "_say", print)
+
+            def say(m):
+                _emit(self, m)
             if gap <= 0.0:
                 tag = "★★ 실제 접촉 — 물리적으로 닿았다. 브리지 버그"
             elif gap < CONTACT_NEAR:
