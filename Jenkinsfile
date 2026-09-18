@@ -168,7 +168,11 @@ pipeline {
                             sh '''
                                 docker tag fms-estimate-worker:$BUILD_NUMBER $REGISTRY/fms-estimate-worker:$BUILD_NUMBER
                                 docker push $REGISTRY/fms-estimate-worker:$BUILD_NUMBER
-                                kubectl -n fms set image deployment/sim-worker worker=$REGISTRY_NODE/fms-estimate-worker:$BUILD_NUMBER
+                                # 매니페스트가 기준(-249): 자원·개수·정책 변경도 release 로 나간다. image 줄만 이번 빌드 번호로 바꿔 넣는다
+                                # (파일의 :latest 는 첫 적용용 자리). apply 뒤 set image 를 따로 하면 latest 로 한 번 더 롤아웃이 돌아 합쳤다.
+                                kubectl apply -f 3_FMS/infra/k8s/namespace.yaml
+                                sed -E "s#^( *image: ).*fms-estimate-worker:.*#\\1$REGISTRY_NODE/fms-estimate-worker:$BUILD_NUMBER#" \\
+                                    3_FMS/infra/k8s/sim-worker-deployment.yaml | kubectl apply -f -
                                 if ! kubectl -n fms rollout status deployment/sim-worker --timeout=600s; then
                                     echo "k3s 워커 롤아웃이 600초 안에 끝나지 않음"
                                     kubectl -n fms get pods -o wide || true

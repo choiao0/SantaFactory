@@ -72,12 +72,13 @@ curl -sI https://j15a106.p.ssafy.io/v2/ | head -1          # 허용 IP 밖(이 P
 
 `Jenkinsfile` FMS 단계가 `FMS_DEPLOY` 값으로 갈린다(Jenkins 전역 환경변수, 기본 `compose`).
 - `compose`: 지금까지처럼 EC2 에서 compose 워커. `WORKER_REPLICAS=0` 이면 올리지 않는다.
-- `k3s`: 빌드 → `127.0.0.1:5000` 으로 push → `kubectl set image`(노드용 주소 `j15a106.p.ssafy.io/…`) → rollout 완료 대기 → EC2 compose 워커 내림 → 레지스트리 태그 정리.
+- `k3s`: 빌드 → `127.0.0.1:5000` 으로 push → `kubectl apply`(namespace + `sim-worker-deployment.yaml`, image 줄만 `j15a106.p.ssafy.io/…:<빌드번호>` 로 치환) → rollout 완료 대기 → EC2 compose 워커 내림 → 레지스트리 태그 정리.
+  매니페스트가 기준이라 자원·개수·정책 변경도 release 로 나간다. Secret 은 값이 레포에 없어 apply 대상이 아니다.
 전환은 값을 `k3s` 로, 되돌리기는 `compose` 로 바꾸고 release 를 다시 돌리면 된다. k3s 경로는 FMS 변경이 감지될 때만 도니 전환 첫 release 는 전체 빌드(기준 SHA 삭제)로.
 노드가 합류하기 전에 `k3s` 로 켜면 rollout 대기 600 s 가 실패하고 뒤의 EMQX·fms-core 단계까지 건너뛴다 — 노드 Ready 를 본 뒤 켠다.
 
 ## 워커 개수·자원
 
-- 개수는 Deployment 의 `replicas` 하나. 노드를 늘리면 합류 뒤 숫자만 올린다. `kubectl -n fms scale deployment/sim-worker --replicas=16`
+- 개수는 Deployment 의 `replicas` 하나 — 파일을 고쳐 release 에 넣는다. `kubectl -n fms scale deployment/sim-worker --replicas=16` 은 즉시 반영되지만 다음 release 때 파일 값으로 돌아온다.
 - 메모리 3Gi 는 로봇 13대·주문 4,000 건 실측 기준. 로봇 28대·주문 6,000 건은 넘칠 수 있다(`../gcp/README.md`).
 - 노드 하나가 빠지면 12개 유지가 아니라 8개 가동 + 4개 Pending 이다(CPU 요청 900m × 4 = 노드 한도). 노드가 돌아오면 자동 배치된다.
