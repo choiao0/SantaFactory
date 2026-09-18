@@ -66,6 +66,23 @@ def features_from_name(name, free=None, fleet=None, load_frac=1.0):
     return f
 
 
+def features_from_map(map_dir=None, fleet=None, load_frac=1.0):
+    """도면 격자에서 직접 잰다 — 이름이 없어도 된다 (공식 맵·실제 도면용).
+
+    `map_features.extract` 가 차단/개방 차이로 랙 사이 통로를 찾아 통로 수·간격·길이를 센다.
+    합성 창고 112개에서 이름의 정답과 112/112 일치했다. `map_dir=None` 이면 공식 맵이다.
+
+    **주의** — 공식 맵은 통행 칸이 9,333 으로 학습 범위(1,050~2,217) 밖이다. θ 는 나오지만
+    그 값이 좋다는 보장은 없다 (차단 조건 1런 실측에서 고정 θ 대비 -7.9 %).
+    """
+    import map_features
+    f = map_features.extract(map_dir)
+    if f is None or fleet is None:
+        return None
+    return {"aisles": f["aisles"], "pitch": f["pitch"], "length": f["length"],
+            "free": f["free"], "fleet": float(fleet), "load_frac": float(load_frac)}
+
+
 def _design():
     """합성 창고 설계표 — free·fleet 을 이름만으로 채울 때 쓴다."""
     if "design" in _CACHE:
@@ -145,9 +162,17 @@ def write_theta(theta, out_dir=None):
     return path
 
 
-def theta_file_for(map_name, fleet=None, load_frac=1.0, model_path=None, out_dir=None):
-    """맵 이름 → θ 파일 경로. 한 번에 쓰는 편의 함수. 실패하면 None."""
-    f = features_from_name(map_name, fleet=fleet, load_frac=load_frac)
+def theta_file_for(map_name=None, fleet=None, load_frac=1.0, model_path=None,
+                   out_dir=None, map_dir=None):
+    """맵 → θ 파일 경로. 실패하면 None.
+
+    `map_dir` 를 주면(또는 `map_name` 이 없으면) **도면 격자에서 직접 재고**, 합성 창고
+    이름을 주면 이름에서 읽는다. 둘 다 없으면 공식 맵을 잰다.
+    """
+    if map_dir is not None or map_name is None:
+        f = features_from_map(map_dir, fleet=fleet, load_frac=load_frac)
+    else:
+        f = features_from_name(map_name, fleet=fleet, load_frac=load_frac)
     if f is None:
         return None
     th = predict(f, model_path=model_path)
@@ -159,27 +184,42 @@ if __name__ == "__main__":
     import sys
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    p = argparse.ArgumentParser(description="맵 이름으로 θ 예측")
-    p.add_argument("map", help="합성 창고 이름 (예: r11p5l17)")
-    p.add_argument("--fleet", type=float, default=None)
+    p = argparse.ArgumentParser(
+        description="맵으로 θ 예측 — 인자 없으면 공식 맵을 격자에서 잰다")
+    p.add_argument("map", nargs="?", default=None,
+                   help="합성 창고 이름(r11p5l17) 또는 맵 폴더 경로. 생략하면 공식 맵")
+    p.add_argument("--fleet", type=float, default=None,
+                   help="대수. 공식 맵·폴더 지정 시에는 필수 (합성 이름이면 설계표에서 읽는다)")
     p.add_argument("--load-frac", type=float, default=1.0, dest="load_frac")
     p.add_argument("--model", default=os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "model", "theta_model.joblib"))
     p.add_argument("--out", default=None, help="θ 를 쓸 폴더 (없으면 출력만)")
     a = p.parse_args()
 
-    feat = features_from_name(a.map, fleet=a.fleet, load_frac=a.load_frac)
+    # 이름이면 이름에서, 폴더이거나 생략이면 격자에서 잰다
+    if a.map and not os.path.isdir(a.map) and NAME_RE.search(a.map):
+        label = a.map
+        feat = features_from_name(a.map, fleet=a.fleet, load_frac=a.load_frac)
+    else:
+        label = a.map or "공식 맵 (3_FMS/map)"
+        if a.fleet is None:
+            raise SystemExit("대수를 지정할 것 — 도면에서는 대수를 잴 수 없다 (--fleet 20)")
+        feat = features_from_map(a.map, fleet=a.fleet, load_frac=a.load_frac)
     if feat is None:
-        raise SystemExit("맵 특징을 못 뽑았다 — 합성 창고 이름인지 확인할 것 (r<통로>p<간격>l<길이>)")
-    print("맵 %s · " % a.map + " · ".join("%s %g" % (k, feat[k]) for k in FEATS))
+        raise SystemExit("맵 특징을 못 뽑았다 — 경로나 이름을 확인할 것")
+
+    print("%s" % label)
+    print("  " + " · ".join("%s %g" % (k, feat[k]) for k in FEATS))
     th = predict(feat, model_path=a.model)
     if th is None:
         raise SystemExit("예측 실패 — 모델 파일(%s)을 확인할 것" % a.model)
-    print("\n예측 θ")
+    print()
+    print("예측 θ")
     for k, v in th.items():
         if not k.startswith("_"):
             print("  %-20s %s" % (k, ("%.4f" % v) if isinstance(v, float) else v))
-    print("\n  모델 예측 완주확률 %.0f%% · 처리량비 %.3f"
+    print()
+    print("모델 예측 완주확률 %.0f%% · 처리량비 %.3f"
           % (100 * th["_pred_complete"], th["_pred_ratio"]))
     if a.out:
         print("  %s" % write_theta(th, a.out))
