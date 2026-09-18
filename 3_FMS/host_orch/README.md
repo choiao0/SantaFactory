@@ -69,3 +69,5 @@ Stop 둘 다 → sim-runner IDLE(Isaac 정리 21 s) + fms-core IDLE → `done`, 
 - sim-wms 파드 · k3s Job — 지금은 fms-core 도 compose 상시 데몬(`infra/compose.fms-core.yml`)
 - 러너가 여러 대면 NBIRTH `Runner/State` 가 IDLE 인 노드를 골라 보내고 prefetch 를 러너 수로 (지금은 `--node` 하나)
 - `uagv/v2/+/+/#` 관측 구독은 ACL 에 있지만 아직 안 쓴다 (`biz/v1/#` 은 kpi_summary 에 쓴다)
+
+배포(-249): Jenkins 'host-orch 빌드·배포' 스테이지가 release 마다 `infra/compose.host-orch.yml` 을 build·up -d 한다(조건: `3_FMS/host_orch/**`·compose·Dockerfile 변경 또는 전체 빌드). 자격 `app-env`(RabbitMQ)·`emqx-env`(MQTT). 그 전의 수동 배포(`deploy_ec2.sh`, EC2 `~/host-orch` 사본)는 같은 compose 프로젝트 이름(fms-host-orch)이라 첫 Jenkins 배포가 컨테이너를 넘겨받는다.
