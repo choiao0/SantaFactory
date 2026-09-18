@@ -140,13 +140,14 @@ def _fake_pika(handle_result_status="failed"):
 
 
 def test_consume_publishes_then_acks(monkeypatch):
-    """가짜 pika: 메시지 1건 → 작업 스레드가 handle → pika 스레드가 결과 발행 뒤 ack (명세 §1-3 순서 불변)."""
+    """가짜 pika: 메시지 1건 → running 발행 → 작업 스레드가 handle → pika 스레드가 결과 발행 뒤 ack (명세 §1-3 순서 불변)."""
     fake, calls, stop = _fake_pika()
     monkeypatch.setitem(sys.modules, "pika", fake)
     w.consume(stop_event=stop, poll_s=0.01)
     kinds = [c[0] for c in calls]
     assert kinds[:2] == ["qos", "consume"] and calls[0] == ("qos", 1)
-    assert [c for c in calls if c[0] in ("publish", "ack")] == [("publish", "sim.result", "failed"), ("ack", 7)]
+    assert [c for c in calls if c[0] in ("publish", "ack")] == [
+        ("publish", "sim.result", "running"), ("publish", "sim.result", "failed"), ("ack", 7)]
     assert kinds.index("publish") < kinds.index("ack") < kinds.index("cancel")
 
 

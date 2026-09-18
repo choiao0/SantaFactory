@@ -322,11 +322,24 @@ POLL_S = float(os.environ.get("SIM_POLL_S", "1.0"))     # 폴 간격 [s] — hea
 RECONNECT_S = 5.0
 
 
+def _run_id(body):
+    try:
+        return json.loads(body).get("run_id", "?")
+    except Exception:  # noqa: BLE001
+        return "?"
+
+
+def _publish(pika, ch, payload):
+    ch.basic_publish(exchange="", routing_key=RESULT_QUEUE, body=json.dumps(payload),
+                     properties=pika.BasicProperties(content_type="application/json", delivery_mode=2))
+
+
 class Job:
     """요청 1건의 작업 스레드. handle() 은 예외를 안 내지만(failed 결과), 스레드에서 새면 안 되니 한 번 더 감싼다."""
 
     def __init__(self, delivery_tag, body):
         self.delivery_tag, self.body = delivery_tag, body
+        self.run_id = _run_id(body)
         self.result = None
         self.done = threading.Event()
         self.thread = threading.Thread(target=self._run, name="sim-job", daemon=True)
@@ -339,12 +352,7 @@ class Job:
         try:
             self.result = handle(self.body)
         except Exception as e:  # noqa: BLE001 — 작업 스레드가 죽으면 ack 도 결과도 없이 큐가 막힌다
-            run_id = "?"
-            try:
-                run_id = json.loads(self.body).get("run_id", "?")
-            except Exception:  # noqa: BLE001
-                pass
-            self.result = dict(run_id=run_id, status="failed", error=f"worker internal error: {e}"[:2000], kpi=None)
+            self.result = dict(run_id=self.run_id, status="failed", error=f"worker internal error: {e}"[:2000], kpi=None)
         finally:
             self.done.set()
 
@@ -362,10 +370,11 @@ def _serve(pika, conn, stop_event, poll_s):
             ch.cancel()
             return
         if method is not None:                              # 새 요청 (prefetch 1 → job 이 없을 때만 온다)
-            job = Job(method.delivery_tag, body).start()
+            job = Job(method.delivery_tag, body)
+            _publish(pika, ch, dict(run_id=job.run_id, status="running"))   # 집었다고 먼저 알린다 (명세 §1-2)
+            job.start()
         if job is not None and job.done.is_set():
-            ch.basic_publish(exchange="", routing_key=RESULT_QUEUE, body=json.dumps(job.result),
-                             properties=pika.BasicProperties(content_type="application/json", delivery_mode=2))
+            _publish(pika, ch, job.result)
             ch.basic_ack(delivery_tag=job.delivery_tag)     # 결과 발행 뒤 ack (명세 §1-3) — pika 스레드에서
             job = None
 

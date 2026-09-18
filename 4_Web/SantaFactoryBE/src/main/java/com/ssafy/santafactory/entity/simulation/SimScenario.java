@@ -116,6 +116,11 @@ public class SimScenario {
         return new SimScenario(estimate, runId, amrCount, totalCost);
     }
 
+    /** 워커가 이 run 을 집었다 ({@code status: running} 수신). 재전달로 두 번 와도 그대로 RUNNING. */
+    public void markRunning() {
+        this.status = RunStatus.RUNNING;
+    }
+
     /**
      * 결과 수신 — KPI 를 채우고 DONE 으로 넘긴다.
      *

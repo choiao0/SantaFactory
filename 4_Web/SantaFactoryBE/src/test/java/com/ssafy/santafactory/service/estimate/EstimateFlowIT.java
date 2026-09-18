@@ -25,6 +25,9 @@ import java.util.List;
 
 import static com.ssafy.santafactory.support.TestPrincipals.ADMIN;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 
 /**
  * 견적 생성 → 결과 수신 → 판정 확정까지 실제 Postgres 로 한 번 관통한다.
@@ -118,6 +121,8 @@ new EstimateCreateRequest(warehouseId, null, null, null, null, null, null), ADMI
         assertThat(queued).extracting(SimScenario::getRunId)
                 .startsWith("est_%d_n1".formatted(created.estimateId()))
                 .endsWith("est_%d_n%d".formatted(created.estimateId(), MAX_AMR));
+        // 발행은 커밋 뒤 이벤트 리스너가 한다 — 실제 트랜잭션 매니저 위에서 대수만큼 나갔는지 본다
+        verify(simulationClient, times(MAX_AMR)).publish(any());
 
         // 대수를 늘릴수록 처리율은 오르고 가동률은 떨어지는 곡선을 하나씩 되돌려준다
         for (int amrCount = 1; amrCount <= MAX_AMR; amrCount++) {
