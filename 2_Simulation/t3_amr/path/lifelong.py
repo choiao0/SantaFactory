@@ -136,6 +136,18 @@ def _pair_table():
         print(f"[turn_pair] pitch {pitch} · 여유 {MARGIN} m · **금지 조합 {n}개**"
               + ("   ☹ 표가 비었다 — 규칙이 아무 일도 안 한다" if n == 0 else ""),
               flush=True)
+        # ★★ 위 `make_geom` 이 **랙 마스크를 지웠는지** 본다 (-240, 2026-09-18).
+        #   실제로 지웠다. `make_geom` -> `front_rule` -> `geo.configure(...)` 인데
+        #   `configure` 는 `turn_mask` 를 안 주면 None 으로 되돌린다. 이 표를
+        #   **첫 `step_h` 에서 게으르게** 굽는 탓에, 그 시점이 `setup_lifelong`
+        #   이 마스크를 건 **뒤**였다. 그 판에서 `A11#11 turn(66,105,0)->(66,105,3)`
+        #   (기하 침투 58.1 mm)이 계획에 나와 랙에 10.6 mm 박혔다.
+        #   `front_rule` 을 고쳤으니 여기서는 통과해야 한다 — 안 통과하면 운다.
+        try:
+            import turn_sweep_mask as _TSM
+            _TSM.verify("(_pair_table 뒤)")
+        except ImportError:
+            pass
     return _PAIR_TAB
 
 

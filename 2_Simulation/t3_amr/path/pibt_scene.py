@@ -270,7 +270,29 @@ def front_rule(pitch):
     want = os.environ.get("PIBT_FRONT_RULE")
     if want is not None:
         want = want.strip().lower()
-        geo.configure(front_swing=(want not in ("off", "0", "no", "")),
+        # ★★ **이미 걸린 회전 마스크를 도로 넣어 준다** (-240, 2026-09-18).
+        #
+        #   `geo.configure` 는 `turn_mask` 를 안 주면 **지운다**(geometry.py:91
+        #   `_TURN_MASK = None if turn_mask is None else …`). 그런데 이 함수는
+        #   「앞 칸 규칙」만 정하려고 부르는 자리다. 앞 칸 규칙을 물었는데
+        #   **랙 마스크가 사라지는** 것은 누구도 의도한 적이 없다.
+        #
+        #   ☹ 실제로 당했다. `PIBT_TURN_PAIR` 의 `_pair_table()` 이 `make_geom`
+        #     을 다시 부르는데(lifelong.py), 그게 **첫 `step_h` 에서 게으르게**
+        #     돌아 `setup_lifelong` 이 건 마스크를 지웠다. 로그에는
+        #
+        #         [turn_sweep] ★ 계획기에 걸었다 — 회전 2,976건 금지
+        #         [scene] 앞 칸 규칙 PIBT_FRONT_RULE=4 -> 4칸     <- 이게 뒤에 온다
+        #
+        #     둘 다 찍히고 아무 경고도 없었다. 그 판에서 `A11#11
+        #     turn(66,105,0)->(66,105,3)`(기하 침투 58.1 mm)이 그대로 나와
+        #     랙에 10.6 mm 박혔다 — 마스크가 금지하는 회전이다.
+        #
+        #   `setup_lifelong` 이 「순서가 뒤집히면 configure 가 _TURN_MASK 를
+        #   None 으로 되돌린다」고 **주석으로 경고**해 두었는데, 경고만으로는
+        #   못 막았다. 순서를 지키라고 부탁하는 대신 **순서에 안 걸리게** 한다.
+        geo.configure(turn_mask=geo.turn_mask(),
+                      front_swing=(want not in ("off", "0", "no", "")),
                       front_diag=(want == "4"),
                       robot_dims=(GEOM_KW["front_len"], GEOM_KW["rear_len"],
                                   GEOM_KW["width"]),

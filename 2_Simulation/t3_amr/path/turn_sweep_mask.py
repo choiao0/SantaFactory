@@ -350,6 +350,47 @@ def apply(free, geom, map_dir, verbose=True):
     #   `live_pibt` 가 `setup_lifelong(..., verbose=False)` 로 부르는 바람에
     #   이 줄이 통째로 묻혔다 — 마스크가 걸렸는지를 **액션 수로 역추적**해서
     #   확인해야 했다. 기본과 다른 상태는 보여야 한다.
-    print(f"[turn_sweep] ★ 계획기에 걸었다 — 회전 {int((~m).sum()):,}건 금지 "
+    global _APPLIED
+    _APPLIED = int((~m).sum())
+    print(f"[turn_sweep] ★ 계획기에 걸었다 — 회전 {_APPLIED:,}건 금지 "
           f"(PIBT_TURN_SWEEP=1 · 문턱 {BAN_MM:.0f} mm)", flush=True)
     return m
+
+
+_APPLIED = 0            # 건 금지 수. 0 = 안 걸었다
+
+
+def verify(tag=""):
+    """건 마스크가 **아직 붙어 있나.** 한 번이라도 걸었으면 그 뒤로 지워지면 안 된다.
+
+    ☹ 이 함수가 있는 이유 (-240, 2026-09-18). `geo.configure` 는 `turn_mask` 를
+      안 주면 **지운다.** 그래서 「앞 칸 규칙」을 다시 정하려고 `make_geom` 을
+      부른 것만으로 랙 마스크가 사라진다. 실제로 `PIBT_TURN_PAIR` 의
+      `_pair_table()` 이 **첫 `step_h` 에서** 그걸 했고, 로그는
+
+          [turn_sweep] ★ 계획기에 걸었다 — 회전 2,976건 금지
+          [scene] 앞 칸 규칙 PIBT_FRONT_RULE=4 -> 4칸
+
+      둘 다 멀쩡히 찍은 채 **금지 회전이 그대로 계획에 나왔다.** 랙에 10.6 mm
+      박히고서야 알았다. `pibt_scene.front_rule` 쪽을 고쳤지만, 고친 곳
+      하나를 믿는 대신 **없어지면 소리가 나게** 해 둔다. 싸다 — 판에 한 번이다.
+    """
+    if not _APPLIED:
+        return True
+    try:
+        import pibt.geometry as geo
+        cur = geo.turn_mask()
+    except Exception:
+        return True                       # 확인할 수 없으면 아무 말도 안 한다
+    if cur is not None:
+        return True
+    msg = (f"[turn_sweep] ☹☹ **마스크가 사라졌다**{(' ' + tag) if tag else ''} — "
+           f"{_APPLIED:,}건을 걸어 두었는데 지금 `geo.turn_mask()` 가 None 이다. "
+           f"누군가 `configure()` 를 turn_mask 없이 다시 불렀다. "
+           f"**금지된 회전이 계획에 나온다.**")
+    try:
+        import carb
+        carb.log_error(msg)
+    except Exception:                     # pragma: no cover
+        print(msg, flush=True)
+    return False
