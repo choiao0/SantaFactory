@@ -795,7 +795,20 @@ def setup_lifelong(map_dir, n, pitch, seed, mode="cross", verbose=True):
     """
     if FMS_GRID:
         # ★★ 격자·홈·헤딩·마스크가 전부 그쪽 것이 된다. `keep_station_component`
-        #    도 안 한다 — max 풀링이라 애초에 조각이 안 생긴다(그쪽 주석).
+        #    도 안 한다 — **그쪽 격자를 그대로 쓰는 것이 이 분기의 목적**이라,
+        #    우리가 한 번 더 자르면 그 순간 그쪽 격자가 아니게 된다.
+        #
+        #    ☹ 여기 「max 풀링이라 애초에 조각이 안 생긴다(그쪽 주석)」라고
+        #      적어 두었다. **틀렸다** (2026-09-18 실측). 그런 주석은 3_FMS
+        #      어디에도 없고(`grep`), 수는 이렇다 — pitch 1.0 · 같은
+        #      `occupancy_grid.npy`(sha1 65ddcb0c 로 양쪽 동일):
+        #
+        #        FMS load_map aisle=False  free 9,333 · 성분 **61** · 상위 [4956, 2638, 565, ...]
+        #        FMS load_map aisle=True   free 8,640 · 성분 **61** · 상위 [4956, 1945, 565, ...]
+        #        우리 build_free(cross)    free 8,919 · 성분 **53** · 상위 [5107, 1969, 569, ...]
+        #
+        #      max 풀링도 조각난다. 다만 **그래서 잘라야 한다는 뜻은 아니다** —
+        #      자르면 그쪽과 다른 판이 된다. 조각의 값은 따로 재서 낸다.
         return _fms_setup(n, pitch, verbose, map_dir)
     geom = make_geom(pitch)
     free, k = build_free(map_dir, pitch, mode)
