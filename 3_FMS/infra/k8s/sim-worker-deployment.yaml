@@ -1,0 +1,56 @@
+# 견적 DES 워커 (S15P21A106-248). compose.estimate.gcp.yml 의 k3s 판 — 워커 12개를 GCP 노드 3대(role=sim-worker)에 4개씩.
+# 이미지 태그는 Jenkins 가 `kubectl set image` 로 빌드 번호를 넣는다. 여기 적힌 latest 는 첫 적용용.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sim-worker
+  namespace: fms
+  labels:
+    app: sim-worker
+spec:
+  replicas: 12
+  selector:
+    matchLabels:
+      app: sim-worker
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # 새 이미지로 갈 때 한 번에 3개씩 — 노드 여유 CPU 가 없어 surge 는 못 하고, 12개가 한꺼번에 내려가면 처리 중 런이 전부 재전달된다
+      maxUnavailable: 3
+      maxSurge: 0
+  template:
+    metadata:
+      labels:
+        app: sim-worker
+    spec:
+      # 워커는 쿠버네티스 API 를 쓰지 않는다 — 기본 서비스어카운트 토큰을 넣어 두면 컨테이너가 뚫렸을 때 클러스터 접근 통로가 된다
+      automountServiceAccountToken: false
+      nodeSelector:
+        role: sim-worker
+      # 노드마다 같은 수로 — 한 노드에 몰리면 코어를 나눠 써 느려진다
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: sim-worker
+      containers:
+        - name: worker
+          image: 100.100.149.68:5000/fms-estimate-worker:latest
+          envFrom:
+            - secretRef:
+                name: sim-worker-broker
+          resources:
+            # 워커 1개 = 코어 1개(OMP 1). 메모리 3Gi 는 GCP 실측(로봇 12·13대가 2Gi 한도, +70MB/로봇, gcp/README.md)
+            # 디스크: run 마다 isaac_export 약 20 MB 를 쓰고 읽은 뒤 지운다(estimate_worker._read_replay). 상한을 두어 지우기 실패가 노드 디스크를 채우지 않게
+            requests:
+              cpu: 900m
+              memory: 3Gi
+              ephemeral-storage: 200Mi
+            limits:
+              cpu: "1"
+              memory: 3Gi
+              ephemeral-storage: 1Gi
+      # 워커는 결과 발행 뒤 ack 하므로 처리 중 내려가면 RabbitMQ 가 그 런을 다른 워커에 다시 준다. 길게 기다릴 이유가 없다
+      terminationGracePeriodSeconds: 15
