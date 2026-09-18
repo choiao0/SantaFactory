@@ -135,6 +135,28 @@ def load_history(path, cell_m=None, off_m=None, verbose=True):
     return history, meta
 
 
+#: ★★ 궤적의 **시간표**를 지킨다 (-240, 2026-09-18).
+#
+#   ☹ 칸 열이 같아도 **간격이 다르면 다른 주행**이다. 이산에서 10틱 떨어져
+#     지나간 두 대가 자유 주행에서는 바로 뒤에 붙어 간다. 칸은 안 겹쳐도
+#     몸은 41.3 mm 안으로 들어온다 — **접촉을 정하는 것이 바로 그 간격**이다.
+#
+#     그 상태로 접촉이 나면 「그쪽 계획 탓」이라고 말할 수 없다. 우리가 간격을
+#     안 지켜서일 수 있다. 그러면 이 판을 돌리는 의미가 없어진다.
+#
+#   그래서 **동작마다** `release_tick` 을 제 계획 틱으로 박는다. 실행은 그
+#   시각보다 **일찍은 못 가고 늦게는 갈 수 있다** — 물리가 느린 만큼 밀린다.
+#   FMS 시계가 바닥이 되고, 그 위에서 물리가 얼마나 밀리는지가 측정된다.
+#
+#       PIBT_TRAJ_SCHEDULE=0   순서만 지킨다 (☹ 간격이 안 지켜진다)
+#       (기본)                 **시간표를 지킨다**
+#
+#   ☹ 우리 lifelong 판은 `release_tick` 을 **태스크 첫 동작에만** 건다(-211).
+#     로봇이 일찍 끝내도 계획 시각까지 서 있는 것이 막힘의 66.2 % 였기 때문이다.
+#     여기서는 그 66.2 % 가 **버그가 아니라 재현하려는 대상**이라 전부 건다.
+TRAJ_SCHEDULE = os.environ.get("PIBT_TRAJ_SCHEDULE", "1") not in ("0", "", "no", "off")
+
+
 def build(path, geom, verbose=True):
     """`trajectories.json` -> `(adg, order, history, info)`.
 
@@ -158,6 +180,22 @@ def build(path, geom, verbose=True):
     import isaac_drive as D
     history, meta = load_history(path, verbose=verbose)
     chains, order, stats = D.extract_actions(history, geom)
+
+    # ★★ 시간표를 지킨다 — 동작마다 제 계획 틱을 릴리스 바닥으로 박는다.
+    if TRAJ_SCHEDULE:
+        n = 0
+        for ch in chains:
+            for act in ch:
+                act.release_tick = act.tick
+                n += 1
+        meta["scheduled"] = n
+        if verbose:
+            print(f"[fms_traj]   ★★ 시간표 적용 — 동작 {n:,}개에 릴리스 바닥을 박았다"
+                  f" (일찍은 못 가고 늦게는 간다)")
+    elif verbose:
+        print("[fms_traj]   ☹ PIBT_TRAJ_SCHEDULE=0 — **순서만** 지킨다."
+              " 두 로봇 사이 간격이 이산과 달라진다")
+
     adg = D.build_adg(chains)
     if adg.topological_order() is None:
         raise RuntimeError(
