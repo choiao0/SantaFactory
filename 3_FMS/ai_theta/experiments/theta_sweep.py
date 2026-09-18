@@ -112,6 +112,10 @@ def run(job, out_dir, trials, orders, block):
 
 
 def main():
+    # 도움말에 em-dash 가 있어 Windows 기본 콘솔(cp949)에서 --help 가 죽는다.
+    # theta_stall_scan.py:50 과 같은 처리.
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     p = argparse.ArgumentParser(description="합성 창고 θ 일괄 탐색")
     p.add_argument("--jobs", type=int, default=64)
     p.add_argument("--trials", type=int, default=150,
@@ -143,14 +147,20 @@ def main():
             print("  " + " ".join(command(w[0], w[1], a.out, a.trials, a.orders, a.aisle_block)))
         return 0
 
-    t0, done = time.time(), 0
+    t0, done, bad = time.time(), 0, 0
     with ThreadPoolExecutor(max_workers=a.jobs) as pool:
         for name, el, msg in pool.map(
                 lambda w: run(w, a.out, a.trials, a.orders, a.aisle_block), jobs):
             done += 1
+            bad += msg.startswith("실패")
             print("[%3d/%d] %-12s %5.1f분  %s   (경과 %.0f분)"
                   % (done, len(jobs), name, el / 60, msg, (time.time() - t0) / 60), flush=True)
     print("\n끝. 총 %.0f분" % ((time.time() - t0) / 60))
+    # 종료 코드로 성패를 알린다 — 몇 시간짜리 배치라 쉘·CI 가 이것만 보고 판단한다.
+    # 실패를 찍어놓고 0 을 돌려주면 전부 죽어도 성공으로 보인다.
+    if bad:
+        print("  실패 %d/%d" % (bad, len(jobs)))
+        return 1
     return 0
 
 

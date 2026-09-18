@@ -239,6 +239,11 @@ def main():
                   % (name, sseed, el / 60, msg, nok, len(jobs),
                      (time.time() - t0) / 60), flush=True)
     print("\n끝. 총 %.0f분" % ((time.time() - t0) / 60))
+    # 종료 코드로 성패를 알린다 — 몇 시간짜리 배치라 쉘·CI 가 이것만 보고 판단한다.
+    # 실패를 세어놓고 0 을 돌려주면 전부 죽어도 성공으로 보인다.
+    if nok < len(jobs):
+        print("  실패 %d/%d" % (len(jobs) - nok, len(jobs)))
+        return 1
     return 0
 
 

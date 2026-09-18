@@ -131,29 +131,29 @@ def band(rows, key, title):
                  st.fmean(r["gain_vs_neutral"] for r in g)))
 
 
-def main():
+def _parse_args():
     p = argparse.ArgumentParser(description="합성 창고 θ 전수 측정")
     p.add_argument("--jobs", type=int, default=64, help="동시 시뮬 수 (그대로 쓴다)")
     p.add_argument("--orders", type=int, default=250)
     p.add_argument("--timeout", type=int, default=900)
     p.add_argument("--limit", type=int, default=0)
     p.add_argument("--out", default=os.path.join(OUT, "synth_sweep_v2.csv"))
-    a = p.parse_args()
+    return p.parse_args()
 
-    neutral_path = os.path.join(OUT, "_neutral_theta.json")
-    os.makedirs(OUT, exist_ok=True)
-    with open(neutral_path, "w", encoding="utf-8") as f:
-        json.dump(NEUTRAL, f)
 
-    ws, own = warehouses()[:a.limit or None], own_thetas()
+def _make_jobs(ws, own, neutral_path):
+    """창고 x θ 3종 x 시드 3개. own 이 없는 창고는 그 조합만 빠진다."""
     jobs = []
     for w in ws:
         for label, th in (("neutral", neutral_path), ("fixed", FIXED),
                           ("own", own.get(w["name"]))):
             if th:
                 jobs += [(w, label, th, s) for s in SEEDS]
-    print("창고 %d개 · 런 %d개 · 동시 %d" % (len(ws), len(jobs), a.jobs))
+    return jobs
 
+
+def _run_all(jobs, a):
+    """반환 (결과 {(창고,라벨): {시드: 처리량}}, 실패 [(창고,라벨,시드,사유)])."""
     t0, res, fails, done = time.time(), {}, [], 0
     with ThreadPoolExecutor(max_workers=a.jobs) as pool:
         for w, label, seed, val, why in pool.map(
@@ -165,8 +165,15 @@ def main():
             if done % 50 == 0 or done == len(jobs):
                 print("  %4d/%d  실패 %d  (경과 %.0f분)"
                       % (done, len(jobs), len(fails), (time.time() - t0) / 60), flush=True)
-    os.unlink(neutral_path)
+    return res, fails
 
+
+def _summarize(ws, res):
+    """창고마다 한 줄로 접는다 → (전체, 양쪽 완주, 창고별 θ 까지 완주).
+
+    3시드를 다 못 채운 창고는 `full`·`duel` 에서 빠진다 — 완주한 런만 평균 내면
+    "안 멈추는 것" 에 대한 벌점이 사라지기 때문이다.
+    """
     rows = []
     for w in ws:
         r = dict(w)
@@ -186,13 +193,18 @@ def main():
         r["own_vs_fixed_pct"] = 100 * m / r["fixed_mean"]
         r["own_spread"] = round(sp, 1)
         r["verdict"] = v
+    return rows, full, duel
 
-    with open(a.out, "w", encoding="utf-8", newline="") as f:
+
+def _write_csv(path, rows):
+    with open(path, "w", encoding="utf-8", newline="") as f:
         wr = csv.DictWriter(f, fieldnames=sorted({k for r in rows for k in r}),
                             extrasaction="ignore")
         wr.writeheader()
         wr.writerows(rows)
 
+
+def _report_completion(rows, own, fails):
     print("\n=== 0. 완주 (3시드 다 도는가) ===")
     for label in LABELS:
         have = [r for r in rows if label != "own" or r["own_n"] or own.get(r["name"])]
@@ -208,6 +220,8 @@ def main():
             "%s %s %d" % (k[0], k[1], v)
             for k, v in sorted(why.items(), key=lambda x: -x[1])[:6]))
 
+
+def _report_duels(full, duel):
     print("\n=== 1. 일반화: 고정 θ vs 중립 (양쪽 3/3 완주 %d창고) ===" % len(full))
     if full:
         pos = [r for r in full if r["gain_vs_neutral"] > 0]
@@ -224,12 +238,40 @@ def main():
         print("  전체 평균 %+.2f%% (양수 = 창고별 탐색이 이득)"
               % st.fmean(r["own_vs_fixed_pct"] for r in duel))
 
+
+def _report_design(full):
     print("\n=== 3. 설계 인자별 응답 (고정 θ · %d창고) ===" % len(full))
     if full:
         band(full, "aisles", "통로 수")
         band(full, "pitch", "통로 중심 간격")
         band(full, "length", "통로 길이")
+
+
+def main():
+    a = _parse_args()
+    os.makedirs(OUT, exist_ok=True)
+    neutral_path = os.path.join(OUT, "_neutral_theta.json")
+    with open(neutral_path, "w", encoding="utf-8") as f:
+        json.dump(NEUTRAL, f)
+
+    ws, own = warehouses()[:a.limit or None], own_thetas()
+    jobs = _make_jobs(ws, own, neutral_path)
+    print("창고 %d개 · 런 %d개 · 동시 %d" % (len(ws), len(jobs), a.jobs))
+    try:
+        res, fails = _run_all(jobs, a)
+    finally:
+        os.unlink(neutral_path)                  # 중간에 죽어도 임시 θ 를 남기지 않는다
+
+    rows, full, duel = _summarize(ws, res)
+    _write_csv(a.out, rows)
+    _report_completion(rows, own, fails)
+    _report_duels(full, duel)
+    _report_design(full)
     print("\n  CSV %s" % a.out)
+    # 종료 코드로 성패를 알린다 — 몇 시간짜리 배치라 쉘·CI 가 이것만 보고 판단한다.
+    if fails:
+        print("  실패 %d/%d 런" % (len(fails), len(jobs)))
+        return 1
     return 0
 
 
