@@ -46,6 +46,6 @@ docker logs --since 24h emqx 2>&1 | grep -c authentication_failure   # 다음 �
 ## 한계·다음
 - ens5 에는 공인 IPv6 가 없어 `after6.rules` 는 두지 않았다. docker 는 `[::]:1883` 도 열지만 닿을 주소가 없다.
 - 대시보드(18083·9001·15672)는 compose 에서 이미 127.0.0.1 이다. 밖에 나갈 이유가 없는 포트는 publish 주소로 묶는 편이 먼저다.
-- RabbitMQ 5672 는 127.0.0.1 과 tailnet 에만 열려 있다. GCP 워커가 AMQPS 5671 로 붙게 되면 nginx stream 종단이 호스트 프로세스라
-  일반 `ufw allow from <IP> to any port 5671` 로 제한한다.
+- RabbitMQ 5672 는 127.0.0.1 에만 열려 있다(tailnet 리스너는 09-18 닫음). GCP 워커는 AMQPS 5671(nginx stream, `infra/nginx/`)로 붙고,
+  nginx 는 호스트 프로세스라 `ufw allow from 34.47.111.62 to any port 5671 proto tcp` 로 제한한다(-246, 적용됨).
 - Jenkins 에는 안 붙였다. 배포는 SSH 로 `apply.sh` 한 번(host-orch 와 같은 수동 관례).
