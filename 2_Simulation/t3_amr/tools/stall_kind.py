@@ -14,16 +14,24 @@
 쓰는 법
 -------
     source paths.sh
-    PIBT_FRONT_RULE=4 PIBT_PITCH=1.0 SEED=14 python tools/stall_kind.py
+    SEED=14 python tools/stall_kind.py
 
     SEED       볼 시드 (기본 14)
     STAG_MIN   정체로 볼 문턱 틱 (기본 100)
+    RULE       앞 칸 규칙 (기본 4 — 주행과 같게 맞춘다)
 """
 import os
 import sys
 
 sys.path.insert(0, os.path.join(os.environ["W"], "path"))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+# ★ 주행과 **같은 환경**을 스스로 맞춘다 (-224). 예전에는 독스트링이
+#   `PIBT_FRONT_RULE=4` 를 앞에 붙이라고만 했다. 빠뜨리면 규칙 없이 계획이
+#   서고, 그러면 **조용히 다른 계획**을 재게 된다 — `lag_budget` 이 실제로
+#   그랬다 (태스크 완료가 주행 13 개인데 도구는 15 개였다). 위상 잠금을
+#   가리는 도구가 다른 계획을 보고 있으면 결론이 통째로 무의미하다.
+os.environ.setdefault("PIBT_FRONT_RULE", os.environ.get("RULE", "4"))
 
 import pibt_scene                                            # noqa: E402
 
@@ -78,6 +86,9 @@ def main():
     K = holder["k"]
     trace = K.trace
     print(f"[stall_kind] 시드 {SEED} · {N}대 · {len(trace)}틱 기록")
+    # ★ 어느 시스템을 잰 표인지 **표 자체로** 알 수 있어야 한다.
+    print(f"             PIBT_FRONT_RULE={os.environ.get('PIBT_FRONT_RULE')} · "
+          f"pitch {PITCH} · horizon {HORIZON} · order_gap {GAP}")
     print(f"             stag_max {li.get('stag_max')} · "
           f"100틱+ {li.get('stag_stuck')} · 태스크 {li.get('tasks_done')}")
 

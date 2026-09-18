@@ -1640,6 +1640,151 @@ def _tol_env(name, default):
 K_CROSS = _tol_env("PIBT_K_CROSS", 1.8)
 K_HEAD = _tol_env("PIBT_K_HEAD", 2.2)
 
+# ★★ 회전 각가속 제한 [rad/s^2] — 0 이면 끈다 (지금까지의 동작).
+#
+#   왜 (2026-09-17, S15P21A106-240). 회전 162건 중 **1건이 363.4 mm** 밀렸다
+#   (중앙 47.7 · p95 61.6). 시작 48.4 -> 끝 363.4 이므로 **회전 그 자체가
+#   315 mm 를 만들었다.** 앞에서 물려받은 것이 아니다.
+#
+#   회전 가지에는 **가속도 제한이 없다.** 직진은
+#
+#       self._v += clamp(want - self._v, -a_exec*dt, +a_exec*dt)
+#
+#   로 한 스텝에 가속도만큼만 바뀌는데, 회전은 `clamp(3*err, ±w_max)` 를
+#   그대로 돌려준다. 90도 회전이면 err=1.571 -> 3*err=4.71 이라 **첫 스텝에
+#   곧바로 w_max(2.07)** 다. 60 Hz 에서 바퀴 접선속도 0.83 m/s 짜리 계단이고,
+#   속도 제어 조인트에 계단을 주면 마찰 한도를 잠깐 넘어 **미끄러진다.**
+#
+#   왜 161건은 멀쩡한가 — 계단만으로는 안 나고 접지·하중·캐스터 각이 겹쳐야
+#   난다. 그래서 **분포의 꼬리**로만 보인다. 이 상수는 그 꼬리를 자르려는 것이다.
+#
+#   ☹ 값을 너무 작게 잡으면 **회전이 느려져 틱 모델이 깨진다** (TURN_TICKS=5 는
+#     FMS 와 공유한다). 90도 = 1.571 rad 이므로 대략
+#         소요 ~ 1.571/w_max + w_max/W_ACCEL
+#     20 rad/s^2 이면 램프가 0.10 s 라 0.76 s -> 0.81 s 로 거의 안 변한다.
+#     반면 한 스텝 변화는 2.07 -> 0.33 rad/s 로 **6배 작아진다.**
+W_ACCEL = _tol_env("PIBT_W_ACCEL", 0.0)
+
+
+def pivot_in_body(pa: tuple[float, float, float],
+                  pb: tuple[float, float, float]) -> tuple[float, float] | None:
+    """두 자세를 잇는 **강체 회전의 중심**을 시작 시점 차체 좌표로 돌려준다.
+
+    회전만 하는 액션이 축을 옮겼다면, 옮긴 만큼이 「어디를 중심으로 돌았나」를
+    말해 준다. 평면 강체 운동은 (순수 평행이동이 아니면) 항상 **한 점**을
+    중심으로 한 회전이고, 그 점은 두 자세만으로 정해진다.
+
+        p_b = R(dth)·(p_a - P) + P
+        ->  p_a - P = (R - I)^-1 (p_b - p_a)
+
+    돌려주는 값은 **시작 자세 기준 차체 좌표** (전방 +x, 좌측 +y) [m] 다.
+    그래야 하드웨어와 바로 맞댈 수 있다:
+
+        (0, 0)          축 중점을 중심으로 돌았다 — 정상
+        (0, +-0.25)     **한쪽 구동바퀴**가 중심이다 (wheel_base 0.50)
+        (-1.11, ~0)     뒤쪽(캐스터)이 중심이다
+
+    각 변화가 거의 없으면 회전이 아니라 미끄러짐이므로 `None` 을 준다.
+    """
+    dth = wrap(pb[2] - pa[2])
+    if abs(dth) < 1e-3:
+        return None
+    dx, dy = pb[0] - pa[0], pb[1] - pa[1]
+    c, s = math.cos(dth), math.sin(dth)
+    # (R - I) 의 역행렬. det = (c-1)^2 + s^2 = 2(1 - c) > 0 (dth != 0)
+    det = (c - 1.0) ** 2 + s * s
+    ux = ((c - 1.0) * dx + s * dy) / det
+    uy = (-s * dx + (c - 1.0) * dy) / det
+    px, py = pa[0] - ux, pa[1] - uy            # world 좌표의 중심
+    # 시작 자세의 차체 좌표로 옮긴다
+    ca, sa = math.cos(pa[2]), math.sin(pa[2])
+    rx, ry = px - pa[0], py - pa[1]
+    return (ca * rx + sa * ry, -sa * rx + ca * ry)
+
+# ★ A — 게 걸음 평형에서 빠져나오는 복구 기동 (S15P21A106-240)
+#
+#   ☹ 기제는 이득비가 **아니다.** 위 주석이 「비율이 crab 각의 크기를 정한다」고
+#     적었고 `tools/crab_gain.py` 로 흔들어 봤지만, 어떤 양수 이득쌍에도 평형이
+#     있어서 닫혔다. 진짜 자리는 여기다:
+#
+#         w    = K_CROSS*cross + K_HEAD*head     조향은 cross 를 본다
+#         want = clamp(1.6 * along, ...)         ★ 속도는 **along 만** 본다
+#
+#     바퀴 달린 차는 **움직여야** 횡오차가 준다. `along` 이 0 에 가까워지면
+#     `v -> 0` 이고, 그 순간 `cross` 를 줄일 수단이 사라진다. 평형을 옮겨도
+#     `v = 0` 이면 횡으로 못 움직이는 것은 그대로다.
+#
+#     실측 (시드 7 · A6#86 `reverse(46,50,0)->(45,50,0)`):
+#         along 37 mm (허용 50 **안**) · cross 211 mm · head -10.0도 · w +0.000 rad/s
+#         막는 조건: 각도 10.04도 > 2.86 · 위치 214.2 mm > 50
+#     느린 수렴이 아니라 **진짜 고정점**이다.
+#
+#   대처 — 진행 방향 **반대로** 물러나 `along` 을 되살린다. 그러면 `v` 가 살아나고
+#   그제야 `w` 가 `cross` 를 줄인다.
+#
+#   ★ 왜 「물러나기」인가 (「넘어가기」가 아니라)
+#       occupied(frm) = {frm, 꼬리}   ·   occupied(to) = rest = {to, 꼬리}
+#       cells = swept = 둘의 합집합
+#       물러나면  몸 ⊂ cells        ✓ **우리 예약 안**이다
+#       넘어가면  몸 ⊄ cells        ✗ 목표 너머는 예약이 없다
+#     그리고 `frm` 쪽 칸은 `released` 지만 **놓아주는 시점이 완료**다
+#     (`complete()` 는 `body & released` 를 보고, 후행은 ADG `preds` 로 풀린다).
+#     교착이면 애초에 완료가 아니므로 **후행이 아직 안 들어왔다** — 실측 로그도
+#     `agent3 대기 … 선행 미완 1건 -> agents [6]` 이었다.
+#
+#   상한은 그래서 **축이 `frm` 을 넘지 않는 선**이다.
+#
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# ☹☹ 여기까지가 **틀렸다.** 재 보고 두 번 뒤집혔다 (2026-09-17).
+#
+#   ① 「v 를 되살리면 된다」 -> **아무 효과가 없다.**
+#      물러나서 `along` 을 300 mm 까지 되살렸는데 `cross` 201.8 mm 가 12초 동안
+#      **1 mm 도 안 움직였다.** 풀어 보면 이유가 나온다:
+#
+#          d(cross)/dt = -w * along          (병진 항은 정확히 상쇄된다)
+#
+#      **곱이다.** 몸이 자기 헤딩을 따라가므로 프레임이 같이 돌아 **병진만으로는
+#      횡오차가 전혀 안 준다.** 평형은 `w = 0` 이라, `along` 만 되살리면 곱은
+#      그대로 0 이다. 갇힌 것은 `v` 가 아니라 **`w`** 였다.
+#
+#   ② 「그럼 w 를 직접 주자」 -> **더 나빠진다.**
+#      물러나며 `w=+0.3` 을 주면 cross 201.8 -> 99.6 으로 준다. 그런데 돌아올 때
+#      법칙이 강제로 튼 head(-38도)를 되돌리며 99.6 -> 246.2 로 **더 잃는다.**
+#
+#   ★ 지배식을 `w dt = dθ` 로 바꾸면 전부 설명된다:
+#
+#          Δcross = -∫ w·along dt = **-∫ along dθ**
+#                 = (along, θ) 평면에서 **부호 있는 넓이**
+#
+#      왕복이 같은 경로면 넓이가 0 이라 **정확히 상쇄**된다(①). 돌아오는 쪽
+#      |w| 가 더 크면 넓이 부호가 뒤집힌다(②).
+#
+#   ★ 그래서 설계 규칙은 하나다 — **`along` 이 클 때 돌고, 작을 때 되돌린다.**
+#     평행주차와 같은 모양이고, 4구간 개루프 기동이 필요하다:
+#         ㄱ 제자리에서 튼다        along~0 이라 **공짜** (cross 안 변한다)
+#         ㄴ 곧게 물러난다          along 을 키운다
+#         ㄷ 먼 쪽에서 튼다         along 이 크니 **여기서 번다**
+#         ㄹ 곧게 돌아온다          되돌릴 각을 최소로
+#     그리고 그 사이 몸이 `cells` 안에 있어야 한다 — 아직 안 따졌다.
+#
+#   지금 코드는 ①+②까지다. **기본 꺼짐**이고, 켜면 더 나빠진다.
+#   `tools/` 에 재현 하니스가 없다 — 위 실측은 제어기만 적분해서 낸 값이다.
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# ☹ ★ 기본 **꺼짐**이다. 대책이 아직 안 섰다 — 켜면 **더 나빠진다** (아래).
+#   `PIBT_RECOVER=1` 은 위 검출/기동을 실험해 보는 용도다.
+RECOV_ON = os.environ.get("PIBT_RECOVER", "0") not in ("0", "", "no", "off")
+RECOV_AFTER = _tol_env("PIBT_RECOVER_AFTER", 1.0)     # 평형이 이만큼 이어지면 [s]
+RECOV_W = _tol_env("PIBT_RECOVER_W", 0.02)            # |w| 가 이 아래면 수렴 [rad/s]
+RECOV_D = _tol_env("PIBT_RECOVER_D", 0.30)            # 한 번에 물러날 거리 [m]
+RECOV_MARGIN = _tol_env("PIBT_RECOVER_MARGIN", 0.05)  # frm 까지 남길 여유 [m]
+# ★ 무한 반복을 막는다. 여기서 멈추면 워치독이 **평소대로** 잡는다 —
+#   복구가 새 실패를 가리면 안 된다.
+RECOV_MAX = int(os.environ.get("PIBT_RECOVER_MAX", "3"))
+# ★★ 복구 중 **직접 주는 조향** [rad/s]. 이것이 대책의 본체다 —
+#   d(cross)/dt = -w * along 이라 `w` 를 0 에서 떼지 않으면 `along` 을 아무리
+#   되살려도 `cross` 가 안 준다 (실측: 12초에 1 mm 도 안 움직였다).
+RECOV_WCMD = _tol_env("PIBT_RECOVER_WCMD", 0.30)
+
 
 @dataclass
 class Tolerance:
@@ -1750,6 +1895,10 @@ class MotionController:
         self.tol = tol or Tolerance()
         self.action: Action | None = None
         self._v = 0.0
+        # ★★ 마지막으로 **명령한** 각속도 (-240). 각가속 제한의 상태다.
+        #   액션 사이에 0 으로 안 되돌린다 — 몸은 액션 경계에서 안 멈추므로
+        #   명령도 이어지는 것이 물리에 맞다.
+        self._w = 0.0
         # [patch_vexec] **실행 속도는 계획 속도와 다른 값이다** (2026-09-14).
         #   `geom.v_max`(= config.SPEED_PLAN 0.9)는 계획의 틱 길이
         #   `pitch / v_max` 와 ADG 릴리스 일정을 정한다. 그걸 올리면 계획이
@@ -1772,6 +1921,11 @@ class MotionController:
         #   FleetController 가 매 스텝 정해 준다 — 다음 액션이 같은 방향
         #   직진이고 곧바로 시작 가능할 때만 0 보다 크다.
         self.exit_v = 0.0
+        # --- A 복구 기동 상태 (S15P21A106-240). 근거는 RECOV_* 주석 ---
+        self._stuck = 0.0      # 평형이 이어진 시간 [s]
+        self._recov = 0.0      # 물러날 남은 거리 [m] (0 = 평상 주행)
+        self._recov_n = 0      # 이 액션에서 복구를 몇 번 했나
+        self.recovered = 0     # 통계용 — FleetController 가 읽어 간다
 
     def begin(self, action: Action, keep_speed: bool = False) -> None:
         """`keep_speed` 면 현재 속도를 물려받는다 (이어달리기).
@@ -1783,6 +1937,46 @@ class MotionController:
         if not keep_speed:
             self._v = 0.0
         self.exit_v = 0.0
+        self._stuck = self._recov = 0.0
+        self._recov_n = 0          # ★ 액션마다 0 으로. 판 전체 한도가 아니다
+        # ★★ 진입 자세 (S15P21A106-240). 첫 `update()` 에서 채운다 —
+        #   `begin()` 은 pose 를 안 받는다.
+        #
+        #   왜 재나: a6 교착의 자세가 cross **211 mm** 인데 회전 관문은
+        #   **100 mm** 다. 두 배가 넘는다. 그런데 한 액션은 횡오차의 55.8 %
+        #   밖에 못 지우므로(`tools/tol_chain.py`), **진입이 90 mm 를 넘으면
+        #   그 액션은 끝날 수 없다.** 그러면 211 이 어디서 왔는지가 뿌리다:
+        #
+        #       진입이 100 이하인데 211 로 자란다  ->  액션 중에 자란다
+        #       진입이 이미 211 이다               ->  앞 액션이 그렇게 넘긴다
+        #
+        #   둘은 대책이 다르다. 그래서 **멈춘 뒤**가 아니라 **시작할 때**를 잰다.
+        self._entry: tuple[float, float, float] | None = None
+        # ★★ 시작 위치오차 [m] — **회전에도 남긴다** (-240, 2회차).
+        #   `_entry` 는 비-TURN 가지에서만 잡히는데(along/cross 가 거기서만
+        #   정의된다), 정작 물음은 **회전**으로 옮겨 갔다: 회전 162건 중
+        #   1건이 363 mm 로 끝났고 중앙값은 47.7 mm 다. 6배 이상치다.
+        #
+        #   회전은 `update()` 가 `(0, w)` 를 돌려주므로 **병진 속도가 0 이다.**
+        #   스스로는 위치를 못 고치고, 못 망친다 — 물리적 미끄러짐이 없다면.
+        #   그래서 시작과 끝을 같이 보면 갈린다:
+        #
+        #       시작 ~363 · 끝 ~363   ->  **앞에서 물려받았다**. 뿌리가 더 앞이다
+        #       시작 ~50  · 끝  363   ->  **회전 중에 미끄러졌다** (바퀴 헛돎)
+        #
+        #   둘은 고칠 자리가 완전히 다르다. 종류를 안 가리고 첫 update 에서
+        #   한 번만 담는다.
+        self._entry_pos: float | None = None
+        # ★★ 시작 **자세 전체** — 회전 중심을 역산하려고 둔다 (-240, 3회차).
+        #   각가속 램프(W_ACCEL=20)로 A/B 했더니 363.4 -> 375.5 로 **안 변했다.**
+        #   계단 입력 가설이 틀렸다. 대신 숫자가 다른 것을 가리킨다:
+        #
+        #       90도 회전에서 축 이동 = 2·d·sin(45도) = 1.414·d
+        #       363~375 mm  ->  d = 257~265 mm     바퀴 반간격 = **250 mm**
+        #
+        #   즉 **한쪽 구동바퀴를 중심으로 돌았다**(한 바퀴가 안 돌았다)는 뜻이다.
+        #   캐스터는 축 뒤 1.11 m 라 자릿수가 안 맞는다. 추측을 끝내려면 재야 한다.
+        self._entry_pose: tuple[float, float, float] | None = None
         self.tx, self.ty, self.tyaw = self.g.state_pose(action.to)
         sx, sy, _ = self.g.state_pose(action.frm)
         self.sx, self.sy = sx, sy
@@ -1798,11 +1992,22 @@ class MotionController:
         x, y, yaw = pose
         g = self.g
 
+        # ★★ 종류를 안 가리고 **시작 위치오차**를 한 번만 담는다 (-240).
+        #   TURN 가지가 아래에서 바로 return 하므로 그 위여야 한다.
+        if self._entry_pos is None:
+            self._entry_pos = math.hypot(self.tx - x, self.ty - y)
+            self._entry_pose = (x, y, yaw)
+
         if a.kind == TURN:
             err = wrap(self.tyaw - yaw)
             w = clamp(3.0 * err, -g.w_max, g.w_max)
             if abs(err) < 3.0 * self.tol.yaw:            # 마지막엔 부드럽게
                 w = clamp(w, -0.4 * g.w_max, 0.4 * g.w_max)
+            # ★★ 각가속 제한 (-240). 근거는 `W_ACCEL` 주석. 직진 가지의
+            #   `a_exec` 와 **같은 꼴**이다 — 회전만 계단이었다.
+            if W_ACCEL > 0.0:
+                w = self._w + clamp(w - self._w, -W_ACCEL * dt, W_ACCEL * dt)
+            self._w = w
             return (0.0, w)
 
         # 진행 방향 단위벡터. 후진이면 헤딩의 반대다. (begin()이 기하로 정함)
@@ -1813,11 +2018,18 @@ class MotionController:
         cross = fx * dy - fy * dx                        # 진행 방향 기준 좌측(+) 오차
         head = wrap(self.tyaw - yaw)
 
+        # ★★ 진입 자세를 여기서 한 번만 잡는다 (-240). 근거는 `_entry` 주석.
+        if self._entry is None:
+            self._entry = (along, cross, head)
+
         # 조향 부호에 sign을 곱하지 않는다. (fx, fy)에 이미 방향이 들어 있고,
         # 차체를 +w로 돌리면 진행 방향 벡터도 같이 +w만큼 돈다 — 전진이든 후진이든.
         # 여기에 sign을 한 번 더 곱하면 후진에서 조향이 반대로 걸려 횡오차가
         # 발산하고, 방향 항과 싸우다가 목표 반경에 영영 못 든다.
         w = clamp(K_CROSS * cross + K_HEAD * head, -g.w_max, g.w_max)
+        # 여기는 **제한하지 않는다** — 이 가지의 w 는 이미 작고(횡오차 x 1.8),
+        # 감쇠 55.8 % 같은 측정이 전부 이 식 위에 서 있다. 상태만 따라 둔다.
+        self._w = w
 
         # 속도는 대칭으로: 지나쳤으면(along < 0) 되돌아올 수 있어야 한다.
         # 감속 계수는 **물리적** 후진에 붙인다 (센서가 없는 방향이므로).
@@ -1831,6 +2043,53 @@ class MotionController:
         want = clamp(1.6 * along, -lim, lim)
         if self.exit_v > 0.0 and along > 0.0:
             want = max(want, min(lim, self.exit_v))   # 목표 근처에서 0 으로 안 죽게
+
+        # --- A 복구 기동 (S15P21A106-240). 왜 이 자리인지는 RECOV_* 주석 ---
+        #   ★ `want` 를 정한 **뒤**에 덮는다. 평상 경로는 한 글자도 안 바뀌므로
+        #     `PIBT_RECOVER=0` 이면 비트 동일이다 (대책 전/후 대조용).
+        if RECOV_ON:
+            if self._recov > 0.0:
+                # 물러나는 중 — 남은 거리만큼만. 방향은 진행의 **반대**다.
+                self._recov -= abs(self._v) * dt
+                want = clamp(-1.6 * max(self._recov, 0.05), -lim, lim)
+                # ★★ 조향도 **직접 준다.** 이게 대책의 본체다 (2026-09-17 정정).
+                #
+                #   처음에는 `want`(속도)만 되살렸는데 **아무 효과가 없었다.**
+                #   횡오차 201.8 mm 가 12초 동안 1 mm 도 안 움직였다. 풀어 보면:
+                #
+                #       d(cross)/dt = -w * along      (병진 항은 정확히 상쇄된다)
+                #
+                #   **곱이다.** 몸이 자기 헤딩을 따라가므로 **병진만으로는 횡오차가
+                #   전혀 안 준다** — 프레임이 같이 움직이기 때문이다. `w` 와
+                #   `along` 이 **둘 다** 0 이 아니어야 준다.
+                #   평형은 `w = 0` 이라, `along` 만 되살리면 곱은 그대로 0 이다.
+                #
+                #   그래서 평형 법칙을 **덮고** 조향을 직접 준다. 부호는 위 식에서
+                #   나온다 — 물러나는 동안 `along > 0` 이므로 `cross` 를 줄이려면
+                #   `w` 가 `cross` 와 **같은 부호**여야 한다.
+                w = clamp(math.copysign(RECOV_WCMD, cross), -g.w_max, g.w_max)
+            else:
+                # 평형 검출 — 셋이 동시에 참이어야 한다.
+                #   along 이 허용 안  : v 가 곧 0 이 된다
+                #   cross 가 허용 밖  : 그런데 고칠 것이 남았다
+                #   |w| 가 수렴       : 느린 수렴이 아니라 **고정점**이다
+                if (abs(along) <= self.tol.pos and abs(cross) > self.tol.pos
+                        and abs(w) <= RECOV_W):
+                    self._stuck += dt
+                else:
+                    self._stuck = 0.0
+                if self._stuck >= RECOV_AFTER and self._recov_n < RECOV_MAX:
+                    # 물러날 여유 = 출발점에서 온 거리. 축이 `frm` 을 넘으면
+                    # 몸이 `cells` 밖으로 나가므로 거기서 자른다.
+                    came = (x - self.sx) * fx + (y - self.sy) * fy
+                    room = max(0.0, came - RECOV_MARGIN)
+                    d = min(RECOV_D, room)
+                    self._stuck = 0.0
+                    if d > 0.02:                     # 물러날 자리가 있을 때만
+                        self._recov = d
+                        self._recov_n += 1
+                        self.recovered += 1
+                        want = clamp(-1.6 * d, -lim, lim)
         self._v += clamp(want - self._v, -self.a_exec * dt, self.a_exec * dt)
         return (sign * self._v, w)
 
@@ -1953,6 +2212,10 @@ class FleetStats:
     turn_pos_mm: list[float] = field(default_factory=list, repr=False)
     # 그중 위치 관문(`tol.turn_pos`)을 넘은 회전 수. 분포의 요약값이라 이건 찍는다.
     turn_gate_over: int = 0
+    # ★ A 복구 기동이 걸린 횟수 (S15P21A106-240). **0 이면 안 걸린 것**이고,
+    #   그건 「필요 없었다」와 「검출이 안 됐다」를 못 가른다. 그래서 찍는다 —
+    #   `soft` 배너를 넣은 것과 같은 이유다 (한 번은 대책을 안 켜고 돌렸다).
+    recover_events: int = 0
     worst_overlap: int = 0
     # 겹침 중 관측된 **차체 사이 최소 거리** [m]. 겹침이 없으면 inf.
     #   ★ `worst_overlap`(공유 칸 수)만으로는 심각도를 못 잰다. 1.2 m 칸을
@@ -2322,7 +2585,33 @@ class FleetController:
             f"  축이탈=({dx * 1000:+.0f}, {dy * 1000:+.0f})mm"
             f"  잔차={c.residual(pose, mine):.2f}\n"
             f"       ★ 막는 조건: {blk}\n"
-            f"       놓아줄 칸에 남은 몸={left or '없음'}"
+            # ★★ **진입 자세** (-240). 「멈춘 자세가 211 mm」만으로는 그것이
+            #   들어올 때부터였는지 액션 중에 자란 것인지 못 가른다.
+            #   한 액션은 횡오차의 55.8 % 밖에 못 지우므로(tools/tol_chain.py)
+            #   **진입 > 90 mm 면 그 액션은 끝날 수 없다** — 그때는 이 액션이
+            #   아니라 **앞 액션**을 봐야 한다.
+            + (f"       진입 자세: along {c._entry[0] * 1000:+.0f} · "
+               f"cross {c._entry[1] * 1000:+.0f} · "
+               f"head {math.degrees(c._entry[2]):+.1f}deg"
+               + ("   ★ 진입이 이미 90mm 를 넘는다 — **앞 액션을 보라**"
+                  if abs(c._entry[1]) > 0.090 else
+                  "   (진입은 90mm 안 — 액션 중에 자랐다)")
+               + "\n" if c._entry else "       진입 자세: 못 잡았다 (회전이다)\n")
+            # ★★ 회전은 위 줄이 안 찍힌다 (along/cross 가 비-TURN 에서만 정의).
+            #   그래서 **종류 무관한 시작 위치오차**를 따로 찍는다. 회전은
+            #   병진 속도가 0 이라 스스로 위치를 못 고치므로, 시작과 끝이
+            #   같으면 **앞에서 물려받은 것**이고 벌어졌으면 **미끄러진 것**이다.
+            + ("       시작 위치오차: 못 잡았다\n" if c._entry_pos is None else
+               f"       시작 위치오차: {c._entry_pos * 1000:.1f} mm"
+               f"  ->  지금 {math.hypot(c.tx - x, c.ty - y) * 1000:.1f} mm\n")
+            # ★ 복구가 걸렸는지 (S15P21A106-240). 「대책이 안 먹었다」와 「대책이
+            #   안 걸렸다」를 로그만 보고 갈라야 한다 — soft 줄과 같은 이유다.
+            + (f"       복구 기동 {c._recov_n}회"
+               + (f" · 물러나는 중 {c._recov * 1000:.0f} mm 남음"
+                  if c._recov > 0 else "")
+               + ("  ★ 한도 도달 — 더 안 한다" if c._recov_n >= RECOV_MAX else "")
+               + "\n" if RECOV_ON else "       복구 기동 꺼짐 (PIBT_RECOVER=0)\n")
+            + f"       놓아줄 칸에 남은 몸={left or '없음'}"
             f"  (released={sorted(rel) or '없음'})\n"
             # ★ `soft` 를 같이 찍는다 (2026-09-17). 이 줄이 없어서 "대책이
             #   안 먹었다" 와 "대책이 안 걸렸다" 를 로그만 보고 못 갈랐다.
@@ -2403,8 +2692,12 @@ class FleetController:
         # 판끼리 비교된다. 관문 자체는 배너에 따로 적는다.
         gate = (self.ctrl[self.agents[0]].tol.turn_pos * 1000.0
                 if self.agents else 0.0)
+        # ★ 각가속 제한을 **같은 줄에** 적는다 (-240). 트러블슈팅 (더) —
+        #   기본과 다른 값이 안 보이면 판의 전제를 모르는 채로 결론을 낸다.
         say(f"[회전분포] 기준선 {self._gate_ref:.0f} mm · 관문 "
-            + (f"{gate:.0f} mm" if gate > 0 else "꺼짐 (PIBT_TOL_TURN_POS=0)"))
+            + (f"{gate:.0f} mm" if gate > 0 else "꺼짐 (PIBT_TOL_TURN_POS=0)")
+            + (f" · 각가속 {W_ACCEL:.1f} rad/s^2" if W_ACCEL > 0.0
+               else " · 각가속 제한 없음"))
         say(self.stats.turn_hist(self._gate_ref))
 
     def step(self, dt: float) -> None:
@@ -2448,6 +2741,46 @@ class FleetController:
                         #   기준선(`_gate_ref`)은 관문과 무관하게 고정한다.
                         if _e > self._gate_ref:
                             self.stats.turn_gate_over += 1
+                            # ★★ **누구였는지 남긴다** (-240, 2회차). 지금까지
+                            #   개수(`turn_gate_over`)만 세고 신원을 안 남겨서,
+                            #   363 mm 짜리 한 건을 찾으려면 판을 다시 떠야
+                            #   했다. 시작·끝을 같이 찍어 「물려받았나 / 중에
+                            #   미끄러졌나」를 이 한 줄로 가른다.
+                            _s = ("못 잡음" if c._entry_pos is None
+                                  else f"{c._entry_pos * 1000.0:.1f}")
+                            # ★★ **회전 중심을 역산해 같이 찍는다** (-240).
+                            #   「얼마나 밀렸나」는 세 판을 봐도 원인을 안 준다.
+                            #   「어디를 중심으로 돌았나」는 한 줄로 준다.
+                            _pv = (pivot_in_body(c._entry_pose, pose)
+                                   if c._entry_pose else None)
+                            if _pv is None:
+                                _pvs = "회전중심 못 구함"
+                            else:
+                                _r = math.hypot(*_pv)
+                                # 운동학 드라이버에는 `wb` 가 없다 — 그러면 0.
+                                _half = getattr(drv, "wb", 0.0) * 0.5
+                                _pvs = (f"회전중심 차체({_pv[0] * 1000:+.0f}, "
+                                        f"{_pv[1] * 1000:+.0f})mm  |r|="
+                                        f"{_r * 1000:.0f}mm")
+                                if _half and abs(_r - _half) < 0.06:
+                                    _pvs += "  ★ **한쪽 구동바퀴**다"
+                                elif _r < 0.06:
+                                    _pvs += "  (축 중점 — 정상)"
+                            _msg = (f"[회전밀림] {act}  시작 {_s} -> 끝 "
+                                    f"{_e:.1f} mm  (기준선 "
+                                    f"{self._gate_ref:.0f})\n"
+                                    f"           {_pvs}")
+                            try:
+                                import carb
+                                carb.log_warn(_msg)
+                            except Exception:            # pragma: no cover
+                                print(_msg)
+                # ★ A 복구 기동을 함대 통계로 걷는다 (-240). 컨트롤러가 세고
+                #   여기서 옮겨 담는다 — 컨트롤러는 액션마다 `_recov_n` 을 0 으로
+                #   되돌리지만 `recovered` 는 안 되돌린다.
+                if c.recovered:
+                    self.stats.recover_events += c.recovered
+                    c.recovered = 0
                 if c.complete(pose, body):
                     # ★ 이 액션이 **일찍 놓아준** 칸을 기억한다 (-240).
                     #   옛 정의로는 기다렸을 칸 = (cells - rest) ∩ soft.
