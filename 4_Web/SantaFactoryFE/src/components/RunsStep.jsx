@@ -69,9 +69,9 @@ function RunCard({ run, selected, onSelect }) {
   )
 }
 
-// run 전체(6시간)를 담으므로 배속이 커야 한다 — ×32 면 11분, ×64 면 5.6분에 다 본다.
+// run 전체(6시간)를 담으므로 배속이 커야 한다 — ×32 면 11분, ×64 면 5.6분, ×128 이면 2.8분에 다 본다.
 // 그래도 프레임당 시뮬 0.5~1초라 샘플(4.4초 간격) 사이를 보간이 메운다
-const SPEEDS = [8, 16, 32, 64]
+const SPEEDS = [8, 16, 32, 64, 128]
 
 function formatDuration(sec) {
   const h = String(Math.floor(sec / 3600)).padStart(2, '0')
@@ -149,7 +149,7 @@ function OutboundPanel({ replay, seconds }) {
  * 재생 루프. 대수가 바뀌면 부모가 key 를 갈아 이 컴포넌트를 새로 만든다 —
  * 그래야 "새 데이터가 오면 0초부터" 를 초기화 effect 없이 얻는다.
  */
-function ReplayPlayer({ replay, playing, speed, onTogglePlay, onNextSpeed }) {
+function ReplayPlayer({ replay, playing, speed, onTogglePlay, onSpeed }) {
   const [tick, setTick] = useState(0)
   const ticks = Math.max(...Object.values(replay.robots).map((a) => a.length))
   const dt = replay.dt_s ?? 1
@@ -180,7 +180,16 @@ function ReplayPlayer({ replay, playing, speed, onTogglePlay, onNextSpeed }) {
             <button type="button" className="button rp-btn" onClick={onTogglePlay}>
               {playing ? '⏸︎ PAUSE' : '▶︎ PLAY'}
             </button>
-            <button type="button" className="ghost rp-btn" onClick={onNextSpeed}>SPEED ×{speed}</button>
+            {/* 고르는 목록이다 — 순환 버튼은 "SPEED ×64" 가 현재 배속인지 누르면 될 배속인지
+                구분되지 않아, 바로 위 PAUSE(누르면 일어날 일)와 규칙이 엇갈렸다 */}
+            <select
+              className="rp-speed"
+              aria-label="재생 배속"
+              value={speed}
+              onChange={(e) => onSpeed(Number(e.target.value))}
+            >
+              {SPEEDS.map((v) => <option key={v} value={v}>SPEED ×{v}</option>)}
+            </select>
           </div>
         </div>
       </div>
@@ -209,7 +218,6 @@ function ReplayBoard({ estimateId, amrCount }) {
   // 6시간을 ×64 로 보면 5.6분. ×32 는 11분이라 끝까지 보는 사람이 없다
   const [speed, setSpeed] = useState(64)
 
-  const nextSpeed = () => setSpeed((v) => SPEEDS[(SPEEDS.indexOf(v) + 1) % SPEEDS.length])
   const togglePlay = () => setPlaying((v) => !v)
 
   return (
@@ -227,7 +235,7 @@ function ReplayBoard({ estimateId, amrCount }) {
 
         {replay && (
           <ReplayPlayer key={`${estimateId}:${amrCount}`} replay={replay}
-                        playing={playing} speed={speed} onTogglePlay={togglePlay} onNextSpeed={nextSpeed} />
+                        playing={playing} speed={speed} onTogglePlay={togglePlay} onSpeed={setSpeed} />
         )}
         {!replay && (
           <div className="rp-placeholder">
