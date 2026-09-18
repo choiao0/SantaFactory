@@ -17,6 +17,11 @@ pipeline {
         COMPOSE_EMQX = 'docker compose -f 3_FMS/infra/emqx/compose.yml'
         COMPOSE_CORE = 'docker compose -f 3_FMS/infra/compose.fms-core.yml'
         KEEP_COUNT  = '3'
+        // FMS 워커 배포 방식 (S15P21A106-248). Jenkins 전역 환경변수로 바꾼다 — compose: EC2 에서 compose 워커(지금까지),
+        // k3s: 사설 레지스트리에 push 하고 k3s 가 GCP 노드에 배치(3_FMS/infra/k8s/README.md). 되돌리기는 값만 compose 로.
+        FMS_DEPLOY   = "${env.FMS_DEPLOY ?: 'compose'}"
+        REGISTRY      = '127.0.0.1:5000'        // EC2 가 push 하는 주소(루프백 평문 허용)
+        REGISTRY_NODE = '100.100.149.68:5000'   // 노드가 pull 하는 주소(tailnet)
     }
 
     stages {
@@ -148,30 +153,58 @@ pipeline {
                         grep -E "^(RABBITMQ_USER|RABBITMQ_PASSWORD)=" "$APP_ENV_FILE" > 3_FMS/infra/.env.estimate
                         $COMPOSE_FMS build
                         docker tag fms-estimate-worker:latest fms-estimate-worker:$BUILD_NUMBER
-                        $COMPOSE_FMS up -d
                     '''
                 }
-                sh '''
-                    # 워커는 여러 개(compose replicas, 기본 2)라 컨테이너 전부가 running 이어야 통과.
-                    for i in $(seq 1 30); do
-                        cids=$($COMPOSE_FMS ps -q estimate-worker)
-                        total=$(echo "$cids" | grep -c . || true)
-                        running=0
-                        for cid in $cids; do
-                            if [ "$(docker inspect -f '{{.State.Status}}' "$cid" 2>/dev/null)" = "running" ]; then
-                                running=$((running + 1))
+                script {
+                    if (env.FMS_DEPLOY == 'k3s') {
+                        // k3s: 12개가 새 이미지로 전부 뜬 것을 확인한 뒤에야 EC2 compose 워커를 내린다 — 순서를 바꾸면 노드 합류 전 배포에서 워커가 0 이 된다.
+                        withCredentials([file(credentialsId: 'k3s-kubeconfig', variable: 'KUBECONFIG')]) {
+                            sh '''
+                                docker tag fms-estimate-worker:$BUILD_NUMBER $REGISTRY/fms-estimate-worker:$BUILD_NUMBER
+                                docker push $REGISTRY/fms-estimate-worker:$BUILD_NUMBER
+                                kubectl -n fms set image deployment/sim-worker worker=$REGISTRY_NODE/fms-estimate-worker:$BUILD_NUMBER
+                                if ! kubectl -n fms rollout status deployment/sim-worker --timeout=600s; then
+                                    echo "k3s 워커 롤아웃이 600초 안에 끝나지 않음"
+                                    kubectl -n fms get pods -o wide || true
+                                    kubectl -n fms describe deployment/sim-worker | tail -20 || true
+                                    exit 1
+                                fi
+                                kubectl -n fms get pods -o wide
+                                $COMPOSE_FMS up -d --scale estimate-worker=0
+                                REGISTRY=$REGISTRY bash 3_FMS/infra/k8s/registry-prune.sh fms-estimate-worker "$KEEP_COUNT" || true
+                            '''
+                        }
+                    } else {
+                        sh '''
+                            # 워커는 여러 개(compose replicas, 기본 2)라 컨테이너 전부가 running 이어야 통과.
+                            # WORKER_REPLICAS=0 (GCP 워커가 처리, 3_FMS/infra/gcp/README.md) 이면 EC2 워커를 올리지 않고 끝낸다.
+                            want=${WORKER_REPLICAS:-2}
+                            WORKER_REPLICAS=$want $COMPOSE_FMS up -d
+                            if [ "$want" = "0" ]; then
+                                echo "EC2 FMS 워커 0개 (WORKER_REPLICAS=0)"
+                                exit 0
                             fi
-                        done
-                        if [ "$total" -gt 0 ] && [ "$running" -eq "$total" ]; then
-                            echo "FMS 워커 ${running}개 기동 확인"
-                            exit 0
-                        fi
-                        sleep 2
-                    done
-                    echo "FMS 워커가 60초 안에 전부 기동하지 않음 (running ${running}/${total})"
-                    $COMPOSE_FMS logs --tail 100 || true
-                    exit 1
-                '''
+                            for i in $(seq 1 30); do
+                                cids=$($COMPOSE_FMS ps -q estimate-worker)
+                                total=$(echo "$cids" | grep -c . || true)
+                                running=0
+                                for cid in $cids; do
+                                    if [ "$(docker inspect -f '{{.State.Status}}' "$cid" 2>/dev/null)" = "running" ]; then
+                                        running=$((running + 1))
+                                    fi
+                                done
+                                if [ "$total" -gt 0 ] && [ "$running" -eq "$total" ]; then
+                                    echo "FMS 워커 ${running}개 기동 확인"
+                                    exit 0
+                                fi
+                                sleep 2
+                            done
+                            echo "FMS 워커가 60초 안에 전부 기동하지 않음 (running ${running}/${total})"
+                            $COMPOSE_FMS logs --tail 100 || true
+                            exit 1
+                        '''
+                    }
+                }
             }
         }
 
