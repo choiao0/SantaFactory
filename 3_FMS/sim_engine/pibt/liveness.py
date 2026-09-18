@@ -29,6 +29,15 @@ REPLAN_RADIUS = 3
 REPLAN_HOLD = 12      # 재계획 거리장 유지 틱 (-194: 6 → 12). 매 틱 재계산하면 두 로봇이 서로를 장애물로
                       # 동시에 재계획→동시 회전→되돌림의 대칭 진동(주기 4틱, 실측)
 
+# 우회 비용 상한 (-247, D). 재계획은 「가까운 길이 막혔다」만 보고 우회로를 주는데 **그 우회가
+# 얼마나 비싼지는 안 본다.** 반경 3 안의 로봇 하나 때문에 목표 5칸 앞에서 201칸짜리 길을 받는다
+# (12대 600건 실측: 재계획 9,370건 중 추가 30칸 초과가 1.8 %, 최대 +202칸).
+# 그러면 stag 가 평소 거리장으로 재이므로 멀어지는 내내 안 풀리고, 재계획이 12틱마다 다시 걸려
+# 로봇이 74칸을 갔다가 **같은 칸으로 돌아온다**(679틱 = 189초, 진전 0).
+# 몇 틱 기다리는 쪽이 압도적으로 싼 자리다 — 1칸이 MOVE_TICKS 틱이므로 N칸 우회는 4N 틱이다.
+# 0 = 상한 없음(지금과 비트 동일).
+REPLAN_MAX_EXTRA = 0
+
 
 class Stagnation:
     """agent별 '거리 개선 없음' 연속 틱 수. 진동(회전↔되돌림)도 정체로 잡는다."""
@@ -71,9 +80,10 @@ def stuck_free(free, states, extra, me, radius=REPLAN_RADIUS):
 class Replanner:
     """정체 로봇의 거리장 선택: 재계획(주변 로봇 = 장애물) + 히스테리시스(REPLAN_HOLD틱 유지)."""
 
-    def __init__(self, free, edge_cost, turn_cost, hold=REPLAN_HOLD):
+    def __init__(self, free, edge_cost, turn_cost, hold=REPLAN_HOLD, max_extra=REPLAN_MAX_EXTRA):
         self.cache = ReplanCache(free, edge_cost, turn_cost)
         self.hold_len = hold
+        self.max_extra = max_extra      # 우회 추가 비용 상한 [칸]. 0 = 없음 (-247)
         self.hold = {}          # agent -> (dist, 만료 tick, goal)
 
     def dist_for(self, a, t, states, extra, goal, base, stag):
@@ -84,11 +94,18 @@ class Replanner:
             return h[0]
         if stag > REPLAN_AFTER:
             dm = self.cache.dist(states, extra, a, goal)
-            if dm[states[a]] >= 0:
+            if dm[states[a]] >= 0 and self._worth(dm, base, states[a]):
                 self.hold[a] = (dm, t + self.hold_len, goal)
                 return dm
         self.hold.pop(a, None)
         return base
+
+    def _worth(self, dm, base, s):
+        """우회가 상한 안인가 (-247). 평소 거리가 -1(원래 못 감)이면 우회가 유일한 길이라 항상 쓴다."""
+        if not self.max_extra:
+            return True
+        b = base[s]
+        return b < 0 or dm[s] - b <= self.max_extra
 
 
 class ReplanCache:
