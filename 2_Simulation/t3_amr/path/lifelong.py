@@ -116,14 +116,26 @@ _PAIR_TAB = None
 
 
 def _pair_table():
-    """{회전방향: {(상대칸, 상대헤딩)}} — A 의 헤딩을 0 으로 놓은 좌표계. 한 번만 굽는다."""
+    """{회전방향: {(상대칸, 상대헤딩)}} — A 의 헤딩을 0 으로 놓은 좌표계. 한 번만 굽는다.
+
+    ☹ pitch 를 **`PIBT_PITCH` 에서 읽는다.** 커널이 pitch 를 안 들고 있어서다.
+      처음엔 `pibt_scene.CHARGE_LAT` 을 썼는데 그 기본값이 **1.2** 라, 환경변수를
+      안 준 판에서 **빈 표**를 굽고 규칙이 조용히 아무 일도 안 했다 (막음 0).
+      그래서 기본을 1.0 으로 두고 **표 크기를 반드시 찍는다** — 조용히 비는 것이
+      제일 나쁘다.
+    """
     global _PAIR_TAB
     if _PAIR_TAB is None:
         sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(
             os.path.abspath(__file__))), "tools"))
         import pibt_scene as PS
         from turn_pair_margin import build_table, MARGIN
-        _PAIR_TAB = build_table(PS.make_geom(PS.CHARGE_LAT), MARGIN)
+        pitch = float(os.environ.get("PIBT_PITCH", "1.0"))
+        _PAIR_TAB = build_table(PS.make_geom(pitch), MARGIN)
+        n = sum(len(v) for v in _PAIR_TAB.values())
+        print(f"[turn_pair] pitch {pitch} · 여유 {MARGIN} m · **금지 조합 {n}개**"
+              + ("   ☹ 표가 비었다 — 규칙이 아무 일도 안 한다" if n == 0 else ""),
+              flush=True)
     return _PAIR_TAB
 
 
