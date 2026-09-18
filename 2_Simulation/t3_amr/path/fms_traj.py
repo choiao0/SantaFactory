@@ -135,6 +135,48 @@ def load_history(path, cell_m=None, off_m=None, verbose=True):
     return history, meta
 
 
+def build(path, geom, verbose=True):
+    """`trajectories.json` -> `(adg, order, history, info)`.
+
+    `isaac_drive.plan_and_build_lifelong` 과 **같은 것**을 돌려준다. 다른 점은
+    계획을 **안 한다**는 것뿐이다 — 그쪽이 낸 동작 열을 그대로 세운다.
+
+    ☹ ADG 발자국은 **계획 발자국과 같아야 한다** (2026-09-18 실측).
+      같은 궤적(`--footprint=exact,front_2cell`)을 세워 보면
+
+          규칙 끔    순환
+          앞 2칸     **비순환**   <- 계획과 같은 발자국
+          앞 4칸     **순환**     <- 우리가 채택한 규칙
+
+      계획기가 안 지킨 칸을 ADG 가 예약하면 없던 의존이 생기고 고리가 된다.
+      4칸은 회전마다 `mA·mB` 를 더 잡는데 그쪽 계획기는 그걸 안 봤다.
+      -> 이 궤적을 먹일 때는 **`PIBT_FRONT_RULE=2`** 로 맞춰야 한다.
+
+    ☹ `sweep_audit` 은 없다 — `cells_hist`(계획기가 실제로 예약한 칸)가 궤적에
+      안 담겨 있다. 겹침 감시는 주행 중 `FleetController` 가 실제 자세로 한다.
+    """
+    import isaac_drive as D
+    history, meta = load_history(path, verbose=verbose)
+    chains, order, stats = D.extract_actions(history, geom)
+    adg = D.build_adg(chains)
+    if adg.topological_order() is None:
+        raise RuntimeError(
+            "ADG 에 순환이 있다 — 실행하면 데드락이다.\n"
+            "   ★ 계획 발자국과 맞는지 보라. `--footprint=exact,front_2cell` 로 만든\n"
+            "     궤적은 **PIBT_FRONT_RULE=2** 여야 비순환이다 (4칸은 순환).")
+
+    import metrics
+    horizon = len(history) - 1
+    cp = metrics.critical_path(adg, geom)
+    info = {
+        "actions": stats,
+        "lifelong": {"tasks_done": meta["tasks"], "fms_traj": meta},
+        "throughput": metrics.throughput(meta["tasks"], horizon, geom, makespan=cp),
+        "dispatch": "fms-traj",
+    }
+    return adg, order, history, info
+
+
 def _main():
     if len(sys.argv) < 2:
         print(__doc__)

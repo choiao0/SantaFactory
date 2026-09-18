@@ -231,6 +231,21 @@ ORDER_GAP = int(os.environ.get("PIBT_ORDER_GAP", "60"))   # -211: 틱 단위라 
 #
 #   빈 값이면 종전과 **비트 동일**이다 (난수 스트림).
 ORDERS_CSV = os.environ.get("PIBT_ORDERS", "").strip()
+# ★★ FMS 궤적을 **그대로** 실행한다 — 계획을 아예 안 한다 (-240, 2026-09-18).
+#
+#   `PIBT_ORDERS`·`PIBT_FMS_GRID` 는 입력을 맞추고 **계획은 우리가 다시 한다.**
+#   이쪽은 그쪽 `SIM_EXPORT_ISAAC=1` 이 낸 동작 열을 그대로 세운다 — 「이산으로
+#   계산하고 물리로 증명」의 가장 곧은 형태다.
+#
+#       cd 3_FMS/sim_engine
+#       SIM_EXPORT_ISAAC=1 python sim_v2_tasks.py x 12 0 103 1 --footprint=… --horizon=38880 …
+#       -> sim_engine/isaac_export_x/trajectories.json
+#
+#       PIBT_TRAJ=…/trajectories.json **PIBT_FRONT_RULE=2** bash run.sh
+#
+#   ☹ **발자국을 계획과 맞춰야 한다.** `exact,front_2cell` 로 만든 궤적을 4칸으로
+#     세우면 ADG 가 순환한다 (실측: 끔 순환 · 2칸 비순환 · 4칸 순환).
+TRAJ_JSON = os.environ.get("PIBT_TRAJ", "").strip()
 CAMERA = os.environ.get("PIBT_CAMERA", "/World/Cameras/Cam_Top")
 SPAWN_Z = float(os.environ.get("PIBT_SPAWN_Z", "0.081"))   # build_amr_scene 의 WHEEL_R
 LEFT_IDX, RIGHT_IDX = 0, 1
@@ -1054,9 +1069,37 @@ async def _run():
             oe = ORDER_END
             if oe is not None:
                 oe = int(round(HORIZON * oe)) if oe <= 1.0 else int(round(oe))
+            # ★★ 궤적을 주면 **계획을 건너뛴다.** 그쪽이 낸 동작 열을 그대로 세운다.
+            if TRAJ_JSON:
+                import fms_traj
+                _tj = (TRAJ_JSON if os.path.isabs(TRAJ_JSON)
+                       else os.path.join(os.environ["W"], TRAJ_JSON))
+                carb.log_warn(f"[pibt] ★★ **계획을 안 한다** — FMS 궤적을 그대로 실행: "
+                              f"{os.path.basename(os.path.dirname(_tj))}/"
+                              f"{os.path.basename(_tj)}")
+                adg, order, history, info = fms_traj.build(_tj, geom, verbose=True)
+                _m = (info.get("lifelong") or {}).get("fms_traj") or {}
+                carb.log_warn(f"[pibt] ★★ 궤적 {_m.get('n_robots')}대 · "
+                              f"틱 {_m.get('ticks', 0):,} · 태스크 {_m.get('tasks', 0):,} "
+                              f"· 모델 {_m.get('model')}")
+                # ★★ 스폰을 **궤적 첫 틱으로** 맞춘다. 어긋나면 로봇이 엉뚱한 자리에
+                #   서고 그 뒤가 전부 틀어진다. `PIBT_FMS_GRID=1` 이면 같아야 하지만,
+                #   **같아야 한다**와 **같다**는 다르다 — 확인하고 덮는다.
+                _diff = [a for a, s in history[0].items()
+                         if tuple(starts.get(a, ())) != tuple(s)]
+                if _diff:
+                    carb.log_error(
+                        f"[pibt] ★★ 스폰이 궤적 첫 틱과 다르다 — **궤적으로 덮는다** "
+                        f"({len(_diff)}대). 예: agent{_diff[0]} "
+                        f"{starts.get(_diff[0])} -> {history[0][_diff[0]]}")
+                    carb.log_error("[pibt]    PIBT_FMS_GRID=1 인지 보라. "
+                                   "격자가 다르면 칸 번호가 애초에 다른 뜻이다")
+                starts = {a: tuple(s) for a, s in history[0].items()}
             # ★★ FMS 배정표를 쓰면 주문 스트림을 갈아끼운다. 안 주면 종전과 비트 동일.
             stream = None
-            if ORDERS_CSV:
+            if TRAJ_JSON:
+                pass                       # 궤적을 쓰면 주문 스트림이 필요 없다
+            elif ORDERS_CSV:
                 from fms_stream import FileOrderStream
                 _csv = (ORDERS_CSV if os.path.isabs(ORDERS_CSV)
                         else os.path.join(os.environ["W"], ORDERS_CSV))
@@ -1074,16 +1117,17 @@ async def _run():
                     # 칸을 못 찾으면 **수요가 조용히 줄어든다.** 비교가 깨지므로 알린다.
                     carb.log_error(f"[pibt] ★★ 배정표에서 칸을 못 찾은 항목이 있다 "
                                    f"— 예: {stream.skipped_bad[:3]}")
-            adg, order, history, info = plan_and_build_lifelong(
-                free, starts, goals, geom, horizon=HORIZON, seed=SEED,
-                battery=BATTERY, dispatch=DISPATCH, zone_cells=zone,
-                order_end=oe, order_gap=ORDER_GAP, stream=stream,
-                docks=PS.charge_docks(free, geom) if BATTERY else ())
-            carb.log_warn(f"[pibt] lifelong {HORIZON}틱 · 배터리 {BATTERY} "
-                          f"· 배차 {DISPATCH} · 존복귀 {ZONE}({len(zone)}칸)"
-                          + (" · 주문 **FMS 배정표**" if stream is not None
-                             else f" · 주문간격 {ORDER_GAP}틱")
-                          + (f" · 업무종료 {oe}틱" if oe is not None else ""))
+            if not TRAJ_JSON:
+                adg, order, history, info = plan_and_build_lifelong(
+                    free, starts, goals, geom, horizon=HORIZON, seed=SEED,
+                    battery=BATTERY, dispatch=DISPATCH, zone_cells=zone,
+                    order_end=oe, order_gap=ORDER_GAP, stream=stream,
+                    docks=PS.charge_docks(free, geom) if BATTERY else ())
+                carb.log_warn(f"[pibt] lifelong {HORIZON}틱 · 배터리 {BATTERY} "
+                              f"· 배차 {DISPATCH} · 존복귀 {ZONE}({len(zone)}칸)"
+                              + (" · 주문 **FMS 배정표**" if stream is not None
+                                 else f" · 주문간격 {ORDER_GAP}틱")
+                              + (f" · 업무종료 {oe}틱" if oe is not None else ""))
             _li = info.get("lifelong") or {}
             if _li.get("parked_end") is not None:
                 carb.log_warn(f"[pibt] 계획 종료 시 충전존 주차 "
