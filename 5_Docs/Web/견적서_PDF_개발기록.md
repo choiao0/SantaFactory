@@ -18,7 +18,7 @@
 |---|---|
 | 브라우저 인쇄(`window.print`) | 메일 첨부 불가. 서버에 파일이 없다 |
 | 자바 HTML→PDF 라이브러리(openhtmltopdf) | CSS 2.1 수준이라 시안의 grid·flex 배치를 표로 다시 짜야 하고 SVG 는 플러그인. 모양 편차 |
-| 백엔드 JVM 안 헤드리스 크롬(Playwright) | EC2 t3.medium(4 GB)에서 백엔드 프로세스가 300 MB 씩 부풀고, 크롬이 죽으면 백엔드가 흔들림 |
+| 백엔드 JVM 안 헤드리스 크롬(Playwright) | 백엔드 JVM 안에 브라우저 프로세스(건당 300 MB 안팎)를 두면 크롬이 죽을 때 백엔드가 같이 흔들림. 서버(t3.xlarge, 16 GB) 메모리 자체는 문제가 아니라 격리가 이유 |
 | **Gotenberg 컨테이너 (채택)** | 크로미움 내장 HTTP 변환기. 시안 HTML 그대로, 백엔드는 HTML 만 만들고 HTTP 한 번. 죽어도 견적서 기능만 멈춤. 검증 영상을 MinIO 로 분리한 것과 같은 결 |
 
 정책 결정(사용자, 2026-09-17): 메일 수신자 = 로그인 계정 이메일 고정 · 권한 = 견적 상세 조회와 동일(`OwnershipGuard.checkEstimate`, 남의 것은 404) · 파일명 `견적서_EST-yyyyMMdd-NNNN.pdf` · 비교 기준값 처리 시간 +10 % / 혼잡 +1 %p(임시).
