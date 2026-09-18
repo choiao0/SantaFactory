@@ -86,6 +86,24 @@ ZONE_CLAIM = (TO_HOME, TO_CHARGE, TO_CHARGE_HI, CHARGING)
 
 SERVICE_TICKS = 3          # 픽/드롭 서비스 시간. FMS SERVICE_STEPS 와 같은 자리
 
+# ★★ 드롭 도달성 가드 — **FMS 원본과의 유일한 차이** (미해결 A, S15P21A106-240).
+#
+#   `dispatch()` 가 태스크를 줄 때 픽 칸뿐 아니라 **드롭 칸까지** 도달 가능한지
+#   본다. 원본에는 없다. 넣은 이유는 처리량이 아니라 **틀린 것을 안 하게** 하려던
+#   것이다 — 드롭이 도달 불가인 태스크를 받은 로봇은 거리장이 전부 -1 이라
+#   TO_DROP(RANK 1)으로 영구 정지하고, 우선순위가 높아 남까지 막는다.
+#   실측(팽창본 맵): 검사 없음 완료 6·대기 13·정지 발생 / 있음 완료 7·대기 0.
+#
+#   ☹ 그런데 이 한 줄 때문에 **배차가 FMS 와 비트 동일이 아니다.** 그쪽과 맞댈
+#     때는 꺼야 하고, 켠 채로 비교하면 차이를 물리 탓으로 돌리게 된다.
+#
+#       PIBT_DROP_GUARD=0    FMS 원본 그대로 (☹ 맵이 끊겨 있으면 정지할 수 있다)
+#       PIBT_DROP_GUARD=1    기본. 지금까지의 동작
+#
+#   켜든 끄든 `guard_flipped`(가드가 답을 바꾼 횟수)는 **항상 센다.** 그 수가
+#   0 이면 이 차이는 이 판에서 없었던 것이고, 크면 A 의 남은 물음이 여기다.
+DROP_GUARD = os.environ.get("PIBT_DROP_GUARD", "1") not in ("0", "", "off", "no")
+
 
 def shift_windows(horizon, shifts=("in", "out", "out")):
     """교대 토큰열 → [(kind, start, end)]. FMS order_stream.shift_windows 와 동일."""
@@ -231,6 +249,10 @@ class Kernel(object):
         self.done_ticks = []
         self._t = -1                      # step 이 매 틱 갱신한다
         self.unreachable = 0
+        # ★★ 드롭 도달성 가드가 **답을 바꾼 횟수** (미해결 A, `guard_flipped`).
+        #   이 가드가 FMS 원본과의 **유일한 차이**다(`dispatch` 주석). 세어 두면
+        #   「회전 +2.3회/왕복」의 남은 물음이 이 한 줄 탓인지가 갈린다.
+        self.guard_flipped = 0
 
         # --- 충전존 복귀 (FMS core.py:72-75). 비우면 고정 홈 = 이전 동작 ---
         self.zone_cells = [tuple(rc) for rc in zone_cells if free[tuple(rc)]]
@@ -406,9 +428,14 @@ class Kernel(object):
             #       드롭 검사 없음  완료 6 · 대기 13   정지 발생
             #       드롭 검사 있음  완료 7 · 대기  0   정지 없음
             #   맵이 정상이어도 칸 하나만 끊기면 같은 일이 나므로 상시로 둔다.
-            cand = [a for a in elig
-                    if self.reachable(a, task["frm"])
-                    and self.reachable_between(task["frm"], task["to"])]
+            # ★ 드롭 검사는 **로봇에 안 걸린다**(태스크의 성질). 그래서 후보를
+            #   전부 지우거나 전혀 안 지운다 — 갈라 쓰면 원본과 비트 동일하게
+            #   끌 수 있고, **가드가 답을 바꾼 횟수**도 정확히 세어진다.
+            cand = [a for a in elig if self.reachable(a, task["frm"])]
+            if cand and not self.reachable_between(task["frm"], task["to"]):
+                self.guard_flipped += 1
+                if DROP_GUARD:
+                    continue              # 가드가 이 배차를 막았다
             if not cand:
                 continue
             a = min(cand, key=lambda i: abs(self.states[i][0] - fr)
@@ -659,10 +686,13 @@ class Kernel(object):
     def report(self):
         """`run_lifelong` 이 info 에 합친다. 존이 꺼져 있으면 한 줄만."""
         zs = self.zone_stats
+        # ★ 존을 꺼도 `guard_flipped` 은 낸다 — FMS 패리티 지표라 판마다 필요하다.
+        g = {"guard_flipped": self.guard_flipped, "drop_guard": DROP_GUARD}
         if not self.zone:
-            return {"zone": False}
+            return {"zone": False, **g}
         occ = zs["occ"]
         return {
+            **g,
             "zone": True,
             "zone_cells": len(self.zone_cells),
             "zone_wait_steps": zs["wait"],          # 존 안에서 못 움직인 로봇·틱
