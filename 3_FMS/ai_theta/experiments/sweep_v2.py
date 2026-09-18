@@ -29,8 +29,19 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 
+
+def _fms_root(start):
+    """3_FMS 를 찾아 올라간다 — 이 파일을 ai_theta/experiments 에 두든 infra 에 두든 같게 돈다."""
+    d = start
+    for _ in range(4):
+        if all(os.path.isdir(os.path.join(d, x)) for x in ("sim_engine", os.path.join("map", "synth"))):
+            return d
+        d = os.path.dirname(d)
+    raise SystemExit("3_FMS 를 못 찾았다 — sim_engine 과 map/synth 가 있는 폴더가 위에 없다")
+
+
 HERE = os.path.dirname(os.path.abspath(__file__))
-FMS = os.path.abspath(os.path.join(HERE, "..", ".."))   # ai_theta/experiments → 3_FMS
+FMS = _fms_root(HERE)
 SIM = os.path.join(FMS, "sim_engine")
 SYNTH = os.path.join(FMS, "map", "synth")
 OUT = os.path.join(FMS, "infra", "out")
