@@ -151,6 +151,29 @@ def _pair_table():
     return _PAIR_TAB
 
 
+def _rot_sign(s0, s1):
+    """`s0 -> s1` 이 **제자리 회전**이면 +1(좌) · -1(우), 아니면 None."""
+    if s1[:2] != s0[:2] or s1[2] == s0[2]:
+        return None
+    return 1 if (s1[2] - s0[2]) % 4 == 1 else -1
+
+
+def _pair_key(s0, q):
+    """이웃 상태 `q` 를 **A(`s0`) 의 헤딩을 0 으로 놓은** 상대 좌표로 옮긴다.
+
+    표(`turn_pair_margin.build_table`)의 키와 **같은 규약**이어야 한다 —
+    (상대칸, 상대헤딩). 규약이 두 벌이 되면 표가 조용히 안 맞는다.
+    """
+    c, s = DIRS[s0[2]]                             # s0 의 헤딩을 +r 로 되돌리는 회전
+    dr, dc = q[0] - s0[0], q[1] - s0[1]
+    return ((dr * c + dc * s, -dr * s + dc * c), (q[2] - s0[2]) % 4)
+
+
+def _pair_blocked(states, agents, a, s0, hit):
+    """A 의 회전을 막는 이웃이 **하나라도** 있나. (원래의 `break` 와 같은 단축평가)"""
+    return any(_pair_key(s0, states[b]) in hit for b in agents if b != a)
+
+
 def _turn_pair_veto(states, new, agents):
     """`step_h` 가 낸 회전 중 **금지 조합에 걸리는 것**을 제자리 대기로 되돌린다.
 
@@ -161,24 +184,14 @@ def _turn_pair_veto(states, new, agents):
         return 0                                   # pitch 1.2 등 — 표가 비었다
     n = 0
     for a in agents:
-        s0, s1 = states[a], new[a]
-        if s1[:2] != s0[:2] or s1[2] == s0[2]:
-            continue                               # 회전이 아니다
-        sgn = 1 if (s1[2] - s0[2]) % 4 == 1 else -1
-        hit = tab.get(sgn) or ()
-        if not hit:
+        s0 = states[a]
+        sgn = _rot_sign(s0, new[a])
+        if sgn is None:
             continue
-        c, s = DIRS[s0[2]]                         # s0 의 헤딩을 +r 로 되돌리는 회전
-        for b in agents:
-            if b == a:
-                continue
-            q = states[b]
-            dr, dc = q[0] - s0[0], q[1] - s0[1]
-            key = ((dr * c + dc * s, -dr * s + dc * c), (q[2] - s0[2]) % 4)
-            if key in hit:
-                new[a] = s0                        # ★ 제자리 대기로 되돌린다
-                n += 1
-                break
+        hit = tab.get(sgn) or ()
+        if hit and _pair_blocked(states, agents, a, s0, hit):
+            new[a] = s0                            # ★ 제자리 대기로 되돌린다
+            n += 1
     return n
 
 

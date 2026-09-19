@@ -730,36 +730,49 @@ def charge_zone_cells(free, geom, rect=None):
 #       (없음)             종전과 **비트 동일**
 #
 #   ☹ `CELL_M` 이 1.0 고정이라 **pitch 1.0 에 묶인다.** 그게 그쪽이 쓰는 격자다.
-def _fms_setup(n, pitch, verbose, map_dir_for_contact=None):
-    """FMS `sim_v2_tasks._build` 가 하는 것을 그대로 따라간다."""
-    import re
-    import pibt_core_v2 as _pc          # ★ 먼저 — 이것이 sim_engine 을 sys.path 에 넣는다
-    import map_loader as ML
-    from turn_sweep_mask import TURN_SWEEP_ON as TURN_SWEEP
+# ---------------------------------------------------------------------------
+# FMS 격자 설정 — `sim_v2_tasks._build` 가 하는 것을 조각마다 따라간다.
+#
+#   ★ 아래 헬퍼들은 **`pibt_core_v2` 를 먼저 import 한 뒤에만** 부를 수 있다.
+#     그것이 `3_FMS/sim_engine` 을 `sys.path` 에 넣기 때문이다. 진입점인
+#     `_fms_setup` 이 맨 처음에 그걸 한다 — 순서를 바꾸면 `map_loader` 를 못 찾는다.
+# ---------------------------------------------------------------------------
 
+def _fms_map_dir():
+    """FMS 공식 맵 폴더. `FMS_MAP` 으로 덮을 수 있다."""
+    return os.environ.get(
+        "FMS_MAP", os.path.join(os.environ["W"], "..", "..", "3_FMS", "map"))
+
+
+def _fms_geom(pitch):
+    """그쪽 격자에 맞춘 `RobotGeom` + 앞 칸 규칙 (on, diag).
+
+    칸 중심이 `(c + 0.5 − OFFSET_M, r + 0.5)` 라 그 어긋남을 **origin 으로 흡수**한다.
+    """
+    import map_loader as ML
     if abs(ML.CELL_M - pitch) > 1e-9:
         raise SystemExit(
             f"★ PIBT_FMS_GRID 는 pitch {ML.CELL_M} 에만 쓸 수 있습니다 "
             f"(FMS map_loader.CELL_M 고정). 지금 pitch={pitch}")
-    fms_map = os.environ.get("FMS_MAP",
-                             os.path.join(os.environ["W"], "..", "..", "3_FMS", "map"))
-    ab = bool(getattr(_CFG, "AISLE_BLOCK", False)) if _CFG else False
-    free, st_cell, _stations = ML.load_map(fms_map, aisle_block=ab)
-
-    # 칸 중심이 (c + 0.5 − OFFSET_M, r + 0.5) 다 -> origin 으로 흡수한다.
     on, diag = front_rule(pitch)
     geom = RobotGeom(pitch=pitch,
                      origin=(pitch / 2.0 - ML.OFFSET_M, pitch / 2.0),
                      front_swing=on, front_diag=diag, **GEOM_KW)
+    return geom, on, diag
 
-    # 홈 — 그쪽 함수 그대로. 존이 없으면 고정 홈으로 떨어지는 것도 그쪽과 같다.
+
+def _fms_homes(free, st_cell, fms_map, n):
+    """홈 — 그쪽 함수 그대로. 존이 없으면 고정 홈으로 떨어지는 것도 그쪽과 같다."""
+    import map_loader as ML
     zm = ML.load_charge_zone(free, fms_map)
     if zm is not None:
-        homes = ML.make_homes_zone(free, zm & free, n)
-    else:
-        homes = ML.make_homes(free, st_cell, n)
+        return ML.make_homes_zone(free, zm & free, n)
+    return ML.make_homes(free, st_cell, n)
 
-    # 헤딩 — `kernel/core.py:_init_headings` 그대로: h=0 부터 valid 하고 안 겹치는 첫 방향.
+
+def _fms_headings(free, homes, n):
+    """`kernel/core.py:_init_headings` 그대로 — h=0 부터 valid 하고 안 겹치는 첫 방향."""
+    import pibt_core_v2 as _pc
     taken, starts = set(), {}
     for a in range(n):
         r0, c0 = homes[a]
@@ -771,34 +784,66 @@ def _fms_setup(n, pitch, verbose, map_dir_for_contact=None):
                 break
         if a not in starts:
             raise SystemExit(f"★ robot{a} 홈 {homes[a]}: 유효한 초기 방향이 없습니다")
+    return starts
 
-    # 마스크도 그쪽 것 — 여유 0.05 · 0.05 m 점 표본 · 1도 간격 (M′ 이 여기서 닫힌다)
-    if TURN_SWEEP:
-        import pibt.geometry as _geo
-        mask = ML.turn_mask(fms_map, ML.ROBOT_DIMS, _geo.FOOTPRINT_MARGIN_M)
-        _geo.configure(turn_mask=mask, front_swing=on, front_diag=diag,
-                       robot_dims=ML.ROBOT_DIMS, pitch=pitch)
-        if verbose:
-            print(f"[scene] ★★ FMS 회전 마스크 · 여유 {_geo.FOOTPRINT_MARGIN_M} m "
-                  f"· 금지 비율 {ML.masked_turn_ratio(free, mask) * 100:.2f} %")
 
-    # 스테이션 — `{"kind[i]": (r,c)}` 를 `{kind: [(r,c)]}` 로. **인덱스 순서를 지킨다.**
+def _fms_mask(free, fms_map, pitch, on, diag, verbose):
+    """마스크도 그쪽 것 — 여유 0.05 · 0.05 m 점 표본 · 1도 간격 (M′ 이 여기서 닫힌다)."""
+    from turn_sweep_mask import TURN_SWEEP_ON as TURN_SWEEP
+    if not TURN_SWEEP:
+        return
+    import map_loader as ML
+    import pibt.geometry as _geo
+    mask = ML.turn_mask(fms_map, ML.ROBOT_DIMS, _geo.FOOTPRINT_MARGIN_M)
+    _geo.configure(turn_mask=mask, front_swing=on, front_diag=diag,
+                   robot_dims=ML.ROBOT_DIMS, pitch=pitch)
+    if verbose:
+        print(f"[scene] ★★ FMS 회전 마스크 · 여유 {_geo.FOOTPRINT_MARGIN_M} m "
+              f"· 금지 비율 {ML.masked_turn_ratio(free, mask) * 100:.2f} %")
+
+
+def _fms_stations(st_cell):
+    """`{"kind[i]": (r,c)}` -> `{kind: [(r,c)]}`. **인덱스 순서를 지킨다.**"""
+    import re
     cells = {}
     for name, rc in st_cell.items():
         m = re.match(r"^(.*)\[(\d+)\]$", name)
         if not m:
             continue
         cells.setdefault(m.group(1), []).append((int(m.group(2)), tuple(rc)))
-    cells = {k: [rc for _i, rc in sorted(v)] for k, v in cells.items()}
+    return {k: [rc for _i, rc in sorted(v)] for k, v in cells.items()}
 
-    # ★★ 정적 접촉 감시 — 격자를 바꿔도 **끄면 안 된다** (L, -240). 합불 기준이
-    #   랙을 안 보는 것이 이 판의 옵션이 아니라 결함이었다. 0.1 m 마스크를 보므로
-    #   격자와 무관하지만, `geom.origin` 이 바뀌었으니 그 geom 으로 넘긴다.
+
+def _fms_contact(geom, map_dir_for_contact, verbose):
+    """★★ 정적 접촉 감시 — 격자를 바꿔도 **끄면 안 된다** (L, -240).
+
+    합불 기준이 랙을 안 보는 것이 이 판의 옵션이 아니라 **결함**이었다.
+    0.1 m 마스크를 보므로 격자와 무관하지만, `geom.origin` 이 바뀌었으니
+    그 geom 으로 넘긴다.
+    """
     try:
         import turn_sweep_mask
         turn_sweep_mask.prepare_contact(geom, map_dir_for_contact, verbose=verbose)
     except Exception as e:                    # 감시가 주행을 죽이면 안 된다
         print(f"[static] ☹ 정적 접촉 감시 준비 실패(주행은 계속): {e!r}")
+
+
+def _fms_setup(n, pitch, verbose, map_dir_for_contact=None):
+    """FMS `sim_v2_tasks._build` 가 하는 것을 그대로 따라간다."""
+    import pibt_core_v2 as _pc          # ★ 먼저 — 이것이 sim_engine 을 sys.path 에 넣는다
+    import map_loader as ML             # noqa: F401  (위 import 뒤라야 찾는다)
+    assert _pc is not None
+
+    fms_map = _fms_map_dir()
+    ab = bool(getattr(_CFG, "AISLE_BLOCK", False)) if _CFG else False
+    free, st_cell, _stations = ML.load_map(fms_map, aisle_block=ab)
+
+    geom, on, diag = _fms_geom(pitch)
+    homes = _fms_homes(free, st_cell, fms_map, n)
+    starts = _fms_headings(free, homes, n)
+    _fms_mask(free, fms_map, pitch, on, diag, verbose)
+    cells = _fms_stations(st_cell)
+    _fms_contact(geom, map_dir_for_contact, verbose)
 
     if verbose:
         print(f"[scene] ★★ **FMS 격자** {free.shape} (max 풀링 · OFFSET {ML.OFFSET_M} m)"

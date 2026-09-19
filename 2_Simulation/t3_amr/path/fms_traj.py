@@ -75,6 +75,52 @@ def _headof(yaw):
     return h
 
 
+def _read_traj(path):
+    """파일을 읽고 **로봇 집합이 맞는지**만 본다."""
+    with open(path, encoding="utf-8") as f:
+        raw = json.load(f)
+    if set(raw["robots"]) != set(raw["headings"]):
+        raise ValueError("robots 와 headings 의 로봇 집합이 다르다")
+    return raw
+
+
+def _states_by_robot(raw, dt, cell_m, off_m):
+    """`{rid: {틱: (r,c,h)}}` 와 마지막 틱. 좌표·헤딩 변환이 여기 한 곳에만 있다."""
+    per, tmax = {}, 0
+    for k in sorted(raw["robots"], key=int):
+        rid = int(k)
+        hh = {round(float(t) / dt): yaw for t, yaw in raw["headings"][k]}
+        per[rid] = {}
+        for t_s, x, y in raw["robots"][k]:
+            t = int(round(float(t_s) / dt))
+            r, c = _cellof(float(x), float(y), cell_m, off_m)
+            per[rid][t] = (r, c, _headof(hh.get(t, 0.0)))
+            tmax = max(tmax, t)
+    return per, tmax
+
+
+def _fill_gaps(per, tmax):
+    """빈 틱을 **앞 값으로** 채워 `history` 를 만든다. (history, 채운 칸 수)
+
+    ☹ 한 로봇의 로그가 먼저 끝나는 경우가 있다. 그때 그 로봇을 빼 버리면
+      `extract_actions` 가 **사라진 로봇을 「이동」으로 읽는다.**
+    """
+    history, filled, last = [], 0, {}
+    for t in range(tmax + 1):
+        st = {}
+        for rid, log in per.items():
+            s = log.get(t)
+            if s is None:
+                s = last.get(rid)
+                if s is None:
+                    continue                          # 아직 등장 전
+                filled += 1
+            st[rid] = s
+            last[rid] = s
+        history.append(st)
+    return history, filled
+
+
 def load_history(path, cell_m=None, off_m=None, verbose=True):
     """`trajectories.json` -> (history, meta).
 
@@ -88,39 +134,10 @@ def load_history(path, cell_m=None, off_m=None, verbose=True):
     cell_m = ML.CELL_M if cell_m is None else cell_m
     off_m = ML.OFFSET_M if off_m is None else off_m
 
-    with open(path, encoding="utf-8") as f:
-        raw = json.load(f)
+    raw = _read_traj(path)
     dt = float(raw["dt_s"])
-    robots, heads = raw["robots"], raw["headings"]
-    if set(robots) != set(heads):
-        raise ValueError("robots 와 headings 의 로봇 집합이 다르다")
-
-    per = {}                                          # rid -> {틱: (r,c,h)}
-    tmax = 0
-    for k in sorted(robots, key=int):
-        rid = int(k)
-        hh = {round(float(t) / dt): yaw for t, yaw in heads[k]}
-        per[rid] = {}
-        for t_s, x, y in robots[k]:
-            t = int(round(float(t_s) / dt))
-            r, c = _cellof(float(x), float(y), cell_m, off_m)
-            per[rid][t] = (r, c, _headof(hh.get(t, 0.0)))
-            tmax = max(tmax, t)
-
-    history, filled = [], 0
-    last = {}
-    for t in range(tmax + 1):
-        st = {}
-        for rid, log in per.items():
-            s = log.get(t)
-            if s is None:
-                s = last.get(rid)
-                if s is None:
-                    continue                          # 아직 등장 전
-                filled += 1
-            st[rid] = s
-            last[rid] = s
-        history.append(st)
+    per, tmax = _states_by_robot(raw, dt, cell_m, off_m)
+    history, filled = _fill_gaps(per, tmax)
 
     meta = dict(dt=dt, model=raw.get("model"), n_robots=len(per),
                 ticks=len(history), filled=filled,
@@ -157,6 +174,43 @@ def load_history(path, cell_m=None, off_m=None, verbose=True):
 TRAJ_SCHEDULE = os.environ.get("PIBT_TRAJ_SCHEDULE", "1") not in ("0", "", "no", "off")
 
 
+def _stamp_schedule(chains, meta, verbose):
+    """★★ 시간표를 지킨다 — 동작마다 **제 계획 틱**을 릴리스 바닥으로 박는다.
+
+    끄면(`PIBT_TRAJ_SCHEDULE=0`) 순서만 지키고 간격은 안 지킨다.
+    """
+    if not TRAJ_SCHEDULE:
+        if verbose:
+            print("[fms_traj]   ☹ PIBT_TRAJ_SCHEDULE=0 — **순서만** 지킨다."
+                  " 두 로봇 사이 간격이 이산과 달라진다")
+        return 0
+    n = 0
+    for ch in chains:
+        for act in ch:
+            act.release_tick = act.tick
+            n += 1
+    meta["scheduled"] = n
+    if verbose:
+        print(f"[fms_traj]   ★★ 시간표 적용 — 동작 {n:,}개에 릴리스 바닥을 박았다"
+              f" (일찍은 못 가고 늦게는 간다)")
+    return n
+
+
+def _cycle_nodes(adg):
+    """위상정렬로 **안 빠지는 노드**들 — 고리에 갇힌 것. 없으면 빈 리스트."""
+    indeg = {a.uid: len(adg.preds[a.uid]) for a in adg.actions}
+    q = [u for u, d in indeg.items() if d == 0]
+    seen = set()
+    while q:
+        u = q.pop()
+        seen.add(u)
+        for v in adg.succs[u]:
+            indeg[v] -= 1
+            if indeg[v] == 0:
+                q.append(v)
+    return [a.uid for a in adg.actions if a.uid not in seen]
+
+
 def build(path, geom, verbose=True):
     """`trajectories.json` -> `(adg, order, history, info)`.
 
@@ -181,20 +235,7 @@ def build(path, geom, verbose=True):
     history, meta = load_history(path, verbose=verbose)
     chains, order, stats = D.extract_actions(history, geom)
 
-    # ★★ 시간표를 지킨다 — 동작마다 제 계획 틱을 릴리스 바닥으로 박는다.
-    if TRAJ_SCHEDULE:
-        n = 0
-        for ch in chains:
-            for act in ch:
-                act.release_tick = act.tick
-                n += 1
-        meta["scheduled"] = n
-        if verbose:
-            print(f"[fms_traj]   ★★ 시간표 적용 — 동작 {n:,}개에 릴리스 바닥을 박았다"
-                  f" (일찍은 못 가고 늦게는 간다)")
-    elif verbose:
-        print("[fms_traj]   ☹ PIBT_TRAJ_SCHEDULE=0 — **순서만** 지킨다."
-              " 두 로봇 사이 간격이 이산과 달라진다")
+    _stamp_schedule(chains, meta, verbose)
 
     adg = D.build_adg(chains)
     if adg.topological_order() is None:
@@ -221,17 +262,7 @@ def find_cycle(adg, limit=3):
     위상정렬로 남는 노드(진입차수가 0 이 안 되는 것)에서 DFS 로 되돌아오는
     간선을 찾는다. `topological_order()` 와 같은 자료(`preds`/`succs`)를 쓴다.
     """
-    indeg = {a.uid: len(adg.preds[a.uid]) for a in adg.actions}
-    q = [u for u, d in indeg.items() if d == 0]
-    seen = set()
-    while q:
-        u = q.pop()
-        seen.add(u)
-        for v in adg.succs[u]:
-            indeg[v] -= 1
-            if indeg[v] == 0:
-                q.append(v)
-    left = [a.uid for a in adg.actions if a.uid not in seen]   # 고리에 갇힌 것들
+    left = _cycle_nodes(adg)                         # 고리에 갇힌 것들
     if not left:
         return []
     inside = set(left)
