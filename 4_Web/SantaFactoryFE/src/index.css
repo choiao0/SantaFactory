@@ -286,7 +286,7 @@ section.step > p.desc { font-size: 18px; line-height: 1.7; max-width: 760px; mar
 .run.playable.on .play-hint { color: #4fd18b; }
 .run.DONE { border-color: #2f7a52; border-top-color: #4fd18b; background: #0e1a13; }
 /* 계산 중 — 완료(초록)·실패(앰버)·대기(회색)와 겹치지 않는 네 번째 색. 빨강은 실패로 읽힌다 */
-.run.RUNNING, .run.working { border-color: #2f6b7a; border-top-color: #4fc3d1; background: #0d1a1d; }
+.run.RUNNING { border-color: #2f6b7a; border-top-color: #4fc3d1; background: #0d1a1d; }
 .run.FAILED, .run.TIMEOUT { border-color: #a5730e; border-top-color: var(--warn); background: #1c150a; }
 .run .n { font: 800 32px/1 var(--font-head); letter-spacing: -.04em; color: #fff; }
 .run .n span { font: 500 14px var(--font-mono); color: #999; margin-left: 3px; }
@@ -299,7 +299,7 @@ section.step > p.desc { font-size: 18px; line-height: 1.7; max-width: 760px; mar
   display: flex; align-items: center; justify-content: center;
 }
 /* 글자 없이 AMR 만 — 카드 테두리가 이미 "도는 중"을 말해 준다 */
-.run.working .wait { color: #fff; }
+.run.RUNNING .wait { color: #fff; }
 /* 계산 중인 run — AMR 이 앞으로 나아간다. 정의도 없던 blink 애니메이션을 여기로 대체했다 */
 .run .amr-run { flex: none; display: inline-flex; line-height: 0; }
 .run .amr-run svg { animation: amr-forward 1.2s ease-in-out infinite; }
@@ -321,6 +321,7 @@ section.step > p.desc { font-size: 18px; line-height: 1.7; max-width: 760px; mar
 .runs-legend { display: flex; align-items: center; gap: 16px; font: 500 13px var(--font-mono); color: #aaa; letter-spacing: .04em; }
 .runs-legend i { display: inline-block; width: 12px; height: 12px; margin-right: 6px; vertical-align: -1px; }
 .runs-legend i.DONE { background: #4fd18b; }
+.runs-legend i.RUNNING { background: #4fc3d1; }
 .runs-legend i.FAILED { background: var(--warn); }
 .runs-legend i.QUEUED { background: #555; }
 .runs-legend .status { margin-left: 8px; }

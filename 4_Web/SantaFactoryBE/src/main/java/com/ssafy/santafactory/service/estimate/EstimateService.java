@@ -6,13 +6,18 @@ import com.ssafy.santafactory.dto.estimate.EstimateDetailResponse;
 import com.ssafy.santafactory.service.estimate.EstimateEvents.EstimateFinished;
 import com.ssafy.santafactory.service.estimate.EstimateEvents.EstimateVerified;
 import com.ssafy.santafactory.service.estimate.EstimateEvents.RunUpdated;
+import com.ssafy.santafactory.service.estimate.EstimateEvents.RunsQueued;
 import com.ssafy.santafactory.dto.estimate.EstimateSummaryResponse;
 import com.ssafy.santafactory.dto.simulation.SimulationRequest;
 import com.ssafy.santafactory.dto.simulation.SimulationResponse;
 import com.ssafy.santafactory.dto.simulation.VerifyRequest;
 import com.ssafy.santafactory.dto.simulation.VerifyResultResponse;
+import com.ssafy.santafactory.dto.warehouse.WarehouseResponse;
+import com.ssafy.santafactory.service.estimate.quote.QuoteSource;
 import com.ssafy.santafactory.entity.estimate.Estimate;
 import com.ssafy.santafactory.entity.estimate.RunStatus;
+import com.ssafy.santafactory.entity.estimate.VerifySnapshot;
+import com.ssafy.santafactory.entity.simulation.RunKpiDetail;
 import com.ssafy.santafactory.entity.simulation.SimScenario;
 import com.ssafy.santafactory.entity.warehouse.Warehouse;
 import com.ssafy.santafactory.global.auth.AuthenticatedMember;
@@ -37,6 +42,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.io.IOException;
@@ -71,6 +77,9 @@ public class EstimateService {
     /** 아직 결과를 기다리는 상태 — TIMEOUT 스윕 대상. */
     private static final List<RunStatus> PENDING = List.of(RunStatus.QUEUED, RunStatus.RUNNING);
 
+    /** 워커가 run 을 집었을 때 결과 큐로 먼저 보내는 상태값 (명세 §1-2). */
+    private static final String STATUS_RUNNING = "running";
+
     private final EstimateRepository estimateRepository;
     private final SimScenarioRepository scenarioRepository;
     private final WarehouseRepository warehouseRepository;
@@ -83,14 +92,15 @@ public class EstimateService {
     private final OutboundOrderGenerator outboundOrderGenerator;
     private final ObjectMapper objectMapper;
     private final VerifyVideoPresigner videoPresigner;
+    private final VerifyComparator verifyComparator;
 
     // ── 생성 ─────────────────────────────────────────────────────────────────
 
     /**
      * 견적을 만들고 대수별 run 을 전부 발행한다.
      *
-     * <p>run 행을 먼저 저장하고 발행한다. 발행이 실패하면 트랜잭션이 롤백돼 견적도 남지 않고
-     * 호출자에게 503 이 간다(명세 §1-4).
+     * <p>run 행을 저장하고 커밋한 뒤에 발행한다({@link RunsQueued} → {@link SimRequestDispatcher}).
+     * 발행이 실패한 run 은 {@link #failUnpublished} 가 FAILED 로 닫는다.
      */
     @Transactional
     public EstimateCreateResponse create(EstimateCreateRequest request, AuthenticatedMember me) {
@@ -118,12 +128,30 @@ public class EstimateService {
             scenarioRepository.save(SimScenario.queued(
                     estimate, SimulationService.runId(baseRunId, amrCount), amrCount, costCalculator.cost(amrCount)));
         }
-        List<String> runIds =
-                simulationService.publishRuns(baseRequest(baseRunId, warehouse, outboundOrders), amrCounts);
+        eventPublisher.publishEvent(
+                new RunsQueued(estimate.getId(), baseRequest(baseRunId, warehouse, outboundOrders), amrCounts));
 
         log.info("견적 생성: estimateId={}, 최대 {}대, 목표 처리율 {}%, 가동률 {}%, 예산 {}원",
                 estimate.getId(), maxAmrCount, targetThroughput, targetUtilization, budgetLimit);
+        List<String> runIds = amrCounts.stream().map(count -> SimulationService.runId(baseRunId, count)).toList();
         return new EstimateCreateResponse(estimate.getId(), maxAmrCount, runIds);
+    }
+
+    /**
+     * 요청 큐에 발행하지 못한 run 을 FAILED 로 닫는다. 커밋 뒤 발행 단계에서 부르므로 새 트랜잭션이 필요하다.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void failUnpublished(Long estimateId, List<Integer> amrCounts, String error) {
+        List<SimScenario> runs = scenarioRepository.findByEstimateIdOrderByAmrCountAsc(estimateId).stream()
+                .filter(run -> amrCounts.contains(run.getAmrCount()) && !run.isFinished())
+                .toList();
+        if (runs.isEmpty()) {
+            return;
+        }
+        runs.forEach(run -> run.markFailed(error));
+        runs.forEach(run -> eventPublisher.publishEvent(new RunUpdated(estimateId, EstimateDetailResponse.Run.from(run))));
+        log.error("발행 실패 run {}건 FAILED 처리: estimateId={}, amrCounts={}", runs.size(), estimateId, amrCounts);
+        finalizeIfComplete(runs.get(0).getEstimate());
     }
 
     /**
@@ -238,8 +266,30 @@ public class EstimateService {
         Estimate estimate = estimateRepository.findById(estimateId)
                 .orElseThrow(() -> new GlobalException(ErrorCode.ESTIMATE_NOT_FOUND));
         ownershipGuard.checkEstimate(estimate, me);
-        return EstimateDetailResponse.of(estimate, scenarioRepository.findByEstimateIdOrderByAmrCountAsc(estimateId),
-                videoPresigner.sign(estimate.getVerifyVideoUrl()));
+        return toDetail(estimate);
+    }
+
+    /** 견적서 재료 — 상세 응답과 창고를 한 트랜잭션에서 읽는다 (S15P21A106-236). 소유권 확인은 상세 조회와 같다. */
+    @Transactional(readOnly = true)
+    public QuoteSource quoteSource(Long estimateId, AuthenticatedMember me) {
+        Estimate estimate = estimateRepository.findById(estimateId)
+                .orElseThrow(() -> new GlobalException(ErrorCode.ESTIMATE_NOT_FOUND));
+        ownershipGuard.checkEstimate(estimate, me);
+        return new QuoteSource(toDetail(estimate), WarehouseResponse.from(estimate.getWarehouse()));
+    }
+
+    private EstimateDetailResponse toDetail(Estimate estimate) {
+        List<SimScenario> runs = scenarioRepository.findByEstimateIdOrderByAmrCountAsc(estimate.getId());
+        return EstimateDetailResponse.of(estimate, runs, videoPresigner.sign(estimate.getVerifyVideoUrl()),
+                verifyComparator.compare(estimate.getVerify(), recommendedRun(estimate, runs)));
+    }
+
+    private static SimScenario recommendedRun(Estimate estimate, List<SimScenario> runs) {
+        Integer recommended = estimate.getRecommendedCount();
+        if (recommended == null) {
+            return null;
+        }
+        return runs.stream().filter(run -> recommended.equals(run.getAmrCount())).findFirst().orElse(null);
     }
 
     /**
@@ -282,8 +332,7 @@ public class EstimateService {
     public EstimateDetailResponse snapshot(Long estimateId) {
         Estimate estimate = estimateRepository.findById(estimateId)
                 .orElseThrow(() -> new GlobalException(ErrorCode.ESTIMATE_NOT_FOUND));
-        return EstimateDetailResponse.of(estimate, scenarioRepository.findByEstimateIdOrderByAmrCountAsc(estimateId),
-                videoPresigner.sign(estimate.getVerifyVideoUrl()));
+        return toDetail(estimate);
     }
 
     @Transactional(readOnly = true)
@@ -388,6 +437,11 @@ public class EstimateService {
             log.info("이미 처리된 run 결과 무시: runId={}, status={}", run.getRunId(), run.getStatus());
             return;   // 같은 run_id 가 두 번 올 수 있다 (명세 §1-3)
         }
+        if (STATUS_RUNNING.equals(response.status())) {
+            run.markRunning();
+            eventPublisher.publishEvent(new RunUpdated(run.getEstimate().getId(), EstimateDetailResponse.Run.from(run)));
+            return;
+        }
 
         if (isFailure(response)) {
             log.warn("시뮬 실패: runId={}, error={}", run.getRunId(), response.error());
@@ -424,6 +478,7 @@ public class EstimateService {
                     response.estimateId(), response.runId());
             return;
         }
+        estimate.applyVerifyResult(toVerifySnapshot(response));
         String video = response.artifacts() != null ? response.artifacts().video() : null;
         if (video != null) {
             estimate.applyVerifyVideo(video);
@@ -434,12 +489,40 @@ public class EstimateService {
                 estimate.getId(), response.status(), videoPresigner.sign(video), response.error()));
     }
 
+    /** 계약 §3 페이로드에서 견적에 남길 것만 뽑는다. verify·kpi 가 없는 옛 페이로드는 성패만 남는다. */
+    private VerifySnapshot toVerifySnapshot(VerifyResultResponse response) {
+        VerifyResultResponse.Verify verify = response.verify();
+        SimulationResponse.Kpi kpi = response.kpi();
+        VerifyResultResponse.Fms fms = verify == null ? null : verify.fms();
+        return new VerifySnapshot(
+                response.runId(), response.status(),
+                verify == null ? null : verify.reason(), response.error(),
+                verify == null ? null : verify.nRobots(),
+                verify == null ? null : verify.robotsOnline(),
+                verify == null ? null : verify.windowS(),
+                warningsJson(fms),
+                kpi == null ? null : kpi.throughputOrdersPerH(),
+                kpi == null ? null : kpi.leadTimeP90S(),
+                kpi == null ? null : kpi.conflictWaitRatio(),
+                LocalDateTime.now());
+    }
+
+    private String warningsJson(VerifyResultResponse.Fms fms) {
+        if (fms == null || fms.warnings() == null || fms.warnings().isNull()) {
+            return null;
+        }
+        try {
+            return objectMapper.writeValueAsString(fms.warnings());
+        } catch (JsonProcessingException e) {
+            return fms.warnings().toString();
+        }
+    }
+
     /**
      * 결과가 오지 않는 run 을 TIMEOUT 으로 정리한다.
      *
-     * <p>이게 없으면 워커가 죽거나 발행 메시지가 유실될 때 그 run 이 QUEUED 에 갇히고, 견적이 영원히
-     * RUNNING 으로 남는다. 발행은 트랜잭션 커밋보다 먼저 일어나므로(생성 참고) 아주 빠른 워커가
-     * 커밋 전에 응답해 결과가 버려지는 경우도 여기서 회수된다.
+     * <p>이게 없으면 워커가 죽거나 발행 메시지가 유실될 때 그 run 이 QUEUED/RUNNING 에 갇히고, 견적이
+     * 영원히 RUNNING 으로 남는다.
      *
      * @return TIMEOUT 처리한 run 수
      */
@@ -474,8 +557,14 @@ public class EstimateService {
             return;
         }
         run.markDone(throughputPercent(kpi), utilizationPercent(kpi), dailyOutbound(run, kpi), kpi.leadTimeP90S());
+        run.applyKpiDetail(toKpiDetail(kpi));
         log.info("run 완료: runId={}, 처리율={}%, 가동률={}%",
                 run.getRunId(), run.getThroughput(), run.getUtilization());
+    }
+
+    private RunKpiDetail toKpiDetail(SimulationResponse.Kpi kpi) {
+        return new RunKpiDetail(kpi.ordersTotal(), kpi.ordersCompleted(), kpi.leadTimeMeanS(), kpi.queueTimeMeanS(),
+                kpi.throughputOrdersPerH(), kpi.conflictWaitRatio(), kpi.distanceTotalM());
     }
 
     /**

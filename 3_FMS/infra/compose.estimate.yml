@@ -37,6 +37,10 @@ services:
       # 4_Web/.env 와 같은 값. 기본값을 두지 않는다 — 두면 guest 로 조용히
       # 붙었다가 인증 실패로 재시도 루프를 도는 편이 진단이 더 어렵다.
       RABBITMQ_URL: amqp://${RABBITMQ_USER:?infra/.env 에 RABBITMQ_USER 를 설정하세요}:${RABBITMQ_PASSWORD:?infra/.env 에 RABBITMQ_PASSWORD 를 설정하세요}@rabbitmq:5672/
+      # θ 예측 (S15P21A106-206). 견적 요청의 **대수마다** 맵을 보고 θ 를 뽑는다(0.1 초, 대수별 캐시).
+      # 이 줄을 지우면 지금까지의 고정 θ 로 비트 단위로 되돌아간다 — 예측이 실패해도 자동으로 그리 떨어진다.
+      # 모델은 이미지에 구워져 있다(estimate.Dockerfile 의 COPY ai_theta/).
+      THETA_MODEL: ${THETA_MODEL-/app/ai_theta/model/theta_model.joblib}
     networks: [santafactory]
     restart: unless-stopped
     deploy:

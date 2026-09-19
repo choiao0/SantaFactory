@@ -66,6 +66,14 @@ minio:
   # 영상을 보는 동안 구간 이동이 되려면 시청 시간을 덮어야 한다. 만료되면 프론트가 상세를 다시 불러 새 URL 을 받는다
   presign-ttl: 30m
 
+# 견적서 PDF (S15P21A106-236). 변환은 compose 의 pdf 서비스(Gotenberg)가 하고 백엔드는 HTML 만 만든다.
+# base-url 이 비면(로컬 기본) 견적서 API 가 503 을 준다 — 로컬에서 보려면 `docker compose up -d pdf` 뒤 http://localhost:3001.
+pdf:
+  base-url: ${PDF_BASE_URL:}
+  timeout: 30s
+  # 견적서 안에 적는 서비스 주소. 만료되는 영상 서명 URL 대신 "웹에서 견적을 열어 보라"는 링크로 쓴다
+  site-url: ${APP_PUBLIC_URL:http://localhost:5173}
+
 estimate:
   # amr-price / install-per-unit 은 robots 시드의 price(단가) / cost(구축·설치비)와 같은 값 — 둘 다 대당
   amr-price: 15000000
@@ -115,6 +123,12 @@ estimate:
   # 발행 후 결과가 이 시간 안에 안 오면 TIMEOUT (명세 §1-4 는 30분 — 시연 때는 줄여도 된다)
   run-timeout: 30m
   timeout-sweep-interval: 60   # 스윕 주기(초)
+  # 물리 검증 결과를 권장 대수의 계산 결과와 견줄 때 "나빠졌다"고 볼 기준 (S15P21A106-236, 2026-09-17 임시값).
+  # 검증은 피크 10분 창만 돌리므로 처리율 % 는 견주지 않고 주문 처리 시간(p90)·통로 혼잡만 본다.
+  # 결과가 이상하면 여기서 조정한다. 저장하지 않고 조회할 때 계산하므로 과거 견적에도 바로 적용된다.
+  # verify-compare:
+  #   lead-time-p90-tolerance: 0.10   # 계산보다 10 % 이상 길면 SLOWER_AT_PEAK
+  #   conflict-wait-tolerance: 0.01   # 계산보다 1 %p 이상 높으면 SLOWER_AT_PEAK
 
 # 이메일 인증. enabled 가 false 면(로컬 기본) 메일을 보내지 않고 코드를 백엔드 로그에 찍는다.
 mail:
