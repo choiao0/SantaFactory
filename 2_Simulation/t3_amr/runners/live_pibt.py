@@ -40,6 +40,33 @@ omni 가 지역변수로 잡혀 UnboundLocalError 가 난다 (2026-08-30 실측)
   (유휴 0.346x vs 주행 0.330x 는 "로봇을 굴리는 변동비 4.6%"만 말해준다).
   --lite 와 함께 한 번 재서 기록할 것.
 
+  ★★ **쟀다** (2026-09-17, S15P21A106-240). 12대 · pitch 1.0 · 시드 2 ·
+     같은 기계(jupyter04). `t=10s -> t=20s` 두 점으로 기동 시간을 뺐다.
+
+         STREAM=1              30,003 ms / 10 s sim  ->  배속 **0.333**
+                               (t=20->30 도 30,337 ms = 0.330 — 일관)
+         STREAM=0 + --lite     13,829 ms / 10 s sim  ->  배속 **0.723**
+                                                          **2.17배**
+
+     -> 스텝 비용의 **절반 이상이 렌더**다. 위 "변동비 4.6%" 는 로봇을
+        굴리는 몫이고, 렌더는 그것과 별개로 훨씬 크다.
+
+     ★ 그리고 **물리는 안 바뀐다** — 같은 판의 probe 지문이 소수점까지 같다.
+
+         STREAM=1 (hist_s2)   변화 0.07475
+         STREAM=0 --lite      변화 0.07475
+
+        `MakeInvisible()` 이 `CollisionAPI` 를 안 건드린다는 아래 주석이
+        **측정으로도 섰다.** 재는 절차는 `tools/headless_parity.sh`.
+
+     ☹ 주석 밖 참고값 주의 — `run_record.sh` 가 인용하는 지문 `0.07370` 과
+       우리 실측 `0.07475` 가 다르다. 둘 다 정상 범위로 보이지만 **어느 판에서
+       나온 값인지**가 안 적혀 있다. 판정은 **같은 기계·같은 판의 두 값을
+       맞대는 것**으로 한다 — 남의 숫자와 비교하지 않는다.
+
+     -> 증명 주행 비용: 포화창 9,000 s 가 7.5시간 -> **3.5시간**,
+                        6시간 21,600 s 가 18시간 -> **8.3시간**
+
 ★ 띄엄띄엄 렌더하면 프레임 사이(0.333 s)에 스친 것은 눈으로 놓친다.
   그래서 무충돌 보장은 영상이 아니라 **매 스텝 도는 숫자**(overlap_events)가
   해야 한다. 캡처를 켜도 그 검사는 그대로 돈다.
@@ -182,6 +209,43 @@ ORDER_END = float(_OE) if _OE else None
 # 일하므로 복귀가 안 된다. 전원 복귀를 보려면 25 이상으로 부하를 낮춘다.
 # 실측(12대·seed 1·업무 315틱·horizon 550): gap 15 → 4/12, gap 25 → **12/12**.
 ORDER_GAP = int(os.environ.get("PIBT_ORDER_GAP", "60"))   # -211: 틱 단위라 x4
+# ★★ FMS 배정표를 **그대로** 읽는다 (S15P21A106-240, 2026-09-18).
+#
+#   여기까지 우리 물리 판은 네 층 중 **둘만** FMS 것이었다.
+#
+#       계획 코어   `pibt/` 원본 로드            ★ 그쪽 것
+#       배차        `dispatch.py` 이식본          ★ 그쪽 것
+#       주문        `lifelong.OrderStream` 난수   ☹ **우리 것**
+#       격자        `build_free`                  ☹ 우리 것 (아직)
+#
+#   그런데 주문은 맞출 재료가 **처음부터 다 있었다** — `packing_assign_s*.csv`
+#   6,000행(언제·어느 버퍼·어느 포장대)과 그것을 읽는 `fms_stream.FileOrderStream`
+#   이 -224 에 만들어져 있었다. **꽂히지만 않았다.** `tools/fms_orders_check.py`
+#   가 세 시드 sha256 일치까지 확인해 두고 마지막 줄에 「다음: 이 배정표를 그대로
+#   읽는 OrderStream 을 만든다」라고 적어 둔 것이 9/14 다.
+#
+#   이게 꽂혀야 **이동 수요가 같아지고**, 그래야 「FMS 이산이 낸 판을 물리로
+#   증명한다」가 성립한다. 지금까지는 우리 난수 주문을 우리가 증명해 왔다.
+#
+#       PIBT_ORDERS=tools/_orders/packing_assign_s103.csv
+#
+#   빈 값이면 종전과 **비트 동일**이다 (난수 스트림).
+ORDERS_CSV = os.environ.get("PIBT_ORDERS", "").strip()
+# ★★ FMS 궤적을 **그대로** 실행한다 — 계획을 아예 안 한다 (-240, 2026-09-18).
+#
+#   `PIBT_ORDERS`·`PIBT_FMS_GRID` 는 입력을 맞추고 **계획은 우리가 다시 한다.**
+#   이쪽은 그쪽 `SIM_EXPORT_ISAAC=1` 이 낸 동작 열을 그대로 세운다 — 「이산으로
+#   계산하고 물리로 증명」의 가장 곧은 형태다.
+#
+#       cd 3_FMS/sim_engine
+#       SIM_EXPORT_ISAAC=1 python sim_v2_tasks.py x 12 0 103 1 --footprint=… --horizon=38880 …
+#       -> sim_engine/isaac_export_x/trajectories.json
+#
+#       PIBT_TRAJ=…/trajectories.json **PIBT_FRONT_RULE=2** bash run.sh
+#
+#   ☹ **발자국을 계획과 맞춰야 한다.** `exact,front_2cell` 로 만든 궤적을 4칸으로
+#     세우면 ADG 가 순환한다 (실측: 끔 순환 · 2칸 비순환 · 4칸 순환).
+TRAJ_JSON = os.environ.get("PIBT_TRAJ", "").strip()
 CAMERA = os.environ.get("PIBT_CAMERA", "/World/Cameras/Cam_Top")
 SPAWN_Z = float(os.environ.get("PIBT_SPAWN_Z", "0.081"))   # build_amr_scene 의 WHEEL_R
 LEFT_IDX, RIGHT_IDX = 0, 1
@@ -814,10 +878,31 @@ def _tick(f, dt):
         state["done"] = True
         return
 
+    # ★★ 랙 접촉 (L, -240). 로봇끼리와 **갈라** 본다 — 원인도 대책도 다르다.
+    #   기본은 **세기만 하고 안 멈춘다.** 빈도를 먼저 알아야 하기 때문이다.
+    #   `PIBT_STATIC_ABORT=1` 이면 로봇 접촉과 같이 판을 세운다.
+    if f.stats.static_contact_events and not state.get("_static_said"):
+        state["_static_said"] = True
+        carb.log_error(
+            f"[pibt] ★★ **랙 접촉** {f.stats.static_contact_events:,}스텝  "
+            f"최대 침투 {f.stats.static_worst_pen * 1000:.1f} mm  "
+            f"— 합불 `clean` 이 거짓이다"
+            + ("  (PIBT_STATIC_ABORT=1 — 중단한다)"
+               if os.environ.get("PIBT_STATIC_ABORT", "0") not in ("0", "", "false")
+               else "  (세기만 한다. 멈추려면 PIBT_STATIC_ABORT=1)"))
+        if os.environ.get("PIBT_STATIC_ABORT", "0") not in ("0", "", "false"):
+            _shot_report()
+            state["done"] = True
+            return
+
     if f.stats.contact_events:
+        # ★ **접촉 쌍**을 찍는다 (-240, 2026-09-18). 여기가 `overlap_pairs`(칸 공유)를
+        #   찍고 있어서, 접촉 1건인데 목록에 30쌍이 나와 어느 쌍인지 못 골랐다.
+        #   칸 공유 수는 뒤에 참고로만 붙인다.
         carb.log_error(f"[pibt] ★★ 차체 접촉 {f.stats.contact_events}건  "
-                       f"쌍 {sorted(f.stats.overlap_pairs)}  "
-                       f"차체 최소거리 {f.stats.worst_gap:.3f} m  — 브리지 버그")
+                       f"**접촉 쌍** {sorted(f.stats.contact_pairs)}  "
+                       f"차체 최소거리 {f.stats.worst_gap:.3f} m  — 브리지 버그"
+                       f"   (칸 공유는 별건: {len(f.stats.overlap_pairs)}쌍)")
         try:
             for line in str(f.diagnose()).splitlines()[:25]:
                 carb.log_error("   " + line)
@@ -984,15 +1069,65 @@ async def _run():
             oe = ORDER_END
             if oe is not None:
                 oe = int(round(HORIZON * oe)) if oe <= 1.0 else int(round(oe))
-            adg, order, history, info = plan_and_build_lifelong(
-                free, starts, goals, geom, horizon=HORIZON, seed=SEED,
-                battery=BATTERY, dispatch=DISPATCH, zone_cells=zone,
-                order_end=oe, order_gap=ORDER_GAP,
-                docks=PS.charge_docks(free, geom) if BATTERY else ())
-            carb.log_warn(f"[pibt] lifelong {HORIZON}틱 · 배터리 {BATTERY} "
-                          f"· 배차 {DISPATCH} · 존복귀 {ZONE}({len(zone)}칸)"
-                          f" · 주문간격 {ORDER_GAP}틱"
-                          + (f" · 업무종료 {oe}틱" if oe is not None else ""))
+            # ★★ 궤적을 주면 **계획을 건너뛴다.** 그쪽이 낸 동작 열을 그대로 세운다.
+            if TRAJ_JSON:
+                import fms_traj
+                _tj = (TRAJ_JSON if os.path.isabs(TRAJ_JSON)
+                       else os.path.join(os.environ["W"], TRAJ_JSON))
+                carb.log_warn(f"[pibt] ★★ **계획을 안 한다** — FMS 궤적을 그대로 실행: "
+                              f"{os.path.basename(os.path.dirname(_tj))}/"
+                              f"{os.path.basename(_tj)}")
+                adg, order, history, info = fms_traj.build(_tj, geom, verbose=True)
+                _m = (info.get("lifelong") or {}).get("fms_traj") or {}
+                carb.log_warn(f"[pibt] ★★ 궤적 {_m.get('n_robots')}대 · "
+                              f"틱 {_m.get('ticks', 0):,} · 태스크 {_m.get('tasks', 0):,} "
+                              f"· 모델 {_m.get('model')}")
+                # ★★ 스폰을 **궤적 첫 틱으로** 맞춘다. 어긋나면 로봇이 엉뚱한 자리에
+                #   서고 그 뒤가 전부 틀어진다. `PIBT_FMS_GRID=1` 이면 같아야 하지만,
+                #   **같아야 한다**와 **같다**는 다르다 — 확인하고 덮는다.
+                _diff = [a for a, s in history[0].items()
+                         if tuple(starts.get(a, ())) != tuple(s)]
+                if _diff:
+                    carb.log_error(
+                        f"[pibt] ★★ 스폰이 궤적 첫 틱과 다르다 — **궤적으로 덮는다** "
+                        f"({len(_diff)}대). 예: agent{_diff[0]} "
+                        f"{starts.get(_diff[0])} -> {history[0][_diff[0]]}")
+                    carb.log_error("[pibt]    PIBT_FMS_GRID=1 인지 보라. "
+                                   "격자가 다르면 칸 번호가 애초에 다른 뜻이다")
+                starts = {a: tuple(s) for a, s in history[0].items()}
+            # ★★ FMS 배정표를 쓰면 주문 스트림을 갈아끼운다. 안 주면 종전과 비트 동일.
+            stream = None
+            if TRAJ_JSON:
+                pass                       # 궤적을 쓰면 주문 스트림이 필요 없다
+            elif ORDERS_CSV:
+                from fms_stream import FileOrderStream
+                _csv = (ORDERS_CSV if os.path.isabs(ORDERS_CSV)
+                        else os.path.join(os.environ["W"], ORDERS_CSV))
+                stream = FileOrderStream(_csv, geom, free, MAP, HORIZON,
+                                         order_end=oe, verbose=False)
+                carb.log_warn(
+                    # `n_task` 는 arrivals() 가 불릴 때 누적된다 — 지금은 0 이다.
+                    f"[pibt] ★★ 주문 = **FMS 배정표** {os.path.basename(_csv)} "
+                    f"· 적재 {stream.loaded:,}건 / 파일 {stream.total:,}행"
+                    + (f" · horizon 밖 {stream.skipped_late:,}건 뺌"
+                       if stream.skipped_late else "")
+                    + (f" · ★ 칸 못 찾음 {len(stream.skipped_bad)}건"
+                       if stream.skipped_bad else ""))
+                if stream.skipped_bad:
+                    # 칸을 못 찾으면 **수요가 조용히 줄어든다.** 비교가 깨지므로 알린다.
+                    carb.log_error(f"[pibt] ★★ 배정표에서 칸을 못 찾은 항목이 있다 "
+                                   f"— 예: {stream.skipped_bad[:3]}")
+            if not TRAJ_JSON:
+                adg, order, history, info = plan_and_build_lifelong(
+                    free, starts, goals, geom, horizon=HORIZON, seed=SEED,
+                    battery=BATTERY, dispatch=DISPATCH, zone_cells=zone,
+                    order_end=oe, order_gap=ORDER_GAP, stream=stream,
+                    docks=PS.charge_docks(free, geom) if BATTERY else ())
+                carb.log_warn(f"[pibt] lifelong {HORIZON}틱 · 배터리 {BATTERY} "
+                              f"· 배차 {DISPATCH} · 존복귀 {ZONE}({len(zone)}칸)"
+                              + (" · 주문 **FMS 배정표**" if stream is not None
+                                 else f" · 주문간격 {ORDER_GAP}틱")
+                              + (f" · 업무종료 {oe}틱" if oe is not None else ""))
             _li = info.get("lifelong") or {}
             if _li.get("parked_end") is not None:
                 carb.log_warn(f"[pibt] 계획 종료 시 충전존 주차 "

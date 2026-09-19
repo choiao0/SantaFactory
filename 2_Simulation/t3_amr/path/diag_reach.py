@@ -72,7 +72,14 @@ def main():
     print(f"[진단] 맵 {md}")
     print(f"[진단] 파일 {sorted(os.listdir(md))}")
 
-    raw, k = PS.build_free(md, pitch, "cross")
+    # ★ 풀링을 열어 둔다 (2026-09-17). FMS 답신 22 §5 가 `cross` -> `max`
+    #   (우리 이름으로는 `strict`) 로 맞춰 달라고 했는데, 바꾸면 통행가능 칸이
+    #   줄어 **스테이션이 끊길 수 있다.** 그 실패 모드가 이 도구가 만들어진
+    #   이유다 (팽창 마스크 -> packing·consol 도달 불가 -> 완료 0).
+    #   바꾸기 전에 같은 도구로 양쪽을 재려면 여기가 열려 있어야 한다.
+    pool = os.environ.get("POOL", "cross")
+    print(f"[진단] 풀링 POOL={pool}")
+    raw, k = PS.build_free(md, pitch, pool)
     sz = components(raw)
     print(f"[진단] 성분정리 전  통행가능 {int(raw.sum())}칸 "
           f"({100 * raw.mean():.1f}%)  성분 {len(sz)}개  "

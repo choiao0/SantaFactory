@@ -56,7 +56,7 @@ import sys
 import numpy as np
 
 import pibt_core_v2 as _pc
-from pibt_core_v2 import (Replanner, Stagnation, dist_map_h, front_cells,
+from pibt_core_v2 import (DIRS, Replanner, Stagnation, dist_map_h, front_cells,
                           occupied, stay_map_h, step_h, swing_cells,
                           valid_state, wait_bias)
 
@@ -85,6 +85,114 @@ SERVICE = (SVC_PICK, SVC_DROP, CHARGING)
 ZONE_CLAIM = (TO_HOME, TO_CHARGE, TO_CHARGE_HI, CHARGING)
 
 SERVICE_TICKS = 3          # 픽/드롭 서비스 시간. FMS SERVICE_STEPS 와 같은 자리
+
+# ★★ 드롭 도달성 가드 — **FMS 원본과의 유일한 차이** (미해결 A, S15P21A106-240).
+#
+#   `dispatch()` 가 태스크를 줄 때 픽 칸뿐 아니라 **드롭 칸까지** 도달 가능한지
+#   본다. 원본에는 없다. 넣은 이유는 처리량이 아니라 **틀린 것을 안 하게** 하려던
+#   것이다 — 드롭이 도달 불가인 태스크를 받은 로봇은 거리장이 전부 -1 이라
+#   TO_DROP(RANK 1)으로 영구 정지하고, 우선순위가 높아 남까지 막는다.
+#   실측(팽창본 맵): 검사 없음 완료 6·대기 13·정지 발생 / 있음 완료 7·대기 0.
+#
+#   ☹ 그런데 이 한 줄 때문에 **배차가 FMS 와 비트 동일이 아니다.** 그쪽과 맞댈
+#     때는 꺼야 하고, 켠 채로 비교하면 차이를 물리 탓으로 돌리게 된다.
+#
+#       PIBT_DROP_GUARD=0    FMS 원본 그대로 (☹ 맵이 끊겨 있으면 정지할 수 있다)
+#       PIBT_DROP_GUARD=1    기본. 지금까지의 동작
+#
+#   켜든 끄든 `guard_flipped`(가드가 답을 바꾼 횟수)는 **항상 센다.** 그 수가
+#   0 이면 이 차이는 이 판에서 없었던 것이고, 크면 A 의 남은 물음이 여기다.
+DROP_GUARD = os.environ.get("PIBT_DROP_GUARD", "1") not in ("0", "", "off", "no")
+
+# ★★ 회전 옆 이웃 규칙 — pitch 1.0 에서 옆 칸에 남이 있으면 제자리 회전 금지 (-240).
+#
+#   `tools/turn_pair_margin.py` 가 차체 치수와 pitch 에서 **위치 불변 상수표**를 굽는다
+#   (여유 0.05 = tol.pos 를 기하로 옮긴 값).  pitch 1.0 -> **20개**, 1.2 -> **0개**.
+#
+#       PIBT_TURN_PAIR=1   켠다
+#       (기본 꺼짐)        비트 동일
+TURN_PAIR = os.environ.get("PIBT_TURN_PAIR", "0") not in ("0", "", "off", "no")
+_PAIR_TAB = None
+
+
+def _pair_table():
+    """{회전방향: {(상대칸, 상대헤딩)}} — A 의 헤딩을 0 으로 놓은 좌표계. 한 번만 굽는다.
+
+    ☹ pitch 를 **`PIBT_PITCH` 에서 읽는다.** 커널이 pitch 를 안 들고 있어서다.
+      처음엔 `pibt_scene.CHARGE_LAT` 을 썼는데 그 기본값이 **1.2** 라, 환경변수를
+      안 준 판에서 **빈 표**를 굽고 규칙이 조용히 아무 일도 안 했다 (막음 0).
+      그래서 기본을 1.0 으로 두고 **표 크기를 반드시 찍는다** — 조용히 비는 것이
+      제일 나쁘다.
+    """
+    global _PAIR_TAB
+    if _PAIR_TAB is None:
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))), "tools"))
+        import pibt_scene as PS
+        from turn_pair_margin import build_table, MARGIN
+        pitch = float(os.environ.get("PIBT_PITCH", "1.0"))
+        _PAIR_TAB = build_table(PS.make_geom(pitch), MARGIN)
+        n = sum(len(v) for v in _PAIR_TAB.values())
+        print(f"[turn_pair] pitch {pitch} · 여유 {MARGIN} m · **금지 조합 {n}개**"
+              + ("   ☹ 표가 비었다 — 규칙이 아무 일도 안 한다" if n == 0 else ""),
+              flush=True)
+        # ★★ 위 `make_geom` 이 **랙 마스크를 지웠는지** 본다 (-240, 2026-09-18).
+        #   실제로 지웠다. `make_geom` -> `front_rule` -> `geo.configure(...)` 인데
+        #   `configure` 는 `turn_mask` 를 안 주면 None 으로 되돌린다. 이 표를
+        #   **첫 `step_h` 에서 게으르게** 굽는 탓에, 그 시점이 `setup_lifelong`
+        #   이 마스크를 건 **뒤**였다. 그 판에서 `A11#11 turn(66,105,0)->(66,105,3)`
+        #   (기하 침투 58.1 mm)이 계획에 나와 랙에 10.6 mm 박혔다.
+        #   `front_rule` 을 고쳤으니 여기서는 통과해야 한다 — 안 통과하면 운다.
+        try:
+            import turn_sweep_mask as _TSM
+            _TSM.verify("(_pair_table 뒤)")
+        except ImportError:
+            pass
+    return _PAIR_TAB
+
+
+def _rot_sign(s0, s1):
+    """`s0 -> s1` 이 **제자리 회전**이면 +1(좌) · -1(우), 아니면 None."""
+    if s1[:2] != s0[:2] or s1[2] == s0[2]:
+        return None
+    return 1 if (s1[2] - s0[2]) % 4 == 1 else -1
+
+
+def _pair_key(s0, q):
+    """이웃 상태 `q` 를 **A(`s0`) 의 헤딩을 0 으로 놓은** 상대 좌표로 옮긴다.
+
+    표(`turn_pair_margin.build_table`)의 키와 **같은 규약**이어야 한다 —
+    (상대칸, 상대헤딩). 규약이 두 벌이 되면 표가 조용히 안 맞는다.
+    """
+    c, s = DIRS[s0[2]]                             # s0 의 헤딩을 +r 로 되돌리는 회전
+    dr, dc = q[0] - s0[0], q[1] - s0[1]
+    return ((dr * c + dc * s, -dr * s + dc * c), (q[2] - s0[2]) % 4)
+
+
+def _pair_blocked(states, agents, a, s0, hit):
+    """A 의 회전을 막는 이웃이 **하나라도** 있나. (원래의 `break` 와 같은 단축평가)"""
+    return any(_pair_key(s0, states[b]) in hit for b in agents if b != a)
+
+
+def _turn_pair_veto(states, new, agents):
+    """`step_h` 가 낸 회전 중 **금지 조합에 걸리는 것**을 제자리 대기로 되돌린다.
+
+    돌려준 수 = 막은 회전 수. 0 이면 이 틱에 규칙이 안 걸린 것이다.
+    """
+    tab = _pair_table()
+    if not any(tab.values()):
+        return 0                                   # pitch 1.2 등 — 표가 비었다
+    n = 0
+    for a in agents:
+        s0 = states[a]
+        sgn = _rot_sign(s0, new[a])
+        if sgn is None:
+            continue
+        hit = tab.get(sgn) or ()
+        if hit and _pair_blocked(states, agents, a, s0, hit):
+            new[a] = s0                            # ★ 제자리 대기로 되돌린다
+            n += 1
+    return n
 
 
 def shift_windows(horizon, shifts=("in", "out", "out")):
@@ -231,6 +339,13 @@ class Kernel(object):
         self.done_ticks = []
         self._t = -1                      # step 이 매 틱 갱신한다
         self.unreachable = 0
+        # ★★ 드롭 도달성 가드가 **답을 바꾼 횟수** (미해결 A, `guard_flipped`).
+        #   이 가드가 FMS 원본과의 **유일한 차이**다(`dispatch` 주석). 세어 두면
+        #   「회전 +2.3회/왕복」의 남은 물음이 이 한 줄 탓인지가 갈린다.
+        self.guard_flipped = 0
+        # ★★ 회전 옆 이웃 규칙이 **막은 회전 수** (PIBT_TURN_PAIR).
+        #   대가를 「사후 27.9 %」가 아니라 **계획을 다시 세운 뒤**로 재려는 것이다.
+        self.pair_blocked = 0
 
         # --- 충전존 복귀 (FMS core.py:72-75). 비우면 고정 홈 = 이전 동작 ---
         self.zone_cells = [tuple(rc) for rc in zone_cells if free[tuple(rc)]]
@@ -406,9 +521,14 @@ class Kernel(object):
             #       드롭 검사 없음  완료 6 · 대기 13   정지 발생
             #       드롭 검사 있음  완료 7 · 대기  0   정지 없음
             #   맵이 정상이어도 칸 하나만 끊기면 같은 일이 나므로 상시로 둔다.
-            cand = [a for a in elig
-                    if self.reachable(a, task["frm"])
-                    and self.reachable_between(task["frm"], task["to"])]
+            # ★ 드롭 검사는 **로봇에 안 걸린다**(태스크의 성질). 그래서 후보를
+            #   전부 지우거나 전혀 안 지운다 — 갈라 쓰면 원본과 비트 동일하게
+            #   끌 수 있고, **가드가 답을 바꾼 횟수**도 정확히 세어진다.
+            cand = [a for a in elig if self.reachable(a, task["frm"])]
+            if cand and not self.reachable_between(task["frm"], task["to"]):
+                self.guard_flipped += 1
+                if DROP_GUARD:
+                    continue              # 가드가 이 배차를 막았다
             if not cand:
                 continue
             a = min(cand, key=lambda i: abs(self.states[i][0] - fr)
@@ -473,7 +593,58 @@ class Kernel(object):
         agents = list(self.states)
         # 우선순위: 일의 계급 우선, 같으면 age (run_h 와 같은 단조 증가 규칙)
         prio = sorted(agents, key=lambda a: (RANK[self.rb[a]["state"]], -self.age[a], a))
-        extra = {a: self.swing[a] for a in agents if self.busy[a] > 0}
+        # ★★ 스윙 앞칸을 **hard 로 올린다** (-240, 2026-09-18). 기본 꺼짐.
+        #
+        #   왜. `front_cells`(soft)는 상대의 **축**만 막고 **몸**은 안 막는다.
+        #   그래서 남의 **꼬리**가 내 스윙 칸에 있는 채로 회전이 시작될 수
+        #   있고, 그때 설계 여유가
+        #
+        #       pitch - 폭/2 - 코반경 = 1.0 - 0.400 - 0.5587 = **41.3 mm**
+        #
+        #   뿐이다. 도착 허용오차가 한 대당 50 mm 라(로봇은 늘 그 원의
+        #   가장자리에 선다) 두 대가 서로를 향하면 예산을 넘는다.
+        #   2.5 h 판에서 실제로 났다 — 쌍 (0,8) · 공유칸 (45,103) ·
+        #   최소거리 0.000 m · t=2,986 s. agent0 이 (46,103) 에서 2->3 으로
+        #   돌 때 front(2) = (45,103) 이 agent8 의 **꼬리 칸**이었다.
+        #
+        #   허용오차로는 못 닫는다 — 기하가 요구하는 상한(20.6 mm)이
+        #   제어가 요구하는 하한(20~26 mm, 15 mm 에서 교착 실측)과 안 만난다.
+        #   그러니 **예산 쪽을 늘려야** 하고, hard 로 올리면 여유가 200 mm 가
+        #   된다 (= pitch - width). FMS `geometry.py` 주석의 「5칸 hard(286)」와
+        #   같은 취지다.
+        #
+        #   ☹ 공짜가 아니다. 합법쌍이 314 -> 286 (-9 %) 로 줄어 대기가 는다.
+        #     **처리량을 내주고 안전을 사는 선택**이라 기본은 꺼 둔다.
+        #   ★★ hard 는 **쫓아내지 못한다. 빈 칸을 미리 잡을 뿐이다** (실측).
+        #     처음에 `swing_soft` 를 통째로 `extra` 에 합쳤더니 계획기가
+        #     `AssertionError: 시작 점유 겹침 (49,100) agent 1 & 2` 로 죽었다.
+        #     `extra` 의 뜻이 「지금 내가 점유한다」라, 남의 몸이 이미 있는 칸을
+        #     넣으면 두 대가 같은 칸을 점유하는 상태가 된다.
+        #     `soft_hold` 가 「신규 진입만 막고 기존 주차는 못 쫓아낸다」와
+        #     같은 성질이다 — **이미 들어온 꼬리는 못 내보낸다.**
+        #     그래서 **남이 안 쓰는 칸만** 잡고, 동시에 도는 두 대가 같은 칸을
+        #     노리면 낮은 rid 가 갖는다 (결정적 순서).
+        #   ★ 빼야 할 것이 **셋**이다 (2026-09-18, 어서션 두 번 맞고 알았다).
+        #     `now_cells[a] = occupied(state) | extra[a]` 이고 계획기는 그것들이
+        #     에이전트끼리 **서로 겹치지 않는다**고 단언한다. 그래서 남의 몸만
+        #     빼서는 모자라고, 남의 hard 스윙과 앞서 잡힌 것까지 빼야 한다.
+        _swing_hard = os.environ.get("PIBT_SWING_HARD", "0") not in ("0", "", "false")
+        if _swing_hard:
+            busy = [a for a in sorted(agents) if self.busy[a] > 0]
+            own = {a: frozenset(occupied(self.states[a])) for a in agents}
+            bodies = set().union(*own.values()) if own else set()
+            hard = {a: set(self.swing[a]) for a in busy}
+            hard_all = set().union(*hard.values()) if hard else set()
+            extra, claimed = {}, set()
+            for a in busy:
+                blocked = ((bodies - set(own[a]))        # 남의 몸 — 못 쫓아낸다
+                           | (hard_all - hard[a])        # 남의 hard 스윙
+                           | claimed)                    # 앞선 로봇이 잡은 것
+                got = set(self.swing_soft[a]) - blocked
+                extra[a] = hard[a] | got
+                claimed |= got
+        else:
+            extra = {a: self.swing[a] for a in agents if self.busy[a] > 0}
         bias = {a: wait_bias(self.stag.get(a)) for a in agents}
 
         d_now = {}
@@ -564,6 +735,24 @@ class Kernel(object):
                                      None, 0, (), None, None,
                                      soft_hold if soft_on else None)
 
+        # ★★ 회전 옆 이웃 규칙 (-240, 2026-09-18). `PIBT_TURN_PAIR` 로 켠다.
+        #
+        #   pitch 1.0 에서 옆 칸에 남이 있을 때 제자리 회전을 하면 **몸이 닿는다.**
+        #   `tools/turn_pair_margin.py` 가 여유 0.05 로 금지 조합 **20개**를 구웠다
+        #   (위치 불변 — 상대 칸 · 상대 헤딩 · 회전 방향만 본다). pitch 1.2 에서는 **0개**다.
+        #
+        #   ☹ 지금까지 이 규칙의 대가를 「회전의 27.9 %」로 말해 왔는데 그건
+        #     **이미 만들어진 계획을 사후에 훑은 수**다. 규칙을 계획기에 넣으면
+        #     계획기가 **애초에 그 자리에서 안 돈다** — 한 칸 더 가서 돌거나 다른
+        #     길을 고른다. 그래서 진짜 대가는 여기서 다시 재야 한다.
+        #
+        #   왜 `extra` 가 아니라 후처리인가 — `extra` 의 뜻은 「내가 이 칸을 점유한다」다.
+        #   우리 규칙은 「상대가 저기 있으면 **내 회전을 금지**」라 칸 점유로 못 옮긴다.
+        #   그래서 `step_h` 가 낸 답에서 위반 회전만 **제자리 대기로 되돌린다.**
+        #   대기는 언제나 합법이다 (그 칸에 이미 자기가 서 있다).
+        if TURN_PAIR:
+            self.pair_blocked += _turn_pair_veto(self.states, new, agents)
+
         for a in agents:
             s0, s1 = self.states[a], new[a]
             if s1[:2] == s0[:2] and s1[2] != s0[2]:          # 회전 시작
@@ -608,10 +797,14 @@ class Kernel(object):
     def report(self):
         """`run_lifelong` 이 info 에 합친다. 존이 꺼져 있으면 한 줄만."""
         zs = self.zone_stats
+        # ★ 존을 꺼도 `guard_flipped` 은 낸다 — FMS 패리티 지표라 판마다 필요하다.
+        g = {"guard_flipped": self.guard_flipped, "drop_guard": DROP_GUARD,
+             "pair_blocked": self.pair_blocked, "turn_pair": TURN_PAIR}
         if not self.zone:
-            return {"zone": False}
+            return {"zone": False, **g}
         occ = zs["occ"]
         return {
+            **g,
             "zone": True,
             "zone_cells": len(self.zone_cells),
             "zone_wait_steps": zs["wait"],          # 존 안에서 못 움직인 로봇·틱
@@ -685,6 +878,10 @@ def run_lifelong(free, starts, cells_by_cat, horizon=600, seed=0, order_gap=15,
             #   구현판을 헷갈리는 일이 실제로 있었다.
             "soft_hold": os.environ.get("PIBT_SOFT_HOLD", "1")
                          not in ("0", "", "false"),
+            # ★ 기본과 다른 값은 결과에 남아야 한다 (-240). 회전 관문이 셸에
+            #   남은 값으로 꺼진 채 세 판이 돌았던 일을 되풀이하지 않는다.
+            "swing_hard": os.environ.get("PIBT_SWING_HARD", "0")
+                          not in ("0", "", "false"),
             # ★ 교착 지표 (-224). `soft_hold` 는 제약을 늘리므로 위험이 접촉이
             #   아니라 **처리량·교착**이다. FMS 답신 12 §3: 위상 잠금은
             #   6대·시드 42 에서 실측된 사후 기록이고, **밀도가 아니라 배치**가

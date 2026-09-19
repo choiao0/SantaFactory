@@ -22,7 +22,10 @@
 #   SHOT_FPS=30      출력 fps (기본 30)
 #   SHOT_EXT=png     png | jpg
 #   RUN_TAG=이름     출력 폴더·파일 이름 (기본 시각)
-#   VIDEO=0          조립 건너뛰고 프레임만 남긴다
+#   VIDEO=0          조립 건너뛰고 프레임만 남긴다 (★ 캡처는 그대로 돈다)
+#   CAPTURE=0        ★ 촬영을 **아예 끈다**. 계측 판·디스크 절약용
+#   WAIT_BUSY=3600   ★ 내 Kit 이 돌고 있으면 그만큼 기다린다 (기본 0 = 즉시 끊음)
+#                    시드를 for 루프로 돌릴 때 반드시 준다
 #   STRICT=0         촬영이 안 켜져도 끊지 않는다 (기본은 끊는다)
 #   GPU=1            다른 GPU
 #
@@ -62,6 +65,19 @@ SHOT_EXT="${SHOT_EXT:-png}"
 STRICT="${STRICT:-1}"
 WATCH_SEC="${WATCH_SEC:-420}"
 VIDEO="${VIDEO:-1}"
+# ★ 촬영 자체를 끄는 스위치 (2026-09-17). `VIDEO=0` 은 **ffmpeg 조립만**
+#   건너뛰고 PNG 캡처는 그대로 돈다 — 이름이 그렇게 읽히지 않아 실제로 그
+#   함정에 걸렸다.
+#
+#   ☹ **속도 이득은 근거가 없다** (2026-09-17 정정). 처음에 「약 3배 빠르다」고
+#     적었는데 `omni.renderercapture` 경고를 보고 추측한 것이었다. 재 보니
+#     캡처 ON 30초/10초sim · OFF 40초/10초sim 으로 **오히려 느렸다** (판이
+#     달라 직접 비교는 아니다). 끄는 이유는 디스크와 잡음이지 속도가 아니다.
+#
+#     `CAPTURE=0` 은 PNG 인코딩·쓰기만 끈다. **렌더는 그대로 돈다** —
+#     STREAM=1 · PIBT_RENDER_EVERY=1 이라 매 물리 스텝마다 뷰포트를 그린다.
+#     속도를 원하면 그쪽(STREAM=0)을 봐야 한다.
+CAPTURE="${CAPTURE:-1}"
 ISOLATE="${ISOLATE:-1}"
 
 # ── GPU 격리 ────────────────────────────────────────────────
@@ -168,7 +184,13 @@ if [ "${PIBT_RENDER_EVERY:-1}" != "1" ]; then
 fi
 
 # ── 촬영 환경변수 (live_pibt.py 가 읽는 이름) ───────────────
-export PIBT_SHOTS="$SHOTS"
+#   `live_pibt.py:191` 은 `PIBT_SHOTS` 가 **비면 아무것도 안 한다.** 그래서
+#   촬영을 끄는 방법은 이 값을 비우는 것뿐이다 — `VIDEO=0` 으로는 안 꺼진다.
+if [ "$CAPTURE" = "0" ]; then
+    export PIBT_SHOTS=""
+else
+    export PIBT_SHOTS="$SHOTS"
+fi
 export PIBT_SHOT_STRIDE="$SHOT_STRIDE"
 export PIBT_SHOT_FPS="$SHOT_FPS"
 export PIBT_SHOT_EXT="$SHOT_EXT"
@@ -243,7 +265,11 @@ fi
 echo "  프레임      $SHOTS"
 echo "  영상        $MP4"
 echo "  로그        $MYLOG"
-echo "  설정        ${SHOT_STRIDE}스텝마다 · ${SHOT_FPS}fps · $SHOT_EXT · GPU $GPU"
+if [ "$CAPTURE" = "0" ]; then
+    echo "  설정        ★ 촬영 꺼짐 (CAPTURE=0) — 프레임도 영상도 안 만듭니다"
+else
+    echo "  설정        ${SHOT_STRIDE}스텝마다 · ${SHOT_FPS}fps · $SHOT_EXT · GPU $GPU"
+fi
 echo "  예상        약 ${EXPN}장 -> ${EXPSEC}초 영상 = ${SPEED}배속 · 주행 약 29분"
 echo "════════════════════════════════════════════════════"
 
@@ -256,13 +282,42 @@ df -h --output=avail "$OUT" 2>/dev/null | tail -1 | sed 's/^/  남은 디스크 
 KITPAT='bin/isaacsim isaacsim\.exp'
 #   그리고 **실제 프로그램 이름까지 본다** — 패턴만 보면 그 문구가 들어간
 #   조상 셸까지 걸린다 (실측). Isaac 본체는 comm 이 python* 이다.
-BUSY=""
-for _p in $(pgrep -u "$ME" -f "$KITPAT" 2>/dev/null); do
-    [ "$_p" = "$$" ] && continue
-    case "$(cat /proc/$_p/comm 2>/dev/null)" in
-        python*|isaacsim*|kit*) BUSY="$BUSY $_p" ;;
-    esac
-done
+_busy_pids() {
+    local _out="" _p
+    for _p in $(pgrep -u "$ME" -f "$KITPAT" 2>/dev/null); do
+        [ "$_p" = "$$" ] && continue
+        case "$(cat /proc/$_p/comm 2>/dev/null)" in
+            python*|isaacsim*|kit*) _out="$_out $_p" ;;
+        esac
+    done
+    printf '%s' "$_out"
+}
+BUSY="$(_busy_pids)"
+# ★ 배치로 여러 시드를 도는 경우 (2026-09-17). 예전에는 Kit 이 하나라도
+#   돌고 있으면 **즉시 exit 2** 였다. 그래서
+#
+#       for S in 7 14 101 103 104; do PIBT_SEED=$S bash run_record.sh 12; done
+#
+#   이 앞 판이 아직 도는 동안 **1초 안에 다섯 번 튕겼다.** 로그만 다섯 벌
+#   남고 주행은 하나도 안 했다. 실제로 그렇게 날렸다.
+#
+#   `WAIT_BUSY=<초>` 를 주면 그동안 10초마다 다시 본다. 기본 0 은 옛 동작이라
+#   혼자 돌리는 사람의 경험은 안 바뀐다.
+WAIT_BUSY="${WAIT_BUSY:-0}"
+if [ -n "$BUSY" ] && [ "$WAIT_BUSY" != "0" ]; then
+    echo "  ★ 내 Kit 이 돌고 있습니다 — 최대 ${WAIT_BUSY}초 기다립니다"
+    _t=0
+    while [ -n "$BUSY" ] && [ "$_t" -lt "$WAIT_BUSY" ]; do
+        sleep 10
+        _t=$((_t + 10))
+        BUSY="$(_busy_pids)"
+    done
+    if [ -z "$BUSY" ]; then
+        echo "  비었습니다 (${_t}초 기다림). 시작합니다"
+    else
+        echo "  ${WAIT_BUSY}초를 기다렸는데 아직 돕니다."
+    fi
+fi
 if [ -n "$BUSY" ]; then
     echo "  ★ 내 Kit 이 이미 돌고 있습니다:"
     for p in $BUSY; do
@@ -278,6 +333,16 @@ echo
 # ── 조립 — EXIT 에 걸어 Ctrl-C 로 끊어도 만든다 ─────────────
 assemble() {
     local n
+    # 촬영을 **일부러** 껐으면 「프레임이 0장입니다」가 오해를 부른다 —
+    # 촬영이 실패한 것처럼 읽히고, 실제로 그 아래 줄이 verify_start 를
+    # 의심하라고 시킨다. 껐을 때는 껐다고 말한다.
+    if [ "$CAPTURE" = "0" ]; then
+        echo
+        echo "──────────── 조립 ────────────"
+        echo "CAPTURE=0 — 촬영을 끄고 돌았습니다. 만들 프레임이 없습니다."
+        rmdir "$SHOTS" 2>/dev/null
+        return 0
+    fi
     n=$(find "$SHOTS" -maxdepth 1 -name "f_*.$SHOT_EXT" 2>/dev/null | wc -l)
     echo
     echo "──────────── 조립 ────────────"
@@ -380,7 +445,11 @@ SCRIPT_PID=$!
 #   ★ 150초는 너무 짧았다 (2026-09-08 13:04, 정상 런을 끊었다). Kit 부팅 +
 #     USD 로드 + play 전 프레임 대기까지 합쳐 첫 장까지 5분 넘게 걸린다.
 #     420초로 늘렸다. 그래도 첫 장이 없으면 촬영이 정말 꺼진 것이다.
-( sleep "$WATCH_SEC"
+( # ★ 촬영을 **일부러** 껐으면 이 감시는 돌면 안 된다 (2026-09-17).
+  #   프레임도 「캡처 ON」도 영영 안 나오므로 ${WATCH_SEC}초에 무조건 걸려
+  #   STRICT=1 기본값으로 **판을 죽인다.** 계측 판이 7분마다 끊긴다.
+  [ "$CAPTURE" = "0" ] && exit 0
+  sleep "$WATCH_SEC"
   _parent_gone && exit 0                                   # 부모가 죽었으면 나도 끝
   n=$(find "$SHOTS" -maxdepth 1 -name "f_*.$SHOT_EXT" 2>/dev/null | wc -l)
   if [ "$n" -gt 0 ]; then exit 0; fi                       # 촬영 중
