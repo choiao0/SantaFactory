@@ -84,6 +84,10 @@ SERVICE = (SVC_PICK, SVC_DROP, CHARGING)
 # IDLE 은 우리 쪽에서 goal=None 이라 목표 대신 **서 있는 칸**으로 예약한다.
 ZONE_CLAIM = (TO_HOME, TO_CHARGE, TO_CHARGE_HI, CHARGING)
 
+# ★ 정체 문턱 — FMS `hd_after` 와 같은 값 (FMS-26 §2-6). `stag_robot_ticks`
+#   가 이 값을 쓴다. 저쪽이 바꾸면 여기도 같이 바꿔야 비교가 선다.
+HD_AFTER = int(os.environ.get("PIBT_HD_AFTER", "16"))
+
 SERVICE_TICKS = 3          # 픽/드롭 서비스 시간. FMS SERVICE_STEPS 와 같은 자리
 
 # ★★ 드롭 도달성 가드 — **FMS 원본과의 유일한 차이** (미해결 A, S15P21A106-240).
@@ -330,6 +334,8 @@ class Kernel(object):
         #   보고했는데 겪은 로봇은 8대였다 (FMS 답신 15 §3).
         #   「끝까지 막혀 있던 수」가 아니라 **「겪은 수」**를 세야 한다.
         self.stag_peak = {a: 0 for a in starts}
+        # 정체 로봇·틱 누적 (FMS-26 §2-7 대안 지표). 위 주석 참조.
+        self.stag_robot_ticks = 0
         self.replan = Replanner(free, self.edge_cost, self.turn_cost)
         self.done = 0
         # ★ 완료 **틱**을 남긴다 (-224). 총계만으로는 FMS 의 `saturated_tph`
@@ -783,6 +789,22 @@ class Kernel(object):
                 self.stag.update(a, r["goal"], self.dm(r["goal"])[s1])
                 if self.stag.get(a) > self.stag_peak[a]:
                     self.stag_peak[a] = self.stag.get(a)
+                # ★ 정체 로봇·틱 — FMS `standoff_ticks` 의 **대안 지표**
+                #   (FMS-26 §2-7). 「`stag >= hd_after` 인 로봇을 매 틱 세어
+                #   합한다」. 대치 상태기계 없이 잴 수 있고, 저쪽 대치 감지의
+                #   **입력**이라 대치 로봇·틱의 상위 집합이다.
+                #
+                #   ★★ `stag_stuck` 과 **다른 값이다.** 이름이 비슷해서
+                #     묶으면 안 된다:
+                #       stag_stuck        `stag_peak >= 100` 인 로봇 수. 판당 한 번
+                #       stag_robot_ticks  `stag >= 16` 인 로봇 수를 **매 틱 누적**
+                #
+                #   목표가 있는 로봇만 센다 — 목표가 없으면 `stag` 가 이 틱에
+                #   갱신되지 않아 **옛 값이 남는다.** 저쪽 감지도 `state ∈ NAV`
+                #   를 요구하므로(§2-2 A) 목표가 있는 쪽이 맞다고 본다.
+                #   (해석이 하나 들어갔다 — 답신에 그렇게 적었다.)
+                if self.stag.get(a) >= HD_AFTER:
+                    self.stag_robot_ticks += 1
                 self.age[a] = 0 if s1[:2] == r["goal"] else self.age[a] + 1
                 if s1[:2] == r["goal"]:
                     self._arrive(a)
@@ -841,9 +863,37 @@ def run_lifelong(free, starts, cells_by_cat, horizon=600, seed=0, order_gap=15,
     커널 훅과 같은 뜻이다 — 이 파일에 FMS 파일 형식이 섞이면 안 된다.
     """
     rng = np.random.default_rng(seed)
+    # ★ 주문 출처를 **여기 한 곳**에서 정한다 (2026-09-17).
+    #   `pibt_scene` 에만 꽂으면 `plan_scale`·`soft_probe`·`adg_edge_audit` 이
+    #   전부 안 탄다 — 셋 다 이 함수를 직접 부른다. 공통 진입점에 두어야
+    #   도구가 아무것도 안 고쳐도 따라온다.
+    #   형식을 아는 코드는 `fms_stream` 에 둔다 (위 독스트링의 약속).
+    # ★ 호출자가 스트림을 **직접 준** 경우도 말해야 한다 (2026-09-17 정정).
+    #   처음에는 `src = "시드 생성"` 으로 두고 `stream is None` 일 때만 고쳤는데,
+    #   `pibt_scene --orders` 처럼 밖에서 넣어 주면 **파일로 돌면서 「시드
+    #   생성」이라고 찍었다.** 출처를 찍는 줄이 출처를 속이면 없느니만 못하다.
+    src = None
+    if stream is not None:
+        src = (stream.provenance() if hasattr(stream, "provenance")
+               else f"호출자가 준 스트림 ({type(stream).__name__})")
+    else:
+        try:
+            import fms_stream
+        except ImportError:
+            fms_stream = None
+        if fms_stream is not None:
+            stream = fms_stream.from_env(free, horizon, order_end=order_end)
+            if stream is not None:
+                src = stream.provenance()
     if stream is None:
         stream = OrderStream(rng, cells_by_cat, horizon, order_gap, shifts,
                              order_end=order_end)
+        src = (f"시드 생성 (seed={seed} · order_gap={order_gap} · "
+               f"shifts={list(shifts)})")
+    # ★ 출처를 **반드시** 찍는다. 2026-09-17 에 「파일을 물었나 시드가 냈나」를
+    #   로그로 못 갈라 30분을 날렸다. 확인은 액션 수로도 된다 — 시드 생성이
+    #   416,714 라, 파일을 물면 반드시 달라야 한다. 같으면 안 걸린 것이다.
+    print(f"[lifelong] 주문 출처: {src}")
     # ★ 커널을 갈아 끼울 자리. 기본값이면 동작은 이전과 **완전히 같다**.
     #   battery.BatteryKernel 이 이 훅으로 들어온다 — 이 파일에 배터리 코드가
     #   섞이지 않게 하려는 것이다.
@@ -874,6 +924,9 @@ def run_lifelong(free, starts, cells_by_cat, horizon=600, seed=0, order_gap=15,
             #   ★ 0 을 단언하면 안 된다 — 버그 신호가 아니라 **노출 지표**다
             #     (겹친 채 도는 것 자체는 합법. FMS 답신 12 §1·§4 확인).
             "soft_clash": getattr(K, "_soft_clash", 0),
+            # ★ 주문 출처 — 결과 표에도 남긴다. 로그만 보고 「파일인가 시드인가」
+            #   를 못 갈라 30분을 날린 뒤에 넣었다 (2026-09-17).
+            "orders_src": src,
             # ★ 어느 쪽 판인지 결과에 남긴다 (-224). 표만 보고 기준선과
             #   구현판을 헷갈리는 일이 실제로 있었다.
             "soft_hold": os.environ.get("PIBT_SOFT_HOLD", "1")
@@ -894,6 +947,9 @@ def run_lifelong(free, starts, cells_by_cat, horizon=600, seed=0, order_gap=15,
             "stag_mean": (sum(K.stag_peak.values()) / len(K.stag_peak)
                           if K.stag_peak else 0.0),
             "stag_stuck": sum(1 for v in K.stag_peak.values() if v >= 100),
+            # ★ FMS `standoff_ticks` 의 대안 — 이름이 비슷한 위 값과 **다르다**
+            "stag_robot_ticks": K.stag_robot_ticks,
+            "hd_after": HD_AFTER,
             # 끝 시점 값 — 「지금도 막혀 있나」. 판정에 쓰려면 이쪽이 맞다
             "stag_stuck_end": sum(1 for v in K.stag.stag.values() if v >= 100)}
     if hasattr(K, "report"):
