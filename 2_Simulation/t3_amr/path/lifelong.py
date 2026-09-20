@@ -112,6 +112,10 @@ DROP_GUARD = os.environ.get("PIBT_DROP_GUARD", "1") not in ("0", "", "off", "no"
 #       PIBT_TURN_PAIR=1   켠다
 #       (기본 꺼짐)        비트 동일
 TURN_PAIR = os.environ.get("PIBT_TURN_PAIR", "0") not in ("0", "", "off", "no")
+# ★★ 이웃의 **다음** 상태까지 본다 (-240, 2026-09-21). 기본 **꺼짐**.
+#   근거는 `_pair_blocked` 의 주석 — 계획 한 틱이 실행 5틱이라, 출발 순간만
+#   보면 도착해 들어오는 이웃을 놓친다. 실측 사고 하나가 정확히 그거였다.
+PAIR_NEXT = os.environ.get("PIBT_TURN_PAIR_NEXT", "0") not in ("0", "", "off", "no")
 _PAIR_TAB = None
 
 
@@ -169,9 +173,35 @@ def _pair_key(s0, q):
     return ((dr * c + dc * s, -dr * s + dc * c), (q[2] - s0[2]) % 4)
 
 
-def _pair_blocked(states, agents, a, s0, hit):
-    """A 의 회전을 막는 이웃이 **하나라도** 있나. (원래의 `break` 와 같은 단축평가)"""
-    return any(_pair_key(s0, states[b]) in hit for b in agents if b != a)
+def _pair_blocked(states, new, agents, a, s0, hit):
+    """A 의 회전을 막는 이웃이 **하나라도** 있나. (원래의 `break` 와 같은 단축평가)
+
+    ★★ 이웃의 **현재**와 **다음** 상태를 둘 다 본다 (-240, 2026-09-21).
+
+    ☹ 왜 둘인가 — **계획의 한 틱이 실행의 5틱**이다 (`TURN_TICKS=5`).
+      회전이 도는 동안 이웃은 1.25칸 움직인다. 출발 순간만 보면 **도착해
+      들어오는 이웃**을 못 본다.
+
+      실측 (s101_rank · t=13,989.6 s 차체 접촉 (0,6)):
+
+          A6  (45,89,3) -> (45,89,2) 로 회전
+          A0  states (43,88,2)  키 ((1,-2),3)  금지 **False**   <- 지금 코드가 본 것
+              new    (44,88,2)  키 ((1,-1),3)  금지 **True**    <- 사고를 만든 것
+
+      **금지 조합표에 이미 있었다.** 여유 30 mm 로 낮춰도 들어 있다. 표가
+      모자란 게 아니라 **조회 시점이 하나 모자랐다.**
+
+    `PIBT_TURN_PAIR_NEXT=0` 으로 옛 동작(현재만). 대가는 처리량이다 — 막는
+    회전이 늘어난다.
+    """
+    for b in agents:
+        if b == a:
+            continue
+        if _pair_key(s0, states[b]) in hit:
+            return True
+        if PAIR_NEXT and _pair_key(s0, new[b]) in hit:
+            return True
+    return False
 
 
 def _turn_pair_veto(states, new, agents):
@@ -189,7 +219,7 @@ def _turn_pair_veto(states, new, agents):
         if sgn is None:
             continue
         hit = tab.get(sgn) or ()
-        if hit and _pair_blocked(states, agents, a, s0, hit):
+        if hit and _pair_blocked(states, new, agents, a, s0, hit):
             new[a] = s0                            # ★ 제자리 대기로 되돌린다
             n += 1
     return n

@@ -1431,6 +1431,23 @@ class AdgRuntime:
         self.blocked_cells: set[Cell] = set()          # 장애물 보고로 막힌 칸
         self.tick_s = tick_s        # None 이면 예전 동작 (시각 무시)
         self.clock = 0.0
+        # ★★ 면제한 간선 (-240, 2026-09-21). `_turn_body_clear` 의 교착 해소용.
+        #
+        #   왜 필요한가 — ADG 도 비순환이고 회전 게이트도 비순환인데 **둘의
+        #   합집합에 고리**가 난다.
+        #
+        #       게이트   회전이 남의 몸이 스윙 칸에서 빠지기를 기다린다
+        #       ADG      그 몸의 **비우는 액션**이 이 회전 뒤로 걸려 있다
+        #       -> 서로 기다린다. 한도(10 s)가 그걸 힘으로 끊고 **밀고 들어가** 접촉했다
+        #
+        #   면제는 그 고리의 간선 하나를 **지운다.** 지우기만 하므로 순환이
+        #   새로 생길 수 없고, 한 번 하면 유지한다 (껐다 켜면 진동한다).
+        #
+        #   ☹ 안전은 호출자가 책임진다 — `_turn_body_clear` 가 **스윙(guard)
+        #     때문에 생긴 간선만** 면제한다. 회전은 아직 시작을 안 해 스윙 칸이
+        #     비어 있고, 그 순서는 **게이트가 물리로 계속 지킨다.** 논리 사본만
+        #     지우고 물리 원본은 남기는 것이라 잃는 것이 없다.
+        self.waived: set[tuple[int, int]] = set()
 
         # [patch_adg_why] 왜 멈췄나 — ①장애물 ②릴리스바닥 ③ADG선행 귀속
         #   `blocking()` 이 이미 셋을 구분한다. 여기서 세기만 한다.
@@ -1545,8 +1562,22 @@ class AdgRuntime:
             return False
         if self.clock + 1e-9 < self.release_time(nxt):
             return False
-        return all(u in self.done or u == running.uid
+        return all(self._met(u, nxt.uid) or u == running.uid
                    for u in self.adg.preds[nxt.uid])
+
+    def _met(self, u: int, v: int) -> bool:
+        """선행 `u -> v` 가 충족됐나. 끝났거나 **면제됐으면** 충족이다."""
+        return u in self.done or (u, v) in self.waived
+
+    def waive(self, u: int, v: int) -> bool:
+        """간선 `u -> v` 를 면제한다. 새로 면제했으면 True.
+
+        ☹ 부르기 전에 **안전을 확인할 것** — 위 `waived` 주석의 조건이다.
+        """
+        if (u, v) in self.waived:
+            return False
+        self.waived.add((u, v))
+        return True
 
     # [patch_adg_why]
     def _why_hit(self, action, k: int) -> None:
@@ -1564,14 +1595,19 @@ class AdgRuntime:
             if self._why_on:
                 self._why_hit(action, 1)
             return False                               # 아직 주문이 안 왔다
-        ok = all(u in self.done for u in self.adg.preds[action.uid])
+        ok = all(self._met(u, action.uid) for u in self.adg.preds[action.uid])
         if not ok and self._why_on:
             self._why_hit(action, 2)                   # ADG 선행 대기
         return ok
 
     def blocking(self, action: Action) -> list[int]:
-        """왜 못 시작하는지 — 진단용. 하한 대기 중이면 [-1] 을 앞에 붙인다."""
-        out = [u for u in self.adg.preds[action.uid] if u not in self.done]
+        """왜 못 시작하는지 — 진단용. 하한 대기 중이면 [-1] 을 앞에 붙인다.
+
+        면제한 간선은 **빼고** 돌려준다 — `can_start` 와 같은 것을 봐야 진단이
+        맞는다. 안 그러면 「선행이 남았는데 왜 출발했나」로 읽힌다.
+        """
+        out = [u for u in self.adg.preds[action.uid]
+               if not self._met(u, action.uid)]
         if self.clock + 1e-9 < self.release_time(action):
             out = [-1] + out
         return out
@@ -1813,6 +1849,24 @@ W_ACCEL = _tol_env("PIBT_W_ACCEL", 0.0)
 #     그냥 시작한다 — 접촉 위험보다 영구 교착이 나쁘다. 포기할 때는 로그를 남긴다.
 TURN_BODY_GATE = os.environ.get("PIBT_TURN_BODY_GATE", "0") not in ("0", "", "off")
 TURN_BODY_MAX = _tol_env("PIBT_TURN_BODY_MAX", 10.0)      # 초
+# ★★ 양보 (-240, 2026-09-21). 기본 **꺼짐**.
+#
+#   게이트가 막혔을 때, 막은 로봇이 못 가는 이유가 **이 회전 자신**이면 교착이다.
+#   그 간선을 면제해 상대를 먼저 보낸다. 회전은 계속 기다린다 — 아무도 밀지 않는다.
+#
+#   ☹ `PIBT_TURN_BODY_GATE=1` 이 있어야 뜻이 있다 (게이트가 꺼지면 막히지도 않는다).
+TURN_YIELD = os.environ.get("PIBT_TURN_YIELD", "0") not in ("0", "", "off", "false")
+# ★★ 기하 게이트 (-240, 2026-09-21). 기본 **꺼짐**.
+#
+#   칸 게이트는 **칸 겹침**으로 막는다. 칸이 겹쳐도 몸은 멀 수 있다 — 사고 현장을
+#   재 보니 여유 **34.3 mm** 로 안 닿는데 막았고, 그 과대 검출이 교착을 낳았다.
+#   켜면 회전 궤적을 쓸어 **실제 최소 거리**로 판정한다.
+#
+#   ☹ 한계를 기하 예산(41.3 mm)으로 잡으면 34.3 mm 짜리를 여전히 막는다.
+#     20 mm 는 「자세가 명목에 가까우면 통과, 밀려 있으면 차단」이 되는 값이다.
+TURN_BODY_CLEAR = _tol_env("PIBT_TURN_BODY_CLEAR", 0.020)   # m
+TURN_GEO_STEPS = int(os.environ.get("PIBT_TURN_GEO_STEPS", "13"))
+TURN_BODY_GEO = os.environ.get("PIBT_TURN_BODY_GEO", "0") not in ("0", "", "off", "false")
 
 # ★★ 회전 **스텝별 자취** (-240, 2026-09-18). 기본 **꺼짐**.
 #
@@ -2499,6 +2553,15 @@ class FleetStats:
     #   뒤엣것이 0 이 아니면 그만큼 접촉 위험을 그대로 안고 간 것이다.
     turn_body_waits: int = 0
     turn_body_gaveup: int = 0
+    # ★ 포기를 **네 갈래로 가른다** (-240, 2026-09-21). 지금까지 `turn_body_gaveup`
+    #   하나에 뭉뚱그려져 「왜 포기했나」를 못 나눴다. 대책이 듣는지는
+    #   `turn_yield` 가 대부분을 가져가는지로 판정한다.
+    turn_yield: int = 0            # 양보해서 풀었다  <- 이게 대부분이어야 한다
+    turn_gaveup_body: int = 0      # ☹ 회전 로봇의 **몸** 때문에 생긴 간선이라 못 푼다
+    turn_gaveup_park: int = 0      # ☹ 막은 로봇이 **주차**다 (액션이 없다)
+    turn_gaveup_other: int = 0     # 교착이 아닌데 한도 초과 (= 그냥 느린 것)
+    turn_geo_pass: int = 0         # ★ 칸은 겹쳤지만 **거리가 넉넉해** 그냥 돈 횟수
+    turn_geo_min: float = float("inf")   # 그때 본 최소 거리 중 가장 작은 값
     stall_steps: int = 0
     sim_time: float = 0.0
 
@@ -2688,6 +2751,8 @@ class FleetController:
         self._static_log_next = 0.0
         # ★ 회전 대기 게이트 상태 (-240). agent -> 기다린 시간 [s].
         self._turn_wait: dict[int, float] = {}
+        self._uid_map: dict[int, Action] | None = None   # 양보 판정용 (지연 생성)
+        self._pose_last: dict[int, tuple] = {}           # 기하 게이트용
         self._occ_last: dict[int, frozenset] = {}
         self._last_dt = 0.0
         if os.environ.get("PIBT_STATIC_CONTACT", "1") not in ("0", "", "false"):
@@ -3013,6 +3078,9 @@ class FleetController:
             #   최악이라도 **한 스텝 전** 값이고, 스텝당 이동이 2 cm 미만이라
             #   판정이 안 바뀐다.
             self._occ_last[a] = body
+            # ★ 기하 게이트용 (-240, 2026-09-21). `_occ_last` 와 같은 이유로
+            #   여기 남긴다 — 뒤 순번의 자세도 (최악 한 스텝 전 값으로) 보인다.
+            self._pose_last[a] = pose
             poses[a] = pose
             # ★★ 정적 기하(랙)와 닿았나 (L, -240). 칸으로 먼저 거르므로 통로
             #   한가운데서는 공짜다 — SAT 는 장애물 칸에 걸쳤을 때만 돈다.
@@ -3320,15 +3388,44 @@ class FleetController:
         if not blocked:
             self._turn_wait.pop(a, None)
             return True
+
+        # ★★ 기하 게이트 (-240, 2026-09-21). **칸으로 거르고 거리로 판정한다.**
+        #
+        #   위 `blocked` 는 **칸 겹침**이다. 칸이 겹쳐도 몸은 멀 수 있다 —
+        #   사고 현장(A6 회전 @(45,89) × A0 @(44,88) h2)을 재 보니 **여유 34.3 mm**
+        #   로 안 닿는다. 그런데 칸 게이트는 막았고, 막은 상대는 이 회전 뒤에
+        #   ADG 로 걸려 있어 **교착**이 났다. 한도가 그걸 힘으로 끊어 접촉했다.
+        #
+        #   ☹ 즉 접촉의 원인은 「막아야 할 것을 못 막아서」가 아니라
+        #     **「안 막아도 될 것을 막아서」**였다. 과대 검출이 교착을 낳았다.
+        #
+        #   그래서 실제 회전 궤적을 쓸어 상대 몸과의 **최소 거리**를 본다.
+        #   한계보다 넉넉하면 그냥 돈다 — 기다릴 이유가 없다.
+        if TURN_BODY_GEO and self._turn_geo_clear(a, act, blocked):
+            self._turn_wait.pop(a, None)
+            self.stats.turn_geo_pass += 1
+            return True
         w = self._turn_wait.get(a, 0.0) + self._last_dt
         self._turn_wait[a] = w
         self.stats.turn_body_waits += 1
+
+        # ★★ 양보 (-240, 2026-09-21). 밀고 들어가기 **전에** 교착인지 본다.
+        #
+        #   막은 로봇이 못 가는 이유가 **나 자신**이면 고리다. 그때는 기다려도
+        #   영원히 안 풀린다 (한도 10 -> 30 초 재판이 같은 자리에서 재현한 이유).
+        #   그 간선을 면제해 **상대를 먼저 보낸다.** 회전은 계속 기다린다 —
+        #   양보는 상대를 푸는 것이지 내가 들어가는 것이 아니다.
+        if TURN_YIELD:
+            self._turn_try_yield(a, act, blocked)
+
         if w >= TURN_BODY_MAX:
             # 한도 초과 — 그냥 간다. **다만 남긴다.** 조용히 포기하면 나중에
             # 「대책을 켰는데 접촉이 났다」의 원인을 못 찾는다.
             self._turn_wait.pop(a, None)
             self.stats.turn_body_gaveup += 1
-            msg = (f"[회전대기] agent{a} 가 {w:.1f}s 기다리다 **그냥 시작한다** — "
+            why = self._turn_gaveup_why(a, act, blocked)
+            msg = (f"[회전대기] agent{a} 가 {w:.1f}s 기다리다 **그냥 시작한다** "
+                   f"({why}) — "
                    f"{act}  스윙 칸 {sorted(act.guard)} 에 agent{blocked} 의 몸")
             try:
                 _emit(self, msg)
@@ -3336,6 +3433,128 @@ class FleetController:
                 print(msg, flush=True)
             return True
         return False
+
+    # ── ★★ 기하 게이트 (-240, 2026-09-21) ─────────────────────────────────
+    def _turn_geo_clear(self, a: int, act: Action, blocked: list[int]) -> bool:
+        """회전을 **끝까지 쓸어** 막은 로봇들과의 최소 거리를 본다.
+
+        한계(`TURN_BODY_CLEAR`)보다 넉넉하면 True — 칸이 겹쳐도 돈다.
+
+        ☹ 기준은 **지금 자세**다. 계획 자세가 아니다 — 밀려 있는 것까지 포함해
+          재야 뜻이 있다. 상대도 지금 자세로 본다 (회전 중 상대가 움직이면
+          더 멀어지는 쪽이 보통이지만, 그걸 믿지 않고 한계로 여유를 둔다).
+        """
+        pa = self._pose_last.get(a)
+        if pa is None:
+            return False                       # 자세를 모르면 보수적으로 막는다
+        yaw1 = act.to[2] * (math.pi / 2)
+        d = (yaw1 - pa[2] + math.pi) % (2 * math.pi) - math.pi   # 최단 방향
+        worst = float("inf")
+        for b in blocked:
+            pb = self._pose_last.get(b)
+            if pb is None:
+                return False
+            for k in range(TURN_GEO_STEPS):
+                yaw = pa[2] + d * k / (TURN_GEO_STEPS - 1)
+                worst = min(worst, self.g.body_gap((pa[0], pa[1], yaw), pb))
+                if worst < TURN_BODY_CLEAR:
+                    return False
+        self.stats.turn_geo_min = min(self.stats.turn_geo_min, worst)
+        return True
+
+    # ── ★★ 양보 (-240, 2026-09-21) ────────────────────────────────────────
+    def _yield_path(self, act: Action, pb: Action, limit: int = 200):
+        """`pb` 의 **미완 선행**을 거슬러 `act` 에 닿나. 닿으면 `act` 의 후행을 준다.
+
+        돌려주는 것 — `act` 바로 다음 노드(면제 후보)의 uid, 없으면 None.
+
+        ☹ 미완 선행만 따라간다. 이미 끝난 것은 더 막지 않으므로 고리의 일부가
+          아니다. 방문 수를 막아 최악을 묶는다 — 못 찾으면 「교착 아님」으로
+          본다. **보수적이다** (지금처럼 기다릴 뿐 나빠지지 않는다).
+        """
+        rt = self.rt
+        prev = {}                       # node -> 이 노드를 낳은 자식(= 경로 역방향)
+        seen, stack, n = {pb.uid}, [pb.uid], 0
+        while stack and n < limit:
+            v = stack.pop()
+            n += 1
+            for u in rt.adg.preds.get(v, ()):
+                if rt._met(u, v) or u in seen:
+                    continue
+                prev[u] = v
+                if u == act.uid:
+                    return v            # act -> v 가 고리의 첫 간선이다
+                seen.add(u)
+                stack.append(u)
+        return None
+
+    def _turn_try_yield(self, a: int, act: Action, blocked: list[int]) -> None:
+        """막은 로봇이 **나 때문에** 못 가면 그 간선을 면제한다."""
+        rt = self.rt
+        for b in blocked:
+            slot = self.slot.get(b)
+            if slot is None:
+                continue
+            pb = rt.pending(slot)
+            if pb is None:
+                continue                          # 주차 — §5 나). 여기선 못 푼다
+            v = self._yield_path(act, pb)
+            if v is None:
+                continue                          # 교착이 아니다 — 그냥 느린 것
+            s = self._act_by_uid(v)
+            if s is None:
+                continue
+            # ☹☹ **몸 때문에 생긴 간선은 못 푼다.** 회전 로봇의 몸은 지금도
+            #   거기 있다. 풀면 상대가 로봇 안으로 들어온다.
+            #   스윙(guard)만이라면 회전이 아직 시작을 안 해 **비어 있다.**
+            need = set(s.hard) | set(s.guard or ()) | set(s.axle)
+            if need & set(act.hard):
+                continue                          # 지표는 포기 시점에 센다
+            if rt.waive(act.uid, v):
+                self.stats.turn_yield += 1
+                msg = (f"[양보] agent{a} 의 회전이 agent{b} 와 **교착** — "
+                       f"간선 {act.uid}->{v} 면제. 회전은 계속 기다린다  "
+                       f"({act})")
+                try:
+                    _emit(self, msg)
+                except Exception:
+                    print(msg, flush=True)
+
+    def _act_by_uid(self, u: int) -> "Action | None":
+        if self._uid_map is None:
+            self._uid_map = {x.uid: x for x in self.rt.adg.actions}
+        return self._uid_map.get(u)
+
+    def _turn_gaveup_why(self, a: int, act: Action, blocked: list[int]) -> str:
+        """포기를 네 갈래로 가른다 — 대책이 듣는지는 이 분포로 판정한다."""
+        rt = self.rt
+        park = body = dead = 0
+        for b in blocked:
+            slot = self.slot.get(b)
+            pb = rt.pending(slot) if slot is not None else None
+            if pb is None:
+                park += 1
+                continue
+            v = self._yield_path(act, pb)
+            if v is None:
+                continue
+            s = self._act_by_uid(v)
+            need = (set(s.hard) | set(s.guard or ()) | set(s.axle)) if s else set()
+            if need & set(act.hard):
+                body += 1
+            else:
+                dead += 1                 # 면제했는데도 아직 안 비켰다
+        if park:
+            self.stats.turn_gaveup_park += 1
+            return "상대가 주차 — 액션이 없다"
+        if body:
+            self.stats.turn_gaveup_body += 1
+            return "☹ 몸 간선이라 못 푼다"
+        if dead:
+            self.stats.turn_gaveup_body += 1
+            return "☹ 면제했는데도 안 비켰다"
+        self.stats.turn_gaveup_other += 1
+        return "교착 아님 — 그냥 느리다"
 
     def _check_static(self, a, pose, body) -> None:
         """차체가 **랙**을 파고들었나 (L, -240).
