@@ -991,16 +991,113 @@ class ADG:
         ])
 
 
+#: ★★ 틱 순위로 방향을 정한다 (-240, 2026-09-20). 기본 **꺼짐**.
+#
+#   ☹ 아래 `_key` 의 가운데 필드가 **칸의 함수**다. 그래서 같은 쌍이 칸마다
+#     반대 순서가 되어 **양방향 간선 = 2-고리**가 난다. 주석은 「전순서라
+#     순환이 생길 수 없다」고 적는데 **그 전제가 깨진다.**
+#
+#     실측 (seed 101 · 38,880틱 · strict · `PIBT_ADG_BODY=1`) — 순환 **3개, 전부 길이 2**:
+#
+#         칸 (45,90)  A10 (21875, **0**, 10)  vs  A1 (21875, 1, 1)  ->  A10 먼저
+#         칸 (46,90)  A10 (21875, **1**, 10)  vs  A1 (21875, 1, 1)  ->  A1  먼저
+#
+#   고침 — **칸마다 정하지 말고 틱마다 한 번** 정한다. 틱 안에서 소유 관계
+#   (leave-before-enter)로 작은 그래프를 만들고 위상정렬해 순위를 준다.
+#   `_key` 가 그 순위를 쓰면 **칸과 무관**해지므로 전순서가 되살아난다.
+#
+#       같은 틱 · 공유 칸 2개 이상인 쌍            **72**
+#         한쪽만 소유 (방향이 정해진다)            **39**
+#         아무도 소유 안 함 (틱·번호로)            **31**
+#         ☹ 양쪽이 서로 다른 칸을 소유             **2**   <- 원리적으로 못 편다
+#
+#   ☹ 마지막 2쌍은 **동시 교대**라 순서 그래프로 표현이 안 된다. PIBT 는 한 틱에
+#     같이 움직여 허용하지만 ADG 는 순차다. 여기서는 **세어서 남기고**(`RANK_CLASH`)
+#     런타임 게이트(`PIBT_TURN_BODY_GATE`)에 맡긴다.
+#
+#   ☹☹ 기본을 안 켠 이유 — `ADG_BODY=0` 인 지금 판에는 순환이 없고, 순위를 바꾸면
+#     간선 방향이 달라져 **완주 세 판의 전제가 바뀐다.** `PIBT_ADG_BODY` 와 같이 켠다.
+ADG_RANK = os.environ.get("PIBT_ADG_RANK", "0") not in ("0", "", "false", "no")
+_RANK: dict[int, int] = {}          # uid -> 틱 안 순위
+RANK_CLASH = 0                      # 양쪽이 서로 다른 칸을 소유해 못 편 쌍의 수
+
+
+def _needs(a: Action) -> set:
+    """그 액션이 **자리를 요구하는** 칸 — 간선 구성이 보는 집합과 같아야 한다."""
+    #   hard  규칙 ① 이 쓰는 집합 · guard  규칙 ② 조회 · axle  기본 `_src`
+    #   셋의 합집합이라 **어느 스위치에서도 빠지는 칸이 없다.**
+    return set(a.hard) | set(a.guard or ()) | set(a.axle or ())
+
+
+def _tick_ranks(actions: list[Action]) -> tuple[dict[int, int], int]:
+    """틱마다 leave-before-enter 를 만족하는 **하나의** 순서를 정한다.
+
+    돌려주는 것 (uid -> 순위, 못 편 쌍 수). 순위는 같은 틱 안에서만 뜻이 있다 —
+    `_key` 가 `(tick, rank, agent)` 로 쓰므로 틱이 먼저 가른다.
+    """
+    import collections as _c
+    by_tick: dict[int, list[Action]] = _c.defaultdict(list)
+    for a in actions:
+        by_tick[a.tick].append(a)
+
+    rank: dict[int, int] = {}
+    clash = 0
+    for _t, group in by_tick.items():
+        group.sort(key=lambda a: a.agent)          # 안정된 출발 순서
+        if len(group) == 1:
+            rank[group[0].uid] = 0
+            continue
+        occ = {a.uid: set(occupied(a.frm)) for a in group}
+        need = {a.uid: _needs(a) for a in group}
+        succ: dict[int, set] = {a.uid: set() for a in group}
+        indeg = {a.uid: 0 for a in group}
+        for i, p in enumerate(group):
+            for q in group[i + 1:]:
+                sh = need[p.uid] & need[q.uid]
+                if not sh:
+                    continue
+                po, qo = bool(sh & occ[p.uid]), bool(sh & occ[q.uid])
+                if po and qo:
+                    # ☹ 서로 상대가 가진 칸이 필요하다 — 동시 교대. 순서가 없다.
+                    clash += 1
+                    continue
+                if not (po or qo):
+                    continue                        # 아무도 안 가졌다 — agent 번호로
+                lo, hi = (p, q) if po else (q, p)   # 가진 쪽이 먼저
+                if hi.uid not in succ[lo.uid]:
+                    succ[lo.uid].add(hi.uid)
+                    indeg[hi.uid] += 1
+        # 위상정렬 — 진입차수 0 을 agent 번호 순으로 꺼낸다 (결정론)
+        import heapq as _h
+        ready = [a.uid for a in group if indeg[a.uid] == 0]
+        _h.heapify(ready)
+        r = 0
+        while ready:
+            u = _h.heappop(ready)
+            rank[u] = r
+            r += 1
+            for v in succ[u]:
+                indeg[v] -= 1
+                if indeg[v] == 0:
+                    _h.heappush(ready, v)
+        for a in group:                             # 고리에 남은 것 (clash) 은 뒤로
+            if a.uid not in rank:
+                rank[a.uid] = r
+                r += 1
+    return rank, clash
+
+
 def _key(action: Action, cell: Cell) -> tuple[int, int, int]:
     """공유 칸에서 type 2 엣지의 방향을 정하는 전순서.
 
     가운데 필드가 leave-before-enter다 — 같은 틱이면 그 칸을 **이미 갖고 있던**
     로봇(놓아줄 쪽)이 **얻으려는** 로봇보다 먼저 정렬된다.
 
-    `(tick, sub, agent)`가 전순서이고 같은 로봇의 체인은 tick에 대해 단조라서
-    두 종류 엣지의 합집합에 순환이 생길 수 없다. `topological_order()`가 그걸
-    말로 믿지 않고 실제로 확인한다.
+    ☹ 그 필드가 **칸의 함수**라 같은 쌍이 칸마다 뒤집힐 수 있다(위 주석).
+      `PIBT_ADG_RANK=1` 이면 틱마다 미리 정한 순위를 써 **칸과 무관**해진다.
     """
+    if ADG_RANK and _RANK:
+        return (action.tick, _RANK.get(action.uid, 0), action.agent)
     return (action.tick, 0 if cell in occupied(action.frm) else 1, action.agent)
 
 
@@ -1176,6 +1273,19 @@ def build_adg(chains: list[list[Action]], geom: "RobotGeom | None" = None) -> AD
     if len({(a.agent, a.tick) for a in actions}) != len(actions):
         raise RuntimeError("★ 같은 tick 에 같은 로봇의 액션이 둘 이상이다 — "
                          "_key 가 전순서가 아니게 되어 비순환 보장이 깨진다")
+
+    # ★★ 틱 순위 (-240). `_key` 의 가운데 필드를 **칸과 무관**하게 만든다.
+    #
+    #   ☹ 꼭 여기서 — 아래 `users.sort(key=...)` 가 `_key` 를 처음 부른다.
+    #     그 전에 `_RANK` 가 차 있어야 정렬이 새 순서를 쓴다.
+    global _RANK, RANK_CLASH
+    if ADG_RANK:
+        _RANK, RANK_CLASH = _tick_ranks(actions)
+        _say(f"[adg] 틱 순위 **켬** (PIBT_ADG_RANK=1) · 액션 {len(actions):,}개 · "
+             f"☹ 못 편 쌍 **{RANK_CLASH}**"
+             + ("  (동시 교대 — 런타임 게이트가 받는다)" if RANK_CLASH else ""))
+    else:
+        _RANK, RANK_CLASH = {}, 0
 
     def _link(p: Action, n: Action) -> bool:
         if p.agent == n.agent or n.uid in succs[p.uid]:
