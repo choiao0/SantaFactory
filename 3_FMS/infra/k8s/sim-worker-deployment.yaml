@@ -1,5 +1,6 @@
 # 견적 DES 워커 (S15P21A106-248). compose.estimate.gcp.yml 의 k3s 판 — 워커 12개를 GCP 노드 3대(role=sim-worker)에 4개씩.
-# 이미지 태그는 Jenkins 가 `kubectl set image` 로 빌드 번호를 넣는다. 여기 적힌 latest 는 첫 적용용.
+# 이 파일이 기준이다(-249) — Jenkins k3s 경로가 release 마다 image 줄만 빌드 번호로 치환해 `kubectl apply` 한다. 여기 적힌 latest 는 첫 적용용.
+# 자원·개수를 바꾸려면 여기를 고쳐 release 에 넣는다. 클러스터에서 손으로 바꾼 값은 다음 release 때 이 파일 값으로 돌아온다.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -23,6 +24,9 @@ spec:
       labels:
         app: sim-worker
     spec:
+      # 파드 DNS 를 노드 것으로(-249). CoreDNS 는 EC2 에 있고, tailnet 을 쓰지 않아 GCP 파드가 EC2 파드에 닿지 않는다.
+      # 워커가 푸는 이름은 공인 j15a106.p.ssafy.io 뿐이라 노드의 GCP DNS 로 충분하다.
+      dnsPolicy: Default
       # 워커는 쿠버네티스 API 를 쓰지 않는다 — 기본 서비스어카운트 토큰을 넣어 두면 컨테이너가 뚫렸을 때 클러스터 접근 통로가 된다
       automountServiceAccountToken: false
       nodeSelector:
@@ -37,7 +41,8 @@ spec:
               app: sim-worker
       containers:
         - name: worker
-          image: 100.100.149.68:5000/fms-estimate-worker:latest
+          # 공인 이름 = nginx 443 `/v2/` → EC2 registry (infra/nginx/registry-v2.conf, -249). 공인 CA 라 노드에 registries.yaml 이 없다
+          image: j15a106.p.ssafy.io/fms-estimate-worker:latest
           envFrom:
             - secretRef:
                 name: sim-worker-broker
