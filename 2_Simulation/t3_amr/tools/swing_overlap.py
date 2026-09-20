@@ -138,8 +138,20 @@ def scan(geom, history, cells_hist):
     return hits, kinds
 
 
-def scan_guard(geom, history):
+def scan_guard(geom, history, body=False):
     """★ 규칙 위반을 **정면으로** 센다 — `guard ∩ 남의 축`.
+
+    ★★ `body=True` 면 **축이 아니라 몸**(`occupied` = 축 + 뒤 칸)을 본다
+    (-240, 2026-09-18). soft 규칙은 축만 금지하므로 `body=False` 가 규칙의
+    문장이지만, **차체 접촉은 몸이 정한다.**
+
+        2.5 h 판 · 쌍 (0,8) · 공유칸 (45,103) · 최소거리 0.000 m
+        agent0 이 (46,103) 에서 2->3 으로 돌 때 front(2) = (45,103) 이
+        agent8 의 **꼬리 칸**이었다. 축은 (45,102) 라 `body=False` 로는
+        **한 건도 안 잡힌다.**
+
+    `PIBT_SWING_HARD=1` 은 그 칸을 hard 로 올려 몸도 못 들어오게 한다.
+    그 스위치가 듣는지 보려면 이 모드로 재야 한다 — 켜고 **0 이어야** 한다.
 
     `scan()` 은 `swept[a] ∩ body[b]` 를 본다. 그런데 4칸 규칙의 `mA`·`mB` 는
     pitch 1.0 에서 **실제 스윕 밖**이다 (`ADG_축규칙.md` §2-3 표: 0/8).
@@ -184,7 +196,11 @@ def scan_guard(geom, history):
                     if b == a:
                         continue
                     # 「축」은 상대의 **칸 좌표**다 (몸 전체가 아니라).
-                    axle = {tuple(q0[b][:2]), tuple(q1[b][:2])}
+                    #   body=True 면 뒤 칸까지 — 차체 접촉을 정하는 것은 몸이다.
+                    if body:
+                        axle = set(D.occupied(q0[b])) | set(D.occupied(q1[b]))
+                    else:
+                        axle = {tuple(q0[b][:2]), tuple(q1[b][:2])}
                     for cell in guard & frozenset(axle):
                         k = classify(s0, s1, cell)
                         stay = tuple(q0[b][:2]) == tuple(q1[b][:2]) == tuple(cell)
@@ -229,8 +245,11 @@ def run(seed):
 
     hits, kinds = scan(geom, history, cells_hist)
     ghits, gkinds = scan_guard(geom, history)
+    # ★ 몸 기준도 같이 낸다 (-240). 차체 접촉을 정하는 것은 축이 아니라 몸이다.
+    bhits, bkinds = scan_guard(geom, history, body=True)
     return dict(seed=seed, hits=hits, kinds=kinds, ghits=ghits, gkinds=gkinds,
-                sweep=sweep, cyclic=cyclic,
+                bhits=bhits, bkinds=bkinds,
+                sweep=sweep, cyclic=cyclic, info=li,
                 tasks=li.get("tasks_done"), ticks=len(history) - 1)
 
 
@@ -256,10 +275,13 @@ def main():
         if sw:
             print(f"   sweep_audit 예약부족 {sw['short']}/{sw['total']}"
                   f" ({100.0 * sw['short'] / max(1, sw['total']):.1f}%)  {sw['by_kind']}")
+        # ★ 예전에는 여기서 `continue` 해 **guard 검사를 통째로 건너뛰었다**
+        #   (-240, 2026-09-18). `hits`(스윕∩몸)가 0 이어도 `mA`·`mB` 는
+        #   스윕 밖이라 guard 위반이 남을 수 있다 — 그게 이 도구의 요지다.
         if not r["hits"]:
-            print("   -> 계획은 깨끗하다. 접촉은 **실행 층**에서 났다는 뜻이다.")
-            continue
-        print(f"   칸 종류별: {r['kinds']}")
+            print("   -> 스윕∩몸 겹침은 없다. **guard 쪽을 아래에서 따로 본다.**")
+        else:
+            print(f"   칸 종류별: {r['kinds']}")
         # 뒤대각이 있으면 그게 주행에서 본 것과 같은 모양이다.
         back_in = sum(v for k, v in r["kinds"].items()
                       if k.startswith("뒤대각(예약안)"))
@@ -281,6 +303,23 @@ def main():
             print("         거부했어야 하는 자리다.")
         else:
             print("      -> 계획은 규칙을 지킨다. 위반은 **실행 층**에서 생긴 것이다.")
+
+        # ★★ 몸 기준 — `PIBT_SWING_HARD` 가 듣는지 보는 자리다 (-240)
+        print()
+        print(f"   ★★ guard ∩ 남의 **몸** — **차체 접촉이 나는 배치**: "
+              f"{len(r['bhits'])}건   (swing_hard={r['info'].get('swing_hard')})")
+        if r["bhits"]:
+            print(f"      종류별: {r['bkinds']}")
+            for t, a, b, cell, k, dt, stay in r["bhits"][:TOP]:
+                print(f"      {t:>6}{a:>4}{b:>4}  {str(tuple(cell)):>10}  {k:<8}"
+                      f"{'  상주' if stay else '  통과중'}  {dt + 1}틱째")
+            if len(r["bhits"]) > TOP:
+                print(f"      ... 외 {len(r['bhits']) - TOP}건")
+            print("      -> 남의 **꼬리**가 스윙 칸에 있는 채로 회전이 시작된다.")
+            print("         설계 여유가 41.3 mm 뿐이라 허용오차 두 대분(100 mm)이")
+            print("         들어가면 닿는다. `PIBT_SWING_HARD=1` 로 0 이 되어야 한다.")
+        else:
+            print("      -> ★ 몸까지 안 들어온다. 차체 접촉의 그 배치가 계획에 없다.")
 
         print(f"\n   {'틱':>6}{'A':>4}{'B':>4}  {'칸':>10}  종류")
         for t, a, b, cell, k, inres, stay in r["hits"][:TOP]:

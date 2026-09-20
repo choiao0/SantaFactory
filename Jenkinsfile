@@ -16,7 +16,13 @@ pipeline {
         COMPOSE_FMS  = 'docker compose -f 3_FMS/infra/compose.estimate.yml --env-file 3_FMS/infra/.env.estimate'
         COMPOSE_EMQX = 'docker compose -f 3_FMS/infra/emqx/compose.yml'
         COMPOSE_CORE = 'docker compose -f 3_FMS/infra/compose.fms-core.yml'
+        COMPOSE_HOST = 'docker compose -f 3_FMS/infra/compose.host-orch.yml'   // (-249) 검증 오케스트레이터
         KEEP_COUNT  = '3'
+        // FMS 워커 배포 방식 (S15P21A106-248). Jenkins 전역 환경변수로 바꾼다 — compose: EC2 에서 compose 워커(지금까지),
+        // k3s: 사설 레지스트리에 push 하고 k3s 가 GCP 노드에 배치(3_FMS/infra/k8s/README.md). 되돌리기는 값만 compose 로.
+        FMS_DEPLOY   = "${env.FMS_DEPLOY ?: 'compose'}"
+        REGISTRY      = '127.0.0.1:5000'        // EC2 가 push 하는 주소(루프백 평문 허용)
+        REGISTRY_NODE = 'j15a106.p.ssafy.io'    // 노드가 pull 하는 주소 — nginx 443 /v2/ → 루프백 레지스트리 (3_FMS/infra/nginx/registry-v2.conf, -249). tailnet 미사용
     }
 
     stages {
@@ -72,8 +78,13 @@ pipeline {
                             !it.startsWith('3_FMS/docs/') }) ? 'true' : 'false'
                     env.BUILD_EMQX = (fullBuild || common ||
                         changedList.any { it.startsWith('3_FMS/infra/emqx/') }) ? 'true' : 'false'
+                    // (-249) host-orch 는 별도 compose 스택이라 따로 본다. BUILD_FMS 에도 걸리지만(3_FMS/ 밑) 그쪽은 워커·core 만 다룬다.
+                    env.BUILD_HOST_ORCH = (fullBuild || common ||
+                        changedList.any { it.startsWith('3_FMS/host_orch/') ||
+                            it == '3_FMS/infra/compose.host-orch.yml' ||
+                            it == '3_FMS/infra/host_orch.Dockerfile' }) ? 'true' : 'false'
 
-                    echo "배포 대상: backend=${env.BUILD_BE}, frontend=${env.BUILD_FE}, fms=${env.BUILD_FMS}(워커+core), emqx=${env.BUILD_EMQX}"
+                    echo "배포 대상: backend=${env.BUILD_BE}, frontend=${env.BUILD_FE}, fms=${env.BUILD_FMS}(워커+core), emqx=${env.BUILD_EMQX}, host-orch=${env.BUILD_HOST_ORCH}"
 
                     // 표시는 BE/FE 와 같은 레벨로 맞춘다 — EMQX 는 FMS 도메인의 일부라 별도 항목으로 안 보이고 FMS 에 흡수.
                     def fmsShown = (env.BUILD_FMS == 'true' || env.BUILD_EMQX == 'true')
@@ -148,30 +159,62 @@ pipeline {
                         grep -E "^(RABBITMQ_USER|RABBITMQ_PASSWORD)=" "$APP_ENV_FILE" > 3_FMS/infra/.env.estimate
                         $COMPOSE_FMS build
                         docker tag fms-estimate-worker:latest fms-estimate-worker:$BUILD_NUMBER
-                        $COMPOSE_FMS up -d
                     '''
                 }
-                sh '''
-                    # 워커는 여러 개(compose replicas, 기본 2)라 컨테이너 전부가 running 이어야 통과.
-                    for i in $(seq 1 30); do
-                        cids=$($COMPOSE_FMS ps -q estimate-worker)
-                        total=$(echo "$cids" | grep -c . || true)
-                        running=0
-                        for cid in $cids; do
-                            if [ "$(docker inspect -f '{{.State.Status}}' "$cid" 2>/dev/null)" = "running" ]; then
-                                running=$((running + 1))
+                script {
+                    if (env.FMS_DEPLOY == 'k3s') {
+                        // k3s: 12개가 새 이미지로 전부 뜬 것을 확인한 뒤에야 EC2 compose 워커를 내린다 — 순서를 바꾸면 노드 합류 전 배포에서 워커가 0 이 된다.
+                        withCredentials([file(credentialsId: 'k3s-kubeconfig', variable: 'KUBECONFIG')]) {
+                            sh '''
+                                docker tag fms-estimate-worker:$BUILD_NUMBER $REGISTRY/fms-estimate-worker:$BUILD_NUMBER
+                                docker push $REGISTRY/fms-estimate-worker:$BUILD_NUMBER
+                                # 매니페스트가 기준(-249): 자원·개수·정책 변경도 release 로 나간다. image 줄만 이번 빌드 번호로 바꿔 넣는다
+                                # (파일의 :latest 는 첫 적용용 자리). apply 뒤 set image 를 따로 하면 latest 로 한 번 더 롤아웃이 돌아 합쳤다.
+                                kubectl apply -f 3_FMS/infra/k8s/namespace.yaml
+                                sed -E "s#^( *image: ).*fms-estimate-worker:.*#\\1$REGISTRY_NODE/fms-estimate-worker:$BUILD_NUMBER#" \\
+                                    3_FMS/infra/k8s/sim-worker-deployment.yaml | kubectl apply -f -
+                                if ! kubectl -n fms rollout status deployment/sim-worker --timeout=600s; then
+                                    echo "k3s 워커 롤아웃이 600초 안에 끝나지 않음"
+                                    kubectl -n fms get pods -o wide || true
+                                    kubectl -n fms describe deployment/sim-worker | tail -20 || true
+                                    exit 1
+                                fi
+                                kubectl -n fms get pods -o wide
+                                $COMPOSE_FMS up -d --scale estimate-worker=0
+                                REGISTRY=$REGISTRY bash 3_FMS/infra/k8s/registry-prune.sh fms-estimate-worker "$KEEP_COUNT" || true
+                            '''
+                        }
+                    } else {
+                        sh '''
+                            # 워커는 여러 개(compose replicas, 기본 2)라 컨테이너 전부가 running 이어야 통과.
+                            # WORKER_REPLICAS=0 (GCP 워커가 처리, 3_FMS/infra/gcp/README.md) 이면 EC2 워커를 올리지 않고 끝낸다.
+                            want=${WORKER_REPLICAS:-2}
+                            WORKER_REPLICAS=$want $COMPOSE_FMS up -d
+                            if [ "$want" = "0" ]; then
+                                echo "EC2 FMS 워커 0개 (WORKER_REPLICAS=0)"
+                                exit 0
                             fi
-                        done
-                        if [ "$total" -gt 0 ] && [ "$running" -eq "$total" ]; then
-                            echo "FMS 워커 ${running}개 기동 확인"
-                            exit 0
-                        fi
-                        sleep 2
-                    done
-                    echo "FMS 워커가 60초 안에 전부 기동하지 않음 (running ${running}/${total})"
-                    $COMPOSE_FMS logs --tail 100 || true
-                    exit 1
-                '''
+                            for i in $(seq 1 30); do
+                                cids=$($COMPOSE_FMS ps -q estimate-worker)
+                                total=$(echo "$cids" | grep -c . || true)
+                                running=0
+                                for cid in $cids; do
+                                    if [ "$(docker inspect -f '{{.State.Status}}' "$cid" 2>/dev/null)" = "running" ]; then
+                                        running=$((running + 1))
+                                    fi
+                                done
+                                if [ "$total" -gt 0 ] && [ "$running" -eq "$total" ]; then
+                                    echo "FMS 워커 ${running}개 기동 확인"
+                                    exit 0
+                                fi
+                                sleep 2
+                            done
+                            echo "FMS 워커가 60초 안에 전부 기동하지 않음 (running ${running}/${total})"
+                            $COMPOSE_FMS logs --tail 100 || true
+                            exit 1
+                        '''
+                    }
+                }
             }
         }
 
@@ -245,11 +288,56 @@ pipeline {
             }
         }
 
+        stage('host-orch 빌드·배포') {
+            // (-249) 검증 오케스트레이터. fms-core 처럼 backbone(external) + santafactory 네트워크가 먼저 있어야 한다.
+            // 자격은 둘 — infra/.env(RabbitMQ, app-env 에서 추출) · infra/emqx/.env(MQTT_PW_HOST_ORCH, emqx-env).
+            // 09-18 이전에는 EC2 ~/host-orch 사본에서 수동 배포했다. compose 프로젝트 이름(fms-host-orch)과 컨테이너 이름이 같아
+            // 첫 Jenkins 배포가 그 컨테이너를 그대로 넘겨받는다.
+            when { expression { env.SKIP_ALL != 'true' && env.BUILD_HOST_ORCH == 'true' } }
+            steps {
+                withCredentials([file(credentialsId: 'app-env', variable: 'APP_ENV_FILE'),
+                                 file(credentialsId: 'emqx-env', variable: 'EMQX_ENV_FILE')]) {
+                    sh '''
+                        grep -E "^(RABBITMQ_USER|RABBITMQ_PASSWORD)=" "$APP_ENV_FILE" > 3_FMS/infra/.env
+                        tr -d '\\r' < "$EMQX_ENV_FILE" > 3_FMS/infra/emqx/.env
+                        $COMPOSE_HOST build
+                        docker tag fms-host-orch:latest fms-host-orch:$BUILD_NUMBER
+                        $COMPOSE_HOST up -d
+                    '''
+                }
+                sh '''
+                    # fms-core 와 같은 기준 — running 을 본 뒤 10초 두고 RestartCount 0 까지 확인한다.
+                    cid=""
+                    for i in $(seq 1 30); do
+                        cid=$($COMPOSE_HOST ps -q host-orch)
+                        if [ -n "$cid" ] && [ "$(docker inspect -f '{{.State.Status}}' "$cid" 2>/dev/null)" = "running" ]; then
+                            break
+                        fi
+                        sleep 2
+                    done
+                    if [ -z "$cid" ]; then
+                        echo "host-orch 컨테이너가 60초 안에 뜨지 않음"
+                        $COMPOSE_HOST logs --tail 100 || true
+                        exit 1
+                    fi
+                    sleep 10
+                    status=$(docker inspect -f '{{.State.Status}}' "$cid")
+                    restarts=$(docker inspect -f '{{.RestartCount}}' "$cid")
+                    if [ "$status" != "running" ] || [ "$restarts" -gt 0 ]; then
+                        echo "host-orch 가 안정적으로 뜨지 않음 (status=$status, 재시작 $restarts 회)"
+                        $COMPOSE_HOST logs --tail 100 || true
+                        exit 1
+                    fi
+                    echo "host-orch 기동 확인 (재시작 0회)"
+                '''
+            }
+        }
+
         stage('이미지 정리') {
             when { expression { env.SKIP_ALL != 'true' } }
             steps {
                 sh '''
-                    for img in santafactory-be santafactory-fe fms-estimate-worker fms-core; do
+                    for img in santafactory-be santafactory-fe fms-estimate-worker fms-core fms-host-orch; do
                         docker images "$img" --format '{{.Tag}}' \
                             | grep -E '^[0-9]+$' | sort -n | head -n -"$KEEP_COUNT" \
                             | xargs -r -I{} docker rmi "$img:{}"
@@ -269,7 +357,7 @@ pipeline {
             }
         }
         always {
-            sh 'rm -f 4_Web/.env 3_FMS/infra/.env.estimate 3_FMS/infra/emqx/.env'
+            sh 'rm -f 4_Web/.env 3_FMS/infra/.env.estimate 3_FMS/infra/.env 3_FMS/infra/emqx/.env'
         }
     }
 }

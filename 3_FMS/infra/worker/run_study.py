@@ -40,6 +40,7 @@
 import argparse
 import json
 import os
+import statistics
 import sys
 
 import optuna
@@ -48,7 +49,8 @@ _WORKER_DIR = os.path.dirname(os.path.abspath(__file__))
 if _WORKER_DIR not in sys.path:
     sys.path.insert(0, _WORKER_DIR)
 
-from objective import SimFailed, evaluate, tick_seconds  # noqa: E402
+from objective import (SimFailed, evaluate, run_once,  # noqa: E402
+                       tick_seconds, write_theta)
 
 DEFAULT_SIM_ENGINE = "/work/sim_engine"
 DEFAULT_FMS_ROOT = "/work"
@@ -130,16 +132,55 @@ def suggest_theta(trial, continuous, categorical, pinned):
     return theta
 
 
+def _evaluate_pruning(trial, args, theta):
+    """시드를 하나씩 돌며 중간값을 보고한다 — 가망 없는 θ 는 시드 1개에서 끊는다.
+
+    이게 없으면 명백히 나쁜 θ 도 시드를 끝까지 다 돈다(trial 당 3런). 실측에서 study 하나가
+    150 trial × 3시드 = 450런 ≈ 60분인데, 하위 절반을 시드 1개에서 끊으면 300런이 된다(−33 %).
+
+    **같은 시드끼리 비교된다.** MedianPruner 는 "같은 step 의 다른 trial 값"과 견주므로
+    step 0 은 모든 trial 의 시드 42 값끼리다. 시드 운이 비교에 섞이지 않는다.
+
+    objective.evaluate 를 안 쓰고 여기서 시드를 도는 이유는 그 함수가 **견적 워커와 공유**라서다
+    (estimate_worker 가 run_once 를 가져간다). 공유 코드는 안 건드린다.
+
+    가지치기를 켜면 탐색 경로가 달라져 **나오는 θ 가 --prune 없을 때와 다르다**. 기존 θ 재현에는
+    쓰지 말 것 (기본값이 꺼짐인 이유).
+    """
+    runs = []
+    path = write_theta(theta)
+    try:
+        for step, seed in enumerate(args.seeds):
+            runs.append(run_once(args.sim_engine, path, args.robots, args.orders, seed,
+                                 timeout_s=args.timeout, aisle_block=args.aisle_block,
+                                 flow=FLOW, cell=args.cell, order_gap=args.order_gap,
+                                 extra_args=args.extra_args, tag=f"bo{trial.number}"))
+            if step + 1 < len(args.seeds):          # 마지막 시드 뒤엔 끊을 이유가 없다
+                trial.report(statistics.fmean(r[args.metric] for r in runs), step)
+                if trial.should_prune():
+                    raise optuna.TrialPruned(
+                        "시드 %d/%d 에서 중앙값 미달" % (step + 1, len(args.seeds)))
+    finally:
+        os.unlink(path)
+    keys = [k for k, v in runs[0].items() if isinstance(v, (int, float))]
+    return {"mean": {k: statistics.fmean(r[k] for r in runs) for k in keys},
+            "spread": {k: max(r[k] for r in runs) - min(r[k] for r in runs) for k in keys},
+            "runs": runs}
+
+
 def make_objective(args, continuous, categorical):
     def objective(trial):
         theta = suggest_theta(trial, continuous, categorical, args.pinned)
         try:
-            result = evaluate(theta, args.sim_engine, args.robots, args.orders,
-                              args.seeds, timeout_s=args.timeout,
-                              aisle_block=args.aisle_block, flow=FLOW,
-                              cell=args.cell, order_gap=args.order_gap,
-                              extra_args=args.extra_args,
-                              tag=f"bo{trial.number}")
+            if args.prune:
+                result = _evaluate_pruning(trial, args, theta)
+            else:
+                result = evaluate(theta, args.sim_engine, args.robots, args.orders,
+                                  args.seeds, timeout_s=args.timeout,
+                                  aisle_block=args.aisle_block, flow=FLOW,
+                                  cell=args.cell, order_gap=args.order_gap,
+                                  extra_args=args.extra_args,
+                                  tag=f"bo{trial.number}")
         except SimFailed as exc:
             # 시뮬이 못 끝나는 θ 도 정보다 — 버리지 말고 기록하고 가지치기한다.
             trial.set_user_attr("sim_failed", str(exc))
@@ -257,6 +298,11 @@ def parse_args(argv=None):
     # 1.0 과 float 로 비교하면 미세 오차로 분기가 뒤집힐 수 있다.
     p.add_argument("--speed", type=float, default=None,
                    help=f"로봇 속도[m/s]. 운영과 같게 줄 것. 생략하면 {DEFAULT_SPEED:g}")
+    # 가지치기 (S15P21A106-206). 기본 꺼짐 — 켜면 탐색 경로가 달라져 기존 θ 가 재현되지 않는다.
+    # 실측: study 하나가 150 trial x 3시드 = 450런 ≈ 60분. 하위 절반을 시드 1개에서
+    # 끊으면 300런(−33 %). 비교는 같은 step = 같은 시드끼리라 시드 운이 안 섞인다.
+    p.add_argument("--prune", action="store_true",
+                   help="가망 없는 θ 를 시드 1개에서 끊는다 (MedianPruner). 새 탐색 전용")
     p.add_argument("--timeout", type=int, default=300, help="시뮬 1회 상한(초)")
     p.add_argument("--noise-warn-ratio", type=float, default=0.05,
                    dest="noise_warn_ratio",
@@ -357,6 +403,10 @@ def main(argv=None):
         direction=args.direction,
         load_if_exists=True,
         sampler=optuna.samplers.TPESampler(seed=args.sampler_seed),
+        # n_startup_trials: 이만큼은 안 끊는다 — 비교할 중앙값이 쌓여야 한다.
+        # n_warmup_steps=0: 시드 1개를 돈 직후(step 0)부터 판단한다. 우리는 step 이 시드라 3개뿐이다.
+        pruner=(optuna.pruners.MedianPruner(n_startup_trials=10, n_warmup_steps=0)
+                if args.prune else optuna.pruners.NopPruner()),
     )
     study.optimize(make_objective(args, continuous, categorical),
                    n_trials=args.trials)

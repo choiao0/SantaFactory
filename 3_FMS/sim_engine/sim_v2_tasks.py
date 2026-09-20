@@ -20,6 +20,10 @@
 #                              [--horizon=<틱>] [--shifts=in,out,out]                     (고정 시간·교대, -145 §1)
 #                              [--battery] [--chargers=6] [--runtime-h=8] [--charge-h=1.5] [--soc=20,80,95]  (배터리, -145 §2)
 #                              [--orders-file=<json>] [--capacity=<토트 수>] [--tote-units=<상품 수>] [--svc-per-tote=<초>]
+#                              [--service-steps=<틱>]  (v3.15, -247: 도킹 틱. 기본 = round(SERVICE_TIME_S/dt) = v1 계보 상수)
+#                              [--rev-ticks=<틱>]     (계약 v3.15, -250: 후진 1칸 틱. 기본 REV_TICKS=12
+#                              = speed 0.9 에서 0.300 m/s = 물리 팀 녹화 후진 p99. v3.14 로 되돌리려면 4)
+#                              [--replan-max-extra=<칸>]  (v3.15, -247: 정체 재계획 우회 추가 비용 상한. 0 = 없음)
 #                              [--max-order-totes=24]  (v3.5: 토트 합계 초과 주문 = 팔레트 흐름 제외, 그 아래 큰 주문은 여러 왕복. 0 = 제한 없음)
 #                              [--speed=<m/s>]   (v3.3, -116: 틱 길이 = CELL_M / speed. 1칸 = 1틱은 그대로, 초 환산만 바뀐다)
 #                              [--footprint=exact|legacy|exact,front|exact,front_2cell] [--robot-dims=0.39,1.11,0.80]   (v3.4 -203, front 6칸 -79)
@@ -70,7 +74,7 @@ from map_loader import (load_map, make_homes, CELL_M, OFFSET_M, MAP_DIR, ROBOT_D
                         make_homes_zone, load_rack_map, load_topology_spec, masked_turn_ratio, turn_mask)
 from pibt.geometry import FOOTPRINT_MARGIN_M
 from order_stream import MAX_ORDER_TOTES, OrderStream
-from pibt_core import DIRS, MOVE_TICKS, TURN_TICKS
+from pibt_core import DIRS, MOVE_TICKS, REV_TICKS, TURN_TICKS
 
 SERVICE_TIME_S = 40 / 11            # v1과 동일 (docs/θ_경로_기준선.md#기준선-계보)
 SERVICE_STEPS = round(SERVICE_TIME_S / DT)
@@ -242,6 +246,11 @@ def _parse_orders(a, argv):
     a.capacity = _opt(argv, "capacity", int, 1)
     a.tote_units = _opt(argv, "tote-units", int)
     a.svc_per_tote = _opt(argv, "svc-per-tote", int, 0)
+    # 도킹 틱 (-247): 기본은 SERVICE_TIME_S(=40/11 s, v1 기준선 계보) 환산. 물리 팀 대조판은 0 으로 준다
+    # — 「안 적은 인자가 기본값으로 조용히 들어간다」를 막으려고 SUMMARY 에도 낸다 (t3-30 §5-1).
+    a.service_steps = _opt(argv, "service-steps", int)
+    a.rev_ticks = _opt(argv, "rev-ticks", int)
+    a.replan_max_extra = _opt(argv, "replan-max-extra", int, 0)
     # 주문 단위 경계 (v3.5, 2026-09-14): 토트 합계 초과 주문 = 팔레트 흐름 제외. 그 아래 큰 주문은 여러 왕복. 0 = 제한 없음.
     a.max_order_totes = _opt(argv, "max-order-totes", int, MAX_ORDER_TOTES)
     assert a.max_order_totes >= 0, f"--max-order-totes 는 0 이상 (0 = 제한 없음): {a.max_order_totes}"
@@ -249,6 +258,9 @@ def _parse_orders(a, argv):
         assert a.flow == "main", "--orders-file 은 main 흐름만"
     assert 1 <= a.capacity <= 6, f"--capacity 는 1~6 토트: {a.capacity}"
     assert a.svc_per_tote >= 0, f"--svc-per-tote 는 0 이상: {a.svc_per_tote}"
+    assert a.service_steps is None or a.service_steps >= 0, f"--service-steps 는 0 이상: {a.service_steps}"
+    assert a.rev_ticks is None or a.rev_ticks >= 1, f"--rev-ticks 는 1 이상: {a.rev_ticks}"
+    assert a.replan_max_extra >= 0, f"--replan-max-extra 는 0 이상 (0 = 없음): {a.replan_max_extra}"
     if a.tote_units is not None:
         assert a.tote_units >= 1, f"--tote-units 는 1 이상: {a.tote_units}"
         if a.orders_file is None:
@@ -364,10 +376,13 @@ def build(a):
     _hd.GOAL_WAIT_FREE = bool(getattr(a, "goal_wait_free", True))
     _hd.TURN_FLOOR_WAIT = bool(getattr(a, "turn_floor", False))
     cfg = KernelConfig(heading=a.heading, zone=a.zone, theta=bool(a.theta_path or a.lanes), check=a.check,
-                       dock_prio=a.dock_prio, export=a.export, service_steps=round(SERVICE_TIME_S / a.dt),
+                       dock_prio=a.dock_prio, export=a.export,
+                       service_steps=round(SERVICE_TIME_S / a.dt) if a.service_steps is None else a.service_steps,
                        capacity=a.capacity, svc_per_tote=a.svc_per_tote,
                        yield_rule=a.yield_rule, section_limit=a.section_limit, standoff=a.standoff,
                        turn_ticks=TURN_TICKS, move_ticks=MOVE_TICKS,
+                       rev_ticks=REV_TICKS if a.rev_ticks is None else a.rev_ticks,
+                       replan_max_extra=a.replan_max_extra,
                        stall_warn_only=a.horizon is not None,
                        footprint=a.footprint, robot_dims=a.robot_dims, **bat)
     kernel = FmsKernel(free, st_cell, edge_cost, wait_cost, homes, a.n_robots, cfg,

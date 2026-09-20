@@ -31,15 +31,17 @@ function AmrRunning() {
   )
 }
 
-function RunCard({ run, selected, onSelect, working }) {
+function RunCard({ run, selected, onSelect }) {
   const failed = run.status === 'FAILED' || run.status === 'TIMEOUT'
   const playable = run.status === 'DONE'
+  // 워커가 집었다고 알린 run 만 계산 중이다 — 백엔드가 결과 큐의 running 메시지로 RUNNING 을 세운다
+  const working = run.status === 'RUNNING'
   // 완료된 run 만 누를 수 있다 — 나머지는 보여줄 궤적이 없다
   const Tag = playable ? 'button' : 'div'
   return (
     <Tag
       type={playable ? 'button' : undefined}
-      className={`run ${run.status}${working ? ' working' : ''}${playable ? ' playable' : ''}${selected ? ' on' : ''}`}
+      className={`run ${run.status}${playable ? ' playable' : ''}${selected ? ' on' : ''}`}
       onClick={playable ? () => onSelect(run.amr_count) : undefined}
       aria-pressed={playable ? selected : undefined}
     >
@@ -67,9 +69,9 @@ function RunCard({ run, selected, onSelect, working }) {
   )
 }
 
-// run 전체(6시간)를 담으므로 배속이 커야 한다 — ×32 면 11분, ×64 면 5.6분에 다 본다.
+// run 전체(6시간)를 담으므로 배속이 커야 한다 — ×32 면 11분, ×64 면 5.6분, ×128 이면 2.8분에 다 본다.
 // 그래도 프레임당 시뮬 0.5~1초라 샘플(4.4초 간격) 사이를 보간이 메운다
-const SPEEDS = [8, 16, 32, 64]
+const SPEEDS = [8, 16, 32, 64, 128]
 
 function formatDuration(sec) {
   const h = String(Math.floor(sec / 3600)).padStart(2, '0')
@@ -147,7 +149,7 @@ function OutboundPanel({ replay, seconds }) {
  * 재생 루프. 대수가 바뀌면 부모가 key 를 갈아 이 컴포넌트를 새로 만든다 —
  * 그래야 "새 데이터가 오면 0초부터" 를 초기화 effect 없이 얻는다.
  */
-function ReplayPlayer({ replay, playing, speed, onTogglePlay, onNextSpeed }) {
+function ReplayPlayer({ replay, playing, speed, onTogglePlay, onSpeed }) {
   const [tick, setTick] = useState(0)
   const ticks = Math.max(...Object.values(replay.robots).map((a) => a.length))
   const dt = replay.dt_s ?? 1
@@ -178,7 +180,16 @@ function ReplayPlayer({ replay, playing, speed, onTogglePlay, onNextSpeed }) {
             <button type="button" className="button rp-btn" onClick={onTogglePlay}>
               {playing ? '⏸︎ PAUSE' : '▶︎ PLAY'}
             </button>
-            <button type="button" className="ghost rp-btn" onClick={onNextSpeed}>SPEED ×{speed}</button>
+            {/* 고르는 목록이다 — 순환 버튼은 "SPEED ×64" 가 현재 배속인지 누르면 될 배속인지
+                구분되지 않아, 바로 위 PAUSE(누르면 일어날 일)와 규칙이 엇갈렸다 */}
+            <select
+              className="rp-speed"
+              aria-label="재생 배속"
+              value={speed}
+              onChange={(e) => onSpeed(Number(e.target.value))}
+            >
+              {SPEEDS.map((v) => <option key={v} value={v}>SPEED ×{v}</option>)}
+            </select>
           </div>
         </div>
       </div>
@@ -207,7 +218,6 @@ function ReplayBoard({ estimateId, amrCount }) {
   // 6시간을 ×64 로 보면 5.6분. ×32 는 11분이라 끝까지 보는 사람이 없다
   const [speed, setSpeed] = useState(64)
 
-  const nextSpeed = () => setSpeed((v) => SPEEDS[(SPEEDS.indexOf(v) + 1) % SPEEDS.length])
   const togglePlay = () => setPlaying((v) => !v)
 
   return (
@@ -225,7 +235,7 @@ function ReplayBoard({ estimateId, amrCount }) {
 
         {replay && (
           <ReplayPlayer key={`${estimateId}:${amrCount}`} replay={replay}
-                        playing={playing} speed={speed} onTogglePlay={togglePlay} onNextSpeed={nextSpeed} />
+                        playing={playing} speed={speed} onTogglePlay={togglePlay} onSpeed={setSpeed} />
         )}
         {!replay && (
           <div className="rp-placeholder">
@@ -261,16 +271,6 @@ function ReplayBoard({ estimateId, amrCount }) {
 export default function RunsStep({ estimateId, estimate, connected, error }) {
   const runs = estimate?.runs ?? []
   const finished = runs.filter((r) => !isPending(r)).length
-  /*
-   * 지금 계산 중인 run — 백엔드는 워커가 어느 run 을 집었는지 모른다(RunStatus.RUNNING 은 쓰이지 않고
-   * 워커는 결과만 보낸다). 대신 발행이 대수 오름차순이고 큐가 FIFO, 워커가 prefetch 1 로 하나씩 집으므로
-   * 결과가 안 온 것 중 가장 적은 대수가 도는 중이다. 워커가 둘이라 실제로는 둘이 동시에 도는데, 둘 다
-   * 칠하면 어느 쪽이 먼저 끝날지 모르는 채로 앞서 표시하는 셈이라 확실한 하나만 칠한다.
-   * 견적이 끝난 뒤에는 남은 run 이 있어도(실패·타임아웃) 도는 게 아니므로 켜지 않는다.
-   */
-  const workingCount = estimate?.status === 'RUNNING'
-    ? runs.filter(isPending)[0]?.amr_count ?? null
-    : null
   const [picked, setPicked] = useState(null)
 
   // 아무것도 고르지 않았으면 권장 대수를 보여준다 — 사용자가 제일 궁금해할 구성이다.
@@ -307,6 +307,7 @@ export default function RunsStep({ estimateId, estimate, connected, error }) {
             </span>
             <div className="runs-legend">
               <span><i className="DONE" />완료</span>
+              <span><i className="RUNNING" />계산 중</span>
               <span><i className="FAILED" />실패</span>
               <span><i className="QUEUED" />대기</span>
               <span className={`status ${estimate.status}`}>
@@ -317,8 +318,7 @@ export default function RunsStep({ estimateId, estimate, connected, error }) {
           </div>
           <div className="runlist">
             {runs.map((r) => (
-              <RunCard key={r.run_id} run={r} selected={r.amr_count === shown} onSelect={setPicked}
-                       working={r.amr_count === workingCount} />
+              <RunCard key={r.run_id} run={r} selected={r.amr_count === shown} onSelect={setPicked} />
             ))}
           </div>
         </>

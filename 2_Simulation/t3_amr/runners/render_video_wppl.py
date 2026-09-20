@@ -123,9 +123,17 @@ def _make_cam(stage, path, focal):
 
 
 def _aim(op, eye, tgt):
-    """build_amr_scene_v2.py 의 look_at 과 같은 수식."""
+    """build_amr_scene_v2.py 의 look_at 과 같은 수식.
+
+    ★ `float()` 로 감싼다 (S15P21A106-240). 기록 자세는 npz 에서 온 `float32`
+      인데 `Gf.Vec3d` 는 그걸 안 받고 `Boost.Python.ArgumentError` 로 죽는다.
+      `_apply` 는 이미 감싸고 있었는데 여기만 빠져 있었다 — 즉 `RENDER_FOLLOW`
+      는 **실제 기록으로 한 번도 안 돌아간 코드**였다 (고정 카메라 경로만
+      쓰였다. 거기서는 `LOOKAT` 이 파이썬 float 라 안 걸린다).
+    """
     from pxr import Gf
-    eye, tgt = Gf.Vec3d(*eye), Gf.Vec3d(*tgt)
+    eye = Gf.Vec3d(*[float(v) for v in eye])
+    tgt = Gf.Vec3d(*[float(v) for v in tgt])
     f = (tgt - eye).GetNormalized()
     up0 = Gf.Vec3d(0, 0, 1) if abs(Gf.Dot(f, Gf.Vec3d(0, 0, 1))) < 0.999 else Gf.Vec3d(0, 1, 0)
     r = Gf.Cross(f, up0).GetNormalized()

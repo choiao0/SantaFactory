@@ -29,15 +29,20 @@ public class SimulationService {
     public List<String> publishRuns(SimulationRequest base, List<Integer> amrCounts) {
         List<String> runIds = new ArrayList<>();
         for (int amrCount : amrCounts) {
-            String runId = runId(base.runId(), amrCount);
-            SimulationRequest.Amr amr = base.amr();
-            simulationClient.publish(base.forRun(runId,
-                    new SimulationRequest.Amr(amrCount, amr.speedEmpty(), amr.speedLoaded(), amr.consumption(),
-                            amr.battery(), amr.chargeTime(), amr.chargeThreshold(), amr.capacity())));
-            runIds.add(runId);
+            runIds.add(publishRun(base, amrCount));
         }
         log.info("시뮬레이션 요청 발행: base={}, runs={}", base.runId(), runIds);
         return runIds;
+    }
+
+    /** 대수 하나의 run 을 발행한다. 실패하면 {@code SIM_QUEUE_UNAVAILABLE} 이 그대로 올라온다. */
+    public String publishRun(SimulationRequest base, int amrCount) {
+        String runId = runId(base.runId(), amrCount);
+        SimulationRequest.Amr amr = base.amr();
+        simulationClient.publish(base.forRun(runId,
+                new SimulationRequest.Amr(amrCount, amr.speedEmpty(), amr.speedLoaded(), amr.consumption(),
+                        amr.battery(), amr.chargeTime(), amr.chargeThreshold(), amr.capacity())));
+        return runId;
     }
 
     public void publishVerify(VerifyRequest request) {

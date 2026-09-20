@@ -101,9 +101,9 @@ UsdGeom.Imageable(gp.GetPrim()).MakeInvisible()
 UsdPhysics.CollisionAPI.Apply(gp.GetPrim())
 print("[s] GroundPlane 생성 (무한 평면 콜라이더, z=0)", flush=True)
 
-# ★ 바닥 물리 재질 (S15P21A106-224) — 기본은 **끔**
+# ★ 바닥 물리 재질 — **기본 0.9** (S15P21A106-224 에서 스위치, -240 에서 채택)
 #
-#   2026-09-17 실측: 창고 씬 전체에 `physics:*Friction` 을 가진 prim 이
+#   [경위] 2026-09-17 실측: 창고 씬 전체에 `physics:*Friction` 을 가진 prim 이
 #   **0 개**다 (콜라이더는 3,973개). 로봇이 실제로 달리는 이 평면에도 없다.
 #   `/World/floor` 에 묶인 것은 MDL — 렌더 재질이지 물리가 아니다.
 #   바퀴 쪽 0.9 는 `iw_hub.usd` 저작값이고, 짝이 되는 바닥은 **PhysX 기본
@@ -113,13 +113,36 @@ print("[s] GroundPlane 생성 (무한 평면 콜라이더, z=0)", flush=True)
 #   MIR100 이 90도 명령에 10도만 돈 사례가 **PhysicsMaterial 이 없던** 경우다.
 #   회전 중 접지 상실 1/89 (2026-09-16 a6) 의 후보로 남는다.
 #
-#   ★ 그래도 기본을 안 바꾼다. 마찰을 주면 주행 결과가 **바뀐다** — 지금까지
-#     잰 기준선(시드 2 = 560.0s · 시드 5 = 541.5s)이 비교 불능이 된다.
-#     값을 정하는 것은 측정이지 짐작이 아니다. A/B 로 연다.
+#   ★★ 2026-09-17: **기본을 0.9 로 박았다.** A/B/C/D 네 점을 재고 정했다.
 #
-#       GROUND_FRICTION=0.9          정적·동적 같이 0.9
-#       GROUND_FRICTION=0.9,0.7      정적 0.9 · 동적 0.7
-_gf = os.environ.get("GROUND_FRICTION", "").strip()
+#     바닥 μ   유효 μ   접지비 중앙   밀림 중앙   p95
+#       0.9     0.90       0.92        5.32     11.70    <- 채택
+#       기본    ~0.74      0.91        9.09     15.60
+#       0.3     0.60       0.89       12.42     22.38
+#       0.01    0.455      0.88       13.02     27.13
+#
+#     근거 둘.
+#       ① **평소 밀림이 제일 작다** — 9.09 -> 5.32 mm (42 % 감소). 측정값이다
+#       ② 실기 바닥이 콘크리트다. 고무-마른 콘크리트가 통상 0.7~0.9 이고
+#          `average(0.9, 0.9) = 0.9` 는 그 **위쪽 끝**이다. 방어는 되지만
+#          보수적인 값은 아니다 — 더 낮춰야 할 근거가 생기면 여기를 본다
+#
+#     ★ 「330 mm 사건(a6)이 0.9 에서도 난다」는 반대 근거가 아니다. 그건
+#       마찰로 피할 게 아니라 **복구로 막을 것**이다 (-240). 0.3 으로 두면
+#       증상은 가려지는데 물리가 틀어진다.
+#
+#     ※ 근거로 쓰면 안 되는 것 — 「worst_gap 42.7 mm 가 안 나빠진다」.
+#       그 값은 4칸 soft 최소 여유로 **계획 기하 상수**다. 마찰에 반응할 수가
+#       없다. 주행 쪽 worst_gap 은 A 0.1387 · B 0.1418 · C 0.1549 로 달랐다.
+#
+#     [대가] 기준선이 리셋된다. 시드 2 = 560.0s · 시드 5 = 541.5s 는 **기본
+#     재질(μ~0.74) 값**이라 이제 비교 불능이다. 다시 떠야 한다.
+#
+#       GROUND_FRICTION=0.9,0.7   정적 0.9 · 동적 0.7 (따로 주고 싶을 때)
+#       GROUND_FRICTION=off       재질을 안 준다 (옛 기준선 재현용)
+_gf = os.environ.get("GROUND_FRICTION", "0.9").strip()
+if _gf.lower() in ("off", "none", "0"):
+    _gf = ""
 if _gf:
     # ★ 최상단이 아니라 여기서 import 한다. 기본 경로는 이 모듈을 안 쓰는데
     #   위에 두면 import 하나가 **모든 주행**을 죽인다. 이 파일은 주행 경로다.
@@ -131,14 +154,41 @@ if _gf:
     _api.CreateStaticFrictionAttr(_static)
     _api.CreateDynamicFrictionAttr(_dynamic)
     _api.CreateRestitutionAttr(0.0)
-    UsdShade.MaterialBindingAPI.Apply(gp.GetPrim())
-    UsdShade.MaterialBindingAPI(gp.GetPrim()).Bind(
-        _m, UsdShade.Tokens.weakerThanDescendants, "physics")
+    # ★ **켜져 있는** 바닥 콜라이더 전부에 묶는다 (2026-09-17 정정).
+    #
+    #   예전에는 `GroundPlane` 하나에만 묶고 로그는 「붙였다」고만 했다.
+    #   0.9 · 0.3 · 0.01 로 네 판을 돌려도 결과가 안 움직였는데, 그때
+    #   **어디에 묶였는지 알 길이 없어** 원인을 못 갈랐다.
+    #
+    #   `/World/Warehouse/ground` 는 위에서 콜리전을 껐으므로 대상이 아니다.
+    #   그래도 이름으로 찍지 말고 **켜진 것만 훑어서** 묶는다 — 씬이 바뀌면
+    #   이름 목록은 또 어긋난다.
+    _hint = ("ground", "floor", "plane")
+    _bound = []
+    for _p in st.Traverse():
+        _path = str(_p.GetPath())
+        if not _p.HasAPI(UsdPhysics.CollisionAPI):
+            continue
+        if not any(h in _path.lower() for h in _hint):
+            continue
+        _en = UsdPhysics.CollisionAPI(_p).GetCollisionEnabledAttr().Get()
+        if _en is False:                    # 없으면 기본 켬
+            continue
+        UsdShade.MaterialBindingAPI.Apply(_p)
+        UsdShade.MaterialBindingAPI(_p).Bind(
+            _m, UsdShade.Tokens.weakerThanDescendants, "physics")
+        _bound.append(_path)
     print(f"[s] ★ 바닥 물리 재질 정적 {_static} · 동적 {_dynamic} "
           f"(GROUND_FRICTION) — 기준선과 비교 불가", flush=True)
+    # ★ **어디에** 묶었는지 찍는다. 이 줄이 없어서 판을 날렸다.
+    print(f"[s]   바인딩 {len(_bound)}곳: {', '.join(_bound) or '★ 없다'}",
+          flush=True)
+    if not _bound:
+        print("[s]   ☠ 켜진 바닥 콜라이더를 못 찾았다 — 재질이 접촉에 "
+              "안 들어간다. tools/ground_material.py 로 확인할 것", flush=True)
 else:
-    print("[s] 바닥 물리 재질 없음 (PhysX 기본값). 주려면 "
-          "GROUND_FRICTION=0.9 또는 0.9,0.7", flush=True)
+    print("[s] ★ 바닥 물리 재질 **없음** (GROUND_FRICTION=off). PhysX 기본값 "
+          "~0.58 로 돈다 — 옛 기준선 재현용이다", flush=True)
 
 # --- 충전존 (stations.json charger 6 + charge_q 6 = 파란 장판 12개, x=107.8/105.5 y=50~65) ---
 # 궤적 시작점 대신 여기서 로봇을 스폰한다. PathFollower._closest_forward()는
@@ -238,7 +288,27 @@ look_at("/World/Cameras/Cam_Follow", (cx - 8, cy - 10, 5.0), (cx, cy, 0.3), 20.0
 look_at("/World/Cameras/Cam_Overview", (57.5, -35.0, 62.0), (57.5, 53.0, 0.0), 20.0)
 # 바로 위에서 내려다보는 평면도 시점 — AMR 2대의 경로를 동시에 보기 좋다
 look_at("/World/Cameras/Cam_Top", (57.5, 53.0, 120.0), (57.5, 53.01, 0.0), 24.0)
-print("[s] 카메라 3개 (Cam_Follow, Cam_Overview, Cam_Top)", flush=True)
+
+# ★ 한 지점을 **가까이** 보는 카메라 (S15P21A106-240).
+#
+#   기존 셋은 전부 조망이다 — `Cam_Top` 은 120 m 상공이라 1.5 m 짜리 AMR 이
+#   점으로 보인다. 교착처럼 **한 대의 자세**를 눈으로 확인해야 할 때 못 쓴다.
+#
+#   기본 좌표는 a6 교착 자리(칸 (46,50) = world (50.5, 46.5))다.
+#   다른 데를 보려면 `PIBT_SPOT="x,y"` · 거리는 `PIBT_SPOT_D`.
+#
+#       PIBT_SPOT=50.5,46.5 PIBT_SPOT_D=6 bash run_webrtc.sh --skip-build
+#       그다음 뷰어에서 PIBT_CAMERA=/World/Cameras/Cam_Spot
+_spot = os.environ.get("PIBT_SPOT", "50.5,46.5")
+try:
+    _sx, _sy = [float(v) for v in _spot.split(",")]
+except Exception:
+    _sx, _sy = 50.5, 46.5
+_sd = float(os.environ.get("PIBT_SPOT_D", "7"))
+look_at("/World/Cameras/Cam_Spot",
+        (_sx - _sd * 0.7, _sy - _sd * 0.7, _sd * 0.55), (_sx, _sy, 0.4), 24.0)
+print(f"[s] 카메라 4개 (Cam_Follow, Cam_Overview, Cam_Top, "
+      f"★Cam_Spot -> ({_sx:.1f}, {_sy:.1f}) 거리 {_sd:.0f}m)", flush=True)
 
 st.GetRootLayer().Export(args.out)
 print(f"[s] 저장: {args.out}", flush=True)

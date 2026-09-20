@@ -1,0 +1,66 @@
+{
+ "n_rows": 100,
+ "features": [
+  "aisles",
+  "pitch",
+  "length",
+  "free",
+  "fleet",
+  "load_frac"
+ ],
+ "axes": [
+  "aisle_alt_gain",
+  "aisle_alt_boost",
+  "loop_gain",
+  "main_aisle_gain",
+  "junction_penalty",
+  "station_in",
+  "station_out",
+  "wait_cost"
+ ],
+ "loo_r2": {
+  "aisle_alt_gain": {
+   "noise_ratio": 0.9248419171393986,
+   "gp_r2": 0.2771872546435392,
+   "xgb_r2": -0.35451329271681864
+  },
+  "aisle_alt_boost": {
+   "noise_ratio": 0.5870748700112922,
+   "gp_r2": 0.013897241153663309,
+   "xgb_r2": -0.2258657939155504
+  },
+  "loop_gain": {
+   "noise_ratio": 0.5595866897418179,
+   "gp_r2": -0.012123113244339123,
+   "xgb_r2": -0.09775475804069078
+  },
+  "main_aisle_gain": {
+   "noise_ratio": 0.5070186660869783,
+   "gp_r2": 0.12652301236900199,
+   "xgb_r2": -0.008009593108059487
+  },
+  "junction_penalty": {
+   "noise_ratio": 0.9022856343648632,
+   "gp_r2": 0.09076403426114277,
+   "xgb_r2": -0.04701204030460149
+  },
+  "station_in": {
+   "noise_ratio": 1.3212460928094178,
+   "gp_r2": -0.20783347707836053,
+   "xgb_r2": -0.04456116601302784
+  },
+  "station_out": {
+   "noise_ratio": 0.7233331937291282,
+   "gp_r2": -0.15937820716250983,
+   "xgb_r2": -0.19441818675012024
+  },
+  "wait_cost": {
+   "noise_ratio": 0.992616118978501,
+   "gp_r2": -0.4326990972882976,
+   "xgb_r2": -0.1161156491445754
+  }
+ },
+ "gp_avg_r2": -0.037957794043269974,
+ "xgb_avg_r2": -0.13603130999918053,
+ "winner": "GP"
+}

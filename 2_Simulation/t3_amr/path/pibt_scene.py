@@ -171,6 +171,8 @@ WHEEL_BASE = 0.5796          # localPos0 = ±0.28963
 #   또 `CHARGE_ZONE[:n]` 이라 n>12 면 starts 가 12개만 담기고 목표 루프의
 #   starts[a] 에서 KeyError 로 죽었다. 이제 존이 허용하는 만큼 나온다.
 CHARGE_RECT = (102.6, 48.0, 108.6, 67.0)   # warehouse/map/charge_zone.json "east"
+# ★★ 격자·홈·헤딩·마스크를 FMS 것으로 (-240). 자세한 근거는 `_fms_setup` 머리말.
+FMS_GRID = os.environ.get("PIBT_FMS_GRID", "0") not in ("0", "", "no", "off")
 CHARGE_LAT = float(os.environ.get("PIBT_PITCH", "1.2"))     # 계획 격자 pitch
 CHARGE_STEP_X = float(os.environ.get("CHARGE_STEP_X", "2.4"))
 CHARGE_STEP_Y = float(os.environ.get("CHARGE_STEP_Y", "2.4"))
@@ -268,7 +270,29 @@ def front_rule(pitch):
     want = os.environ.get("PIBT_FRONT_RULE")
     if want is not None:
         want = want.strip().lower()
-        geo.configure(front_swing=(want not in ("off", "0", "no", "")),
+        # ★★ **이미 걸린 회전 마스크를 도로 넣어 준다** (-240, 2026-09-18).
+        #
+        #   `geo.configure` 는 `turn_mask` 를 안 주면 **지운다**(geometry.py:91
+        #   `_TURN_MASK = None if turn_mask is None else …`). 그런데 이 함수는
+        #   「앞 칸 규칙」만 정하려고 부르는 자리다. 앞 칸 규칙을 물었는데
+        #   **랙 마스크가 사라지는** 것은 누구도 의도한 적이 없다.
+        #
+        #   ☹ 실제로 당했다. `PIBT_TURN_PAIR` 의 `_pair_table()` 이 `make_geom`
+        #     을 다시 부르는데(lifelong.py), 그게 **첫 `step_h` 에서 게으르게**
+        #     돌아 `setup_lifelong` 이 건 마스크를 지웠다. 로그에는
+        #
+        #         [turn_sweep] ★ 계획기에 걸었다 — 회전 2,976건 금지
+        #         [scene] 앞 칸 규칙 PIBT_FRONT_RULE=4 -> 4칸     <- 이게 뒤에 온다
+        #
+        #     둘 다 찍히고 아무 경고도 없었다. 그 판에서 `A11#11
+        #     turn(66,105,0)->(66,105,3)`(기하 침투 58.1 mm)이 그대로 나와
+        #     랙에 10.6 mm 박혔다 — 마스크가 금지하는 회전이다.
+        #
+        #   `setup_lifelong` 이 「순서가 뒤집히면 configure 가 _TURN_MASK 를
+        #   None 으로 되돌린다」고 **주석으로 경고**해 두었는데, 경고만으로는
+        #   못 막았다. 순서를 지키라고 부탁하는 대신 **순서에 안 걸리게** 한다.
+        geo.configure(turn_mask=geo.turn_mask(),
+                      front_swing=(want not in ("off", "0", "no", "")),
                       front_diag=(want == "4"),
                       robot_dims=(GEOM_KW["front_len"], GEOM_KW["rear_len"],
                                   GEOM_KW["width"]),
@@ -687,6 +711,148 @@ def charge_zone_cells(free, geom, rect=None):
     return out
 
 
+#: ★★ 격자·홈·헤딩·마스크를 **FMS 것으로** 바꾼다 (S15P21A106-240, 2026-09-18).
+#
+#   우리 물리 판이 「FMS 이산을 물리로 증명한다」였는데, 층을 하나씩 열어 보니
+#   여섯 중 셋이 우리 것이었다.
+#
+#       계획 코어  `pibt/` 원본 로드                  ★ 그쪽 것
+#       배차       `lifelong` 이식본 (guard_flipped 0) ★ 그쪽 것 — 비트 동일 확인
+#       주문       `PIBT_ORDERS` 배정표               ★ 그쪽 것 — 오늘 꽂았다
+#       **격자**   `build_free` cross 풀링 · 패딩 없음  ☹ 우리 것
+#       **홈**     2.4 m 물리 슬롯 · 행 우선            ☹ 우리 것 (7/12 만 겹쳤다)
+#       **헤딩**   서쪽(3) 강제                         ☹ 우리 것 (FMS 는 h=0 부터)
+#
+#   남은 셋은 **뿌리가 하나**다 — 격자. 그쪽 격자를 쓰면 `make_homes_zone` 과
+#   헤딩 규칙을 그대로 부를 수 있다.
+#
+#       PIBT_FMS_GRID=1    load_map · make_homes_zone · FMS 헤딩 · FMS turn_mask
+#       (없음)             종전과 **비트 동일**
+#
+#   ☹ `CELL_M` 이 1.0 고정이라 **pitch 1.0 에 묶인다.** 그게 그쪽이 쓰는 격자다.
+# ---------------------------------------------------------------------------
+# FMS 격자 설정 — `sim_v2_tasks._build` 가 하는 것을 조각마다 따라간다.
+#
+#   ★ 아래 헬퍼들은 **`pibt_core_v2` 를 먼저 import 한 뒤에만** 부를 수 있다.
+#     그것이 `3_FMS/sim_engine` 을 `sys.path` 에 넣기 때문이다. 진입점인
+#     `_fms_setup` 이 맨 처음에 그걸 한다 — 순서를 바꾸면 `map_loader` 를 못 찾는다.
+# ---------------------------------------------------------------------------
+
+def _fms_map_dir():
+    """FMS 공식 맵 폴더. `FMS_MAP` 으로 덮을 수 있다."""
+    return os.environ.get(
+        "FMS_MAP", os.path.join(os.environ["W"], "..", "..", "3_FMS", "map"))
+
+
+def _fms_geom(pitch):
+    """그쪽 격자에 맞춘 `RobotGeom` + 앞 칸 규칙 (on, diag).
+
+    칸 중심이 `(c + 0.5 − OFFSET_M, r + 0.5)` 라 그 어긋남을 **origin 으로 흡수**한다.
+    """
+    import map_loader as ML
+    if abs(ML.CELL_M - pitch) > 1e-9:
+        raise SystemExit(
+            f"★ PIBT_FMS_GRID 는 pitch {ML.CELL_M} 에만 쓸 수 있습니다 "
+            f"(FMS map_loader.CELL_M 고정). 지금 pitch={pitch}")
+    on, diag = front_rule(pitch)
+    geom = RobotGeom(pitch=pitch,
+                     origin=(pitch / 2.0 - ML.OFFSET_M, pitch / 2.0),
+                     front_swing=on, front_diag=diag, **GEOM_KW)
+    return geom, on, diag
+
+
+def _fms_homes(free, st_cell, fms_map, n):
+    """홈 — 그쪽 함수 그대로. 존이 없으면 고정 홈으로 떨어지는 것도 그쪽과 같다."""
+    import map_loader as ML
+    zm = ML.load_charge_zone(free, fms_map)
+    if zm is not None:
+        return ML.make_homes_zone(free, zm & free, n)
+    return ML.make_homes(free, st_cell, n)
+
+
+def _fms_headings(free, homes, n):
+    """`kernel/core.py:_init_headings` 그대로 — h=0 부터 valid 하고 안 겹치는 첫 방향."""
+    import pibt_core_v2 as _pc
+    taken, starts = set(), {}
+    for a in range(n):
+        r0, c0 = homes[a]
+        for h in range(4):
+            s = (r0, c0, h)
+            if _pc.valid_state(free, s) and not (set(_pc.occupied(s)) & taken):
+                starts[a] = s
+                taken |= set(_pc.occupied(s))
+                break
+        if a not in starts:
+            raise SystemExit(f"★ robot{a} 홈 {homes[a]}: 유효한 초기 방향이 없습니다")
+    return starts
+
+
+def _fms_mask(free, fms_map, pitch, on, diag, verbose):
+    """마스크도 그쪽 것 — 여유 0.05 · 0.05 m 점 표본 · 1도 간격 (M′ 이 여기서 닫힌다)."""
+    from turn_sweep_mask import TURN_SWEEP_ON as TURN_SWEEP
+    if not TURN_SWEEP:
+        return
+    import map_loader as ML
+    import pibt.geometry as _geo
+    mask = ML.turn_mask(fms_map, ML.ROBOT_DIMS, _geo.FOOTPRINT_MARGIN_M)
+    _geo.configure(turn_mask=mask, front_swing=on, front_diag=diag,
+                   robot_dims=ML.ROBOT_DIMS, pitch=pitch)
+    if verbose:
+        print(f"[scene] ★★ FMS 회전 마스크 · 여유 {_geo.FOOTPRINT_MARGIN_M} m "
+              f"· 금지 비율 {ML.masked_turn_ratio(free, mask) * 100:.2f} %")
+
+
+def _fms_stations(st_cell):
+    """`{"kind[i]": (r,c)}` -> `{kind: [(r,c)]}`. **인덱스 순서를 지킨다.**"""
+    import re
+    cells = {}
+    for name, rc in st_cell.items():
+        m = re.match(r"^(.*)\[(\d+)\]$", name)
+        if not m:
+            continue
+        cells.setdefault(m.group(1), []).append((int(m.group(2)), tuple(rc)))
+    return {k: [rc for _i, rc in sorted(v)] for k, v in cells.items()}
+
+
+def _fms_contact(geom, map_dir_for_contact, verbose):
+    """★★ 정적 접촉 감시 — 격자를 바꿔도 **끄면 안 된다** (L, -240).
+
+    합불 기준이 랙을 안 보는 것이 이 판의 옵션이 아니라 **결함**이었다.
+    0.1 m 마스크를 보므로 격자와 무관하지만, `geom.origin` 이 바뀌었으니
+    그 geom 으로 넘긴다.
+    """
+    try:
+        import turn_sweep_mask
+        turn_sweep_mask.prepare_contact(geom, map_dir_for_contact, verbose=verbose)
+    except Exception as e:                    # 감시가 주행을 죽이면 안 된다
+        print(f"[static] ☹ 정적 접촉 감시 준비 실패(주행은 계속): {e!r}")
+
+
+def _fms_setup(n, pitch, verbose, map_dir_for_contact=None):
+    """FMS `sim_v2_tasks._build` 가 하는 것을 그대로 따라간다."""
+    import pibt_core_v2 as _pc          # ★ 먼저 — 이것이 sim_engine 을 sys.path 에 넣는다
+    import map_loader as ML             # noqa: F401  (위 import 뒤라야 찾는다)
+    assert _pc is not None
+
+    fms_map = _fms_map_dir()
+    ab = bool(getattr(_CFG, "AISLE_BLOCK", False)) if _CFG else False
+    free, st_cell, _stations = ML.load_map(fms_map, aisle_block=ab)
+
+    geom, on, diag = _fms_geom(pitch)
+    homes = _fms_homes(free, st_cell, fms_map, n)
+    starts = _fms_headings(free, homes, n)
+    _fms_mask(free, fms_map, pitch, on, diag, verbose)
+    cells = _fms_stations(st_cell)
+    _fms_contact(geom, map_dir_for_contact, verbose)
+
+    if verbose:
+        print(f"[scene] ★★ **FMS 격자** {free.shape} (max 풀링 · OFFSET {ML.OFFSET_M} m)"
+              f" · 통행 {int(free.sum()):,}칸 · 통로차단 {ab}")
+        print(f"[scene] ★★ **FMS 홈** {n}대 · 헤딩 "
+              + " ".join(str(starts[a][2]) for a in range(n)))
+    return geom, free, starts, cells
+
+
 def setup_lifelong(map_dir, n, pitch, seed, mode="cross", verbose=True):
     """lifelong 용 진입점. 목표 대신 **스테이션 후보 집합**을 돌려준다.
 
@@ -694,6 +860,23 @@ def setup_lifelong(map_dir, n, pitch, seed, mode="cross", verbose=True):
     도달 가능한 목표가 한 줄로 쏠려 12대가 몰리고 어느 시드도 완주하지 못했다
     (2026-09-07). lifelong 은 일을 시간에 걸쳐 흘려보내므로 그 쏠림이 없다.
     """
+    if FMS_GRID:
+        # ★★ 격자·홈·헤딩·마스크가 전부 그쪽 것이 된다. `keep_station_component`
+        #    도 안 한다 — **그쪽 격자를 그대로 쓰는 것이 이 분기의 목적**이라,
+        #    우리가 한 번 더 자르면 그 순간 그쪽 격자가 아니게 된다.
+        #
+        #    ☹ 여기 「max 풀링이라 애초에 조각이 안 생긴다(그쪽 주석)」라고
+        #      적어 두었다. **틀렸다** (2026-09-18 실측). 그런 주석은 3_FMS
+        #      어디에도 없고(`grep`), 수는 이렇다 — pitch 1.0 · 같은
+        #      `occupancy_grid.npy`(sha1 65ddcb0c 로 양쪽 동일):
+        #
+        #        FMS load_map aisle=False  free 9,333 · 성분 **61** · 상위 [4956, 2638, 565, ...]
+        #        FMS load_map aisle=True   free 8,640 · 성분 **61** · 상위 [4956, 1945, 565, ...]
+        #        우리 build_free(cross)    free 8,919 · 성분 **53** · 상위 [5107, 1969, 569, ...]
+        #
+        #      max 풀링도 조각난다. 다만 **그래서 잘라야 한다는 뜻은 아니다** —
+        #      자르면 그쪽과 다른 판이 된다. 조각의 값은 따로 재서 낸다.
+        return _fms_setup(n, pitch, verbose, map_dir)
     geom = make_geom(pitch)
     free, k = build_free(map_dir, pitch, mode)
     raw = int(free.sum())
@@ -703,6 +886,18 @@ def setup_lifelong(map_dir, n, pitch, seed, mode="cross", verbose=True):
         print(f"[scene] 격자 {free.shape} ({pitch} m, {k}x {mode} 풀링)")
         print(f"[scene] 성분 {n_comp}개 중 스테이션 {n_hit}곳이 붙은 것만 사용 "
               f"({raw} -> {int(free.sum())}칸)")
+    # ★★ 회전 스윕 마스크 (-240). `PIBT_TURN_SWEEP` 이 꺼져 있으면 아무것도 안 한다.
+    #   여기여야 한다 — `keep_station_component` 로 `free` 가 확정된 **뒤**이고,
+    #   `make_geom`(= `front_rule` -> `geo.configure`) 보다 **나중**이다.
+    #   순서가 뒤집히면 `configure` 가 `_TURN_MASK` 를 None 으로 되돌린다.
+    import turn_sweep_mask
+    turn_sweep_mask.apply(free, geom, map_dir, verbose=verbose)
+    # ★★ 정적 접촉 감시 준비 (L, -240). 마스크와 **무관하게 늘** 한다 —
+    #   합불 기준이 랙을 안 보는 것이 이 판의 옵션이 아니라 결함이었다.
+    try:
+        turn_sweep_mask.prepare_contact(geom, map_dir, verbose=verbose)
+    except Exception as e:                    # 감시가 주행을 죽이면 안 된다
+        print(f"[static] ☹ 정적 접촉 감시 준비 실패(주행은 계속): {e!r}")
     starts = pick_starts(free, geom, n, verbose)
     cells = station_cells(free, geom, map_dir)
     if verbose:

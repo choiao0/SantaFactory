@@ -312,7 +312,13 @@ def rnd(*key):
 t0 = time.time()
 # 저작은 렌더러와 분리된 순수 USD 스테이지에서 — 참조를 하나씩 붙이며 app.update()를
 # 돌리면 로딩 중 hydra 경로에서 간헐 세그폴트(3회 재현). 완성 파일을 한 번에 열면 안정.
-usd_path = os.path.join(HERE, "warehouse_scene.usd")
+# ★ 출력 경로를 덮어쓸 수 있게 둔다 (-240, 2026-09-18). 기본은 그대로다.
+#   **판이 도는 중에 다른 씬을 굽기 위해서다** — 기본 경로로 구우면 이미
+#   그 USD 를 연 Isaac 판이 바닥에서 파일을 잃는다. `RACK_COLLIDER=1` 실험을
+#   3시간짜리 판과 나란히 돌리려다 필요해졌다.
+#       SCENE_OUT=$W/warehouse/scene/warehouse_scene_rack.usd RACK_COLLIDER=1 python …
+#   그 씬으로 돌릴 때는 `SCENE=` 을 같이 준다 (paths.sh 가 미리 준 값을 존중한다).
+usd_path = os.environ.get("SCENE_OUT") or os.path.join(HERE, "warehouse_scene.usd")
 if os.path.exists(usd_path):
     os.remove(usd_path)
 stage = Usd.Stage.CreateNew(usd_path)

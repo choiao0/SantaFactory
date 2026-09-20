@@ -10,6 +10,8 @@
 #
 # 환경: SIM_ENGINE_DIR(기본 /work/sim_engine, 없으면 이 파일 기준 ../../sim_engine)
 #       THETA_PATH(기본 <3_FMS>/infra/out/theta_wallA_r20_c6_v36.json, "" 이면 중립)
+#       THETA_MODEL(비면 꺼짐. 채우면 ai_theta 모델로 **대수별** θ 를 뽑고, 실패하면 THETA_PATH 로)
+#       THETA_MAP_DIR(예측할 맵 폴더. 비면 공식 맵)  THETA_AI_DIR(기본 <3_FMS>/ai_theta)
 #       SIM_TIMEOUT_S(기본 1200)  SIM_REQUEST_QUEUE/SIM_RESULT_QUEUE(기본 sim.request/sim.result)
 # 주문: 요청의 outbound[] 가 **필수** — 백엔드 OutboundOrderGenerator 가 견적 생성 시 1회 만들어 저장한 목록(-197)이고,
 #       같은 목록이 검증 런(scenario.orders)에도 간다. 비어 있으면 failed (워커 자체 생성 -158 은 2026-09-14 제거).
@@ -61,6 +63,53 @@ WORKER_ID = os.environ.get("HOSTNAME", "")[:12]     # 컨테이너 id 앞 12자 
 
 def log(msg):
     print(f"[worker{(' ' + WORKER_ID) if WORKER_ID else ''}] {msg}", flush=True)
+
+
+# ------------------------------------------------------------
+# θ 예측 (S15P21A106-206) — 기본은 꺼져 있다
+#
+# THETA_MODEL 이 비어 있으면 이 부분은 **한 줄도 안 돌고**, 견적은 지금까지와 비트 단위로
+# 같은 고정 θ(THETA_PATH)로 돈다. 켜도 실패하면 조용히 고정 θ 로 떨어진다 — 모델 때문에
+# 견적이 멈추면 안 된다.
+#
+# **대수마다 다른 θ 를 뽑는다.** 견적 1건은 1~28대 run 을 한꺼번에 발행하는데, 모델 입력의
+# `fleet` 이 바로 그 대수다. 파일 하나를 THETA_PATH 로 묶으면 20대에서 뽑은 값이 1대에도
+# 28대에도 똑같이 들어간다.
+#
+# 대수별로 한 번만 예측해 캐시한다(최대 28항). 예측 1회가 무작위 후보 10만 개라 1초대이고
+# run 은 분 단위라 무시할 만하다. 모델은 seed 가 고정이라 같은 입력이면 같은 θ 가 나온다.
+# ------------------------------------------------------------
+THETA_MODEL = os.environ.get("THETA_MODEL", "")            # joblib 경로. 비면 꺼짐
+THETA_MAP_DIR = os.environ.get("THETA_MAP_DIR") or None    # 비면 공식 맵
+_THETA_CACHE = {}
+_THETA_LOCK = threading.Lock()
+
+
+def _theta_for(n_robots):
+    """대수 → θ 파일 경로. 꺼져 있거나 예측이 실패하면 고정 θ 그대로."""
+    if not THETA_MODEL:
+        return THETA_PATH or None
+    fixed = THETA_PATH or None
+    with _THETA_LOCK:
+        if n_robots in _THETA_CACHE:
+            return _THETA_CACHE[n_robots]
+        path = None
+        try:
+            ai_dir = os.environ.get("THETA_AI_DIR") or os.path.join(FMS_DIR, "ai_theta")
+            if ai_dir not in sys.path:
+                sys.path.insert(0, ai_dir)
+            import predict as theta_predict     # 늦게 부른다 — 꺼져 있으면 sklearn 이 없어도 된다
+            path = theta_predict.theta_file_for(fleet=float(n_robots), model_path=THETA_MODEL,
+                                                map_dir=THETA_MAP_DIR)
+        except Exception as e:
+            log(f"θ 예측 실패({n_robots}대): {type(e).__name__}: {e}")
+        if path is None:
+            log(f"θ 를 못 뽑았다({n_robots}대) — 고정 θ 로 돌린다: {fixed or '중립'}")
+            path = fixed
+        else:
+            log(f"θ 예측 {n_robots}대 → {path}")
+        _THETA_CACHE[n_robots] = path
+        return path
 
 
 # ------------------------------------------------------------
@@ -153,7 +202,7 @@ def to_sim_args(req, orders_path=None):
     seed = req.get("seed")
     return dict(tag=re.sub(r"[^A-Za-z0-9_.-]", "_", run_id), n_robots=n, n_orders=0,
                 seed=int(seed) if seed is not None else 42,
-                theta_path=THETA_PATH or None, extra_args=tuple(extra))
+                theta_path=_theta_for(n), extra_args=tuple(extra))
 
 
 # ------------------------------------------------------------
@@ -322,11 +371,24 @@ POLL_S = float(os.environ.get("SIM_POLL_S", "1.0"))     # 폴 간격 [s] — hea
 RECONNECT_S = 5.0
 
 
+def _run_id(body):
+    try:
+        return json.loads(body).get("run_id", "?")
+    except Exception:  # noqa: BLE001
+        return "?"
+
+
+def _publish(pika, ch, payload):
+    ch.basic_publish(exchange="", routing_key=RESULT_QUEUE, body=json.dumps(payload),
+                     properties=pika.BasicProperties(content_type="application/json", delivery_mode=2))
+
+
 class Job:
     """요청 1건의 작업 스레드. handle() 은 예외를 안 내지만(failed 결과), 스레드에서 새면 안 되니 한 번 더 감싼다."""
 
     def __init__(self, delivery_tag, body):
         self.delivery_tag, self.body = delivery_tag, body
+        self.run_id = _run_id(body)
         self.result = None
         self.done = threading.Event()
         self.thread = threading.Thread(target=self._run, name="sim-job", daemon=True)
@@ -339,12 +401,7 @@ class Job:
         try:
             self.result = handle(self.body)
         except Exception as e:  # noqa: BLE001 — 작업 스레드가 죽으면 ack 도 결과도 없이 큐가 막힌다
-            run_id = "?"
-            try:
-                run_id = json.loads(self.body).get("run_id", "?")
-            except Exception:  # noqa: BLE001
-                pass
-            self.result = dict(run_id=run_id, status="failed", error=f"worker internal error: {e}"[:2000], kpi=None)
+            self.result = dict(run_id=self.run_id, status="failed", error=f"worker internal error: {e}"[:2000], kpi=None)
         finally:
             self.done.set()
 
@@ -353,7 +410,8 @@ def _serve(pika, conn, stop_event, poll_s):
     """연결 하나의 수명: 폴링 루프. 진행 중 job 은 연결이 끊겨도 계속 돌고(§2), 재연결 뒤 결과를 발행한다."""
     ch = conn.channel()
     ch.basic_qos(prefetch_count=1)
-    log(f"소비 시작 {REQUEST_QUEUE} → {RESULT_QUEUE} (sim_engine={SIM_ENGINE_DIR}, theta={THETA_PATH or '중립'}, poll={poll_s:g}s)")
+    log(f"소비 시작 {REQUEST_QUEUE} → {RESULT_QUEUE} (sim_engine={SIM_ENGINE_DIR}, "
+        f"theta={('예측 ' + THETA_MODEL) if THETA_MODEL else (THETA_PATH or '중립')}, poll={poll_s:g}s)")
     job = None
     for method, _props, body in ch.consume(REQUEST_QUEUE, inactivity_timeout=poll_s):
         if stop_event.is_set():
@@ -362,10 +420,11 @@ def _serve(pika, conn, stop_event, poll_s):
             ch.cancel()
             return
         if method is not None:                              # 새 요청 (prefetch 1 → job 이 없을 때만 온다)
-            job = Job(method.delivery_tag, body).start()
+            job = Job(method.delivery_tag, body)
+            _publish(pika, ch, dict(run_id=job.run_id, status="running"))   # 집었다고 먼저 알린다 (명세 §1-2)
+            job.start()
         if job is not None and job.done.is_set():
-            ch.basic_publish(exchange="", routing_key=RESULT_QUEUE, body=json.dumps(job.result),
-                             properties=pika.BasicProperties(content_type="application/json", delivery_mode=2))
+            _publish(pika, ch, job.result)
             ch.basic_ack(delivery_tag=job.delivery_tag)     # 결과 발행 뒤 ack (명세 §1-3) — pika 스레드에서
             job = None
 

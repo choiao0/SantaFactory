@@ -6,7 +6,7 @@ public enum RunStatus {
     /** 요청 큐에 발행됨. */
     QUEUED,
 
-    /** 워커가 꺼내 계산 중 (현재는 QUEUED 와 구분 없이 처리). */
+    /** 워커가 꺼내 계산 중 — 결과 큐의 {@code status: running} 수신. */
     RUNNING,
 
     /** 결과 메시지 {@code status: done} 수신. */

@@ -9,6 +9,27 @@ import { useVerifyStream } from '../hooks/useVerifyStream.js'
  */
 const REFRESH_COOLDOWN_MS = 10_000
 
+/**
+ * 영상이 없을 때 자리를 채우는 내용. 섹션 자체는 언제나 그린다 — 헤더의 VERIFY 앵커가 가리키는
+ * 곳이라, 영상이 생겨야 섹션이 나타나면 그 전까지는 눌러도 아무 데도 가지 않는다.
+ */
+function placeholderFor({ estimateId, ready, verify }) {
+  if (estimateId == null) {
+    return { tag: 'QUEUED', label: '대기', text: '02 단계에서 견적을 요청하면 물리 검증 결과가 여기에 표시됩니다.' }
+  }
+  if (!ready) {
+    return { tag: 'RUNNING', label: '계산 중', live: true, text: '시뮬레이션 판정이 끝나면 권장 대수로 물리 검증을 돌립니다.' }
+  }
+  if (verify.error) {
+    return { tag: 'FAILED', label: '실패', text: `물리 검증에 실패했습니다 — ${verify.error}` }
+  }
+  // 워커가 끝났다고 알렸는데 영상이 없는 경우 — 검증은 돌았으니 진행 중이라고 하면 안 된다
+  if (verify.status && verify.status !== 'PENDING') {
+    return { tag: 'PARTIAL', label: '영상 없음', text: '물리 검증은 끝났지만 재생할 영상이 남지 않았습니다.' }
+  }
+  return { tag: 'RUNNING', label: '검증 중', live: true, text: 'Isaac Sim 이 권장 대수를 재현하는 중입니다. 영상이 준비되면 여기에서 바로 재생됩니다.' }
+}
+
 export default function VerifyStep({ estimateId, ready }) {
   const verify = useVerifyStream(ready ? estimateId : null)
   const [refreshed, setRefreshed] = useState(null)
@@ -43,7 +64,8 @@ export default function VerifyStep({ estimateId, ready }) {
     if (at.playing) video.play().catch(() => {})
   }
 
-  if (!ready || verify.status !== 'done' || !videoUrl) return null
+  const playable = ready && verify.status === 'done' && Boolean(videoUrl)
+  const placeholder = playable ? null : placeholderFor({ estimateId, ready, verify })
 
   return (
     <section className="step section-dark" id="verify">
@@ -57,16 +79,25 @@ export default function VerifyStep({ estimateId, ready }) {
       <div className="sim-board">
         <div className="board-head">
           <span>PHYSICAL VERIFICATION · ISAAC SIM</span>
-          <span className="status DONE">완료</span>
+          <span className={`status ${playable ? 'DONE' : placeholder.tag}`}>
+            {playable ? '완료' : placeholder.label}
+          </span>
         </div>
-        <video
-          ref={videoRef}
-          className="verify-video"
-          src={videoUrl}
-          controls
-          onError={refreshUrl}
-          onLoadedMetadata={resume}
-        />
+        {playable ? (
+          <video
+            ref={videoRef}
+            className="verify-video"
+            src={videoUrl}
+            controls
+            onError={refreshUrl}
+            onLoadedMetadata={resume}
+          />
+        ) : (
+          <div className="verify-placeholder">
+            {placeholder.live && <span className="live-dot pulse" />}
+            <p>{placeholder.text}</p>
+          </div>
+        )}
       </div>
     </section>
   )
