@@ -10,6 +10,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from map_loader import K, OX, front_swing, turn_mask_from_grid  # noqa: E402
+from pibt.geometry import DEFAULT_FOOTPRINT  # noqa: E402
 import pibt.geometry as geo  # noqa: E402
 from pibt.geometry import DIRS, front_cells, swing_cells, turn_ok  # noqa: E402
 from pibt.hgraph import HGraph, _dist_map_h_ref  # noqa: E402
@@ -143,8 +144,10 @@ BASE = ["base", "6", "40", "42", "1"]
 
 
 def test_cli_defaults_exact_and_dims():
+    """기본 발자국은 **단일 출처**(geometry.DEFAULT_FOOTPRINT)에서 온다(-251). 문자열을 여기
+    다시 적으면 기본값이 두 벌이 된다 — 값이 바뀌면 이 줄의 리터럴도 같이 바꾼다."""
     a = parse_args(BASE)
-    assert a.footprint == "exact"
+    assert a.footprint == DEFAULT_FOOTPRINT == "exact"
     assert a.robot_dims == (0.39, 1.11, 0.80)
     assert a.yield_rule
 
