@@ -1484,8 +1484,16 @@ class AdgRuntime:
         self._why_on = _os.environ.get("ADG_WHY", "1") not in ("0", "", "false", "False")
         self._why_every = float(_os.environ.get("ADG_WHY_EVERY", "120"))
         self._why_next = self._why_every if self._why_on else float("inf")
-        self._why = {}                      # agent -> [obstacle, release, adg]
+        # agent -> [장애물, 릴리스, ADG-자기, ADG-남]
+        self._why = {}
         self._why_late = {}                 # 같은 것, release 지평 이후만
+        # ★ ③ 을 **누가 막았나**로 한 번 더 가른다 (2026-09-22, SADG 판단용).
+        #   SADG 가 뒤집을 수 있는 것은 **다른 로봇** 간선뿐이다. 같은 로봇의
+        #   앞 액션(type 1)은 순서 그 자체라 재배치 대상이 아니다. 합쳐 세면
+        #   「대기가 크다 -> SADG 가 답이다」로 잘못 읽힌다.
+        self._by_uid = {a.uid: a for a in adg.actions}
+        # 분모. 막힌 프레임 수만으로는 「얼마나 큰가」를 못 읽는다.
+        self._why_steps = 0
         # 「이 시각 뒤로는 관문 ②가 아무도 못 막는다」 = 바닥의 최댓값.
         # ★ 2026-09-15 (-211): 예전에는 `max(a.tick)`(= 마지막 **액션** 틱)을
         #   썼다. 바닥이 `action.tick` 이던 시절엔 그게 맞았지만 이제 바닥은
@@ -1499,6 +1507,7 @@ class AdgRuntime:
     def advance(self, dt: float) -> None:
         self.clock += float(dt)
         # [patch_adg_why]
+        self._why_steps += 1
         if self.clock >= self._why_next:
             self._why_next += self._why_every
             self.why_report()
@@ -1513,27 +1522,35 @@ class AdgRuntime:
             say = carb.log_warn
         except Exception:
             say = print
-        NM = ("장애물", "릴리스", "ADG선행")
+        # ★ ADG 를 둘로 나눴다 — **남**만이 SADG 의 대상이다.
+        NM = ("장애물", "릴리스", "ADG-자기", "ADG-남")
 
         def block(tbl, title):
-            tot = [0, 0, 0]
+            tot = [0, 0, 0, 0]
             for v in tbl.values():
-                for i in range(3):
+                for i in range(4):
                     tot[i] += v[i]
             n = sum(tot)
             if not n:
                 say(f"[adg-why] {title}: 막힌 프레임 없음")
                 return
-            say(f"[adg-why] {title}  막힘 {n:,} 프레임")
-            say(f"[adg-why]   {'로봇':>4} {'장애물':>8} {'릴리스':>8} "
-                f"{'ADG선행':>8} {'합':>10}")
+            # 분모 = 스텝 x 로봇. 「막힘 12만」이 큰지 작은지는 이것 없이 못 읽는다.
+            denom = self._why_steps * max(1, len(self.adg.chains))
+            say(f"[adg-why] {title}  막힘 {n:,} / 로봇-프레임 {denom:,}"
+                f"  = {n / denom * 100:.1f}%")
+            say(f"[adg-why]   {'로봇':>4} {NM[0]:>8} {NM[1]:>8} "
+                f"{NM[2]:>9} {NM[3]:>8} {'합':>10}")
             for a in sorted(tbl):
                 v = tbl[a]
                 s = sum(v) or 1
                 say(f"[adg-why]   {a:>4} {v[0]/s*100:7.1f}% {v[1]/s*100:7.1f}% "
-                    f"{v[2]/s*100:7.1f}% {sum(v):>10,}")
+                    f"{v[2]/s*100:8.1f}% {v[3]/s*100:7.1f}% {sum(v):>10,}")
             say(f"[adg-why]   {'전체':>4} {tot[0]/n*100:7.1f}% "
-                f"{tot[1]/n*100:7.1f}% {tot[2]/n*100:7.1f}% {n:>10,}")
+                f"{tot[1]/n*100:7.1f}% {tot[2]/n*100:8.1f}% "
+                f"{tot[3]/n*100:7.1f}% {n:>10,}")
+            # ★ 이 한 줄이 SADG 판단이다. 로봇-프레임 대비 **남 대기** 비율.
+            say(f"[adg-why]   -> SADG 대상(ADG-남) = 로봇-프레임의 "
+                f"{tot[3] / denom * 100:.2f}%")
 
         say(f"[adg-why] ── t={self.clock:.0f}s  "
             f"릴리스 지평 {self._why_horizon:.0f}s ──")
@@ -1609,9 +1626,9 @@ class AdgRuntime:
     # [patch_adg_why]
     def _why_hit(self, action, k: int) -> None:
         a = getattr(action, "agent", -1)
-        self._why.setdefault(a, [0, 0, 0])[k] += 1
+        self._why.setdefault(a, [0, 0, 0, 0])[k] += 1
         if self.clock > self._why_horizon:
-            self._why_late.setdefault(a, [0, 0, 0])[k] += 1
+            self._why_late.setdefault(a, [0, 0, 0, 0])[k] += 1
 
     def can_start(self, action: Action) -> bool:
         if action.cells & self.blocked_cells:
@@ -1624,7 +1641,12 @@ class AdgRuntime:
             return False                               # 아직 주문이 안 왔다
         ok = all(self._met(u, action.uid) for u in self.adg.preds[action.uid])
         if not ok and self._why_on:
-            self._why_hit(action, 2)                   # ADG 선행 대기
+            # ★ 막은 선행이 **남의 것**인가 (2026-09-22). SADG 가 뒤집을 수
+            #   있는 것은 그쪽뿐이라, 합쳐 세면 판단이 안 선다.
+            other = any(self._by_uid[u].agent != action.agent
+                        for u in self.adg.preds[action.uid]
+                        if not self._met(u, action.uid))
+            self._why_hit(action, 3 if other else 2)   # ADG 선행 대기
         return ok
 
     def blocking(self, action: Action) -> list[int]:
