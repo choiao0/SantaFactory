@@ -249,16 +249,30 @@ done
 # ★ 촬영은 **뷰포트가 있어야** 한다. 2026-09-21 부터 `run.sh` 의 기본이
 #   그림 없음(HEADLESS=1)으로 바뀌었으므로, 촬영 경로에서는 되돌려 놓는다.
 #   안 되돌리면 run.sh 가 Kit 을 안 띄워 프레임이 0장 나온다.
+# ── 렌더 경로 (2026-09-21) ──────────────────────────────────
+# 기본은 **예전 그대로** Kit 을 띄운다. `run.sh` 의 기본이 그림 없음으로
+# 바뀌었으므로 여기서 되돌려 놓는다 — 안 되돌리면 프레임이 0장 나온다.
+#
+# `HEADLESS=1` 로 주면 **새 경로**를 쓴다. 다른 점은 하나뿐이다.
+#
+#     기존       매 스텝 렌더 -> STRIDE 스텝마다 한 장 저장 (그린 것의 95% 버림)
+#     HEADLESS=1 저장할 스텝에만 렌더                      (버리는 것이 없다)
+#
+# 파일명·조립 공식·배속 계산은 완전히 같다. 다만 **아직 실측 전이다** —
+# 헤드리스 experience 에 활성 뷰포트가 없으면 리플리케이터로 넘어가는데,
+# 거기서 막히면 긴 주행 끝에 0장이 나올 수 있다. 짧은 판으로 먼저 확인하라.
 if [ "${HEADLESS:-0}" = "1" ]; then
-    echo "★ HEADLESS=1 은 렌더를 아예 하지 않아 촬영이 불가능합니다."
-    echo "  숫자만 필요하면:  bash run.sh --planner pibt_h   (기본이 그림 없음)"
-    exit 2
-fi
-export HEADLESS=0
-export STREAM="${STREAM:-1}"
-if [ "$STREAM" = "0" ]; then
-    echo "★ STREAM=0 은 WebRTC 만 끈 것이지만, 이 경로는 뷰포트가 필요합니다."
-    exit 2
+    echo "[rec] ★ 새 경로: 저장할 스텝에만 렌더합니다 (HEADLESS=1)."
+    echo "[rec]   아직 실측 전입니다. 짧은 판으로 프레임이 나오는지 먼저 보세요."
+    export STREAM=0
+else
+    export HEADLESS=0
+    export STREAM="${STREAM:-1}"
+    if [ "$STREAM" = "0" ]; then
+        echo "★ STREAM=0 은 WebRTC 만 끈 것이지만, 이 경로는 뷰포트가 필요합니다."
+        echo "  더 빠른 촬영을 원하면:  HEADLESS=1 bash run_record.sh ..."
+        exit 2
+    fi
 fi
 if [ "${PIBT_RENDER_EVERY:-1}" != "1" ]; then
     echo "★ PIBT_RENDER_EVERY>1 은 물리 뷰를 무효화합니다 (2026-09-08 미해결)."

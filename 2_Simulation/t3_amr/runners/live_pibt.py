@@ -1010,8 +1010,9 @@ async def _run():
     for _ in range(120):
         await app.next_update_async()
 
-    if HEADLESS:
-        carb.log_warn("[pibt] (headless) 뷰포트 없음 — 카메라를 걸지 않는다")
+    if HEADLESS and not SHOTS:
+        # 볼 사람도 저장할 것도 없다. 뷰포트 확장이 안 올라와 있을 수도 있다.
+        carb.log_warn("[pibt] (headless) 촬영 없음 — 카메라를 걸지 않는다")
     else:
         try:
             from omni.kit.viewport.utility import get_active_viewport
