@@ -146,8 +146,17 @@ def cmd_run(args):
         raise SystemExit("  ★ 씬이 0바이트입니다")
 
     # 이전 Kit 정리 — 안 죽이면 NVST_R_BUSY 가 도배된다
-    if subprocess.run(["pgrep", "-f", "kit/kit|isaacsim"],
-                      capture_output=True).returncode == 0:
+    #
+    # ★ 헤드리스는 **안 죽인다** (2026-09-21). NVST_R_BUSY 는 스트리밍 서버가
+    #   포트를 못 잡아서 나는 것인데, 헤드리스는 Kit CLI 도 스트림도 안 쓴다.
+    #   그리고 여기서 죽이면 **같이 돌리는 다른 판을 죽인다** — 헤드리스는
+    #   포트를 안 물므로 GPU 별로 여러 판을 동시에 돌릴 수 있고, 그게 남는
+    #   GPU 를 쓰는 유일한 방법이다 (렌더 한 판은 GPU 를 더 준다고 안 빨라진다).
+    if _HEADLESS:
+        print("-- 이전 Kit 정리 건너뜀 (헤드리스는 포트를 안 씁니다 — "
+              "동시 실행을 죽이지 않기 위해)")
+    elif subprocess.run(["pgrep", "-f", "kit/kit|isaacsim"],
+                        capture_output=True).returncode == 0:
         print("-- 이전 Kit 종료")
         subprocess.run(["bash", "-c", "pkill -f 'kit/kit'; pkill -f isaacsim; sleep 5"])
         if subprocess.run(["pgrep", "-f", "kit/kit|isaacsim"],
