@@ -91,7 +91,9 @@ def cmd_cmds(args):
     print("# 1) 씬 빌드")
     for ln in m.scene_cmd(args.n):
         print(ln)
-    print("\n# 2) 주행 + WebRTC")
+    from amr.path._common import _HEADLESS
+    print("\n# 2) 주행 (헤드리스 · 렌더 없음)" if _HEADLESS
+          else "\n# 2) 주행 + WebRTC")
     print("pkill -f 'kit/kit'; pkill -f isaacsim; sleep 5")
     for ln in m.run_cmd(args.n):
         print(ln)
@@ -101,9 +103,14 @@ def cmd_run(args):
     """서버에서 실제로 실행한다. `cmds` 가 찍는 것과 **같은 정의**를 쓴다."""
     import subprocess
 
+    from amr.path._common import _HEADLESS
+
     m = P.get(args.planner)
     n = args.n
-    need = ["W", "SCENE", "ROBOT", "PLAN", "STAGE", "LAN_IP", "GPU"]
+    # LAN_IP 는 WebRTC 용이다 — 헤드리스에는 붙을 곳이 없으므로 요구하지 않는다.
+    need = ["W", "SCENE", "ROBOT", "PLAN", "STAGE", "GPU"]
+    if not _HEADLESS:
+        need.insert(5, "LAN_IP")
     miss = [k for k in need if not os.environ.get(k)]
     if miss:
         raise SystemExit(f"환경변수 없음: {', '.join(miss)}\n"
@@ -150,8 +157,13 @@ def cmd_run(args):
     env, argv = m.launch(n).argv()
     if args.lite:
         env["LIVE_LITE"] = "1"
-    print(f"-- 실행.  WebRTC 클라이언트 Server 에 [ {os.environ['LAN_IP']} ] 를 넣고 Connect")
-    print("   (기동 약 12초. 'Streaming server started' 뒤에 붙는다.  종료 Ctrl+C)\n")
+    if _HEADLESS:
+        # 볼 것이 없다 — 화면도, 붙을 곳도 없다. 대신 배속이 로그에 찍힌다.
+        print("-- 실행 (헤드리스 · 렌더 없음).  화면은 없습니다.")
+        print("   진행은 [hl] 줄의 배속으로 봅니다.  종료 Ctrl+C\n")
+    else:
+        print(f"-- 실행.  WebRTC 클라이언트 Server 에 [ {os.environ['LAN_IP']} ] 를 넣고 Connect")
+        print("   (기동 약 12초. 'Streaming server started' 뒤에 붙는다.  종료 Ctrl+C)\n")
     os.execvpe(argv[0], argv, dict(os.environ, **env))
 
 

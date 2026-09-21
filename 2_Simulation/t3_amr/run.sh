@@ -2,9 +2,15 @@
 # ============================================================
 # 시뮬 실행 — 이거 하나만 치면 된다.
 #
-# ── 시연 (기본) ─────────────────────────────────────────────
-#   bash run.sh                          wppl 12대
-#   bash run.sh --planner pibt_h         화면(WebRTC)으로 본다
+# ── 기본: 그림을 안 그린다 (2026-09-21 변경) ────────────────
+#   bash run.sh --planner pibt_h         렌더 없이 물리만. 화면 없음.
+#
+#   Kit 을 아예 안 띄우고 `python runners/headless_pibt.py` 가 돈다.
+#   계획·ADG·주행·판정은 완전히 같고, 렌더만 빠진다.
+#
+# ── 화면으로 보려면 STREAM=1 ────────────────────────────────
+#   STREAM=1 bash run.sh                 wppl 12대
+#   STREAM=1 bash run.sh --planner pibt_h   화면(WebRTC)으로 본다
 #
 #   ★ 이 스크립트는 **녹화하지 않는다.** SHOT_* 를 export 하지만 live_pibt.py 는
 #     PIBT_SHOT_* 를 읽으므로 접두사가 안 맞는다 — 의도적으로 안 고쳤다.
@@ -16,9 +22,14 @@
 #      2026-09-08 정정.)
 #
 # ── 측정 ────────────────────────────────────────────────────
-#   STREAM=0 bash run.sh --planner pibt_h --lite     약 13분 (배속 0.91)
+#   bash run.sh --planner pibt_h                     기본이 이미 가장 빠르다
+#   HEADLESS=0 bash run.sh --planner pibt_h --lite   Kit 은 띄우되 전송만 끔
 #
-#   헤드리스라 화면이 없다 -> 촬영은 자동으로 비활성된다.
+#   ☹ `STREAM=0` 을 오래 "헤드리스"라 불러 왔는데 **아니다.** 인코딩·전송만
+#     끈 것이고 RTX 렌더는 계속 돌았다 (50.51 -> 27.03 ms/스텝에서 정지).
+#     진짜로 안 그리는 것은 `HEADLESS=1`(지금 기본)뿐이다.
+#
+#   화면이 없으므로 촬영은 자동으로 비활성된다.
 #   물리는 시연 경로와 완전히 동일하다 (실측: t=10·20·30s 체크포인트 일치).
 #
 # ── 그 밖에 ─────────────────────────────────────────────────
@@ -53,8 +64,35 @@ set -uo pipefail
 [ -n "${VIRTUAL_ENV:-}" ] || source "${VENV:-$HOME/khs/venv}/bin/activate"
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/paths.sh"
 
-STREAM="${STREAM:-1}"
-export STREAM
+# ── 렌더 여부 (2026-09-21) ──────────────────────────────────
+# **기본이 그림 없음으로 바뀌었다.** 근거는 아래 세 줄이다.
+#
+#     STREAM=1     isaacsim full.streaming --exec    렌더 + WebRTC 전송
+#     STREAM=0     isaacsim base.python    --exec    렌더만 (전송만 껐다)
+#     HEADLESS=1   python runners/headless_pibt.py   렌더 없음  ← 지금 기본
+#
+# 오래 `STREAM=0` 을 "헤드리스"라 불러 왔지만 그것은 인코딩·전송만 끈 것이고
+# RTX 렌더는 계속 돌았다. 그래서 27 ms/스텝에서 더 안 내려갔다.
+#
+# 화면으로 보려면 **STREAM=1 을 명시**한다. 그러면 예전 동작 그대로다.
+#
+#     bash run.sh --planner pibt_h              그림 없음 (빠름)
+#     STREAM=1 bash run.sh --planner pibt_h     WebRTC 시연
+#     HEADLESS=0 bash run.sh --planner pibt_h   Kit 은 띄우되 전송만 끔
+#
+# ☹ 헤드리스 러너가 있는 계획기는 지금 pibt_h 뿐이다. wppl 등으로 돌리면
+#   _common.py 가 무엇을 해야 하는지 알려주며 멈춘다.
+_stream_given="${STREAM+yes}"
+STREAM="${STREAM:-0}"
+if [ -z "${HEADLESS:-}" ]; then
+    if [ "$_stream_given" = "yes" ] && [ "$STREAM" != "0" ]; then
+        HEADLESS=0          # 보겠다고 했으니 Kit 을 띄운다
+    else
+        HEADLESS=1
+    fi
+fi
+[ "$HEADLESS" = "1" ] && STREAM=0
+export STREAM HEADLESS
 
 TAG="${RUN_TAG:-$(date +%Y%m%d_%H%M%S)}"
 SHOT_EXT="${SHOT_EXT:-png}"
@@ -62,11 +100,13 @@ SHOT_FPS="${SHOT_FPS:-30}"
 CAPTURE=0
 
 # ── 촬영 가부 ───────────────────────────────────────────────
-# 스크린샷은 **뷰포트가 있어야** 찍힌다. 헤드리스(STREAM=0)에는 없다.
+# 스크린샷은 **뷰포트가 있어야** 찍힌다. 렌더를 안 하면 당연히 없다.
 if [ "$STREAM" = "0" ]; then
     if [ -n "${SHOTS:-}" ] && [ "${SHOTS:-}" != "0" ]; then
-        echo "[run] ★ STREAM=0 (헤드리스) 에는 뷰포트가 없어 촬영이 안 됩니다."
-        echo "[run]   SHOTS 를 무시합니다. 영상이 필요하면 STREAM 을 빼고 돌리세요."
+        echo "[run] ★ 그림을 안 그리는 모드라 촬영이 안 됩니다. SHOTS 를 무시합니다."
+        echo "[run]   영상이 필요하면:  STREAM=1 bash run.sh ...   (또는 run_record.sh)"
+        echo "[run]   숫자만 필요하면 그대로 두세요 — 무충돌 판정은 매 스텝 도는"
+        echo "[run]   overlap/contact 검사가 하지, 영상이 하지 않습니다."
     fi
     unset SHOTS
 elif [ "${SHOTS:-}" = "0" ]; then
@@ -131,7 +171,11 @@ trap assemble EXIT
 # ★ `exec` 를 쓰지 않는다 — 뒤에서 영상을 조립해야 하므로 셸이 살아 있어야 한다.
 #   그리고 main.py 가 os.execvpe 로 Isaac 을 띄우므로, 이 python 이 곧 Isaac 이다.
 #   완주 시 앱이 스스로 종료해야 여기로 돌아온다 (patch_autoquit.py).
-echo "[run] 실행: main.py run $*  (STREAM=$STREAM, GPU=$GPU)"
+if [ "$HEADLESS" = "1" ]; then
+    echo "[run] 그림 없음 (HEADLESS=1) — Kit 을 안 띄우고 python 이 물리만 돌립니다."
+    echo "[run]   화면으로 보려면:  STREAM=1 bash run.sh $*"
+fi
+echo "[run] 실행: main.py run $*  (STREAM=$STREAM, HEADLESS=$HEADLESS, GPU=$GPU)"
 python "$W/amr/main.py" run "$@"
 rc=$?
 echo "[run] Isaac 종료 (코드 $rc)"

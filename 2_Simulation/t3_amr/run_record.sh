@@ -246,8 +246,18 @@ for a in "${ARGS[@]}"; do
         exit 2
     fi
 done
-if [ "${STREAM:-1}" = "0" ]; then
-    echo "★ STREAM=0 은 헤드리스라 뷰포트가 없어 촬영이 불가능합니다."
+# ★ 촬영은 **뷰포트가 있어야** 한다. 2026-09-21 부터 `run.sh` 의 기본이
+#   그림 없음(HEADLESS=1)으로 바뀌었으므로, 촬영 경로에서는 되돌려 놓는다.
+#   안 되돌리면 run.sh 가 Kit 을 안 띄워 프레임이 0장 나온다.
+if [ "${HEADLESS:-0}" = "1" ]; then
+    echo "★ HEADLESS=1 은 렌더를 아예 하지 않아 촬영이 불가능합니다."
+    echo "  숫자만 필요하면:  bash run.sh --planner pibt_h   (기본이 그림 없음)"
+    exit 2
+fi
+export HEADLESS=0
+export STREAM="${STREAM:-1}"
+if [ "$STREAM" = "0" ]; then
+    echo "★ STREAM=0 은 WebRTC 만 끈 것이지만, 이 경로는 뷰포트가 필요합니다."
     exit 2
 fi
 if [ "${PIBT_RENDER_EVERY:-1}" != "1" ]; then

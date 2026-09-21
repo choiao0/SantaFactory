@@ -200,4 +200,9 @@ echo "── 스트리밍 ──────────────────
 echo "  Isaac Sim WebRTC Streaming Client 에서 Server = $PUBLIC_IP:$SIGNAL_PORT"
 echo "  (첫 실행은 셰이더 컴파일로 수 분 걸립니다 — 정상입니다)"
 echo
+# ★ 2026-09-21 부터 `run.sh` 의 기본은 그림 없음(HEADLESS=1)이다. 이 스크립트는
+#   화면으로 보라고 있는 것이므로 여기서 되돌린다 — 안 그러면 위에 찍은
+#   "Server = ..." 안내가 있는데 붙을 스트림이 없다.
+export HEADLESS=0
+export STREAM="${STREAM:-1}"
 exec bash "$W/run.sh" --planner pibt_h "${PASS[@]}"

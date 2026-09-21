@@ -100,8 +100,18 @@ SETUP_CAP = int(os.environ.get("PIBT_HL_SETUP_CAP", "12000"))
 # ===========================================================================
 from isaacsim import SimulationApp                      # noqa: E402
 
-print(f"[hl] SimulationApp 기동 (headless) · dt={DT:.6f} · stepper={STEPPER}")
-simulation_app = SimulationApp({"headless": True})
+_CFG = {"headless": True}
+# GPU 선택. `--exec` 경로에서는 Kit 플래그(--/renderer/activeGpu=$GPU)가 했는데
+# 여기는 Kit 을 안 띄우므로 SimulationApp 설정으로 넘긴다. 팀원과 겹칠 때
+# `GPU=1 bash run.sh ...` 가 그대로 먹어야 한다.
+_gpu = (os.environ.get("GPU", "") or "").strip()
+if _gpu.isdigit():
+    _CFG["active_gpu"] = int(_gpu)
+    _CFG["multi_gpu"] = False
+
+print(f"[hl] SimulationApp 기동 (headless) · dt={DT:.6f} · stepper={STEPPER}"
+      + (f" · GPU {_gpu}" if _gpu.isdigit() else ""))
+simulation_app = SimulationApp(_CFG)
 
 import carb                                             # noqa: E402
 import omni.physx                                       # noqa: E402
