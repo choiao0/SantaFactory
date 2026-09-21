@@ -1,0 +1,27 @@
+# EC2 컨테이너 운영 대시보드 — Portainer CE (S15P21A106-262, 2026-09-21).
+# compose 로 도는 컨테이너 전부(브로커·DB·Redis·MinIO·EMQX·백엔드·프론트·PDF·fms-core·host-orch·registry)의 상태·로그·재시작을 웹에서 본다.
+# k3s 워커(GCP)는 여기 안 보인다 — 그쪽은 Lens(SSH 터널 + k3s.yaml) 또는 다음에 Portainer 에이전트로.
+#
+# 접근: https://j15a106.p.ssafy.io/portainer/  ← nginx 443 → 127.0.0.1:9100 (infra/nginx/portainer.conf). 9100 은 루프백에만 바인딩(9000 은 SonarQube).
+# ★ docker.sock 은 호스트 루트 권한과 같다. 공인 NIC 에 직접 열지 않고, 밖에서는 nginx TLS + Portainer 로그인만 거친다.
+# ★ 첫 기동 뒤 5분 안에 https://…/portainer/ 에서 관리자 계정을 만들어야 한다. 지나면 잠기고 `docker restart a106-portainer` 로 다시 5분.
+#   계정은 PJT-2 private 비밀 파일에.
+# 기동(EC2, 한 번): docker compose -f compose.portainer.yml up -d   — 레지스트리(compose.registry.yml)와 같은 수동 관례, Jenkins 대상 아님.
+# 판올림: 태그만 바꿔 up -d. 데이터(계정·설정)는 볼륨 portainer-data 에 남는다.
+name: a106-portainer
+services:
+  portainer:
+    image: portainer/portainer-ce:2.45.1     # 2026-09-21 의 lts. 태그 lts 는 굴러가므로 고정
+    container_name: a106-portainer
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:9100:9000"                # HTTP UI. 호스트 9000 은 SonarQube 가 쓴다(-262 실측) → 9100. 9443(HTTPS)·8000(엣지 에이전트)은 열지 않는다
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - portainer-data:/data
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+volumes:
+  portainer-data:
+    name: portainer-data
