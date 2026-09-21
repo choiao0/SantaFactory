@@ -40,6 +40,7 @@ FMS 재현 절차(2026-09-16)는 주문을 **결과로** 준다 —
 """
 import collections
 import csv
+import json
 import os
 import re
 import sys
@@ -426,6 +427,164 @@ class FileOrderStream(object):
                 if mine != theirs:
                     bad.append((cat, i, mine, theirs))
         return bad
+
+
+class JsonOrderStream(FileOrderStream):
+    """백엔드 `scenario.orders` → lifelong 주문 스트림. **배정 전 형태를 받는다.**
+
+    `FileOrderStream` 이 읽는 `packing_assign_*.csv` 는 FMS 의 **출력**이라
+    `frm_name`·`to_name` 이 이미 정해져 있다. 백엔드가 보내는 것은 그 앞 단계다.
+
+        {"order_id": 1, "ordered_at_s": 23659,
+         "lines": [{"product_id": 3, "qty": 2, "rack_id": "A3"}]}
+
+    「무엇을 얼마나」만 있고 「어디서 어디로」가 없다. 그 둘을 만드는 규칙은
+    **FMS 에 이미 있고**, 여기서는 그것을 그대로 옮긴다 (추측하지 않는다).
+
+        rack_id -> 버퍼   warehouse/map/rack_buffers.json 의 `racks`
+                          3_FMS/sim_engine/order_stream.py:256-259 와 같은 표
+        토트 묶기         같은 버퍼는 qty 를 합쳐 ceil(합 / tote_units)
+                          같은 파일 `_parse_order` 와 같은 식
+        포장대            **주문마다 균등 난수 1 draw** — 그 주문의 토트는 전부
+                          같은 포장대로 간다 (order_stream.py:189, 주석에
+                          "포장대는 시뮬(WMS 역할)이 배정")
+        도착 틱           round(ordered_at_s / our_dt(geom))
+                          CSV 의 `created_tick` 과 달리 초로 오므로 환산이 한 번이다
+
+    ☹ 포장대 난수는 **FMS 의 뽑기와 같은 수열이 아니다.** 정책은 같지만 어느
+      주문이 어느 포장대로 갈지는 다르다. 비트 동일이 필요하면 FMS 의 배정표
+      CSV(`FileOrderStream`)나 궤적(`PIBT_TRAJ`)을 써야 한다. 이 스트림은
+      「백엔드 주문으로 실제로 돌려 본다」는 목적이지 정합성 대조용이 아니다.
+    """
+
+    def __init__(self, json_path, geom, free, map_dir, horizon, seed=0,
+                 tote_units=10, order_end=None, window_start_s=None, verbose=True):
+        import collections
+        import pibt_scene as PS
+
+        self.path = json_path
+        self.sha256 = sha256(json_path)
+        self.horizon = int(horizon)
+        self.order_end = None if order_end is None else max(0, int(order_end))
+        self.n_task = 0
+        self.windows = [("out", 0, self.horizon)]
+
+        self._pts = PS.load_stations(map_dir)
+        self._geom, self._free, self._PS = geom, free, PS
+        self._map = map_dir
+        self._cache = {}
+
+        racks = _rack_map(map_dir)
+        n_pack = len(self._pts.get("packing") or ())
+        if not n_pack:
+            raise RuntimeError("stations.json 에 packing 이 없다 — 포장대를 못 고른다")
+        rng = _np().random.default_rng(int(seed))
+        dt = our_dt(geom)
+
+        orders = _scenario_orders(json_path)
+        self.total = len(orders)
+        self.skipped_late = 0
+        self.skipped_bad = []
+        self.totes = 0
+        self._by_tick = collections.defaultdict(list)
+
+        for od in orders:
+            t_s = float(od.get("ordered_at_s", 0.0))
+            if window_start_s:                 # host-orch 가 안 당겨 줬을 때만
+                t_s -= float(window_start_s)
+            if t_s < 0:
+                self.skipped_late += 1
+                continue
+            t = int(round(t_s / dt))
+            if t >= self.horizon:
+                self.skipped_late += 1
+                continue
+            # ── 랙 -> 버퍼, 같은 버퍼는 qty 합쳐 토트로 ──
+            group = {}
+            bad = False
+            for ln in od.get("lines") or ():
+                rid = ln.get("rack_id")
+                if rid not in racks:
+                    self.skipped_bad.append(rid)
+                    bad = True
+                    break
+                group[racks[rid]] = group.get(racks[rid], 0) + int(ln.get("qty", 1))
+            if bad or not group:
+                continue
+            # ★ 포장대는 **주문당 한 번** 뽑는다. 토트마다 뽑으면 한 주문이
+            #   여러 포장대로 흩어져 FMS 와 다른 문제가 된다.
+            to = self._resolve("packing[%d]" % int(rng.integers(n_pack)))
+            for b, q in sorted(group.items()):
+                frm = self._resolve("aisle_buf[%d]" % b)
+                if frm is None or to is None:
+                    self.skipped_bad.append("aisle_buf[%d]" % b)
+                    continue
+                n_tote = -(-q // tote_units) if tote_units else 1
+                for _ in range(n_tote):
+                    self._by_tick[t].append(
+                        {"kind": "out", "frm": frm, "to": to, "born": t})
+                    self.totes += 1
+
+        self.loaded = sum(len(v) for v in self._by_tick.values())
+        self.dt_file = self.dt_ours = dt
+        self.tick_scale, self.rescaled = 1.0, False
+        if verbose:
+            print(f"[fms_stream] {os.path.basename(json_path)} · "
+                  f"주문 {self.total:,}건 -> **토트 {self.loaded:,}개** 적재 "
+                  f"(horizon {self.horizon:,}틱 · dt {dt:.6f}s · tote_units {tote_units})",
+                  flush=True)
+            if self.skipped_late:
+                print(f"[fms_stream]   창 밖이라 뺌 {self.skipped_late:,}건", flush=True)
+            if self.skipped_bad:
+                print(f"[fms_stream]   ★ 랙을 못 찾음 {len(self.skipped_bad)}건 — "
+                      f"예: {self.skipped_bad[:3]}", flush=True)
+            print("[fms_stream]   ☹ 포장대는 우리 난수로 배정했다 (seed %d) — "
+                  "FMS 와 **같은 정책, 다른 뽑기**다" % int(seed), flush=True)
+
+
+def _np():
+    import numpy
+    return numpy
+
+
+def _rack_map(map_dir):
+    """`rack_buffers.json` 의 `racks` — rack_id -> aisle_buf 인덱스.
+
+    FMS `3_FMS/map/rack_buffers.json` 과 같은 파일이고, 그 규칙은 파일 안에
+    적혀 있다: "rack -> zone -> facility(x,y) == stations.json aisle_buf[i]
+    (정확 일치, 최근접 아님)".
+    """
+    p = os.path.join(map_dir, "rack_buffers.json")
+    if not os.path.isfile(p):
+        raise RuntimeError(
+            "rack_buffers.json 이 없다: %s\n"
+            "  백엔드 주문은 rack_id 로 오므로 이 표가 있어야 버퍼를 정한다.\n"
+            "  원본: 3_FMS/map/rack_buffers.json" % p)
+    with open(p, encoding="utf-8") as f:
+        d = json.load(f)
+    racks = d.get("racks") if isinstance(d, dict) else None
+    if not isinstance(racks, dict) or not racks:
+        raise RuntimeError("rack_buffers.json 에 `racks` 가 없다: %s" % p)
+    return racks
+
+
+def _scenario_orders(path):
+    """`scenario.json` 또는 주문 파일 → outbound 리스트.
+
+    받는 모양이 셋이다 — edge 가 떨어뜨린 `scenario.json`(그 안에 orders),
+    생성기 산출물 `{meta, outbound}`, 그리고 리스트 그대로.
+    """
+    with open(path, encoding="utf-8") as f:
+        d = json.load(f)
+    if isinstance(d, dict) and "scenario" in d:          # Start 페이로드 통째
+        d = d["scenario"]
+    if isinstance(d, dict) and "orders" in d:            # scenario.json
+        d = d["orders"]
+    if isinstance(d, dict):
+        d = d.get("outbound")
+    if not isinstance(d, list):
+        raise RuntimeError("주문 목록을 못 찾았다 (scenario.orders.outbound): %s" % path)
+    return d
 
 
 def from_env(free, horizon, geom=None, map_dir=None, order_end=None):
