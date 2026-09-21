@@ -41,12 +41,17 @@ def shift_windows(horizon, shifts):
     return out
 
 
+# 교대 기본값 — 출고 전용 (계약 v3.16, 2026-09-21). 09-14 「입고는 켜지 않는다」를 입구마다 따로 막던 것을 엔진 한 곳으로.
+# 입고를 돌리려면 --shifts=in,out,out 을 명시한다. sim_v2_tasks·fms_core 가 이 이름을 읽는다 — 리터럴 복제 금지(-234·-251 같은 병).
+DEFAULT_SHIFTS = ("out",)
+
+
 class OrderStream:
     """주문·입고 스트림. arrivals(t) 로 이 틱의 새 태스크를, on_completed(task, t) 로 후속 태스크를 낸다."""
 
     def __init__(self, rng, flow, n_orders, order_gap, st_cell, stations,
                  n_inbound=None, inbound_gap=None, k_line_p=(0.5, 0.3, 0.2),
-                 horizon=None, shifts=("in", "out", "out"), dt=1.0,
+                 horizon=None, shifts=DEFAULT_SHIFTS, dt=1.0,
                  orders=None, rack_map=None, tote_units=None, max_order_totes=MAX_ORDER_TOTES):
         assert flow in ("main", "v1compat"), f"알 수 없는 flow: {flow}"
         self.rng, self.flow, self.st_cell = rng, flow, st_cell

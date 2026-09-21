@@ -17,7 +17,7 @@
 #                              [--flow=main|v1compat] [--theta=<θ json 경로>] [--cell] [--fixed-homes]
 #                              [--order-gap=<틱>]  (주문·입고 도착 간격 평균, 기본 50 — 고부하 스윕용)
 #                              [--inbound-gap=<틱>] (입고 간격만 따로, 기본 = order-gap)
-#                              [--horizon=<틱>] [--shifts=in,out,out]                     (고정 시간·교대, -145 §1)
+#                              [--horizon=<틱>] [--shifts=out]                            (고정 시간·교대, -145 §1. 기본 out = 출고 전용, v3.16)
 #                              [--battery] [--chargers=6] [--runtime-h=8] [--charge-h=1.5] [--soc=20,80,95]  (배터리, -145 §2)
 #                              [--orders-file=<json>] [--capacity=<토트 수>] [--tote-units=<상품 수>] [--svc-per-tote=<초>]
 #                              [--service-steps=<틱>]  (v3.15, -247: 도킹 틱. 기본 = round(SERVICE_TIME_S/dt) = v1 계보 상수)
@@ -46,7 +46,7 @@
 #              docs/맵_충전존.md#구현-규칙. --fixed-homes 면 기존 charger 12칸 홈
 #              (B-1e pibt_main 재현). v1compat 은 항상 고정 홈(패리티).
 #   --horizon: 고정 시간 실행 — 유한 주문 대신 T 틱까지 돌리고 T 안의 완료 수로 처리량 (Lifelong). 주문수 인자는 무시.
-#              --shifts 로 T 를 등분해 창마다 in(입고)/out(출고) 한 종류만 도착 (기본 in,out,out = 앞 1/3 입고, 뒤 2/3 출고).
+#              --shifts 로 T 를 등분해 창마다 in(입고)/out(출고) 한 종류만 도착 (기본 out = 출고 전용, v3.16. 입고는 --shifts=in,out,out 처럼 명시).
 #   --battery: SoC 틱 모델 + 충전 도크(charger[0..k) 칸). 임무 없는 로봇이 soc<low 면 강제, soc<go 면 기회 충전.
 #              main + 존 전용 (--fixed-homes·v1compat 과 함께 못 씀). docs/커널_시뮬_구조.md#배터리와-충전-도크
 #   --orders-file: WMS 명시 주문(큐 명세 §1-1 outbound[]) 을 그대로 흘림. 도착 틱 = ordered_at_s, rack_id → map/rack_buffers.json,
@@ -73,7 +73,7 @@ from fms_kernel import FmsKernel, KernelConfig, StallError
 from map_loader import (load_map, make_homes, CELL_M, OFFSET_M, MAP_DIR, ROBOT_DIMS, load_charge_zone,
                         make_homes_zone, load_rack_map, load_topology_spec, masked_turn_ratio, turn_mask)
 from pibt.geometry import FOOTPRINT_MARGIN_M
-from order_stream import MAX_ORDER_TOTES, OrderStream
+from order_stream import DEFAULT_SHIFTS, MAX_ORDER_TOTES, OrderStream
 from pibt_core import DEFAULT_FOOTPRINT, DIRS, MOVE_TICKS, REV_TICKS, TURN_TICKS
 
 SERVICE_TIME_S = 40 / 11            # v1과 동일 (docs/θ_경로_기준선.md#기준선-계보)
@@ -211,7 +211,7 @@ def _parse_lifelong(a, argv, pos):
     # 고정 시간·교대 (-145 §1). --horizon 없이 --shifts 만 주면 무시.
     a.horizon = _opt(argv, "horizon", int)
     shifts_arg = _opt(argv, "shifts", str)
-    a.shifts = tuple(s.strip() for s in shifts_arg.split(",")) if shifts_arg else ("in", "out", "out")
+    a.shifts = tuple(s.strip() for s in shifts_arg.split(",")) if shifts_arg else DEFAULT_SHIFTS
     if a.horizon is not None:
         assert 0 < a.horizon < 200_000, f"--horizon 은 1~199,999 틱 (커널 틱 상한 200,000): {a.horizon}"
         assert a.flow == "main", "--horizon 은 main 흐름 전용 (v1compat 은 패리티 전용)"

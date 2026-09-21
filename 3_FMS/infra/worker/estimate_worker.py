@@ -194,7 +194,7 @@ def to_sim_args(req, orders_path=None):
     dt = tick_seconds(speed, SIM_ENGINE_DIR)      # 시뮬과 같은 상수로 (-194)
     extra = [f"--horizon={int(round(horizon_s / dt))}", f"--speed={speed:g}"]
     # 교대: 요청이 주면 그대로, 없으면 출고 전용(-191). 팀 결정(2026-09-11) 견적 부하 = 6,000건/6h 출고만.
-    # 엔진 기본 in,out,out 은 입고를 켜서 고밀도 교착(입고 × 차선·양보)까지 부른다. 결과 inbound_* 는 0 으로 남는다.
+    # 엔진 기본도 v3.16 부터 out 이지만 여기서도 명시한다 — 요청 로그에 교대가 보이게. 결과 inbound_* 는 0 으로 남는다.
     extra.append(f"--shifts={req.get('shifts') or 'out'}")
     extra += _gap_flags(req, dt)
     _log_ignored(req, amr, run_id)

@@ -79,7 +79,7 @@ def des_build(sim_v2, worker, tmp_path, sc, n_robots=N_ROBOTS, horizon=HORIZON):
     dt = worker.tick_seconds(worker.SPEED_DEFAULT, worker.SIM_ENGINE_DIR)
     req = {"run_id": "parity", "amr": dict(sc.get("amr") or {}, count=n_robots),
            "horizon_s": horizon * dt, "seed": sc.get("seed", 42),
-           # 교대는 명시해서 맞춘다 — 견적의 기본값(in,out,out)과 검증 런의 기본값(out)이 다른 건 의도된 차이다
+           # 교대는 명시해서 맞춘다 — 견적·검증·엔진 기본이 전부 out(v3.16)이지만 입고를 섞는 시험이라 양쪽에 같은 값을 적는다
            # (test_verify_replays_one_outbound_window 참고). 입고 창은 도착 시각을 뽑느라 난수를 소비하므로
            # 교대가 다르면 같은 시드에서도 포장대 배정이 어긋난다.
            "shifts": ",".join(scenario_shifts(sc))}
@@ -155,7 +155,7 @@ def test_totes_group_lines_the_same_way(sim_v2, worker, tmp_path):
 def test_verify_replays_one_outbound_window():
     """의도된 차이 하나 — 교대 기본값.
 
-    견적은 지평선 전체를 in,out,out 으로 돌린다(sim_v2 기본). 검증 런은 그 지평선 안의 한 창(출고 구간, 보통
+    견적은 요청의 shifts 로 지평선 전체를 돌린다(엔진 기본은 v3.16 부터 out). 검증 런은 그 지평선 안의 한 창(출고 구간, 보통
     outbound 시작 + 90 분)만 재생하므로 창 길이(예: 600 초)에 in 교대를 다시 잘라 넣으면 그 시각의 견적 모델과
     오히려 달라진다. 그래서 기본은 출고 전용이고, 입고를 섞으려면 scenario.shifts 를 명시해야 한다.
     (SIM_VERIFY_CONTRACT §6 ① 검증 창)

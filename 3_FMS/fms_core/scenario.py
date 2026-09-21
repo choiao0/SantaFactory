@@ -192,7 +192,7 @@ def stream_options(scenario: dict) -> dict:
         if not _is_num(gap) or gap <= 0:
             raise ValueError("scenario.inbound_gap_s must be positive")
         opts["inbound_gap"] = float(gap)
-        shifts = scenario.get("shifts", "in,out,out")
+        shifts = scenario.get("shifts", "out")      # 엔진 기본과 같게(v3.16) — inbound_gap_s 만 와도 입고가 켜지지 않는다
         if not isinstance(shifts, str):
             raise ValueError("scenario.shifts must be a string like 'in,in,out'")
         toks = tuple(s.strip() for s in shifts.split(",") if s.strip())
