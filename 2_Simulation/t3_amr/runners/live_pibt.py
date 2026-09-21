@@ -1114,7 +1114,7 @@ async def _run():
                 from fms_stream import JsonOrderStream
                 _js = (ORDERS_JSON if os.path.isabs(ORDERS_JSON)
                        else os.path.join(os.environ["W"], ORDERS_JSON))
-                stream = JsonOrderStream(
+                stream = JsonOrderStream.from_file(
                     _js, geom, free, MAP, HORIZON, seed=SEED,
                     tote_units=int(os.environ.get("PIBT_TOTE_UNITS", "10")),
                     order_end=oe, verbose=False)

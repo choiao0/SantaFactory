@@ -145,10 +145,20 @@ class FileOrderStream(object):
     커널이 쓰는 것은 `arrivals(t)` · `n_task` · `windows` · `order_end` 넷이다.
     """
 
+    def _setup_stations(self, geom, free, map_dir):
+        """이름 -> 칸 해석에 필요한 것들. `JsonOrderStream` 도 같은 것을 쓴다.
+
+        ☹ `pibt_scene` 은 **여기서 늦게** 임포트한다. 그것이 `3_FMS/sim_engine`
+          을 `sys.path` 에 넣는 쪽이라 모듈 최상단에서 부르면 순서가 꼬인다.
+        """
+        import pibt_scene as PS
+        self._pts = PS.load_stations(map_dir)
+        self._geom, self._free, self._PS = geom, free, PS
+        self._map = map_dir
+        self._cache = {}
+
     def __init__(self, csv_path, geom, free, map_dir, horizon,
                  order_end=None, verbose=True):
-        import pibt_scene as PS
-
         self.path = csv_path
         self.sha256 = sha256(csv_path)
         self.horizon = int(horizon)
@@ -156,11 +166,7 @@ class FileOrderStream(object):
         self.n_task = 0
         # 교대 창은 파일이 정한다. 커널이 `info` 에만 쓰므로 한 칸으로 둔다.
         self.windows = [("out", 0, self.horizon)]
-
-        self._pts = PS.load_stations(map_dir)
-        self._geom, self._free, self._PS = geom, free, PS
-        self._map = map_dir
-        self._cache = {}
+        self._setup_stations(geom, free, map_dir)
 
         self._by_tick = collections.defaultdict(list)
         self.skipped_late = 0        # horizon 밖이라 버린 것
@@ -457,89 +463,120 @@ class JsonOrderStream(FileOrderStream):
       「백엔드 주문으로 실제로 돌려 본다」는 목적이지 정합성 대조용이 아니다.
     """
 
-    def __init__(self, json_path, geom, free, map_dir, horizon, seed=0,
-                 tote_units=10, order_end=None, window_start_s=None, verbose=True):
-        import collections
-        import pibt_scene as PS
+    # ── 만들기 ───────────────────────────────────────────────────────────
+    #   생성자는 **조립만** 한다. 파일을 읽는 것은 `from_file` 이다 —
+    #   그래야 주문 목록만 있으면 디스크 없이 단위 테스트가 된다.
 
-        self.path = json_path
-        self.sha256 = sha256(json_path)
+    @classmethod
+    def from_file(cls, json_path, geom, free, map_dir, horizon, **kw):
+        """`scenario.json`(또는 주문 파일) → 스트림. 부수효과는 여기에만 있다."""
+        return cls(_scenario_orders(json_path), geom, free, map_dir, horizon,
+                   racks=_rack_map(map_dir), name=os.path.basename(json_path),
+                   sha=sha256(json_path), **kw)
+
+    def __init__(self, orders, geom, free, map_dir, horizon, racks, seed=0,
+                 tote_units=10, order_end=None, window_start_s=None,
+                 name="<메모리>", sha="", verbose=True):
+        self.path = name
+        self.sha256 = sha
         self.horizon = int(horizon)
         self.order_end = None if order_end is None else max(0, int(order_end))
         self.n_task = 0
         self.windows = [("out", 0, self.horizon)]
+        self._setup_stations(geom, free, map_dir)
 
-        self._pts = PS.load_stations(map_dir)
-        self._geom, self._free, self._PS = geom, free, PS
-        self._map = map_dir
-        self._cache = {}
-
-        racks = _rack_map(map_dir)
-        n_pack = len(self._pts.get("packing") or ())
-        if not n_pack:
-            raise RuntimeError("stations.json 에 packing 이 없다 — 포장대를 못 고른다")
-        rng = _np().random.default_rng(int(seed))
-        dt = our_dt(geom)
-
-        orders = _scenario_orders(json_path)
         self.total = len(orders)
         self.skipped_late = 0
         self.skipped_bad = []
-        self.totes = 0
-        self._by_tick = collections.defaultdict(list)
+        self.dt_file = self.dt_ours = our_dt(geom)
+        self.tick_scale, self.rescaled = 1.0, False
 
+        self._by_tick = collections.defaultdict(list)
+        self._spawn(orders, racks, int(seed), int(tote_units), window_start_s)
+        self.loaded = sum(len(v) for v in self._by_tick.values())
+        if verbose:
+            self._report(seed, tote_units)
+
+    # ── 주문 -> 토트 태스크 ──────────────────────────────────────────────
+    def _spawn(self, orders, racks, seed, tote_units, window_start_s):
+        n_pack = len(self._pts.get("packing") or ())
+        if not n_pack:
+            raise RuntimeError("stations.json 에 packing 이 없다 — 포장대를 못 고른다")
+        rng = _np().random.default_rng(seed)
         for od in orders:
-            t_s = float(od.get("ordered_at_s", 0.0))
-            if window_start_s:                 # host-orch 가 안 당겨 줬을 때만
-                t_s -= float(window_start_s)
-            if t_s < 0:
+            t = _arrival_tick(od, self.dt_ours, window_start_s, self.horizon)
+            if t is None:
                 self.skipped_late += 1
                 continue
-            t = int(round(t_s / dt))
-            if t >= self.horizon:
-                self.skipped_late += 1
+            group, bad = _group_by_buffer(od.get("lines") or (), racks)
+            if bad:
+                self.skipped_bad.extend(bad)
                 continue
-            # ── 랙 -> 버퍼, 같은 버퍼는 qty 합쳐 토트로 ──
-            group = {}
-            bad = False
-            for ln in od.get("lines") or ():
-                rid = ln.get("rack_id")
-                if rid not in racks:
-                    self.skipped_bad.append(rid)
-                    bad = True
-                    break
-                group[racks[rid]] = group.get(racks[rid], 0) + int(ln.get("qty", 1))
-            if bad or not group:
+            if not group:
                 continue
             # ★ 포장대는 **주문당 한 번** 뽑는다. 토트마다 뽑으면 한 주문이
             #   여러 포장대로 흩어져 FMS 와 다른 문제가 된다.
             to = self._resolve("packing[%d]" % int(rng.integers(n_pack)))
-            for b, q in sorted(group.items()):
-                frm = self._resolve("aisle_buf[%d]" % b)
-                if frm is None or to is None:
-                    self.skipped_bad.append("aisle_buf[%d]" % b)
-                    continue
-                n_tote = -(-q // tote_units) if tote_units else 1
-                for _ in range(n_tote):
-                    self._by_tick[t].append(
-                        {"kind": "out", "frm": frm, "to": to, "born": t})
-                    self.totes += 1
+            for b, n_tote in _totes(group, tote_units):
+                self._add(b, to, n_tote, t)
 
-        self.loaded = sum(len(v) for v in self._by_tick.values())
-        self.dt_file = self.dt_ours = dt
-        self.tick_scale, self.rescaled = 1.0, False
-        if verbose:
-            print(f"[fms_stream] {os.path.basename(json_path)} · "
-                  f"주문 {self.total:,}건 -> **토트 {self.loaded:,}개** 적재 "
-                  f"(horizon {self.horizon:,}틱 · dt {dt:.6f}s · tote_units {tote_units})",
-                  flush=True)
-            if self.skipped_late:
-                print(f"[fms_stream]   창 밖이라 뺌 {self.skipped_late:,}건", flush=True)
-            if self.skipped_bad:
-                print(f"[fms_stream]   ★ 랙을 못 찾음 {len(self.skipped_bad)}건 — "
-                      f"예: {self.skipped_bad[:3]}", flush=True)
-            print("[fms_stream]   ☹ 포장대는 우리 난수로 배정했다 (seed %d) — "
-                  "FMS 와 **같은 정책, 다른 뽑기**다" % int(seed), flush=True)
+    def _add(self, buf, to, n_tote, t):
+        frm = self._resolve("aisle_buf[%d]" % buf)
+        if frm is None or to is None:
+            self.skipped_bad.append("aisle_buf[%d]" % buf)
+            return
+        for _ in range(n_tote):
+            self._by_tick[t].append({"kind": "out", "frm": frm, "to": to, "born": t})
+
+    def _report(self, seed, tote_units):
+        print(f"[fms_stream] {self.path} · 주문 {self.total:,}건 -> "
+              f"**토트 {self.loaded:,}개** 적재 (horizon {self.horizon:,}틱 · "
+              f"dt {self.dt_ours:.6f}s · tote_units {tote_units})", flush=True)
+        if self.skipped_late:
+            print(f"[fms_stream]   창 밖이라 뺌 {self.skipped_late:,}건", flush=True)
+        if self.skipped_bad:
+            print(f"[fms_stream]   ★ 랙을 못 찾음 {len(self.skipped_bad)}건 — "
+                  f"예: {self.skipped_bad[:3]}", flush=True)
+        print("[fms_stream]   ☹ 포장대는 우리 난수로 배정했다 (seed %d) — "
+              "FMS 와 **같은 정책, 다른 뽑기**다" % int(seed), flush=True)
+
+
+# ── 순수 함수 — 파일도 클래스 상태도 안 본다 (단위 테스트용) ──────────────
+def _arrival_tick(order, dt, window_start_s, horizon):
+    """주문 하나 → 도착 틱. 창 밖이면 None.
+
+    `window_start_s` 는 host-orch 가 시각을 안 당겨 줬을 때만 준다 — 이미
+    0 기준으로 정규화된 목록에 또 빼면 전부 음수가 된다.
+    """
+    t_s = float(order.get("ordered_at_s", 0.0))
+    if window_start_s:
+        t_s -= float(window_start_s)
+    if t_s < 0:
+        return None
+    t = int(round(t_s / dt))
+    return None if t >= horizon else t
+
+
+def _group_by_buffer(lines, racks):
+    """라인들 → ({버퍼: qty 합}, 못 찾은 rack_id 목록).
+
+    못 찾은 것이 하나라도 있으면 **그 주문 전체를 버린다** — 일부만 실으면
+    수요가 조용히 줄어 비교가 깨진다.
+    """
+    group, bad = {}, []
+    for ln in lines:
+        rid = ln.get("rack_id")
+        if rid not in racks:
+            bad.append(rid)
+            return {}, bad
+        group[racks[rid]] = group.get(racks[rid], 0) + int(ln.get("qty", 1))
+    return group, bad
+
+
+def _totes(group, tote_units):
+    """{버퍼: qty} → [(버퍼, 토트 수)]. FMS `order_stream._parse_order` 와 같은 식."""
+    return [(b, -(-q // tote_units) if tote_units else 1)
+            for b, q in sorted(group.items())]
 
 
 def _np():
