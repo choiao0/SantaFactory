@@ -41,19 +41,22 @@ def test_same_buffer_lines_are_summed():
     # A1 · A2 가 같은 버퍼 0 이면 qty 가 합쳐진다 (order_stream.py:259 와 같다)
     group, bad = FS._group_by_buffer(
         [{"rack_id": "A1", "qty": 3}, {"rack_id": "A2", "qty": 4}], RACKS)
-    assert group == {0: 7} and bad == []
+    assert group == {0: 7}
+    assert bad == []
 
 
 def test_qty_defaults_to_one():
     group, bad = FS._group_by_buffer([{"rack_id": "B1"}], RACKS)
-    assert group == {1: 1} and bad == []
+    assert group == {1: 1}
+    assert bad == []
 
 
 def test_unknown_rack_drops_the_whole_order():
     """일부만 실으면 수요가 **조용히** 줄어 비교가 깨진다. 그래서 전부 버린다."""
     group, bad = FS._group_by_buffer(
         [{"rack_id": "A1", "qty": 1}, {"rack_id": "ZZ9", "qty": 1}], RACKS)
-    assert group == {} and bad == ["ZZ9"]
+    assert group == {}
+    assert bad == ["ZZ9"]
 
 
 # ── 토트 묶기 ────────────────────────────────────────────────────────

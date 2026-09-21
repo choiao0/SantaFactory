@@ -157,66 +157,81 @@ class FileOrderStream(object):
         self._map = map_dir
         self._cache = {}
 
-    def __init__(self, csv_path, geom, free, map_dir, horizon,
-                 order_end=None, verbose=True):
-        self.path = csv_path
-        self.sha256 = sha256(csv_path)
+    def _init_common(self, path, sha, geom, free, map_dir, horizon, order_end):
+        """두 스트림이 공유하는 상태 조립.
+
+        커널이 보는 넷(`arrivals` · `n_task` · `windows` · `order_end`)이 여기서 선다.
+        교대 창은 파일이 정하므로 한 칸으로 둔다 — 커널은 `info` 에만 쓴다.
+        """
+        self.path = path
+        self.sha256 = sha
         self.horizon = int(horizon)
-        self.order_end = None if order_end is None else max(0, int(order_end))
+        self.order_end = _opt_tick(order_end)
         self.n_task = 0
-        # 교대 창은 파일이 정한다. 커널이 `info` 에만 쓰므로 한 칸으로 둔다.
         self.windows = [("out", 0, self.horizon)]
         self._setup_stations(geom, free, map_dir)
-
         self._by_tick = collections.defaultdict(list)
-        self.skipped_late = 0        # horizon 밖이라 버린 것
+        self.skipped_late = 0        # 창 밖이라 버린 것
         self.skipped_bad = []        # 칸을 못 찾은 것
         self.total = 0
 
-        # ★ 도착 분포는 **파일 전체**로 센다 — horizon 과 무관하게 (2026-09-17).
-        #   `loaded`(horizon 안)로 재면 horizon 이 30분보다 짧을 때 전부가
-        #   「첫 30분」이라 100 % 가 나오고, 단언 ③ 이 거짓 경보를 낸다.
-        #   실제로 `run_lifelong(horizon=1260)` 에서 그렇게 터졌다.
-        #   이 값은 「어떤 파일인가」를 묻는 것이지 「우리가 얼마나 쓰나」가 아니다.
-        # 첫 30분은 **파일 틱**으로 잰다 (파일의 성질이므로 파일 dt 로).
+    def __init__(self, csv_path, geom, free, map_dir, horizon,
+                 order_end=None, verbose=True):
+        self._init_common(csv_path, sha256(csv_path), geom, free, map_dir,
+                          horizon, order_end)
+        self._init_scale(geom)
+        self._load_csv(csv_path)
+        self.loaded = sum(len(v) for v in self._by_tick.values())
+        if verbose:
+            self._report_csv()
+
+    def _init_scale(self, geom):
+        """파일 틱 -> 우리 틱 배율. pitch 1.0 이면 정확히 1.0 이다.
+
+        ★ 도착 분포는 **파일 전체**로 센다 — horizon 과 무관하게 (2026-09-17).
+          `loaded`(horizon 안)로 재면 horizon 이 30분보다 짧을 때 전부가
+          「첫 30분」이라 100 % 가 나오고, 단언 ③ 이 거짓 경보를 낸다. 실제로
+          `run_lifelong(horizon=1260)` 에서 그렇게 터졌다. 이 값은 「어떤
+          파일인가」를 묻는 것이지 「우리가 얼마나 쓰나」가 아니다.
+          첫 30분은 **파일 틱**으로 잰다 (파일의 성질이므로 파일 dt 로).
+        """
         self._early_win = round(1800.0 / DT)
         self._early_all = 0
-
-        # ★ 파일 틱 -> 우리 틱 배율. pitch 1.0 이면 정확히 1.0 이다.
         self.dt_file = DT
         self.dt_ours = our_dt(geom)
         self.tick_scale = self.dt_file / self.dt_ours
         self.rescaled = abs(self.tick_scale - 1.0) > 1e-12
 
+    def _load_csv(self, csv_path):
         with open(csv_path, newline="", encoding="utf-8") as f:
             for row in csv.DictReader(f):
                 self.total += 1
-                t_file = int(row["created_tick"])
-                if t_file < self._early_win:
-                    self._early_all += 1
-                t = (t_file if not self.rescaled
-                     else int(round(t_file * self.tick_scale)))
-                if t >= self.horizon:
-                    self.skipped_late += 1
-                    continue
-                frm = self._resolve(row["frm_name"])
-                to = self._resolve(row["to_name"])
-                if frm is None or to is None:
-                    self.skipped_bad.append((row["frm_name"], row["to_name"]))
-                    continue
-                self._by_tick[t].append(
-                    {"kind": "out", "frm": frm, "to": to, "born": t})
+                self._row(row)
 
-        self.loaded = sum(len(v) for v in self._by_tick.values())
-        if verbose:
-            print(f"[fms_stream] {os.path.basename(csv_path)} · "
-                  f"{self.total:,}행 -> {self.loaded:,}건 적재 "
-                  f"(horizon {self.horizon:,}틱)")
-            if self.skipped_late:
-                print(f"[fms_stream]   horizon 밖이라 뺌 {self.skipped_late:,}건")
-            if self.skipped_bad:
-                print(f"[fms_stream]   ★ 칸을 못 찾음 {len(self.skipped_bad)}건 — "
-                      f"예: {self.skipped_bad[:3]}")
+    def _row(self, row):
+        t_file = int(row["created_tick"])
+        if t_file < self._early_win:
+            self._early_all += 1
+        t = t_file if not self.rescaled else int(round(t_file * self.tick_scale))
+        if t >= self.horizon:
+            self.skipped_late += 1
+            return
+        frm = self._resolve(row["frm_name"])
+        to = self._resolve(row["to_name"])
+        if frm is None or to is None:
+            self.skipped_bad.append((row["frm_name"], row["to_name"]))
+            return
+        self._by_tick[t].append({"kind": "out", "frm": frm, "to": to, "born": t})
+
+    def _report_csv(self):
+        print(f"[fms_stream] {os.path.basename(self.path)} · "
+              f"{self.total:,}행 -> {self.loaded:,}건 적재 "
+              f"(horizon {self.horizon:,}틱)")
+        if self.skipped_late:
+            print(f"[fms_stream]   horizon 밖이라 뺌 {self.skipped_late:,}건")
+        if self.skipped_bad:
+            print(f"[fms_stream]   ★ 칸을 못 찾음 {len(self.skipped_bad)}건 — "
+                  f"예: {self.skipped_bad[:3]}")
 
     # ── 이름 -> 칸 ────────────────────────────────────────────────────────
     def _resolve(self, name):
@@ -471,31 +486,24 @@ class JsonOrderStream(FileOrderStream):
     def from_file(cls, json_path, geom, free, map_dir, horizon, **kw):
         """`scenario.json`(또는 주문 파일) → 스트림. 부수효과는 여기에만 있다."""
         return cls(_scenario_orders(json_path), geom, free, map_dir, horizon,
-                   racks=_rack_map(map_dir), name=os.path.basename(json_path),
+                   racks=_rack_map(map_dir), path=json_path,
                    sha=sha256(json_path), **kw)
 
     def __init__(self, orders, geom, free, map_dir, horizon, racks, seed=0,
                  tote_units=10, order_end=None, window_start_s=None,
-                 name="<메모리>", sha="", verbose=True):
-        self.path = name
-        self.sha256 = sha
-        self.horizon = int(horizon)
-        self.order_end = None if order_end is None else max(0, int(order_end))
-        self.n_task = 0
-        self.windows = [("out", 0, self.horizon)]
-        self._setup_stations(geom, free, map_dir)
-
+                 path="<메모리>", sha="", verbose=True):
+        self._init_common(path, sha, geom, free, map_dir, horizon, order_end)
+        self._init_scale(geom)
         self.total = len(orders)
-        self.skipped_late = 0
-        self.skipped_bad = []
-        self.dt_file = self.dt_ours = our_dt(geom)
-        self.tick_scale, self.rescaled = 1.0, False
-
-        self._by_tick = collections.defaultdict(list)
         self._spawn(orders, racks, int(seed), int(tote_units), window_start_s)
         self.loaded = sum(len(v) for v in self._by_tick.values())
         if verbose:
-            self._report(seed, tote_units)
+            self._report_json(seed, tote_units)
+
+    def _init_scale(self, geom):
+        """CSV 와 달리 **초**로 오므로 환산이 한 번이다. 파일 틱 배율이 없다."""
+        self.dt_file = self.dt_ours = our_dt(geom)
+        self.tick_scale, self.rescaled = 1.0, False
 
     # ── 주문 -> 토트 태스크 ──────────────────────────────────────────────
     def _spawn(self, orders, racks, seed, tote_units, window_start_s):
@@ -528,8 +536,8 @@ class JsonOrderStream(FileOrderStream):
         for _ in range(n_tote):
             self._by_tick[t].append({"kind": "out", "frm": frm, "to": to, "born": t})
 
-    def _report(self, seed, tote_units):
-        print(f"[fms_stream] {self.path} · 주문 {self.total:,}건 -> "
+    def _report_json(self, seed, tote_units):
+        print(f"[fms_stream] {os.path.basename(self.path)} · 주문 {self.total:,}건 -> "
               f"**토트 {self.loaded:,}개** 적재 (horizon {self.horizon:,}틱 · "
               f"dt {self.dt_ours:.6f}s · tote_units {tote_units})", flush=True)
         if self.skipped_late:
@@ -542,6 +550,11 @@ class JsonOrderStream(FileOrderStream):
 
 
 # ── 순수 함수 — 파일도 클래스 상태도 안 본다 (단위 테스트용) ──────────────
+def _opt_tick(v):
+    """선택적 틱 값 — 없으면 None, 있으면 음수 없는 정수. 호출부의 분기를 없앤다."""
+    return None if v is None else max(0, int(v))
+
+
 def _arrival_tick(order, dt, window_start_s, horizon):
     """주문 하나 → 도착 틱. 창 밖이면 None.
 
