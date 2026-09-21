@@ -55,11 +55,22 @@ class TestPureAssembly:
         e = REC.environment(c, spec(n=3), base={})
         assert e["REPLAN"] == "0" and "PIBT_SEED" not in e and "SIM_SCENARIO_PATH" not in e
 
-    def test_default_tick_matches_the_211_tick_model(self):
+    def test_default_tick_follows_the_pitch_the_child_actually_runs(self):
         # path/metrics.tick_seconds = pitch / (v_max × MOVE_TICKS). 215 의 4/3 은 211 이전 값이라
         # 창 300 s 에 270틱만 계획해 시뮬 ≈ 90 s 에 끝났다 (2026-09-16 컨테이너 실측: 400틱 = 시뮬 116 s)
-        assert abs(REC.DEFAULT_TICK_S - 1.2 / (0.9 * 4)) < 1e-9
-        assert REC.horizon_ticks(300.0) == 1080                     # (300+60) / 0.3333 = 1080
+        #
+        # ★★ 2026-09-21 — 기본을 1.2 에서 **1.0** 으로 내렸다. run_record.sh:124 가
+        #   `export PIBT_PITCH="${PIBT_PITCH:-1.0}"` 라 자식은 늘 1.0 으로 돌고 있었고,
+        #   여기만 1.2 로 환산해 **창을 20 % 짧게** 계획했다. 위 215 와 같은 종류의 사고다.
+        assert abs(REC.PLAN_PITCH_DEFAULT_M - 1.0) < 1e-9           # run_record.sh:124 와 같아야 한다
+        assert abs(REC.tick_seconds({}) - 1.0 / (0.9 * 4)) < 1e-9
+        assert REC.horizon_ticks(300.0, REC.tick_seconds({})) == 1296   # (300+60) / 0.2778 = 1296
+
+    def test_tick_follows_PIBT_PITCH_when_given(self):
+        """엣지 환경에 pitch 가 있으면 자식도 그 값을 물려받는다 — 둘이 같은 식을 써야 한다."""
+        assert abs(REC.tick_seconds({"PIBT_PITCH": "1.2"}) - 1.2 / (0.9 * 4)) < 1e-9
+        for bad in ("", "0", "-1", "abc"):
+            assert abs(REC.tick_seconds({"PIBT_PITCH": bad}) - 1.0 / (0.9 * 4)) < 1e-9
 
     def test_horizon_ticks_rounds_up(self):
         assert REC.horizon_ticks(600.0, 0.7) == 943                 # (600+60)/0.7 = 942.86 → 943

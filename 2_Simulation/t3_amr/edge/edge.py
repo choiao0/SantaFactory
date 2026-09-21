@@ -21,7 +21,7 @@ import psutil
 
 from . import spb, telemetry
 from .recorder import DEFAULT_TICK_S, RUN_ENV_MARK, Recorder, RecorderConfig
-from .runner import RUNNING, STARTING, STOPPING, Runner, RunnerConfig
+from .runner import ERROR, IDLE, RUNNING, STARTING, STOPPING, Runner, RunnerConfig
 from .spb import EdgeSession
 from .upload import Uploader
 
@@ -83,6 +83,7 @@ class Edge:
                  client: Any = None):
         self.session, self.alive_path = session, alive_path
         self._runner: Runner | None = None          # build() 가 붙인다
+        self.jobs = None                            # build() 가 --job-dir 이면 붙인다
         self.lock = threading.RLock()
         self.stop_event = threading.Event()
         self.exit_code = 0
@@ -193,6 +194,14 @@ class Edge:
                 self.touch_alive(now)
                 with self.lock:
                     self.runner.tick(time.time())
+                    # 폴더 입구 — 틱마다 한 번. 러너가 바쁘면 스스로 안 집는다.
+                    # 락 안에서 부른다: submit 이 곧 handle_start 라 NCMD 경로와
+                    # 같은 상태를 건드린다.
+                    if self.jobs is not None:
+                        try:
+                            self.jobs.poll(time.time())
+                        except Exception:  # noqa: BLE001 — 폴더 사고가 데몬을 죽이면 안 된다
+                            log.exception("job dir poll failed")
                 self.stop_event.wait(TICK_S)
         finally:
             self._shutdown()
@@ -231,6 +240,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="edge_node_id = username = clientId (host-orch --node 와 같아야 한다)")
     p.add_argument("--t3amr-dir", default=T3AMR_DIR, help="run_record.sh 가 있는 폴더")
     p.add_argument("--state-dir", default=DEFAULT_STATE_DIR, help="bdseq · runs/<run_id>/scenario.json · alive")
+    p.add_argument("--job-dir", default=os.environ.get("T3AMR_JOB_DIR") or None,
+                   help="Start JSON 을 **폴더로도** 받는다 (백엔드 연결 전). "
+                        "<dir>/inbox/*.json -> started|failed. MQTT 와 같이 켜도 된다")
     p.add_argument("--planner", default="pibt_h")
     p.add_argument("--tick-s", type=float, default=float(os.environ.get("T3AMR_TICK_S") or DEFAULT_TICK_S),
                    help="계획 틱 길이[s] — window_s → PIBT_HORIZON 환산. "
@@ -263,6 +275,13 @@ def build(args: argparse.Namespace) -> tuple:
     edge = Edge(args.node_id, args.node_id, password, session, os.path.join(args.state_dir, "alive"))
     edge.runner = Runner(cfg, session, lambda: Recorder(rec_cfg), edge, uploader, vram_mb=edge.cached_vram,
                          on_gpu_lost=edge.on_gpu_lost)
+    if args.job_dir:
+        # 두 번째 입구. 같은 RunSpec·같은 Runner 를 쓰므로 MQTT 와 동시에 켜도 된다.
+        # 바쁠 때는 집지 않으니 둘이 겹쳐 들어와도 한 번에 하나만 돈다.
+        from .jobdir import JobDir, JobDirConfig
+        edge.jobs = JobDir(JobDirConfig(os.path.abspath(args.job_dir)),
+                           submit=edge.runner.handle_start,
+                           is_idle=lambda: edge.runner.state in (IDLE, ERROR))
     return edge, host, port
 
 
