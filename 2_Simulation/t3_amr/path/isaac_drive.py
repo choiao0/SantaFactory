@@ -1022,6 +1022,31 @@ _RANK: dict[int, int] = {}          # uid -> 틱 안 순위
 RANK_CLASH = 0                      # 양쪽이 서로 다른 칸을 소유해 못 편 쌍의 수
 
 
+#: ★★ 간선 창 (-259, 2026-09-21). 0 = 제한 없음(기본, 지금까지의 동작).
+#
+#   `PIBT_ADG_BODY=1` 이 새로 거는 간선 22,210개(시드 101 · 12대 · 38,880틱)를
+#   **종류별로 쪼개 보니** 대부분이 값을 안 한다.
+#
+#       틱 간격    0      269 ( 1.2 %)      101~1000  10,099 (45.5 %)
+#                 1~5   1,207 ( 5.4 %)     1000 초과   4,154 (18.7 %)
+#                 6~20  1,967 ( 8.9 %)     21~100     4,514 (20.3 %)
+#
+#       임계경로에 **놓인 것 340개 (1.53 %)** — 나머지 21,870개는 공짜다
+#       그 340개의 틱차는 **0~10** 에 몰려 있다 (표본 8개 중 6개가 0~4)
+#
+#   즉 **64 %가 100틱(28초) 이상 떨어진 쌍**이고, 실행이 그만큼 밀려야 경합한다.
+#   창을 두면 안전은 거의 그대로 두고 간선을 크게 줄일 수 있다.
+#
+#   ☹ 제약을 **빼는** 변경이라 기본은 0(제한 없음)이다. 켤 때는 사고 재현
+#     판정(도달가능 True)이 유지되는지 반드시 확인한다 — `scratchpad/window_check.py`.
+ADG_BODY_WINDOW = int(os.environ.get("PIBT_ADG_BODY_WINDOW", "0"))
+
+
+def _in_window(p: Action, q: Action) -> bool:
+    """규칙 ② 간선을 걸 만큼 두 액션이 **시간적으로 가까운가**."""
+    return ADG_BODY_WINDOW <= 0 or abs(q.tick - p.tick) <= ADG_BODY_WINDOW
+
+
 def _needs(a: Action) -> set:
     """그 액션이 **자리를 요구하는** 칸 — 간선 구성이 보는 집합과 같아야 한다."""
     #   hard  규칙 ① 이 쓰는 집합 · guard  규칙 ② 조회 · axle  기본 `_src`
@@ -1393,14 +1418,16 @@ def build_adg(chains: list[list[Action]], geom: "RobotGeom | None" = None) -> AD
                 i = _bi.bisect_left(ks, _key(p, s))
                 # 동률은 없다 — `_key` 가 (tick, sub, agent) 전순서이고 서로
                 # 다른 액션은 (tick, agent) 가 다르다.
-                if i > 0:
+                if i > 0 and _in_window(qs2[i - 1], p):
                     t2 += _link(qs2[i - 1], p)
-                if i < len(qs2):
+                if i < len(qs2) and _in_window(p, qs2[i]):
                     t2 += _link(p, qs2[i])
     else:
         for p in actions:
             for s in p.guard:
                 for q in _src.get(s, ()):
+                    if not _in_window(p, q):
+                        continue
                     lo, hi = sorted((p, q), key=lambda a: _key(a, s))
                     t2 += _link(lo, hi)
 
@@ -3552,9 +3579,14 @@ class FleetController:
             return "☹ 몸 간선이라 못 푼다"
         if dead:
             self.stats.turn_gaveup_body += 1
-            return "☹ 면제했는데도 안 비켰다"
+            # ☹ 여기는 **교착 판정**만 한 것이지 면제를 했다는 뜻이 아니다.
+            #   초판이 「면제했는데도 안 비켰다」로 찍었는데, `TURN_YIELD` 가 꺼져
+            #   있으면 면제는 **한 번도 안 한다**. 실제로 그 상태에서 그 말이
+            #   찍혀 오진을 부를 뻔했다 (2026-09-21).
+            return ("☹ 면제했는데도 안 비켰다" if TURN_YIELD else
+                    "☹ **교착인데 양보가 꺼져 있다** (PIBT_TURN_YIELD=0)")
         self.stats.turn_gaveup_other += 1
-        return "교착 아님 — 그냥 느리다"
+        return "교착 아님 — ADG 가 이 쌍을 안 묶었다"
 
     def _check_static(self, a, pose, body) -> None:
         """차체가 **랙**을 파고들었나 (L, -240).
