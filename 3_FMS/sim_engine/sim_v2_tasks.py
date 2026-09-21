@@ -74,7 +74,7 @@ from map_loader import (load_map, make_homes, CELL_M, OFFSET_M, MAP_DIR, ROBOT_D
                         make_homes_zone, load_rack_map, load_topology_spec, masked_turn_ratio, turn_mask)
 from pibt.geometry import FOOTPRINT_MARGIN_M
 from order_stream import MAX_ORDER_TOTES, OrderStream
-from pibt_core import DIRS, MOVE_TICKS, REV_TICKS, TURN_TICKS
+from pibt_core import DEFAULT_FOOTPRINT, DIRS, MOVE_TICKS, REV_TICKS, TURN_TICKS
 
 SERVICE_TIME_S = 40 / 11            # v1과 동일 (docs/θ_경로_기준선.md#기준선-계보)
 SERVICE_STEPS = round(SERVICE_TIME_S / DT)
@@ -160,7 +160,7 @@ def _parse_model(a, argv):
     a.lane_gain = _opt(argv, "lane-gain", float, 2.0)
     a.pocket_gain = _opt(argv, "pocket-gain", float, 2.0)
     # 회전 발자국 (-203, 계약 v3.4 결과 변경). 기본 exact = 정적 마스크. 회전이 없는 칸 모델·v1compat 은 legacy 로 둔다.
-    a.footprint = _opt(argv, "footprint", str, "exact")
+    a.footprint = _opt(argv, "footprint", str, DEFAULT_FOOTPRINT)
     assert a.footprint in ("legacy", "exact", "exact,front", "exact,front_2cell"), \
         f"--footprint 는 legacy|exact|exact,front|exact,front_2cell: {a.footprint}"
     dims = _opt(argv, "robot-dims", str, ",".join(f"{v:g}" for v in ROBOT_DIMS))

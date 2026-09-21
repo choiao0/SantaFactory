@@ -80,5 +80,6 @@ curl -sI https://j15a106.p.ssafy.io/v2/ | head -1          # 허용 IP 밖(이 P
 ## 워커 개수·자원
 
 - 개수는 Deployment 의 `replicas` 하나 — 파일을 고쳐 release 에 넣는다. `kubectl -n fms scale deployment/sim-worker --replicas=16` 은 즉시 반영되지만 다음 release 때 파일 값으로 돌아온다.
+- 환경변수는 EC2 `compose.estimate.yml` 과 같아야 한다(-253): `RABBITMQ_URL` 은 Secret, 나머지(지금은 `THETA_MODEL`)는 Deployment 의 `env`. EC2 판에 변수를 더하면 여기와 `compose.estimate.gcp.yml` 에도 더한다.
 - 메모리 3Gi 는 로봇 13대·주문 4,000 건 실측 기준. 로봇 28대·주문 6,000 건은 넘칠 수 있다(`../gcp/README.md`).
 - 노드 하나가 빠지면 12개 유지가 아니라 8개 가동 + 4개 Pending 이다(CPU 요청 900m × 4 = 노드 한도). 노드가 돌아오면 자동 배치된다.

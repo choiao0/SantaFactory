@@ -14,6 +14,9 @@ services:
     image: fms-estimate-worker:latest
     environment:
       RABBITMQ_URL: amqps://${RABBITMQ_USER:?.env.estimate 에 RABBITMQ_USER}:${RABBITMQ_PASSWORD:?.env.estimate 에 RABBITMQ_PASSWORD}@${RABBITMQ_HOST:-j15a106.p.ssafy.io}:${RABBITMQ_PORT:-5671}/
+      # ★ 환경변수는 EC2 판(compose.estimate.yml)과 같아야 한다(-253). θ 예측(-206)이 EC2 에만 켜져 있어 09-20 한 견적 안에서
+      #   run 마다 θ 가 달랐다. 이 줄을 지우면 고정 θ 로 돌아간다. 모델은 이미지에 구워져 있다(estimate.Dockerfile 의 COPY ai_theta/).
+      THETA_MODEL: ${THETA_MODEL-/app/ai_theta/model/theta_model.joblib}
     restart: unless-stopped
     deploy:
       replicas: ${WORKER_REPLICAS:-4}

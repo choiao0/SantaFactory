@@ -12,7 +12,7 @@ for H in "${HOSTS[@]}"; do
     SSH="ssh -o BatchMode=yes -o ConnectTimeout=10 -i $KEY"
     echo "== $H =="
     rsync -az --delete --exclude __pycache__ --exclude .pytest_cache --exclude "*.pyc" --exclude results --exclude tests \
-        -e "$SSH" "$REPO/3_FMS/sim_engine" "$REPO/3_FMS/map" "$REPO/3_FMS/contracts" "$USER_@$H:~/fms/3_FMS/"
+        -e "$SSH" "$REPO/3_FMS/sim_engine" "$REPO/3_FMS/map" "$REPO/3_FMS/contracts" "$REPO/3_FMS/ai_theta" "$USER_@$H:~/fms/3_FMS/"   # ai_theta: Dockerfile 이 COPY 한다(-206·-253)
     rsync -az --exclude __pycache__ -e "$SSH" "$REPO/3_FMS/infra/out" "$REPO/3_FMS/infra/worker" \
         "$REPO/3_FMS/infra/requirements.txt" "$REPO/3_FMS/infra/estimate.Dockerfile" \
         "$REPO/3_FMS/infra/compose.estimate.gcp.yml" "$USER_@$H:~/fms/3_FMS/infra/"

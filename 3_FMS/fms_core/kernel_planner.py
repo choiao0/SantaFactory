@@ -84,7 +84,7 @@ class KernelPlanner:
         ensure_sim_engine()
         from fms_kernel import FmsKernel, KernelConfig
         from map_loader import ROBOT_DIMS, load_charge_zone, load_map, load_rack_map, turn_mask
-        from pibt.geometry import FOOTPRINT_MARGIN_M
+        from pibt.geometry import DEFAULT_FOOTPRINT, FOOTPRINT_MARGIN_M
         from order_stream import OrderStream
         from pibt_core import TURN_TICKS
 
@@ -111,7 +111,7 @@ class KernelPlanner:
                                   st_cell, stations, inbound_gap=so["inbound_gap"], horizon=horizon, shifts=so["shifts"],
                                   orders=orders, rack_map=rack_map, tote_units=so["tote_units"], dt=self.dt)   # 도착 틱 = ordered_at_s / dt
         # 회전 발자국 (-203, 계약 v3.4): 견적(sim_v2 기본 exact)과 같은 마스크·치수. --planner-opt footprint= / robot_dims=앞,뒤,폭
-        footprint = str(opts.get("footprint", "exact"))
+        footprint = str(opts.get("footprint", DEFAULT_FOOTPRINT))
         dims = opts.get("robot_dims", ROBOT_DIMS)
         robot_dims = tuple(float(x) for x in (dims.split(",") if isinstance(dims, str) else dims))
         mask = turn_mask(None, robot_dims, FOOTPRINT_MARGIN_M) if footprint != "legacy" else None
