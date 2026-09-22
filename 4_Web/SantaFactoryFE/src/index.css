@@ -18,6 +18,12 @@
 
 * { box-sizing: border-box; }
 html { scroll-behavior: smooth; }
+/* 앵커로 뛰면 섹션 맨 위가 뷰포트 맨 위에 맞춰져 72px 고정 헤더 뒤로 들어간다 — 제목이 헤더에
+   붙어 나온다. 헤더 높이만큼 물려 두면 섹션 자기 padding(76px)이 숨 쉴 자리로 남는다 */
+section[id] { scroll-margin-top: 72px; }
+/* 02~05 는 섹션 자기 padding(76px)까지 헤더 아래 그대로 드러나 위가 휑하다. 그만큼 헤더에
+   물려 붙인다 — 가려지는 건 여백뿐이라 내용은 안 잘린다. 01 은 첫 섹션이라 지금 간격이 맞다 */
+#s2, #s3, #verify, #quote { scroll-margin-top: 16px; }
 body {
   margin: 0;
   background: var(--black);
