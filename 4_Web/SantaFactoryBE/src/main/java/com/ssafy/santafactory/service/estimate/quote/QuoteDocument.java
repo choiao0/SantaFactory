@@ -66,7 +66,8 @@ public record QuoteDocument(
     /** 07 효율·구축 비용 그래프 — SVG 좌표는 템플릿 viewBox(672 × 175) 기준. */
     public record Curve(String effPath, String costPath, List<AxisLabel> xLabels, List<AxisLabel> yLeft,
                         List<AxisLabel> yRight, double budgetY, String budgetLabel,
-                        Double kneeX, String kneeLabel, double recX, double recY, String recLabel) {
+                        Double kneeX, String kneeLabel, double recX, double recY,
+                        double recLabelX, double recLabelY, String recLabelAnchor, String recLabel) {
     }
 
     public record AxisLabel(double pos, String text, boolean highlight) {

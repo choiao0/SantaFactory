@@ -58,6 +58,9 @@ public class QuoteDocumentFactory {
 
     static final double SVG_W = 672, SVG_H = 175, PAD_L = 36, PAD_R = 48, PAD_T = 14, PAD_B = 22;
 
+    /** 글자 밑선이 이보다 위면 viewBox 위쪽으로 잘린다 (font-size 8.5). */
+    private static final double MIN_LABEL_Y = 9;
+
     private static final Map<ReasonCode, String> REASON_TEXT = new EnumMap<>(Map.of(
             ReasonCode.BUDGET_EXCEEDED, "예산 안에 드는 로봇 대수가 없습니다. 예산을 올리거나 목표를 낮춰 다시 요청해 주세요.",
             ReasonCode.THROUGHPUT_SHORT, "예산 안의 대수로는 목표 주문 처리율에 닿지 않습니다. 목표를 낮추거나 예산을 올려야 합니다.",
@@ -436,7 +439,34 @@ public class QuoteDocumentFactory {
         return new Curve(eff.toString().trim(), costPath.toString().trim(), xLabels, yLeft, yRight,
                 PAD_T + ih - d.budgetLimit() / (double) costMax * ih, "예산 " + won(d.budgetLimit()),
                 kneeX, kneeX == null ? null : d.kneeCount() + "대부터 효과 정체",
-                recX, recY, rec == null ? null : "권장 " + rec.amrCount() + "대 · 효율 " + oneDecimal(efficiency(rec)));
+                recX, recY, recLabelX(recX), recLabelY(recY), recLabelAnchor(recX), rec == null ? null : "권장 " + rec.amrCount() + "대 · 효율 " + oneDecimal(efficiency(rec)));
+    }
+
+    /**
+     * 권장 표식의 설명 글자 높이. 기본은 점 위지만, 효율이 100 에 가까우면 점이 그림 꼭대기에 붙어
+     * 글자가 viewBox 밖으로 나가 잘린다 — 그때는 점 아래로 내린다. 권장 대수의 효율이 가장 높으므로
+     * 잘리는 쪽이 오히려 흔한 경우다.
+     */
+    static double recLabelY(double recY) {
+        double above = recY - 14;
+        return above < MIN_LABEL_Y ? recY + 21 : above;
+    }
+
+    /**
+     * 설명 글자는 점 왼쪽에 붙이지만, 권장이 가장 적은 대수면 점이 왼쪽 끝이라 글자가 그림 밖으로
+     * 나간다 — 그때는 오른쪽으로 넘겨 단다. {@link #recLabelAnchor} 가 그에 맞춰 정렬을 바꾼다.
+     */
+    static double recLabelX(double recX) {
+        return fitsLeft(recX) ? recX - 14 : recX + 14;
+    }
+
+    static String recLabelAnchor(double recX) {
+        return fitsLeft(recX) ? "end" : "start";
+    }
+
+    /** 글자 폭 어림값(약 20자 × 4.6px)만큼 왼쪽에 자리가 있나. */
+    private static boolean fitsLeft(double recX) {
+        return recX - 14 - 92 >= 2;
     }
 
     private static double x(int n, int min, int max, double iw) {

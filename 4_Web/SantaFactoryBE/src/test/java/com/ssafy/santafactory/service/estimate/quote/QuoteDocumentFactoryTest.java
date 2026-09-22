@@ -132,6 +132,23 @@ class QuoteDocumentFactoryTest {
     }
 
     @Test
+    void keeps_the_recommendation_label_inside_the_chart() {
+        // 효율이 100 에 가까우면 표식이 그림 꼭대기에 붙는다. 글자를 그대로 점 위에 두면 잘렸다.
+        double topRecY = QuoteDocumentFactory.PAD_T + 2;
+
+        assertThat(QuoteDocumentFactory.recLabelY(topRecY)).isGreaterThan(topRecY);
+        assertThat(QuoteDocumentFactory.recLabelY(100)).isEqualTo(86);   // 여유가 있으면 지금처럼 점 위
+    }
+
+    @Test
+    void flips_the_recommendation_label_when_it_would_run_off_the_left_edge() {
+        // 권장이 가장 적은 대수면 표식이 왼쪽 끝이라, 왼쪽으로 쓴 글자가 그림 밖으로 나간다
+        assertThat(QuoteDocumentFactory.recLabelAnchor(QuoteDocumentFactory.PAD_L)).isEqualTo("start");
+        assertThat(QuoteDocumentFactory.recLabelX(QuoteDocumentFactory.PAD_L)).isGreaterThan(QuoteDocumentFactory.PAD_L);
+        assertThat(QuoteDocumentFactory.recLabelAnchor(400)).isEqualTo("end");
+    }
+
+    @Test
     void no_recommendation_gives_a_reason_and_no_cost_or_targets() {
         EstimateDetailResponse d = new EstimateDetailResponse(7L, EstimateStatus.DONE, "iw.hub", 95.0, 60.0, 50_000_000L,
                 null, null, null, ReasonCode.BUDGET_EXCEEDED, LocalDateTime.of(2026, 9, 17, 10, 0), LocalDateTime.of(2026, 9, 17, 10, 5),

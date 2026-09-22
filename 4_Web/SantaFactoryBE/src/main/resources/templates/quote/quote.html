@@ -291,7 +291,7 @@ tr.total td{border-top:1.5px solid var(--ink);border-bottom:0;font-weight:800;fo
           <line th:x1="${q.curve.recX}" th:x2="${q.curve.recX}" th:y1="${q.curve.recY + 12}" y2="153" stroke="#e72d2d" stroke-dasharray="3 3"/>
           <circle th:cx="${q.curve.recX}" th:cy="${q.curve.recY}" r="9" fill="none" stroke="#e72d2d" stroke-width="1.5"/>
           <circle th:cx="${q.curve.recX}" th:cy="${q.curve.recY}" r="3" fill="#e72d2d"/>
-          <text th:x="${q.curve.recX - 14}" th:y="${q.curve.recY - 14}" font-size="8.5" fill="#b51616" text-anchor="end" font-weight="700" th:text="${q.curve.recLabel}"></text>
+          <text th:x="${q.curve.recLabelX}" th:y="${q.curve.recLabelY}" font-size="8.5" fill="#b51616" th:attr="text-anchor=${q.curve.recLabelAnchor}" font-weight="700" th:text="${q.curve.recLabel}"></text>
         </g>
         <text x="36" y="10" font-size="8" fill="#77776f">효율 점수</text>
         <text x="624" y="10" font-size="8" fill="#77776f" text-anchor="end">구축 비용</text>
