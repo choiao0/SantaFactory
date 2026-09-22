@@ -18,6 +18,7 @@ import com.ssafy.santafactory.entity.estimate.Estimate;
 import com.ssafy.santafactory.entity.estimate.RunStatus;
 import com.ssafy.santafactory.entity.estimate.VerifySnapshot;
 import com.ssafy.santafactory.entity.simulation.RunKpiDetail;
+import com.ssafy.santafactory.entity.simulation.RunReplay;
 import com.ssafy.santafactory.entity.simulation.SimScenario;
 import com.ssafy.santafactory.entity.warehouse.Warehouse;
 import com.ssafy.santafactory.global.auth.AuthenticatedMember;
@@ -25,6 +26,7 @@ import com.ssafy.santafactory.global.auth.OwnershipGuard;
 import com.ssafy.santafactory.global.exception.ErrorCode;
 import com.ssafy.santafactory.global.exception.GlobalException;
 import com.ssafy.santafactory.repository.EstimateRepository;
+import com.ssafy.santafactory.repository.RunReplayRepository;
 import com.ssafy.santafactory.repository.SimScenarioRepository;
 import com.ssafy.santafactory.repository.WarehouseRepository;
 import com.ssafy.santafactory.service.SimulationService;
@@ -82,6 +84,7 @@ public class EstimateService {
 
     private final EstimateRepository estimateRepository;
     private final SimScenarioRepository scenarioRepository;
+    private final RunReplayRepository replayRepository;
     private final WarehouseRepository warehouseRepository;
     private final SimulationService simulationService;
     private final CostCalculator costCalculator;
@@ -303,24 +306,32 @@ public class EstimateService {
      * 같게 처리하기 때문이다.
      */
     @Transactional(readOnly = true)
-    public JsonNode replay(Long estimateId, int amrCount, AuthenticatedMember me) {
+    public String replay(Long estimateId, int amrCount, AuthenticatedMember me) {
         Estimate estimate = estimateRepository.findById(estimateId)
                 .orElseThrow(() -> new GlobalException(ErrorCode.ESTIMATE_NOT_FOUND));
         ownershipGuard.checkEstimate(estimate, me);
 
         SimScenario run = scenarioRepository.findByEstimateIdAndAmrCount(estimateId, amrCount)
                 .orElseThrow(() -> new GlobalException(ErrorCode.ENTITY_NOT_FOUND));
-        if (run.getReplayJson() == null || estimate.getReplaySceneJson() == null) {
+        RunReplay stored = replayRepository.findById(run.getId())
+                .orElseThrow(() -> new GlobalException(ErrorCode.ENTITY_NOT_FOUND));
+        if (estimate.getReplaySceneJson() == null) {
             throw new GlobalException(ErrorCode.ENTITY_NOT_FOUND);
         }
-        try {
-            ObjectNode replay = (ObjectNode) objectMapper.readTree(run.getReplayJson());
-            replay.set(REPLAY_SCENE, objectMapper.readTree(estimate.getReplaySceneJson()));
-            return replay;
-        } catch (JsonProcessingException | ClassCastException e) {
-            log.error("리플레이 JSON 이 깨졌습니다: estimateId={}, amrCount={}", estimateId, amrCount, e);
+        String trajectory = stored.getReplayJson().strip();
+        String scene = estimate.getReplaySceneJson().strip();
+        // 파싱하지 않고 문자열을 이어 붙인다 — 28대 12 MB 를 트리로 만들고 다시 쓰는 데 0.4~1.5 s 가 들었다 (S15P21A106-255)
+        if (!isJsonObject(trajectory) || !isJsonObject(scene)) {
+            log.error("리플레이 JSON 이 객체가 아닙니다: estimateId={}, amrCount={}", estimateId, amrCount);
             throw new GlobalException(ErrorCode.ENTITY_NOT_FOUND);
         }
+        String body = trajectory.substring(0, trajectory.length() - 1).stripTrailing();
+        String separator = body.endsWith("{") ? "" : ",";
+        return body + separator + "\"" + REPLAY_SCENE + "\":" + scene + "}";
+    }
+
+    private static boolean isJsonObject(String json) {
+        return json.length() >= 2 && json.charAt(0) == '{' && json.charAt(json.length() - 1) == '}';
     }
 
     /**
@@ -585,7 +596,7 @@ public class EstimateService {
             // 맵을 뺀 나머지(dt_s·model·seconds·robots·headings)가 run 별로 다른 부분이다
             ObjectNode trajectory = ((ObjectNode) replay).deepCopy();
             trajectory.remove(REPLAY_SCENE);
-            run.applyReplay(objectMapper.writeValueAsString(trajectory));
+            replayRepository.save(new RunReplay(run.getId(), objectMapper.writeValueAsString(trajectory)));
         } catch (JsonProcessingException | ClassCastException e) {
             log.warn("리플레이 저장 실패 — run 은 그대로 둔다: runId={}, {}", run.getRunId(), e.toString());
         }
