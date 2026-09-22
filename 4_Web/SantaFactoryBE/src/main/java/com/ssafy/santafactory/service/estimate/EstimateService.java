@@ -378,7 +378,7 @@ public class EstimateService {
      * {@code source_run_id}는 반대로 host-orch 로직에 안 쓰이고 결과에 그대로 돌아오기만 하는
      * 추적용이라, 권장 대수의 DES run_id({@code est_{id}_n{count}})를 그대로 싣는다.
      */
-    @Transactional(readOnly = true)
+    @Transactional
     public void requestVerification(Long estimateId, AuthenticatedMember me) {
         Estimate estimate = estimateRepository.findById(estimateId)
                 .orElseThrow(() -> new GlobalException(ErrorCode.ESTIMATE_NOT_FOUND));
@@ -387,12 +387,37 @@ public class EstimateService {
         if (recommendedCount == null) {
             throw new GlobalException(ErrorCode.ESTIMATE_NOT_VERIFIABLE);
         }
+        guardDuplicateVerify(estimate);
         SimScenario run = scenarioRepository.findByEstimateIdAndAmrCount(estimateId, recommendedCount)
                 .orElseThrow(() -> new GlobalException(ErrorCode.ESTIMATE_NOT_VERIFIABLE));
 
+        estimate.markVerifyRequested(LocalDateTime.now());
         simulationService.publishVerify(new VerifyRequest(
                 "verify_" + estimateId, recommendedCount, properties.verifyWindow().toSeconds(),
                 run.getRunId(), estimateId, FIXED_SEED, verifyScenario(estimate)));
+    }
+
+    /**
+     * 같은 견적을 두 번 검증하지 않는다.
+     *
+     * <p>Isaac 은 한 번에 한 건씩 약 10분을 문다. 화면에서 버튼을 잠가도 새로고침하면 상태가 풀려
+     * 다시 누를 수 있어서, 같은 검증이 큐에 두 번 쌓이고 뒤 요청이 그만큼 밀렸다.
+     *
+     * <p>정상 종료한 검증은 다시 돌리지 않는다. 실패했거나, 요청해 놓고 {@code verify-stale-after}
+     * 가 지나도록 결과가 안 온 건은 재요청을 연다 — 워커가 죽어 영영 결과가 없는 견적이 검증
+     * 불가로 굳는 것을 막는다.
+     */
+    private void guardDuplicateVerify(Estimate estimate) {
+        VerifySnapshot verify = estimate.getVerify();
+        if (verify != null && verify.finishedNormally()) {
+            throw new GlobalException(ErrorCode.VERIFY_ALREADY_DONE);
+        }
+        LocalDateTime requestedAt = estimate.getVerifyRequestedAt();
+        boolean waitingForResult = requestedAt != null && verify == null
+                && requestedAt.isAfter(LocalDateTime.now().minus(properties.verifyStaleAfter()));
+        if (waitingForResult) {
+            throw new GlobalException(ErrorCode.VERIFY_IN_PROGRESS);
+        }
     }
 
     /**

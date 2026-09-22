@@ -91,6 +91,13 @@ public class Estimate {
     @Column(name = "verify_video_url", length = 500)
     private String verifyVideoUrl;
 
+    /**
+     * 물리 검증을 큐에 발행한 시각. 결과가 오기 전까지 "요청했다" 를 알 수 있는 유일한 흔적이라,
+     * 중복 발행을 막는 데 쓴다. 검증한 적이 없으면 null.
+     */
+    @Column(name = "verify_requested_at")
+    private LocalDateTime verifyRequestedAt;
+
     /** 같은 검증의 측면 시점 영상. 측면을 찍지 않은 회차는 null 이고 화면은 상단만 보여준다. */
     @Column(name = "verify_video_side_url", length = 500)
     private String verifyVideoSideUrl;
@@ -165,6 +172,11 @@ public class Estimate {
 
     public boolean isCancelled() {
         return status == EstimateStatus.CANCELLED;
+    }
+
+    /** 물리 검증을 큐에 발행했다고 표시한다. 재요청이면 시각을 새로 덮는다. */
+    public void markVerifyRequested(LocalDateTime at) {
+        this.verifyRequestedAt = at;
     }
 
     /** 물리 검증 결과로 받은 시점별 영상 URL을 반영한다. 측면은 없을 수 있다. */

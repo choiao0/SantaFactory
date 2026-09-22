@@ -30,6 +30,8 @@ import java.time.Duration;
  *                          백엔드가 만든 주문 목록의 시각을 따르므로(명시 주문 모드) 토큰의 영향을 받지 않는다.
  *                          팀 결정(2026-09-11) 견적 부하 = 출고만이라 기본 out (S15P21A106-214)
  * @param verifyWindow      물리 검증(Isaac) 창 길이. SIM_VERIFY_CONTRACT.md 기본값(600s)과 같다
+ * @param verifyStaleAfter  검증을 요청해 놓고 이만큼 결과가 없으면 재요청을 연다. 창(10m) + 러너
+ *                          백스톱(창+5m) 보다 넉넉해야 정상 진행 중인 건을 다시 쏘지 않는다
  * @param maxLineQty        출고 주문 한 줄(상품 하나)의 수량 상한 — 개인 온라인몰 1회 구매 기준(S15P21A106-146).
  *                          참조 통계표의 도매 꼬리(12·24·36·48… 다스·케이스 봉우리)를 추첨 대상에서 뺀다
  * @param maxOrderQty       출고 주문 하나의 <b>수량 합</b> 상한 — 넘으면 주문을 통째로 다시 뽑는다
@@ -62,6 +64,7 @@ public record EstimateProperties(
         @DefaultValue("out") String shifts,
         @DefaultValue("true") boolean exportReplay,
         @DefaultValue("10m") Duration verifyWindow,
+        @DefaultValue("25m") Duration verifyStaleAfter,
         @DefaultValue("10") int maxLineQty,
         @DefaultValue("10") int maxOrderQty,
         @DefaultValue("6") int amrCapacity,

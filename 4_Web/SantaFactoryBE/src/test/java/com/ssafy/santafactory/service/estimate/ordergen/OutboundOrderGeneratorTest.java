@@ -288,7 +288,7 @@ class OutboundOrderGeneratorTest {
 
     private static EstimateProperties props(int maxLineQty, int maxOrderQty) {
         return new EstimateProperties(0L, 0L, 0L, 28, 6, 4, 1, Duration.ofMinutes(30), Duration.ofHours(6), "out", false,
-                Duration.ofMinutes(10), maxLineQty, maxOrderQty, 6, null);
+                Duration.ofMinutes(10), Duration.ofMinutes(25), maxLineQty, maxOrderQty, 6, null);
     }
 
     private OrderRuleProfile tinyProfile() {

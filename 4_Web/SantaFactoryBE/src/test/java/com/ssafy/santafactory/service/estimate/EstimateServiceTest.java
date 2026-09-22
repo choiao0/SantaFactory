@@ -37,6 +37,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.Duration;
+import com.ssafy.santafactory.entity.estimate.VerifySnapshot;
 import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
@@ -63,7 +64,7 @@ import static org.mockito.Mockito.when;
 class EstimateServiceTest {
 
     private static final EstimateProperties PROPS =
-            new EstimateProperties(15_000_000L, 5_000_000L, 500_000L, 28, 6, 4, 1, Duration.ofMinutes(30), Duration.ofHours(6), "out", false, Duration.ofMinutes(10), 10, 10, 6, null);
+            new EstimateProperties(15_000_000L, 5_000_000L, 500_000L, 28, 6, 4, 1, Duration.ofMinutes(30), Duration.ofHours(6), "out", false, Duration.ofMinutes(10), Duration.ofMinutes(25), 10, 10, 6, null);
 
     @Mock
     EstimateRepository estimateRepository;
@@ -702,6 +703,48 @@ class EstimateServiceTest {
                 .isInstanceOf(GlobalException.class)
                 .hasFieldOrPropertyWithValue("errorCode", ErrorCode.ESTIMATE_NOT_VERIFIABLE);
         verify(simulationService, never()).publishVerify(any());
+    }
+
+    @Test
+    void rejects_a_second_verification_while_the_first_is_still_running() {
+        Estimate estimate = withId(estimate(85.0, 90.0, 1_000_000_000L), 77L);
+        estimate.complete(4, 6, null, false);
+        estimate.markVerifyRequested(LocalDateTime.now().minusMinutes(3));   // 아직 창(10분) 안
+        when(estimateRepository.findById(77L)).thenReturn(Optional.of(estimate));
+
+        assertThatThrownBy(() -> service().requestVerification(77L, ADMIN))
+                .isInstanceOf(GlobalException.class)
+                .hasFieldOrPropertyWithValue("errorCode", ErrorCode.VERIFY_IN_PROGRESS);
+        verify(simulationService, never()).publishVerify(any());
+    }
+
+    @Test
+    void rejects_verification_that_already_finished_normally() {
+        Estimate estimate = withId(estimate(85.0, 90.0, 1_000_000_000L), 77L);
+        estimate.complete(4, 6, null, false);
+        estimate.applyVerifyResult(new VerifySnapshot(
+                "verify_77", "done", "window elapsed", null, 4, 4, 600, null,
+                null, null, null, LocalDateTime.now()));
+        when(estimateRepository.findById(77L)).thenReturn(Optional.of(estimate));
+
+        assertThatThrownBy(() -> service().requestVerification(77L, ADMIN))
+                .isInstanceOf(GlobalException.class)
+                .hasFieldOrPropertyWithValue("errorCode", ErrorCode.VERIFY_ALREADY_DONE);
+        verify(simulationService, never()).publishVerify(any());
+    }
+
+    /** 워커가 죽어 결과가 영영 안 오는 견적이 검증 불가로 굳으면 안 된다. */
+    @Test
+    void allows_verification_again_when_the_earlier_request_went_stale() {
+        Estimate estimate = withId(estimate(85.0, 90.0, 1_000_000_000L), 77L);
+        estimate.complete(4, 6, null, false);
+        estimate.markVerifyRequested(LocalDateTime.now().minusHours(1));
+        when(estimateRepository.findById(77L)).thenReturn(Optional.of(estimate));
+        when(scenarioRepository.findByEstimateIdAndAmrCount(77L, 4)).thenReturn(Optional.of(run(estimate, 4)));
+
+        service().requestVerification(77L, ADMIN);
+
+        verify(simulationService).publishVerify(any());
     }
 
     @Test

@@ -31,7 +31,7 @@ final class QuoteFixtures {
     static final long BUDGET = 300_000_000L;
 
     static final EstimateProperties PROPS = new EstimateProperties(15_000_000L, 0L, 500_000L, 28, 6, 4, 1,
-            Duration.ofMinutes(30), Duration.ofHours(6), "out", false, Duration.ofMinutes(10), 10, 10, 6, null);
+            Duration.ofMinutes(30), Duration.ofHours(6), "out", false, Duration.ofMinutes(10), Duration.ofMinutes(25), 10, 10, 6, null);
     static final QuotePdfProperties PDF = new QuotePdfProperties("", Duration.ofSeconds(30), "https://santafactory.app");
 
     private QuoteFixtures() {
