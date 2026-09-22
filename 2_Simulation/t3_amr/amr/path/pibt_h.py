@@ -270,7 +270,11 @@ def launch(n=12):
              #     **반드시 명시**할 것.
              _e("PIBT_V_EXEC", ""),
              _e("PIBT_A_EXEC", "")],
-        flags=["--/rtx/post/motionblur/enabled=false"])
+        flags=["--/rtx/post/motionblur/enabled=false"],
+        # HEADLESS=1 이면 Kit 을 안 띄우고 이쪽을 python 으로 직접 돌린다.
+        # 그 러너가 live_pibt.py 를 같은 프로세스 안에서 실행하므로 위 env 는
+        # 그대로 쓰인다 — 계획·ADG·주행은 한 줄도 다르지 않다.
+        headless="headless_pibt.py")
 
 
 def run_cmd(n=12):

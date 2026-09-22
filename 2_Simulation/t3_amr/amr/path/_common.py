@@ -81,6 +81,25 @@ _STREAM = _os.environ.get("STREAM", "1") not in ("0", "", "false", "False")
 LAUNCH = ("isaacsim isaacsim.exp.full.streaming --no-window" if _STREAM
           else "isaacsim isaacsim.exp.base.python --no-window")
 
+# ── 진짜 헤드리스 (2026-09-21) ──────────────────────────────────────
+# ☹ **위의 `STREAM=0` 은 헤드리스가 아니다.** 오래 그렇게 불러 왔지만 그것은
+#   WebRTC 인코딩·전송만 끈 것이고 **RTX 렌더는 계속 돈다.** 위 실측의
+#   50.51 -> 27.03 ms 가 딱 거기서 멈추는 이유가 그것이다.
+#
+#   렌더가 남는 근본 원인은 기동 방식이다 — `isaacsim ... --exec` 는 Kit 앱이
+#   주루프를 쥐고 렌더/물리를 번갈아 돌린다. 러너는 물리 콜백에 얹혀 갈 뿐이라
+#   `step(render=False)` 를 넘길 자리가 없다.
+#
+#   `HEADLESS=1` 은 기동 방식 자체를 바꾼다.
+#
+#       STREAM=1     isaacsim ... full.streaming --exec live_pibt.py   (렌더+전송)
+#       STREAM=0     isaacsim ... base.python    --exec live_pibt.py   (렌더만)
+#       HEADLESS=1   python runners/headless_pibt.py                   (렌더 없음)
+#
+#   세 번째만 앱에서 주루프를 뺏어 온다. 계획기 모듈이 `headless=` 로 자기
+#   standalone 러너를 선언한 경우에만 쓸 수 있다 (없으면 아래에서 막는다).
+_HEADLESS = _os.environ.get("HEADLESS", "0") not in ("0", "", "false", "False")
+
 # ── 스트리밍 포트 ───────────────────────────────────────────────────
 # 기본은 Isaac 기본값 그대로다 (사내망 jupyter04 는 이 줄이 생기기 전과 동일).
 #
@@ -171,16 +190,36 @@ class Launch(object):
     추가하면 두 곳을 고쳐야 했다 (2026-09-06). 표는 계획기 모듈에만 둔다.
     """
 
-    def __init__(self, runner, env, flags=(), notes=()):
+    def __init__(self, runner, env, flags=(), notes=(), headless=None):
         self.runner = runner            # runners/ 의 --exec 스크립트
         self.env = list(env)            # [(이름, 값)] — 값에 $VAR 를 써도 된다
         self.flags = list(flags)        # 계획기 전용 Kit 플래그
         self.notes = list(notes)
+        # HEADLESS=1 일 때 대신 돌릴 standalone 러너 (Kit 이 아니라 python 이
+        # 직접 부른다). 선언한 계획기만 헤드리스로 갈 수 있다.
+        self.headless = headless
+
+    def _no_headless(self):
+        raise SystemExit(
+            "★ 이 계획기에는 헤드리스 러너가 없습니다 (--exec 전용 러너 %s).\n"
+            "  HEADLESS=1 은 앱에서 주루프를 뺏어 렌더를 아예 안 부르는 방식이라\n"
+            "  standalone 러너가 따로 있어야 합니다.\n"
+            "    지금 가능한 것:  pibt_h  ->  runners/headless_pibt.py\n"
+            "  이 계획기는 HEADLESS 를 빼고 돌리세요 (STREAM=0 이면 렌더만 남습니다)."
+            % self.runner)
 
     def lines(self):
         """붙여넣을 수 있는 셸 명령."""
         out = ["# " + t for t in self.notes]
         out += ["%s=%s \\" % (k, v) for k, v in self.env]
+        if _HEADLESS:
+            if not self.headless:
+                self._no_headless()
+            # Kit 플래그는 안 붙는다 — Kit 을 안 띄운다. GPU 는 헤드리스 러너가
+            # $GPU 를 읽어 SimulationApp 의 active_gpu 로 넘긴다.
+            out.append("PIBT_HEADLESS=1 \\")
+            out.append("python $W/runners/%s" % self.headless)
+            return out
         out.append(LAUNCH + " \\")
         out += ["    " + f + " \\" for f in list(COMMON_FLAGS) + list(self.flags)]
         out.append("    --exec $W/runners/%s" % self.runner)
@@ -189,6 +228,15 @@ class Launch(object):
     def argv(self):
         """(환경변수 dict, argv) — os.execvpe 로 바로 넘길 수 있는 형태."""
         env = {k: expand(v) for k, v in self.env}
+        if _HEADLESS:
+            if not self.headless:
+                self._no_headless()
+            env["PIBT_HEADLESS"] = "1"
+            # `sys.executable` 이 곧 Isaac 파이썬이다 — 이 프로세스는 venv 에서
+            # 떴고, 그 venv 가 `isaacsim` CLI 와 `isaacsim` 파이썬 패키지를
+            # 함께 제공한다 (headless_wppl.py 를 `python` 으로 돌리는 것과 같다).
+            return env, [sys.executable,
+                         expand("$W/runners/%s" % self.headless)]
         args = LAUNCH.split()
         for f in list(COMMON_FLAGS) + list(self.flags):
             args += [expand(x) for x in f.split()]

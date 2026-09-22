@@ -116,7 +116,8 @@ def environment(cfg: RecorderConfig, spec: RunSpec, base: dict | None = None,
         "PIBT_N": str(spec.n_robots),
         "PIBT_MODE": "lifelong",
         "PIBT_HORIZON": str(horizon_ticks(spec.window_s, cfg.tick_s)),
-        "REPLAN": "0" if plan_exists else "1",
+        # ★ 궤적을 주면 계획을 **안 한다** — 그러면 계획 폴더도 필요 없다.
+        "REPLAN": "0" if (plan_exists or spec.trajectory) else "1",
         "STRICT": "1",
         "WATCH_SEC": str(int(cfg.watch_s)),
         "VIDEO": "1",
@@ -132,6 +133,20 @@ def environment(cfg: RecorderConfig, spec: RunSpec, base: dict | None = None,
     if scenario_path:
         e["SIM_SCENARIO_PATH"] = scenario_path
         e["SIM_SCENARIO_SHA256"] = spec.scenario_sha256 or ""
+    # ★ 궤적이 오면 계획 단계를 통째로 건너뛴다 (`live_pibt.py:1084`).
+    #   주문(`SIM_SCENARIO_PATH`)보다 **이쪽이 이긴다** — 궤적에는 배정 결과가
+    #   이미 들어 있어 주문 스트림을 쓸 자리가 없다.
+    if spec.trajectory:
+        e["PIBT_TRAJ"] = spec.trajectory
+        # ★ 궤적만 넘기면 안 돈다. 셋이 세트다 (2026-09-22 실측).
+        #   ① 궤적의 칸 번호는 **FMS 격자(107x116)** 기준이다. 안 주면 우리
+        #      격자(106x115)로 읽어 칸이 딴 자리를 가리킨다 — live_pibt 가
+        #      「스폰이 궤적 첫 틱과 다르다」로 운다.
+        #   ② `run_record.sh` 의 `PIBT_FRONT_RULE` 기본이 4인데 이 궤적은
+        #      4칸에서 **ADG 순환**이 난다. 틱 순위가 그걸 편다.
+        #   호출자가 준 값이 있으면 그쪽이 이긴다 — 실험용 구멍을 남긴다.
+        e.setdefault("PIBT_FMS_GRID", "1")
+        e.setdefault("PIBT_ADG_RANK", "1")
     return e
 
 

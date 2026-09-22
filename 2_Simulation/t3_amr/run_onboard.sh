@@ -2,7 +2,10 @@
 # ============================================================
 # run_onboard.sh — 가장 많이 움직이는 AMR 시점에서 진행방향을 녹화한다
 #
-#     bash run_onboard.sh                    주행 시점 (기본)
+#     bash run_onboard.sh                    주행 시점 (기본) · 12대 · **시드 104**
+#     bash run_onboard.sh 16                 16대 · 시드 104
+#     bash run_onboard.sh 16 103             16대 · **시드 103**   ← 대수 다음이 시드
+#     bash run_onboard.sh --seed 103         12대 · 시드 103
 #     bash run_onboard.sh --mode chase       뒤 위에서 따라가며
 #     bash run_onboard.sh --amr 7            로봇을 직접 지정 (기록을 안 읽는다)
 #     bash run_onboard.sh --rec $OUT/rec_full.npz   로봇을 고를 기록을 지정
@@ -11,6 +14,7 @@
 # ★ 읽을 기록(`--rec`)과 이번 판의 녹화 대상(`PIBT_RECORD`)은 **달라야 한다.**
 #   같으면 방금 읽은 파일을 이 판이 덮어쓴다. 같으면 실행 전에 죽는다.
 #
+# 대수·시드 규약은 `run_record.sh` 와 **같다** — 첫 정수가 대수, 두 번째가 시드.
 # 나머지 인자는 `run_record.sh` 로 그대로 넘어간다.
 #
 # 무엇을 하는가
@@ -50,14 +54,51 @@ while [ $# -gt 0 ]; do
         --rec)      REC_IN="$2"; shift 2 ;;
         --link)     LINK="$2"; shift 2 ;;
         --skip-cam) SKIP_CAM=1; shift ;;
+        # [patch_onboard_seed] `--seed` 는 **여기서도 읽고 그대로 넘긴다**
+        #   (2026-09-20). 읽는 이유는 아래 머리말과 씬 경로 때문이고, 넘기는
+        #   이유는 실제로 그 값을 쓰는 쪽이 `run_record.sh` 이기 때문이다.
+        # ☹ `${2}` 를 그냥 쓰면 `--seed` 가 마지막 인자일 때 `set -u` 로 죽는다
+        --seed|-s)  PIBT_SEED="${2:-}"; PASS+=("$1" "${2:-}"); shift 2 ;;
+        --seed=*)   PIBT_SEED="${1#*=}"; PASS+=("$1"); shift ;;
         *) PASS+=("$1"); shift ;;
     esac
 done
+
+# [patch_onboard_seed] 위치 인자도 `run_record.sh` 와 **같은 규약**으로 읽는다.
+#   첫 정수 = 대수 · 두 번째 정수 = 시드. 소비하지 않고 **엿보기만** 한다 —
+#   PASS 는 그대로 넘어가고, 여기서는 씬 경로(`pibt16.usd`)와 머리말에만 쓴다.
+#   ☹ 두 스크립트가 서로 다른 규약을 쓰면 `run_onboard.sh 16` 이 12대 씬을
+#     찾아 「씬이 없습니다」로 죽는다. 규약은 한 곳에서만 바뀌어야 한다.
+#
+#   ☹☹ **아무 정수나 주우면 안 된다.** `--seed 103` 의 103 을 대수로 오인해
+#     `pibt103.usd` 를 찾는다. run_record.sh 와 **같은 순서**로 — 먼저 시드
+#     플래그를 걷어낸 사본을 만들고, 그 **앞쪽 정수**만 본다.
+_peek=()
+_skip=0
+for _a in ${PASS[@]+"${PASS[@]}"}; do
+    if [ "$_skip" = 1 ]; then _skip=0; continue; fi
+    case "$_a" in
+        --seed|-s) _skip=1; continue ;;
+        --seed=*)  continue ;;
+    esac
+    _peek+=("$_a")
+done
+if [ "${#_peek[@]}" -ge 1 ] && [[ "${_peek[0]}" =~ ^[0-9]+$ ]]; then
+    PIBT_N="${_peek[0]}"
+    if [ "${#_peek[@]}" -ge 2 ] && [[ "${_peek[1]}" =~ ^[0-9]+$ ]]; then
+        PIBT_SEED="${_peek[1]}"
+    fi
+fi
 
 # shellcheck disable=SC1091
 source "$W/paths.sh"
 
 N="${PIBT_N:-12}"
+# [patch_onboard_seed] 시드 기본값은 `run_record.sh` 와 **같은 104** 여야 한다.
+#   여기서 export 해 두면 아래 `exec run_record.sh` 가 물려받고, 머리말이
+#   찍는 값과 실제로 도는 값이 같아진다 (위 76행의 논리와 같다).
+SEED="${PIBT_SEED:-104}"
+export PIBT_SEED="$SEED"
 STAGE_USD="$STAGE/pibt$(printf '%02d' "$N").usd"
 # ★ **읽기용 기록과 이번 판의 녹화 대상을 분리한다** (2026-09-14).
 #   예전에는 `PIBT_RECORD` 하나를 둘 다에 썼다. 그런데 그 값은 자식(run_record
@@ -85,7 +126,7 @@ export PIBT_FRONT_RULE="${PIBT_FRONT_RULE:-4}"
 export PIBT_PITCH="${PIBT_PITCH:-1.0}"
 
 echo "════════════════════════════════════════════════════"
-echo " run_onboard   시점 $MODE   대수 $N"
+echo " run_onboard   시점 $MODE   대수 $N   시드 $SEED"
 echo "  격자 pitch $PIBT_PITCH   앞 칸 규칙 $PIBT_FRONT_RULE"
 echo "════════════════════════════════════════════════════"
 
