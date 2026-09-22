@@ -62,7 +62,11 @@ public class VerifyEventStream {
         } else {
             send(estimateId, emitter, EVENT_DONE,
                     new EstimateVerified(estimateId, "done", videoPresigner.sign(video),
-                            videoPresigner.sign(estimate.getVerifyVideoSideUrl()), null));
+                            // 저장된 값이 없으면 이름 규칙으로 찾아 본다 — 엣지가 상단만 올린 채
+                            // 결과를 보고하면 그 시점 확인이 빈손이다 (S15P21A106-265)
+                            videoPresigner.sign(estimate.getVerifyVideoSideUrl() != null
+                                    ? estimate.getVerifyVideoSideUrl()
+                                    : videoPresigner.deriveSideKey(video)), null));
             emitter.complete();
         }
         return emitter;
