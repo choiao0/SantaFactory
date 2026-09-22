@@ -336,6 +336,38 @@ SPEED=$(awk -v s="$SHOT_STRIDE" -v f="$SHOT_FPS" 'BEGIN{printf "%.1f", s*f/60}')
 EXPN=$(awk -v s="$SHOT_STRIDE" 'BEGIN{printf "%d", 43800/s}')
 EXPSEC=$(awk -v n="$EXPN" -v f="$SHOT_FPS" 'BEGIN{printf "%d", n/f}')
 
+# ── 띄우기 전 검사 (2026-09-22) ─────────────────────────────
+#   Isaac 을 45초 띄운 뒤에야 드러나던 둘을 여기서 0.1초에 잡는다.
+if [ -n "${PIBT_TRAJ:-}" ]; then
+    # ① 궤적 파일이 실제로 있나.
+    #    `live_pibt.py:1086` 은 **절대경로가 아니면** $W 를 붙인다. 그래서
+    #    `PIBT_TRAJ="$W/..."` 를 $W 가 빈 채로 쓰면 "/docs/..." 가 되고,
+    #    맨 앞 슬래시 때문에 절대경로로 보여 $W 가 안 붙는다.
+    case "$PIBT_TRAJ" in
+        /*) _TJ="$PIBT_TRAJ" ;;
+        *)  _TJ="$W/$PIBT_TRAJ" ;;
+    esac
+    if [ ! -f "$_TJ" ]; then
+        echo "★ 궤적 파일이 없습니다: $_TJ"
+        echo "  PIBT_TRAJ=$PIBT_TRAJ"
+        [ -z "${W:-}" ] && echo "  ☹ \$W 가 비어 있습니다 — source paths.sh 를 먼저 하세요."
+        echo "  ※ \$W 기준 **상대경로**로 주는 편이 안전합니다:"
+        echo "      export PIBT_TRAJ=\"docs/모음/r13_peak10/trajectories.json\""
+        exit 1
+    fi
+    echo "[preflight] 궤적 확인 — $_TJ"
+
+    # ② 앞 칸 규칙 4 + ADG_RANK 없음 = ADG 순환 (fms_traj.build 독스트링).
+    if [ "$PIBT_FRONT_RULE" = "4" ] && [ -z "${PIBT_ADG_RANK:-}" ]; then
+        echo "★ 궤적 재생인데 PIBT_FRONT_RULE=4 이고 PIBT_ADG_RANK 가 없습니다."
+        echo "  이 조합은 **ADG 순환**으로 죽습니다 (앞 2칸은 비순환 · 4칸은 순환)."
+        echo "  둘 중 하나를 주세요:"
+        echo "      export PIBT_ADG_RANK=1      # 틱 순위로 편다 (259 이상)"
+        echo "      export PIBT_FRONT_RULE=2    # 궤적 발자국에 맞춘다"
+        exit 1
+    fi
+fi
+
 echo "════════════════════════════════════════════════════"
 echo " run_record  $TAG"
 echo "  인자        ${ARGS[*]}"
