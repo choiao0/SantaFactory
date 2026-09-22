@@ -366,7 +366,7 @@ def main() -> int:
     ap.add_argument("npz", nargs="?", help="out/rec_pibt12.npz")
     ap.add_argument("-o", "--out", default="out/path_view.html")
     ap.add_argument("--grid", default=None, help="점유격자 .npy (없으면 자동 탐색)")
-    ap.add_argument("--pitch", type=float, default=1.2,
+    ap.add_argument("--pitch", type=float, default=1.0,
                     help="계획 격자 간격 [m] — 칸 좌표·칸 수 계산용")
     ap.add_argument("--res", type=float, default=None,
                     help="점유격자 해상도 [m/셀]. 생략하면 추정한다 "

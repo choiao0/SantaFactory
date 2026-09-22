@@ -31,7 +31,7 @@ import numpy as np
 #   틀린다. TICK_S 도 1.0/0.75 가 따로 박혀 있었는데, 이건 1.2/0.90 과 우연히
 #   같아서 pitch 1.2 에서만 맞았다. 이제 격자에서 파생시킨다.
 CELL = float(os.environ.get("PITCH",
-             os.environ.get("PIBT_PITCH", "1.2")))   # m  계획 격자 pitch
+             os.environ.get("PIBT_PITCH", "1.0")))   # m  계획 격자 pitch
 V_MAX = float(os.environ.get("PIBT_V_PLAN", "0.90"))  # m/s  **계획** 속도
 W_MAX = 1.80                 # rad/s
 TICK_S = CELL / V_MAX        # 계획 틱 — 격자를 따라간다

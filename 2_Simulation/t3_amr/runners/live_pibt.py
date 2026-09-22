@@ -2,7 +2,7 @@
 """pibt_core_v2(헤딩) 계획을 isaac_drive 의 ADG 로 주행시킨다. --exec 용.
 
     LAN_IP=$(hostname -I | awk '{print $1}')
-    PIBT_SEED=9 PIBT_PITCH=1.2 \
+    PIBT_SEED=9 PIBT_PITCH=1.0 \
     isaacsim isaacsim.exp.full.streaming --no-window \
         --/exts/omni.kit.livestream.app/primaryStream/publicIp=$LAN_IP \
         --/renderer/activeGpu=3 --/renderer/multiGpu/enabled=false \
@@ -187,7 +187,7 @@ STAGE = os.environ.get("PIBT_STAGE", os.path.join(BASE, "v2/warehouse_v59_pibt12
 MAP = os.environ.get("PIBT_MAP", os.path.join(
     BASE, "warehouse/map"))
 N = int(os.environ.get("PIBT_N", "12"))
-PITCH = float(os.environ.get("PIBT_PITCH", "1.2"))
+PITCH = float(os.environ.get("PIBT_PITCH", "1.0"))
 SEED = int(os.environ.get("PIBT_SEED", "9"))
 MAX_STEPS = int(os.environ.get("PIBT_MAX_STEPS", "1600"))  # -211: x4
 # 기본값 "oneshot" 은 사실상 죽은 값이다 — amr/path/pibt_h.py 가 항상

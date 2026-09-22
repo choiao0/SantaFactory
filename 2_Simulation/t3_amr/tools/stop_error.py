@@ -52,7 +52,7 @@ import sys
 
 import numpy as np
 
-PITCH = float(os.environ.get("PITCH", os.environ.get("PIBT_PITCH", "1.2")))
+PITCH = float(os.environ.get("PITCH", os.environ.get("PIBT_PITCH", "1.0")))
 V_MOVE = float(os.environ.get("V_MOVE", "0.05"))     # m/s — 이 위면 움직이는 중
 W_MOVE = float(os.environ.get("W_MOVE", "0.15"))     # rad/s — 이 위면 도는 중
 AXIS_TOL = float(os.environ.get("AXIS_TOL", "0.10"))  # rad — 격자축에서 6도

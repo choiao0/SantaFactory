@@ -244,7 +244,7 @@ class RobotGeom:
     구동축과 같으면 (0, 0).  usd_probe.py 로 확인할 값이다.
     """
 
-    pitch: float = 1.20            # 격자 간격 m — 실제 값으로 교체
+    pitch: float = 1.00            # 격자 간격 m. run_record.sh:174 의 기본값과 같다
     rear_len: float = 0.37         # 피벗 -> 차체 뒷면
     front_len: float = 1.03        # 피벗 -> 차체 앞면 (Isaac 실측 1.03 m)
     width: float = 0.80
@@ -4075,7 +4075,7 @@ from isaac_drive import (RobotGeom, DifferentialDriver, FleetController,
                          plan_and_build)
 
 geom = RobotGeom(
-    pitch=1.20,                    # ★ 실제 격자 간격
+    pitch=1.00,                    # ★ 실제 격자 간격
     rear_len=1.03,                 # 구동축 -> 뒷면 (Isaac 실측)
     front_len=0.37,                # ★ 전장 - rear_len
     width=0.80,                    # ★
@@ -4177,7 +4177,7 @@ def plan_and_build_lifelong(free: np.ndarray, starts: dict[int, State],
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="pibt_core 플랜의 Isaac Sim 주행 계층")
-    ap.add_argument("--pitch", type=float, default=1.20, help="격자 간격 m")
+    ap.add_argument("--pitch", type=float, default=1.00, help="격자 간격 m")
     ap.add_argument("--pivot", choices=("rear_axle", "front_axle"), default="rear_axle",
                     help="회전 중심. rear_axle이면 차체가 앞으로 뻗고 "
                          "heading_offset=2 (pibt_core와 맞추는 라벨링)")

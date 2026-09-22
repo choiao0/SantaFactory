@@ -37,7 +37,7 @@ import sys
 
 import numpy as np
 
-PITCH = float(os.environ.get("PITCH", os.environ.get("PIBT_PITCH", "1.2")))
+PITCH = float(os.environ.get("PITCH", os.environ.get("PIBT_PITCH", "1.0")))
 VMIN = float(os.environ.get("VMIN", "0.30"))      # m/s — 이보다 느리면 "직진 중" 아님
 YAW_TOL = float(os.environ.get("YAW_TOL", "10"))  # 도 — 축 정렬 허용 오차
 WIDTH = 0.800                                     # m — 차체 폭
