@@ -13,12 +13,14 @@ import com.ssafy.santafactory.entity.estimate.EstimateStatus;
 import com.ssafy.santafactory.entity.estimate.ReasonCode;
 import com.ssafy.santafactory.entity.estimate.RunStatus;
 import com.ssafy.santafactory.entity.simulation.RunKpiDetail;
+import com.ssafy.santafactory.entity.simulation.RunReplay;
 import com.ssafy.santafactory.entity.simulation.SimScenario;
 import com.ssafy.santafactory.entity.warehouse.Warehouse;
 import com.ssafy.santafactory.global.auth.OwnershipGuard;
 import com.ssafy.santafactory.global.exception.ErrorCode;
 import com.ssafy.santafactory.global.exception.GlobalException;
 import com.ssafy.santafactory.repository.EstimateRepository;
+import com.ssafy.santafactory.repository.RunReplayRepository;
 import com.ssafy.santafactory.repository.SimScenarioRepository;
 import com.ssafy.santafactory.repository.WarehouseRepository;
 import com.ssafy.santafactory.service.SimulationService;
@@ -68,6 +70,8 @@ class EstimateServiceTest {
     @Mock
     SimScenarioRepository scenarioRepository;
     @Mock
+    RunReplayRepository replayRepository;
+    @Mock
     WarehouseRepository warehouseRepository;
     @Mock
     SimulationService simulationService;
@@ -88,6 +92,7 @@ class EstimateServiceTest {
         service = new EstimateService(
                 estimateRepository,
                 scenarioRepository,
+                replayRepository,
                 warehouseRepository,
                 simulationService,
                 costCalculator,
@@ -898,9 +903,11 @@ class EstimateServiceTest {
         service().applyResult(doneWithReplay("est_1_n3", "wallA"));
         service().applyResult(doneWithReplay("est_1_n5", "다른맵"));
 
-        // 궤적은 run 마다, 맵은 견적에 한 벌 — 그래야 143 KB 짜리가 대수만큼 중복되지 않는다
-        assertThat(three.getReplayJson()).contains("robots").doesNotContain("scene");
-        assertThat(five.getReplayJson()).contains("robots").doesNotContain("scene");
+        // 궤적은 run 마다 별도 테이블에, 맵은 견적에 한 벌 — 그래야 143 KB 짜리가 대수만큼 중복되지 않는다
+        ArgumentCaptor<RunReplay> saved = ArgumentCaptor.captor();
+        verify(replayRepository, times(2)).save(saved.capture());
+        assertThat(saved.getAllValues()).extracting(RunReplay::getReplayJson)
+                .allSatisfy(json -> assertThat(json).contains("robots").doesNotContain("scene"));
         // 먼저 온 것만 남는다. 어차피 같은 맵이라 덮어쓰면 같은 값을 다시 쓰는 UPDATE 가 된다
         assertThat(estimate.getReplaySceneJson()).contains("wallA").doesNotContain("다른맵");
     }
@@ -912,9 +919,12 @@ class EstimateServiceTest {
         when(scenarioRepository.findByRunId("est_1_n3")).thenReturn(Optional.of(three));
         when(scenarioRepository.findByEstimateIdOrderByAmrCountAsc(1L)).thenReturn(List.of(three));
         service().applyResult(doneWithReplay("est_1_n3", "wallA"));
+        ArgumentCaptor<RunReplay> saved = ArgumentCaptor.captor();
+        verify(replayRepository).save(saved.capture());
 
         when(estimateRepository.findById(1L)).thenReturn(Optional.of(estimate));
         when(scenarioRepository.findByEstimateIdAndAmrCount(1L, 3)).thenReturn(Optional.of(three));
+        when(replayRepository.findById(any())).thenReturn(Optional.of(saved.getValue()));
 
         JsonNode replay = service().replay(1L, 3, ADMIN);
 

@@ -91,13 +91,6 @@ public class SimScenario {
     @Column(name = "lead_time_p90")
     private Double leadTimeP90;
 
-    /**
-     * 이 run 의 앞 구간 궤적 (S15P21A106-205). 시뮬이 준 JSON 을 그대로 담는다.
-     * 맵({@code scene})은 대수와 무관하게 같으므로 여기가 아니라 견적 쪽에 한 벌만 둔다.
-     */
-    @Column(name = "replay_json")
-    private String replayJson;
-
     /** 판정 밖 상세 지표 7개 (S15P21A106-236). 전부 NULL 이면 Hibernate 가 null 로 읽는다. */
     @Embedded
     private RunKpiDetail kpiDetail;
@@ -137,16 +130,6 @@ public class SimScenario {
         this.error = null;
         this.status = RunStatus.DONE;
         this.completedAt = LocalDateTime.now();
-    }
-
-    /**
-     * 앞 구간 궤적을 붙인다. 없으면(내보내기를 끄거나 시뮬이 못 만들었으면) 아무것도 하지 않는다 —
-     * 리플레이가 없다고 이미 받아 둔 KPI 를 지울 이유가 없다.
-     */
-    public void applyReplay(String replayJson) {
-        if (replayJson != null) {
-            this.replayJson = replayJson;
-        }
     }
 
     /** 상세 지표를 붙인다. 없으면 그대로 둔다 — 판정에 쓰는 KPI 와 별개라 DONE 전이에 영향이 없다. */

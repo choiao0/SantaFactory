@@ -18,6 +18,7 @@ import com.ssafy.santafactory.entity.estimate.Estimate;
 import com.ssafy.santafactory.entity.estimate.RunStatus;
 import com.ssafy.santafactory.entity.estimate.VerifySnapshot;
 import com.ssafy.santafactory.entity.simulation.RunKpiDetail;
+import com.ssafy.santafactory.entity.simulation.RunReplay;
 import com.ssafy.santafactory.entity.simulation.SimScenario;
 import com.ssafy.santafactory.entity.warehouse.Warehouse;
 import com.ssafy.santafactory.global.auth.AuthenticatedMember;
@@ -25,6 +26,7 @@ import com.ssafy.santafactory.global.auth.OwnershipGuard;
 import com.ssafy.santafactory.global.exception.ErrorCode;
 import com.ssafy.santafactory.global.exception.GlobalException;
 import com.ssafy.santafactory.repository.EstimateRepository;
+import com.ssafy.santafactory.repository.RunReplayRepository;
 import com.ssafy.santafactory.repository.SimScenarioRepository;
 import com.ssafy.santafactory.repository.WarehouseRepository;
 import com.ssafy.santafactory.service.SimulationService;
@@ -82,6 +84,7 @@ public class EstimateService {
 
     private final EstimateRepository estimateRepository;
     private final SimScenarioRepository scenarioRepository;
+    private final RunReplayRepository replayRepository;
     private final WarehouseRepository warehouseRepository;
     private final SimulationService simulationService;
     private final CostCalculator costCalculator;
@@ -310,11 +313,13 @@ public class EstimateService {
 
         SimScenario run = scenarioRepository.findByEstimateIdAndAmrCount(estimateId, amrCount)
                 .orElseThrow(() -> new GlobalException(ErrorCode.ENTITY_NOT_FOUND));
-        if (run.getReplayJson() == null || estimate.getReplaySceneJson() == null) {
+        RunReplay stored = replayRepository.findById(run.getId())
+                .orElseThrow(() -> new GlobalException(ErrorCode.ENTITY_NOT_FOUND));
+        if (estimate.getReplaySceneJson() == null) {
             throw new GlobalException(ErrorCode.ENTITY_NOT_FOUND);
         }
         try {
-            ObjectNode replay = (ObjectNode) objectMapper.readTree(run.getReplayJson());
+            ObjectNode replay = (ObjectNode) objectMapper.readTree(stored.getReplayJson());
             replay.set(REPLAY_SCENE, objectMapper.readTree(estimate.getReplaySceneJson()));
             return replay;
         } catch (JsonProcessingException | ClassCastException e) {
@@ -585,7 +590,7 @@ public class EstimateService {
             // 맵을 뺀 나머지(dt_s·model·seconds·robots·headings)가 run 별로 다른 부분이다
             ObjectNode trajectory = ((ObjectNode) replay).deepCopy();
             trajectory.remove(REPLAY_SCENE);
-            run.applyReplay(objectMapper.writeValueAsString(trajectory));
+            replayRepository.save(new RunReplay(run.getId(), objectMapper.writeValueAsString(trajectory)));
         } catch (JsonProcessingException | ClassCastException e) {
             log.warn("리플레이 저장 실패 — run 은 그대로 둔다: runId={}, {}", run.getRunId(), e.toString());
         }
