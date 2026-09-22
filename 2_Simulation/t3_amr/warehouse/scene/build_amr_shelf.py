@@ -67,6 +67,26 @@ BACKSTOP = 0.020                     # 후면 낙하방지판 두께
 TIERS = 3                            # 적재 단 수 (베이스 포함)
 DECK_T = 0.030                       # 데크 두께. 베이스 플레이트와 같다
 
+# --- 적재물 (골판지 상자) --------------------------------------------------
+# ★ 단마다 **2개**. FMS `MAX_TOTES_PER_TRIP = 6` 이 「3단 x 2토트」에서 나오는데
+#   (core.py:37) 에셋이 그걸 안 보여주고 있었다. 눈으로 보이게 한다.
+#
+#   ★★ **비주얼 전용이다.** 콜라이더도 질량도 안 붙인다 — `--collide` 는 상부
+#     전체를 단일 박스로 덮으므로 상자가 물리에 새로 끼어들 자리가 없다.
+#     주행 지문(ms/step·체크포인트)이 유지되어야 한다.
+#
+#   치수 근거 — 포스트(40 mm, 외형에서 20 mm 안쪽) 사이에 들어가야 한다.
+#       쓸 수 있는 폭   0.800 - 2*(0.020+0.040) = 0.680
+#       상자 2개        0.30 x 2 + 0.04(틈) = 0.640      양옆 20 mm 남음
+#       단 유효높이     446.7 mm  ->  상자 320 mm 면 127 mm 뜬다
+CARGO = True                         # `--no-cargo` 로 뺀다
+CARGO_D = 0.600                      # 앞뒤 (유로 토트 600 mm)
+CARGO_W = 0.300                      # 좌우
+CARGO_H = 0.320                      # 높이
+CARGO_GAP = 0.040                    # 두 상자 사이
+CARGO_CLEAR = 0.060                  # 포스트 안쪽 여유 (inset 0.020 + POST 0.040)
+MAT_CARGO = ((0.62, 0.47, 0.31), 0.85, 0.0)    # 골판지 — 거칠고 금속 아님
+
 # --- 태블릿 (HMI 패널) -----------------------------------------------------
 # 10인치급을 상단 앞쪽에 눕혀 단다. **외형을 넘지 않는 것이 유일한 제약이다.**
 #   앞      FRONT(0.390) 에서 5 mm 안쪽까지만
@@ -159,7 +179,7 @@ def _tablet_cx(h=TAB_H, t=TAB_T, tilt=TAB_TILT):
     return FRONT - TAB_CLEAR - hx
 
 
-def build(out, top_rear, collide, tiers=TIERS, tablet=True):
+def build(out, top_rear, collide, tiers=TIERS, tablet=True, cargo=CARGO):
     stage = Usd.Stage.CreateNew(out)
     UsdGeom.SetStageUpAxis(stage, UsdGeom.Tokens.z)
     UsdGeom.SetStageMetersPerUnit(stage, 1.0)
@@ -200,6 +220,24 @@ def build(out, top_rear, collide, tiers=TIERS, tablet=True):
     _box(stage, "/AmrShelf/backstop", -top_rear, -top_rear + BACKSTOP,
          -hw, hw, BASE_Z1, TOP_Z)
     n += 1
+
+    # 적재물 — 단마다 상자 2개. **비주얼 전용** (위 CARGO 주석)
+    if cargo:
+        m_cargo = _material(stage, "/AmrShelf/Looks/Cargo", MAT_CARGO)
+        # 적재면 = 베이스 윗면 + 각 데크 윗면. 데크 밑면/상단 레일이 천장이다.
+        tops = [BASE_Z1] + [d[1] for d in decks]
+        x0 = -top_rear + CARGO_CLEAR
+        x1 = FRONT - CARGO_CLEAR
+        cx = (x0 + x1) / 2                     # 쓸 수 있는 깊이의 가운데
+        for t, z in enumerate(tops):
+            for k, sy in enumerate((-1, 1)):
+                cy = sy * (CARGO_W + CARGO_GAP) / 2
+                b = _box(stage, f"/AmrShelf/cargo_{t}{'lr'[k]}",
+                         cx - CARGO_D / 2, cx + CARGO_D / 2,
+                         cy - CARGO_W / 2, cy + CARGO_W / 2,
+                         z, z + CARGO_H)
+                _bind(b.GetPrim(), m_cargo)
+                n += 1
 
     # 태블릿 — 상단 레일에 매달린 HMI 패널 (갤럭시 탭 S9 11인치 치수)
     if tablet:
@@ -271,6 +309,9 @@ def main():
                     help="적재 단 수 (베이스 포함). 기본 3 — FMS 의 "
                          "MAX_TOTES_PER_TRIP=6 이 '3단 x 2토트' 에서 나온다. "
                          "★ 총높이 1,650 mm 는 단 수와 무관하게 유지된다")
+    ap.add_argument("--no-cargo", dest="cargo", action="store_false",
+                    help="선반을 비운 채 만든다 (기본은 단마다 상자 2개 — "
+                         "FMS MAX_TOTES_PER_TRIP=6 과 같은 모습). 비주얼 전용")
     ap.add_argument("--no-tablet", dest="tablet", action="store_false",
                     help="상단 앞쪽 HMI 태블릿을 빼고 만든다 (기본은 넣는다)")
     ap.add_argument("--collide", action="store_true",
@@ -284,7 +325,7 @@ def main():
     os.makedirs(os.path.dirname(a.out), exist_ok=True)
     if os.path.exists(a.out):
         os.remove(a.out)                              # CreateNew 는 덮어쓰지 않는다
-    n, decks, (mn, mx) = build(a.out, a.top_rear, a.collide, a.tiers, a.tablet)
+    n, decks, (mn, mx) = build(a.out, a.top_rear, a.collide, a.tiers, a.tablet, a.cargo)
 
     print(f"[shelf] {a.out}")
     print(f"[shelf] 부재 {n}개 · 베이스 {(BASE_REAR + FRONT) * 1000:.0f} x "
