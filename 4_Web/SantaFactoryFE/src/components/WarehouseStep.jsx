@@ -53,11 +53,21 @@ export default function WarehouseStep({ form, onChange, models, modelsError, mod
               </div>
             </div>
 
-            <div className="span2">
-              <label htmlFor="target">목표 출고 처리율</label>
-              <div className="field">
-                <input id="target" type="number" value={form.targetThroughput} min={1} max={100} onChange={number('targetThroughput')} />
-                <span className="suffix">%</span>
+            {/* 한 칸을 둘로 쪼갠다 — 칸 크기는 시간대 줄과 같고, 이름만 각자 위에 붙는다 */}
+            <div className="span2 targetpair">
+              <div>
+                <label htmlFor="target">목표 출고 처리율</label>
+                <div className="field">
+                  <input id="target" type="number" value={form.targetThroughput} min={1} max={100} onChange={number('targetThroughput')} />
+                  <span className="suffix">%</span>
+                </div>
+              </div>
+              <div>
+                <label htmlFor="target-util">목표 가동률</label>
+                <div className="field">
+                  <input id="target-util" type="number" value={form.targetUtilization} min={1} max={100} onChange={number('targetUtilization')} />
+                  <span className="suffix">%</span>
+                </div>
               </div>
             </div>
             <div className="span2">

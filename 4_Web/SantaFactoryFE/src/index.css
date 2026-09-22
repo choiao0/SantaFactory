@@ -184,7 +184,16 @@ section.step > p.desc { font-size: 18px; line-height: 1.7; max-width: 760px; mar
 .field input { padding-right: 64px; }
 .field .suffix { position: absolute; right: 14px; top: 50%; transform: translateY(-50%); font: 500 14px var(--font-mono); color: #77776f; letter-spacing: .02em; pointer-events: none; }
 .formgrid .span2 { grid-column: span 2; }
+/* 퍼센트 칸은 화살표로 한 칸씩 올릴 일이 없다 — 스피너를 숨긴다. 대수·예산은 그대로 둔다 */
+#target::-webkit-inner-spin-button, #target::-webkit-outer-spin-button,
+#target-util::-webkit-inner-spin-button, #target-util::-webkit-outer-spin-button {
+  appearance: none; margin: 0;
+}
+#target, #target-util { appearance: textfield; }   /* 파이어폭스 */
+
 .timerange { display: flex; align-items: center; gap: 8px; }
+/* 한 칸 안에 입력 둘 — 시간대 줄과 같은 폭이 되도록 반반으로 나눈다 */
+.targetpair { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; align-items: end; }
 .timerange > span { color: #8a8983; font-size: 16px; }
 
 /* 시각 입력 (TimeField). 값 버튼은 옆 숫자 칸과 같은 테두리·바탕을 쓰되, 한 줄에 둘이 들어가고
