@@ -27,6 +27,11 @@ lifelong 은 일을 **시간에 걸쳐** 흘려보낸다. 한 번에 움직이�
     격자      1.2 m (헤딩 2칸 점유 모델). FMS 는 1.0 m
     회전      turn_cost + 스윙 3칸. FMS 는 TURN_TICKS
     산출물    history -> isaac_drive 가 ADG 를 짓는다 (연속시간 실행용)
+    계급      TO_CHARGE 를 1 로 올리고 TO_CHARGE_HI(0) 를 더했다. FMS 는
+              TO_CHARGE 2 이고 HI 가 없다 — 도크 진입로에 끼인 채 방전되는
+              시드가 있어서다 (아래 RANK 주석). **2026-09-22 에 이 줄을 더했다:
+              그전까지 이 목록에 없어서 「선언 안 된 차이」였다.**
+    배차 가드  드롭 칸 도달성 검사 (아래 dispatch 주석)
 
 [복귀 — 2026-09-11 이식]  FMS kernel/core.py:199-227·246-258·312-336
 전에는 FREED 를 **시작 칸**(`home` 고정)으로 돌려보내는 것이 전부였다. FMS 는
@@ -88,9 +93,30 @@ ZONE_CLAIM = (TO_HOME, TO_CHARGE, TO_CHARGE_HI, CHARGING)
 #   가 이 값을 쓴다. 저쪽이 바꾸면 여기도 같이 바꿔야 비교가 선다.
 HD_AFTER = int(os.environ.get("PIBT_HD_AFTER", "16"))
 
-SERVICE_TICKS = 3          # 픽/드롭 서비스 시간. FMS SERVICE_STEPS 와 같은 자리
+# ★ 서비스 틱 — **13** 이다. FMS 의 dataclass 기본 4 를 보면 안 된다 (FMS-43).
+#
+#   `core.py:54  service_steps: int = 4` 는 dataclass 기본값이고, CLI 경로가
+#   **항상 덮는다** (`sim_v2_tasks.py:380`)
+#
+#       service_steps = round(SERVICE_TIME_S / dt) = round((40/11) / 0.2778) = 13
+#
+#   그래서 서비스 길이는 `13 + 토트수 x svc_per_tote` 다.
+#
+#       6토트 121 · 5토트 103 · 4토트 85 · 3토트 67 · 2토트 49 · 1토트 31 틱
+#
+#   r13 3h 전체 서비스 975건 중 **121 이 876건**. peak10 조각에서 보였던
+#   95·87 은 전체 궤적에 없다 — 창 앞뒤 경계에서 잘린 것이다.
+#
+#   ☹ 2026-09-22 에 두 번 틀렸다. 3 이었다가 dataclass 기본을 보고 4 로
+#     고쳤고, FMS-43 이 13 이라고 알려 줬다. **기본값이 아니라 CLI 가 넣는
+#     값이 진실**이다 — `tools/port_audit.py` 도 같은 실수를 해서 「4/4 일치」로
+#     통과시켰다. 그쪽도 같이 고쳤다.
+SERVICE_TICKS = 13
 
-# ★★ 드롭 도달성 가드 — **FMS 원본과의 유일한 차이** (미해결 A, S15P21A106-240).
+# ★★ 드롭 도달성 가드 — FMS 원본과 **선언된 차이 중 하나** (미해결 A, -240).
+#   ☹ 2026-09-22 정정 — 예전에 「유일한 차이」라고 적혀 있었는데 사실이
+#     아니었다. 계급(TO_CHARGE)·서비스 틱이 같이 갈려 있었다. 전체 목록은
+#     이 파일 머리말의 [FMS 와 다른 것] 에 있다.
 #
 #   `dispatch()` 가 태스크를 줄 때 픽 칸뿐 아니라 **드롭 칸까지** 도달 가능한지
 #   본다. 원본에는 없다. 넣은 이유는 처리량이 아니라 **틀린 것을 안 하게** 하려던
@@ -404,7 +430,7 @@ class Kernel(object):
         self._t = -1                      # step 이 매 틱 갱신한다
         self.unreachable = 0
         # ★★ 드롭 도달성 가드가 **답을 바꾼 횟수** (미해결 A, `guard_flipped`).
-        #   이 가드가 FMS 원본과의 **유일한 차이**다(`dispatch` 주석). 세어 두면
+        #   이 가드는 FMS 원본과의 **선언된 차이 중 하나**다(`dispatch` 주석). 세어 두면
         #   「회전 +2.3회/왕복」의 남은 물음이 이 한 줄 탓인지가 갈린다.
         self.guard_flipped = 0
         # ★★ 회전 옆 이웃 규칙이 **막은 회전 수** (PIBT_TURN_PAIR).
@@ -570,7 +596,7 @@ class Kernel(object):
     def dispatch(self, t):
         """FMS 정책 — waiting FIFO x 맨해튼 최근접.
 
-        [FMS 원본과의 유일한 차이] 드롭 칸 도달성 검사를 더했다. 이건
+        [FMS 원본과의 차이] 드롭 칸 도달성 검사를 더했다. 이건
         처리량이 아니라 **틀린 것을 안 하게 하는** 변경이라 정책과 무관하게
         필요하다 (아래 주석 참조). 그 외에는 한 글자도 안 바꾼다.
         """
@@ -601,13 +627,17 @@ class Kernel(object):
                     + abs(self.states[i][1] - fc))
             r = self.rb[a]
             r["state"], r["task"], r["goal"] = TO_PICK, task, task["frm"]
+            # ★ 배차 시각을 남긴다 (상류 core.py:294). 2026-09-22 까지 안 적었다.
+            #   FMS 궤적의 `tasks[].assigned` 가 이 값이라, 없으면 리드타임을
+            #   그쪽과 같은 정의로 못 센다.
+            task["assigned"] = t
             self.waiting.remove(task)
-            self._load_riders(task)
+            self._load_riders(task, t)
             elig.remove(a)
             if self.states[a][:2] == r["goal"]:
                 r["state"], r["svc"] = SVC_PICK, self._svc_ticks(r)
 
-    def _load_riders(self, task):
+    def _load_riders(self, task, t=None):
         """같은 버퍼에서 기다리는 토트를 먼저 온 순서로 태운다 (FMS core.py:297).
 
         **목적지를 리더 것으로 덮는다** — 동승자가 원래 다른 포장대로 갈 예정이어도
@@ -619,7 +649,12 @@ class Kernel(object):
         riders = [tk for tk in self.waiting
                   if tk.get("kind") == "out" and tk["frm"] == task["frm"]][:CAPACITY - 1]
         for tk in riders:
+            # 상류 core.py:301-302 는 셋을 다 덮는다. `to` 만 덮으면 이름이
+            # 원래 목적지로 남아 내보낸 데이터가 자기모순이 된다.
             tk["to"] = task["to"]
+            if "to_name" in task:
+                tk["to_name"] = task["to_name"]
+            tk["assigned"] = t
             self.waiting.remove(tk)
         if riders:
             task["riders"] = riders
