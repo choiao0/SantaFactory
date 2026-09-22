@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react'
 import { getEstimate } from '../api/estimates.js'
+import AmrRunning from './AmrRunning.jsx'
 import { useVerifyStream } from '../hooks/useVerifyStream.js'
 
 /**
@@ -27,7 +28,14 @@ function placeholderFor({ estimateId, ready, verify }) {
   if (verify.status && verify.status !== 'PENDING') {
     return { tag: 'PARTIAL', label: '영상 없음', text: '물리 검증은 끝났지만 재생할 영상이 남지 않았습니다.' }
   }
-  return { tag: 'RUNNING', label: '검증 중', live: true, text: 'Isaac Sim 이 권장 대수를 재현하는 중입니다. 영상이 준비되면 여기에서 바로 재생됩니다.' }
+  return {
+    tag: 'RUNNING', label: '검증 중', live: true,
+    text: 'Isaac Sim에서 로봇 동작을 검증하고 있습니다',
+    hint: [
+      '실제 환경에 가까운 정밀한 물리 검증을 위해 다소 시간이 필요합니다.',
+      '완료되면 이 화면에서 결과 영상을 바로 확인할 수 있습니다.',
+    ],
+  }
 }
 
 export default function VerifyStep({ estimateId, ready }) {
@@ -71,14 +79,14 @@ export default function VerifyStep({ estimateId, ready }) {
     <section className="step section-dark" id="verify">
       <div className="eyebrow red">
         <span className="live-dot" />
-        04 — VERIFY
+        04 — 물리 검증
       </div>
       <h2>Confirm it physically.</h2>
       <p className="desc">권장 대수를 Isaac Sim으로 재현해 실제로 문제없이 동작하는지 검증합니다.</p>
 
       <div className="sim-board">
         <div className="board-head">
-          <span>PHYSICAL VERIFICATION · ISAAC SIM</span>
+          <span>물리 검증 · Isaac Sim</span>
           <span className={`status ${playable ? 'DONE' : placeholder.tag}`}>
             {playable ? '완료' : placeholder.label}
           </span>
@@ -94,8 +102,17 @@ export default function VerifyStep({ estimateId, ready }) {
           />
         ) : (
           <div className="verify-placeholder">
-            {placeholder.live && <span className="live-dot pulse" />}
-            <p>{placeholder.text}</p>
+            {placeholder.live && <AmrRunning />}
+            {/* 검증이 도는 동안만 제목처럼 세운다 — 대기·실패 같은 한 줄 안내는 원래의 옅은 문구 */}
+            <p className={placeholder.hint ? 'vp-text' : 'vp-note'}>{placeholder.text}</p>
+            {placeholder.hint && (
+              <p className="vp-hint">
+                {/* 문장 단위로 끊는다 — 폭에 맡기면 "필요합니" / "다." 처럼 문장 가운데서 잘린다 */}
+                {placeholder.hint.map((line, i) => (
+                  <span key={line}>{i > 0 && <br />}{line}</span>
+                ))}
+              </p>
+            )}
           </div>
         )}
       </div>

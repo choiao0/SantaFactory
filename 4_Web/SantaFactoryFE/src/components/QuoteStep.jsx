@@ -102,7 +102,7 @@ function CurveChart({ runs, budget, recommended, knee }) {
           {r.amr_count}
         </text>
       ))}
-      <text x={pad.l} y={H - 4} fontSize="7.5" fill={MUTED} fontFamily={MONO}>AMR COUNT →</text>
+      <text x={pad.l} y={H - 4} fontSize="7.5" fill={MUTED} fontFamily={MONO}>AMR 대수 →</text>
       <text x={pad.l - 40} y={pad.t - 6} fontSize="7.5" fill={MUTED} fontFamily={MONO}>효율</text>
       <text x={W - pad.r + 8} y={pad.t - 6} fontSize="7.5" fill={MUTED} fontFamily={MONO}>구축비</text>
 
@@ -111,7 +111,7 @@ function CurveChart({ runs, budget, recommended, knee }) {
           <line x1={pad.l} x2={W - pad.r} y1={yc(budget)} y2={yc(budget)} stroke={MUTED} strokeDasharray="2 4" />
           {/* 그래프 안에 적으면 구축비 선이 지나가 글자가 뭉갠다 — 구축비 눈금 오른쪽에 붙인다.
               금액은 같은 높이의 눈금이 말해 주므로 여기선 이름만 */}
-          <text x={W - pad.r + 24} y={yc(budget) + 3} fontSize="7" fill={MUTED} fontFamily={MONO}>(BUDGET)</text>
+          <text x={W - pad.r + 24} y={yc(budget) + 3} fontSize="7" fill={MUTED} fontFamily={MONO}>(예산)</text>
         </>
       )}
 
@@ -145,7 +145,7 @@ function CurveChart({ runs, budget, recommended, knee }) {
       {knee != null && knee !== recommended && (
         <>
           <line x1={x(knee)} x2={x(knee)} y1={pad.t} y2={pad.t + ih} stroke={MUTED} strokeDasharray="3 3" />
-          <text x={x(knee) + 6} y={pad.t + ih - 20} fontSize="7.5" fill={MUTED} fontFamily={MONO}>KNEE {knee}</text>
+          <text x={x(knee) + 6} y={pad.t + ih - 20} fontSize="7.5" fill={MUTED} fontFamily={MONO}>변곡 {knee}대</text>
         </>
       )}
       {recommended != null && (
@@ -157,7 +157,7 @@ function CurveChart({ runs, budget, recommended, knee }) {
           <text x={x(recommended) + (x(recommended) > pad.l + iw * 0.7 ? -6 : 6)} y={pad.t + ih - 8}
                 textAnchor={x(recommended) > pad.l + iw * 0.7 ? 'end' : 'start'}
                 fontSize="11" fontWeight="700" fill="#b51616" fontFamily={MONO}>
-            RECOMMENDED {recommended}
+            권장 {recommended}대
           </text>
         </>
       )}
@@ -293,14 +293,14 @@ export default function QuoteStep({ estimateId, estimate, verdict }) {
     <section className="step paper" id="quote">
       <div className="eyebrow red">
         <span className="live-dot" />
-        05 — QUOTE
+        05 — 견적
       </div>
       {!ready && <Placeholder estimateId={estimateId} estimate={estimate} />}
 
       {ready && (
         <>
           <div className="q-head">
-            <h3>SANTA FACTORY · QUOTATION</h3>
+            <h3>SANTA FACTORY · 견적서</h3>
             <span className="mono">
               {formatDateTime(estimate.created_at)} · AMR : {estimate.amr_model}
             </span>
@@ -322,22 +322,22 @@ export default function QuoteStep({ estimateId, estimate, verdict }) {
 
               <div className="kpi">
                 <div>
-                  <span className="k-label">RECOMMENDED FLEET</span>
+                  <span className="k-label">권장 대수</span>
                   <strong>{rec.amr_count}<span>대</span></strong>
                   <em className="ok">목표 충족 · 예산 이내 · 효율 최고</em>
                 </div>
                 <div>
-                  <span className="k-label">THROUGHPUT</span>
+                  <span className="k-label">처리율</span>
                   <strong>{formatPercent(rec.throughput)}<span>%</span></strong>
                   <em>목표 {estimate.target_throughput}% 대비 +{formatPercent(rec.throughput - estimate.target_throughput)}p</em>
                 </div>
                 <div>
-                  <span className="k-label">COST</span>
+                  <span className="k-label">구축비용</span>
                   <strong>{formatWon(rec.total_cost)}</strong>
                   <em>예산 {formatWon(estimate.budget_limit)} 중 {Math.round((rec.total_cost / estimate.budget_limit) * 100)}%</em>
                 </div>
                 <div>
-                  <span className="k-label">UTILIZATION</span>
+                  <span className="k-label">가동률</span>
                   <strong>{formatPercent(rec.utilization)}<span>%</span></strong>
                   <em>목표 가동률 {estimate.target_utilization}%</em>
                 </div>
@@ -357,7 +357,7 @@ export default function QuoteStep({ estimateId, estimate, verdict }) {
             <>
               <div className="charts">
                 <div>
-                  <h5>EFFICIENCY–COST CURVE</h5>
+                  <h5>효율–비용 곡선</h5>
                   <CurveChart
                     runs={runs}
                     budget={estimate.budget_limit}
@@ -373,7 +373,7 @@ export default function QuoteStep({ estimateId, estimate, verdict }) {
                   </p>
                 </div>
                 <div>
-                  <h5>UTILIZATION</h5>
+                  <h5>가동률</h5>
                   <UtilChart runs={runs} target={estimate.target_utilization} recommended={recommended} />
                   <p className="chart-cap">
                     {/* 막대 색을 말로 적으면 어느 막대인지 짚기 어렵다 — 실제 칠하는 색을 그대로 보여준다 */}

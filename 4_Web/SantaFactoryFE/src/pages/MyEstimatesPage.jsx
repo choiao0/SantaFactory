@@ -61,7 +61,7 @@ export default function MyEstimatesPage() {
         <section className="step section-dark">
           <div className="eyebrow red">
             <span className="live-dot" />
-            <span>MY ESTIMATES</span>
+            <span>내 견적</span>
           </div>
           <h2>지난 견적.</h2>
           <p className="desc">요청했던 견적을 다시 엽니다. 대수별 결과와 주행 리플레이가 그대로 남아 있습니다.</p>
