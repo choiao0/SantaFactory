@@ -306,7 +306,7 @@ public class EstimateService {
      * 같게 처리하기 때문이다.
      */
     @Transactional(readOnly = true)
-    public JsonNode replay(Long estimateId, int amrCount, AuthenticatedMember me) {
+    public String replay(Long estimateId, int amrCount, AuthenticatedMember me) {
         Estimate estimate = estimateRepository.findById(estimateId)
                 .orElseThrow(() -> new GlobalException(ErrorCode.ESTIMATE_NOT_FOUND));
         ownershipGuard.checkEstimate(estimate, me);
@@ -318,14 +318,20 @@ public class EstimateService {
         if (estimate.getReplaySceneJson() == null) {
             throw new GlobalException(ErrorCode.ENTITY_NOT_FOUND);
         }
-        try {
-            ObjectNode replay = (ObjectNode) objectMapper.readTree(stored.getReplayJson());
-            replay.set(REPLAY_SCENE, objectMapper.readTree(estimate.getReplaySceneJson()));
-            return replay;
-        } catch (JsonProcessingException | ClassCastException e) {
-            log.error("리플레이 JSON 이 깨졌습니다: estimateId={}, amrCount={}", estimateId, amrCount, e);
+        String trajectory = stored.getReplayJson().strip();
+        String scene = estimate.getReplaySceneJson().strip();
+        // 파싱하지 않고 문자열을 이어 붙인다 — 28대 12 MB 를 트리로 만들고 다시 쓰는 데 0.4~1.5 s 가 들었다 (S15P21A106-255)
+        if (!isJsonObject(trajectory) || !isJsonObject(scene)) {
+            log.error("리플레이 JSON 이 객체가 아닙니다: estimateId={}, amrCount={}", estimateId, amrCount);
             throw new GlobalException(ErrorCode.ENTITY_NOT_FOUND);
         }
+        String body = trajectory.substring(0, trajectory.length() - 1).stripTrailing();
+        String separator = body.endsWith("{") ? "" : ",";
+        return body + separator + "\"" + REPLAY_SCENE + "\":" + scene + "}";
+    }
+
+    private static boolean isJsonObject(String json) {
+        return json.length() >= 2 && json.charAt(0) == '{' && json.charAt(json.length() - 1) == '}';
     }
 
     /**

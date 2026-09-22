@@ -926,12 +926,28 @@ class EstimateServiceTest {
         when(scenarioRepository.findByEstimateIdAndAmrCount(1L, 3)).thenReturn(Optional.of(three));
         when(replayRepository.findById(any())).thenReturn(Optional.of(saved.getValue()));
 
-        JsonNode replay = service().replay(1L, 3, ADMIN);
+        String json = service().replay(1L, 3, ADMIN);
 
-        // 나눠 저장한 것은 저장 쪽 사정이다 — 화면은 둘을 같이 받아야 그림을 그린다
+        // 나눠 저장한 것은 저장 쪽 사정이다 — 화면은 둘을 같이 받아야 그림을 그린다.
+        // 파싱 없이 문자열을 이어 붙이므로(-255) 결과가 온전한 JSON 인지 파싱해서 확인한다
+        JsonNode replay = objectMapper.readTree(json);
         assertThat(replay.get("scene").get("meta").get("map").asText()).isEqualTo("wallA");
         assertThat(replay.get("robots").has("0")).isTrue();
         assertThat(replay.get("seconds").asDouble()).isEqualTo(600.0);
+    }
+
+    @Test
+    void replay_is_404_when_the_stored_json_is_not_an_object() {
+        Estimate estimate = withId(estimate(90.0, 80.0, 300_000_000L), 1L);
+        estimate.applyReplayScene("{\"meta\":{}}");
+        SimScenario three = run(estimate, 3);
+        when(estimateRepository.findById(1L)).thenReturn(Optional.of(estimate));
+        when(scenarioRepository.findByEstimateIdAndAmrCount(1L, 3)).thenReturn(Optional.of(three));
+        when(replayRepository.findById(any())).thenReturn(Optional.of(new RunReplay(null, "[1,2,3")));
+
+        // 파싱을 생략한 대신 최소한 객체 모양({ … })인지는 본다 — 아니면 붙인 결과가 깨진 JSON 이 된다
+        assertThatThrownBy(() -> service().replay(1L, 3, ADMIN))
+                .isInstanceOf(GlobalException.class);
     }
 
     @Test
