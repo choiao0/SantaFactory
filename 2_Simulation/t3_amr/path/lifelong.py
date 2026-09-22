@@ -84,6 +84,10 @@ SERVICE = (SVC_PICK, SVC_DROP, CHARGING)
 # IDLE 은 우리 쪽에서 goal=None 이라 목표 대신 **서 있는 칸**으로 예약한다.
 ZONE_CLAIM = (TO_HOME, TO_CHARGE, TO_CHARGE_HI, CHARGING)
 
+# ★ 정체 문턱 — FMS `hd_after` 와 같은 값 (FMS-26 §2-6). `stag_robot_ticks`
+#   가 이 값을 쓴다. 저쪽이 바꾸면 여기도 같이 바꿔야 비교가 선다.
+HD_AFTER = int(os.environ.get("PIBT_HD_AFTER", "16"))
+
 SERVICE_TICKS = 3          # 픽/드롭 서비스 시간. FMS SERVICE_STEPS 와 같은 자리
 
 # ★★ 드롭 도달성 가드 — **FMS 원본과의 유일한 차이** (미해결 A, S15P21A106-240).
@@ -103,6 +107,34 @@ SERVICE_TICKS = 3          # 픽/드롭 서비스 시간. FMS SERVICE_STEPS 와 
 #   켜든 끄든 `guard_flipped`(가드가 답을 바꾼 횟수)는 **항상 센다.** 그 수가
 #   0 이면 이 차이는 이 판에서 없었던 것이고, 크면 A 의 남은 물음이 여기다.
 DROP_GUARD = os.environ.get("PIBT_DROP_GUARD", "1") not in ("0", "", "off", "no")
+
+# ★★ 동승 (2026-09-21) — **포팅 누락이었다.**
+#
+#   이 파일 머리말의 「FMS 와 맞춘 것」에 `배차` 가 들어 있는데, FMS
+#   `3_FMS/sim_engine/kernel/core.py:297` 의 동승 여섯 줄이 안 옮겨져 있었다.
+#   「FMS 와 다른 것」 목록에도 없으니 의도한 차이가 아니다 — `pibt_core_v2.py`
+#   로더 머리말이 경고한 **「사본은 상류가 바뀌면 조용히 갈린다」** 의 실제 사례다.
+#
+#   무엇이 갈렸나 (시드 104 · 3h · packing_assign_s104.csv, 2026-09-21 실측)
+#
+#       완료 주문   FMS 2,677   우리 630        -76.5 %
+#       트립 수     FMS   476   우리 630        ★ 우리가 32 % **더** 움직였다
+#       트립당      FMS  5.62   우리 1.00
+#
+#     이동이 느려서 난 차이가 아니다. 한 번에 하나씩 나른 것뿐이다.
+#
+#   규칙은 FMS 와 같다 — 같은 **버퍼(frm)** 에서 기다리는 것을 먼저 온 순서로
+#   태우고, **목적지는 리더의 것으로 덮는다.** r13 궤적에서 6건 묶음 431개가
+#   전부 같은 `to_name` 인 이유가 그것이다 (원래 같아서가 아니다).
+#
+#   기본 1 = 예전 동작과 **비트 동일**이고, FMS `core.py:55` 의 기본값과도 같다.
+#   FMS 운영 스윕은 `--capacity=6 --svc-per-tote=18` 로 돈다 — 그쪽과 맞댈
+#   판에서는 같은 값을 줘야 한다.
+#
+#       PIBT_CAPACITY      왕복당 토트 수 (FMS 운영값 6)
+#       PIBT_SVC_PER_TOTE  픽·드롭 **각각** 토트당 추가 틱 (FMS 운영값 18)
+CAPACITY = max(1, int(os.environ.get("PIBT_CAPACITY", "") or 1))
+SVC_PER_TOTE = max(0, int(os.environ.get("PIBT_SVC_PER_TOTE", "") or 0))
 
 # ★★ 회전 옆 이웃 규칙 — pitch 1.0 에서 옆 칸에 남이 있으면 제자리 회전 금지 (-240).
 #
@@ -360,6 +392,8 @@ class Kernel(object):
         #   보고했는데 겪은 로봇은 8대였다 (FMS 답신 15 §3).
         #   「끝까지 막혀 있던 수」가 아니라 **「겪은 수」**를 세야 한다.
         self.stag_peak = {a: 0 for a in starts}
+        # 정체 로봇·틱 누적 (FMS-26 §2-7 대안 지표). 위 주석 참조.
+        self.stag_robot_ticks = 0
         self.replan = Replanner(free, self.edge_cost, self.turn_cost)
         self.done = 0
         # ★ 완료 **틱**을 남긴다 (-224). 총계만으로는 FMS 의 `saturated_tph`
@@ -544,6 +578,8 @@ class Kernel(object):
         for task in list(self.waiting):
             if not elig:
                 break
+            if task not in self.waiting:      # 앞 태스크의 동승 토트로 이미 실렸다
+                continue
             fr, fc = task["frm"]
             # ★ 픽 칸만 보면 안 된다. 드롭 칸이 도달 불가인 태스크를 받으면
             #   그 로봇은 거리장이 전부 -1 이라 TO_DROP(RANK 1)으로 **영구 정지**
@@ -566,17 +602,42 @@ class Kernel(object):
             r = self.rb[a]
             r["state"], r["task"], r["goal"] = TO_PICK, task, task["frm"]
             self.waiting.remove(task)
+            self._load_riders(task)
             elig.remove(a)
             if self.states[a][:2] == r["goal"]:
-                r["state"], r["svc"] = SVC_PICK, SERVICE_TICKS
+                r["state"], r["svc"] = SVC_PICK, self._svc_ticks(r)
+
+    def _load_riders(self, task):
+        """같은 버퍼에서 기다리는 토트를 먼저 온 순서로 태운다 (FMS core.py:297).
+
+        **목적지를 리더 것으로 덮는다** — 동승자가 원래 다른 포장대로 갈 예정이어도
+        리더를 따라간다. 이게 없으면 한 트립이 여러 포장대를 도는 얘기가 되어
+        FMS 와 전혀 다른 문제가 된다.
+        """
+        if CAPACITY <= 1 or task.get("kind") != "out":
+            return
+        riders = [tk for tk in self.waiting
+                  if tk.get("kind") == "out" and tk["frm"] == task["frm"]][:CAPACITY - 1]
+        for tk in riders:
+            tk["to"] = task["to"]
+            self.waiting.remove(tk)
+        if riders:
+            task["riders"] = riders
+
+    def _svc_ticks(self, r):
+        """서비스 틱 — 실은 토트 수만큼 늘어난다 (FMS `_begin_service`)."""
+        if SVC_PER_TOTE <= 0:
+            return SERVICE_TICKS
+        task = r.get("task") or {}
+        return SERVICE_TICKS + (1 + len(task.get("riders") or ())) * SVC_PER_TOTE
 
     def _arrive(self, a):
         """목표 도착 처리 — 상태를 한 칸 진행시킨다."""
         r = self.rb[a]
         if r["state"] == TO_PICK:
-            r["state"], r["svc"] = SVC_PICK, SERVICE_TICKS
+            r["state"], r["svc"] = SVC_PICK, self._svc_ticks(r)
         elif r["state"] == TO_DROP:
-            r["state"], r["svc"] = SVC_DROP, SERVICE_TICKS
+            r["state"], r["svc"] = SVC_DROP, self._svc_ticks(r)
         elif r["state"] == TO_HOME:
             r["state"], r["goal"] = IDLE, None
 
@@ -585,10 +646,13 @@ class Kernel(object):
         if r["state"] == SVC_PICK:
             r["state"], r["goal"] = TO_DROP, r["task"]["to"]
         else:                                            # SVC_DROP → 일 끝
-            self.done += 1
+            # ★ 동승 토트도 같이 내린다 — 한 트립이 주문 여러 건을 끝낸다.
+            #   FMS 의 「완료 태스크」도 **주문 수**를 센다 (r13: 트립 476 · 태스크 2,677).
+            n = 1 + len((r["task"] or {}).get("riders") or ())
+            self.done += n
             # 시그니처는 못 바꾼다 — `battery.BatteryKernel` 이 이 메서드를
             # 오버라이드하고 `super()._service_done(a)` 로 부른다.
-            self.done_ticks.append(self._t)
+            self.done_ticks.extend([self._t] * n)
             r["state"], r["task"], r["goal"] = FREED, None, None
 
     def step(self, t):
@@ -813,6 +877,22 @@ class Kernel(object):
                 self.stag.update(a, r["goal"], self.dm(r["goal"])[s1])
                 if self.stag.get(a) > self.stag_peak[a]:
                     self.stag_peak[a] = self.stag.get(a)
+                # ★ 정체 로봇·틱 — FMS `standoff_ticks` 의 **대안 지표**
+                #   (FMS-26 §2-7). 「`stag >= hd_after` 인 로봇을 매 틱 세어
+                #   합한다」. 대치 상태기계 없이 잴 수 있고, 저쪽 대치 감지의
+                #   **입력**이라 대치 로봇·틱의 상위 집합이다.
+                #
+                #   ★★ `stag_stuck` 과 **다른 값이다.** 이름이 비슷해서
+                #     묶으면 안 된다:
+                #       stag_stuck        `stag_peak >= 100` 인 로봇 수. 판당 한 번
+                #       stag_robot_ticks  `stag >= 16` 인 로봇 수를 **매 틱 누적**
+                #
+                #   목표가 있는 로봇만 센다 — 목표가 없으면 `stag` 가 이 틱에
+                #   갱신되지 않아 **옛 값이 남는다.** 저쪽 감지도 `state ∈ NAV`
+                #   를 요구하므로(§2-2 A) 목표가 있는 쪽이 맞다고 본다.
+                #   (해석이 하나 들어갔다 — 답신에 그렇게 적었다.)
+                if self.stag.get(a) >= HD_AFTER:
+                    self.stag_robot_ticks += 1
                 self.age[a] = 0 if s1[:2] == r["goal"] else self.age[a] + 1
                 if s1[:2] == r["goal"]:
                     self._arrive(a)
@@ -880,9 +960,37 @@ def run_lifelong(free, starts, cells_by_cat, horizon=600, seed=0, order_gap=15,
     커널 훅과 같은 뜻이다 — 이 파일에 FMS 파일 형식이 섞이면 안 된다.
     """
     rng = np.random.default_rng(seed)
+    # ★ 주문 출처를 **여기 한 곳**에서 정한다 (2026-09-17).
+    #   `pibt_scene` 에만 꽂으면 `plan_scale`·`soft_probe`·`adg_edge_audit` 이
+    #   전부 안 탄다 — 셋 다 이 함수를 직접 부른다. 공통 진입점에 두어야
+    #   도구가 아무것도 안 고쳐도 따라온다.
+    #   형식을 아는 코드는 `fms_stream` 에 둔다 (위 독스트링의 약속).
+    # ★ 호출자가 스트림을 **직접 준** 경우도 말해야 한다 (2026-09-17 정정).
+    #   처음에는 `src = "시드 생성"` 으로 두고 `stream is None` 일 때만 고쳤는데,
+    #   `pibt_scene --orders` 처럼 밖에서 넣어 주면 **파일로 돌면서 「시드
+    #   생성」이라고 찍었다.** 출처를 찍는 줄이 출처를 속이면 없느니만 못하다.
+    src = None
+    if stream is not None:
+        src = (stream.provenance() if hasattr(stream, "provenance")
+               else f"호출자가 준 스트림 ({type(stream).__name__})")
+    else:
+        try:
+            import fms_stream
+        except ImportError:
+            fms_stream = None
+        if fms_stream is not None:
+            stream = fms_stream.from_env(free, horizon, order_end=order_end)
+            if stream is not None:
+                src = stream.provenance()
     if stream is None:
         stream = OrderStream(rng, cells_by_cat, horizon, order_gap, shifts,
                              order_end=order_end)
+        src = (f"시드 생성 (seed={seed} · order_gap={order_gap} · "
+               f"shifts={list(shifts)})")
+    # ★ 출처를 **반드시** 찍는다. 2026-09-17 에 「파일을 물었나 시드가 냈나」를
+    #   로그로 못 갈라 30분을 날렸다. 확인은 액션 수로도 된다 — 시드 생성이
+    #   416,714 라, 파일을 물면 반드시 달라야 한다. 같으면 안 걸린 것이다.
+    print(f"[lifelong] 주문 출처: {src}")
     # ★ 커널을 갈아 끼울 자리. 기본값이면 동작은 이전과 **완전히 같다**.
     #   battery.BatteryKernel 이 이 훅으로 들어온다 — 이 파일에 배터리 코드가
     #   섞이지 않게 하려는 것이다.
@@ -913,6 +1021,9 @@ def run_lifelong(free, starts, cells_by_cat, horizon=600, seed=0, order_gap=15,
             #   ★ 0 을 단언하면 안 된다 — 버그 신호가 아니라 **노출 지표**다
             #     (겹친 채 도는 것 자체는 합법. FMS 답신 12 §1·§4 확인).
             "soft_clash": getattr(K, "_soft_clash", 0),
+            # ★ 주문 출처 — 결과 표에도 남긴다. 로그만 보고 「파일인가 시드인가」
+            #   를 못 갈라 30분을 날린 뒤에 넣었다 (2026-09-17).
+            "orders_src": src,
             # ★ 어느 쪽 판인지 결과에 남긴다 (-224). 표만 보고 기준선과
             #   구현판을 헷갈리는 일이 실제로 있었다.
             "soft_hold": os.environ.get("PIBT_SOFT_HOLD", "1")
@@ -933,6 +1044,9 @@ def run_lifelong(free, starts, cells_by_cat, horizon=600, seed=0, order_gap=15,
             "stag_mean": (sum(K.stag_peak.values()) / len(K.stag_peak)
                           if K.stag_peak else 0.0),
             "stag_stuck": sum(1 for v in K.stag_peak.values() if v >= 100),
+            # ★ FMS `standoff_ticks` 의 대안 — 이름이 비슷한 위 값과 **다르다**
+            "stag_robot_ticks": K.stag_robot_ticks,
+            "hd_after": HD_AFTER,
             # 끝 시점 값 — 「지금도 막혀 있나」. 판정에 쓰려면 이쪽이 맞다
             "stag_stuck_end": sum(1 for v in K.stag.stag.values() if v >= 100)}
     if hasattr(K, "report"):

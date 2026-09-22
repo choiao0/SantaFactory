@@ -124,6 +124,14 @@ REV_TICKS = round(MOVE_TICKS * REVERSE_FACTOR)   # 후진 1칸 실행 틱 (계�
 # 12틱 = 3.3333 s/칸 = **0.300 m/s** 로 그쪽 후진 p99 와 같다(후진 상한 0.3 = 전진 0.9 의 1/3).
 # 값을 여기 한 곳에만 둔다 — KernelConfig 와 sim_v2_tasks 가 이 이름을 쓴다.
 
+DEFAULT_FOOTPRINT = "exact"   # 운영 기본 회전 발자국 — sim_v2_tasks 와 fms_core.kernel_planner 가 이 이름을 쓴다 (-251)
+# 전엔 문자열 "exact" 가 두 곳에 복제돼 있었다. 값을 여기 한 곳에만 둔다 — REV_TICKS·CELL_M 과 같은 이유.
+# ☹ exact 는 앞 칸 규칙이 없어 회전 중 코가 들어가는 칸을 아무도 안 막는다(pitch 1.0 에서 코 반경
+# hypot(0.39, 0.40) = 0.5587 > 반칸 0.50). 물리 팀 금지 조합표로 세면 위험한 회전 exact 9.85 % · 2칸 1.79 % · 4칸 0.95 %.
+# 그런데 2칸은 고부하에서 STALL(2칸 × v3.11 turn_bias = 정면 대치 탈출로 0), 4칸은 six 28대가 무너진다(건/h 851).
+# 그래서 exact 를 유지하고 근본 고침(금지 조합표 + 거리장 벌점)은 v3.17 이다 — docs/2026-09-18_FMS-37.
+
+
 def rear_cell(r, c, h):
     return (r - DIRS[h][0], c - DIRS[h][1])
 

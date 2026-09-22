@@ -24,3 +24,17 @@ sudo ss -ltn | grep :5671
 docker exec a106-rabbitmq rabbitmqctl list_connections user peer_host | sort | uniq -c   # sim-worker 12 = GCP 3대 × 4
 echo | openssl s_client -connect j15a106.p.ssafy.io:5671 -servername j15a106.p.ssafy.io | grep "Verify return code"   # 허용 IP 에서 0 (ok)
 ```
+
+# EC2 nginx — 레지스트리 공인 경로 (S15P21A106-249)
+
+k3s 노드(GCP)가 워커 이미지를 받는 길. tailnet 평문 5000 대신 **443 `/v2/` → 127.0.0.1:5000** 으로, 5671 과 같은 원칙(TLS 는 nginx, 출발지 제한).
+push 는 Jenkins 가 EC2 안에서 루프백 5000 으로 직접 하므로 이 경로는 pull 전용이다(`limit_except GET HEAD`).
+
+```
+sudo cp registry-v2.conf /etc/nginx/snippets/registry-v2.conf
+# j15a106.p.ssafy.io 의 443 server 블록 안에 한 줄:  include snippets/registry-v2.conf;
+sudo nginx -t && sudo systemctl reload nginx
+curl -sI https://j15a106.p.ssafy.io/v2/ | head -1      # 이 PC: 403 (허용 IP 아님). GCP 노드에서: 200
+```
+- registry 컨테이너는 `compose.registry.yml` 대로 127.0.0.1:5000 에만 바인딩한다. 노드 쪽 `registries.yaml` 은 필요 없다(공인 CA).
+- 이미지 이름이 `j15a106.p.ssafy.io/fms-estimate-worker:<태그>` 로 바뀐다 — Deployment 와 Jenkinsfile 의 `REGISTRY_NODE` 가 그 값이다.

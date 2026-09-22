@@ -10,6 +10,7 @@ run_record.sh(t3_amr) 의 규약:
 from __future__ import annotations
 
 import glob
+import logging
 import math
 import os
 import shutil
@@ -22,6 +23,8 @@ from typing import Any
 from .spec import RunSpec, canonical_json
 
 RUN_ENV_MARK = "SIM_RUN_ID"                  # 자식 환경 표식 — 데몬 재시작 때 남은 런 프로세스를 찾는다
+log = logging.getLogger(__name__)
+
 DEFAULT_PLANNER = "pibt_h"
 # 계획 틱 길이 — path/metrics.tick_seconds 와 같은 식:
 #   pitch / (v_max × MOVE_TICKS) = 1.2 / (0.9 × 4) ≈ 0.333 s (211 틱 모델).
@@ -29,10 +32,38 @@ DEFAULT_PLANNER = "pibt_h"
 #   시뮬 ≈ 90 s 에 "전원 완주"로 끝났다 (2026-09-16 컨테이너 실측: 400틱 = 시뮬 116 s).
 #   엣지는 numpy 없이 돌아야 해서 metrics 를 import 하지 않고 상수를 둔다.
 #   격자(PIBT_PITCH)·v_max·MOVE_TICKS 가 바뀌면 여기와 T3AMR_TICK_S(edge.py --tick-s)를 같이 본다.
-PLAN_PITCH_M = 1.2                           # live_pibt PIBT_PITCH 기본 · isaac_drive.RobotGeom.pitch
+# ★★ 2026-09-21 정정 — **기본이 1.2 였는데 자식은 1.0 으로 돌고 있었다.**
+#   `run_record.sh:124` 가 `export PIBT_PITCH="${PIBT_PITCH:-1.0}"` 다. 그런데
+#   여기는 1.2 로 환산했으므로 틱이 0.333 s 로 잡혔고, 실제(1.0)는 0.278 s 다.
+#   결과는 **창이 20 % 짧게 계획되는 것**이다 — 창 600 s 에 1,980틱을 세우는데
+#   2,376틱이 맞다. 그러면 창이 끝나기 전에 「전원 완주」로 판이 끝난다.
+#   바로 위 주석이 기록한 215 사고(창 300 s 에 270틱)와 **같은 종류**다.
+#
+#   그래서 상수를 박지 않고 `PIBT_PITCH` 를 본다. 엣지 환경에 그 값이 있으면
+#   `environment()` 가 os.environ 을 통째로 물려주므로 **자식도 같은 값**을 쓴다.
+#   없으면 run_record.sh 와 같은 1.0 으로 맞춘다 — 양쪽 기본값이 갈리면 안 된다.
+PLAN_PITCH_DEFAULT_M = 1.0                   # run_record.sh:124 의 기본값과 **같아야 한다**
 PLAN_V_MAX_MPS = 0.9                         # isaac_drive.RobotGeom.v_max
 MOVE_TICKS = 4                               # 3_FMS/sim_engine pibt.geometry.MOVE_TICKS — 전진 1칸 = 4틱 (-211)
-DEFAULT_TICK_S = PLAN_PITCH_M / (PLAN_V_MAX_MPS * MOVE_TICKS)
+
+
+def plan_pitch_m(env: dict | None = None) -> float:
+    """계획 격자(m). `PIBT_PITCH` 가 있으면 그것, 없으면 run_record.sh 와 같은 기본값."""
+    raw = ((os.environ if env is None else env).get("PIBT_PITCH") or "").strip()
+    try:
+        v = float(raw)
+    except ValueError:
+        return PLAN_PITCH_DEFAULT_M
+    return v if v > 0 else PLAN_PITCH_DEFAULT_M
+
+
+def tick_seconds(env: dict | None = None) -> float:
+    """계획 틱 길이[s] = pitch / (v_max × MOVE_TICKS). `path/metrics.tick_seconds` 와 같은 식."""
+    return plan_pitch_m(env) / (PLAN_V_MAX_MPS * MOVE_TICKS)
+
+
+PLAN_PITCH_M = plan_pitch_m()                # 기록·로그용 (읽는 시점의 실제 값)
+DEFAULT_TICK_S = tick_seconds()
 HORIZON_MARGIN_S = 60.0                      # 창보다 조금 길게 계획 — 창 끝은 host-orch Stop 이 자른다
 READY_MARKER = "캡처 ON"
 FINISHED_MARKERS = ("post_quit", "전원 완주")
@@ -85,16 +116,37 @@ def environment(cfg: RecorderConfig, spec: RunSpec, base: dict | None = None,
         "PIBT_N": str(spec.n_robots),
         "PIBT_MODE": "lifelong",
         "PIBT_HORIZON": str(horizon_ticks(spec.window_s, cfg.tick_s)),
-        "REPLAN": "0" if plan_exists else "1",
+        # ★ 궤적을 주면 계획을 **안 한다** — 그러면 계획 폴더도 필요 없다.
+        "REPLAN": "0" if (plan_exists or spec.trajectory) else "1",
         "STRICT": "1",
         "WATCH_SEC": str(int(cfg.watch_s)),
         "VIDEO": "1",
     })
     if spec.seed is not None:
         e["PIBT_SEED"] = str(spec.seed)
+    # 주문 — 계약 §2 의 `scenario.outbound_gap_s`(초)를 계획 틱으로 옮긴다.
+    #   `PIBT_ORDER_GAP` 은 **틱 단위**다 (live_pibt.py:211 "-211: 틱 단위라 x4").
+    #   초로 넘기면 pitch 1.0 에서 3.6배 촘촘한 주문이 되어 판이 전혀 달라진다.
+    #   ☹ `scenario.orders`(목록)는 아직 못 넘긴다 — spec.RunSpec.orders 참조.
+    if spec.order_gap_s is not None:
+        e["PIBT_ORDER_GAP"] = str(max(1, int(round(spec.order_gap_s / cfg.tick_s))))
     if scenario_path:
         e["SIM_SCENARIO_PATH"] = scenario_path
         e["SIM_SCENARIO_SHA256"] = spec.scenario_sha256 or ""
+    # ★ 궤적이 오면 계획 단계를 통째로 건너뛴다 (`live_pibt.py:1084`).
+    #   주문(`SIM_SCENARIO_PATH`)보다 **이쪽이 이긴다** — 궤적에는 배정 결과가
+    #   이미 들어 있어 주문 스트림을 쓸 자리가 없다.
+    if spec.trajectory:
+        e["PIBT_TRAJ"] = spec.trajectory
+        # ★ 궤적만 넘기면 안 돈다. 셋이 세트다 (2026-09-22 실측).
+        #   ① 궤적의 칸 번호는 **FMS 격자(107x116)** 기준이다. 안 주면 우리
+        #      격자(106x115)로 읽어 칸이 딴 자리를 가리킨다 — live_pibt 가
+        #      「스폰이 궤적 첫 틱과 다르다」로 운다.
+        #   ② `run_record.sh` 의 `PIBT_FRONT_RULE` 기본이 4인데 이 궤적은
+        #      4칸에서 **ADG 순환**이 난다. 틱 순위가 그걸 편다.
+        #   호출자가 준 값이 있으면 그쪽이 이긴다 — 실험용 구멍을 남긴다.
+        e.setdefault("PIBT_FMS_GRID", "1")
+        e.setdefault("PIBT_ADG_RANK", "1")
     return e
 
 
@@ -145,6 +197,13 @@ class Recorder:
     # ---- 수명 -----------------------------------------------------------------
     def start(self, spec: RunSpec, now: float) -> None:
         self.spec = spec
+        if spec.orders is not None:
+            # 조용히 버리지 않는다 — 백엔드가 목록을 보냈는데 우리가 간격으로만
+            # 재생하면 **다른 판**이 돈다. 결과를 견적과 맞대기 전에 알아야 한다.
+            n = len(spec.orders.get("outbound") or []) if isinstance(spec.orders, dict) else 0
+            log.warning("run %s: scenario.orders(출고 %d건) 를 **쓰지 않는다** — "
+                        "rack_id→스테이션 이름 규칙이 없다. outbound_gap_s 간격으로만 재생한다",
+                        spec.run_id, n)
         env = environment(self.cfg, spec, scenario_path=self.write_scenario(spec))
         os.makedirs(self.cfg.logs_dir, exist_ok=True)
         with open(os.path.join(self.cfg.logs_dir, f"edge_{spec.run_id}.log"), "ab") as out:   # 자식이 fd 를 물려받는다

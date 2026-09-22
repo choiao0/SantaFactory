@@ -246,6 +246,17 @@ ORDERS_CSV = os.environ.get("PIBT_ORDERS", "").strip()
 #   ☹ **발자국을 계획과 맞춰야 한다.** `exact,front_2cell` 로 만든 궤적을 4칸으로
 #     세우면 ADG 가 순환한다 (실측: 끔 순환 · 2칸 비순환 · 4칸 순환).
 TRAJ_JSON = os.environ.get("PIBT_TRAJ", "").strip()
+
+# ★ 백엔드 주문 (2026-09-21). `scenario.orders` 는 **배정 전** 형태다 —
+#   rack_id 만 있고 목적지가 없다. `fms_stream.JsonOrderStream` 이 FMS 와 같은
+#   규칙으로 버퍼·토트·포장대를 정한다.
+#
+#     SIM_SCENARIO_PATH  edge 가 세운다. **있으면 이긴다** (백엔드가 실제로 보낸 것)
+#     PIBT_ORDERS_JSON   손으로 줄 때 (tools/_orders/orders6000_s104_cap10.json)
+#     PIBT_ORDERS        FMS 배정표 CSV — 이미 frm/to 가 정해져 있다
+#     (없음)             시드 난수. 종전과 비트 동일
+ORDERS_JSON = (os.environ.get("SIM_SCENARIO_PATH", "").strip()
+               or os.environ.get("PIBT_ORDERS_JSON", "").strip())
 CAMERA = os.environ.get("PIBT_CAMERA", "/World/Cameras/Cam_Top")
 SPAWN_Z = float(os.environ.get("PIBT_SPAWN_Z", "0.081"))   # build_amr_scene 의 WHEEL_R
 LEFT_IDX, RIGHT_IDX = 0, 1
@@ -1128,6 +1139,29 @@ async def _run():
             stream = None
             if TRAJ_JSON:
                 pass                       # 궤적을 쓰면 주문 스트림이 필요 없다
+            elif ORDERS_JSON:
+                from fms_stream import JsonOrderStream
+                _js = (ORDERS_JSON if os.path.isabs(ORDERS_JSON)
+                       else os.path.join(os.environ["W"], ORDERS_JSON))
+                stream = JsonOrderStream.from_file(
+                    _js, geom, free, MAP, HORIZON, seed=SEED,
+                    tote_units=int(os.environ.get("PIBT_TOTE_UNITS", "10")),
+                    order_end=oe, verbose=False)
+                carb.log_warn(
+                    f"[pibt] ★★ 주문 = **백엔드 주문**(rack_id) "
+                    f"{os.path.basename(_js)} · 주문 {stream.total:,}건 -> "
+                    f"토트 {stream.loaded:,}개"
+                    + (f" · 창 밖 {stream.skipped_late:,}건 뺌"
+                       if stream.skipped_late else "")
+                    + (f" · ★ 랙 못 찾음 {len(stream.skipped_bad)}건"
+                       if stream.skipped_bad else ""))
+                carb.log_warn(
+                    "[pibt]    ☹ 포장대는 우리 난수로 배정했다 — FMS 와 같은 "
+                    "정책이지만 **뽑기가 다르다.** 정합성 대조에는 "
+                    "PIBT_ORDERS(배정표) 나 PIBT_TRAJ(궤적)를 써라")
+                if stream.skipped_bad:
+                    carb.log_error(f"[pibt] ★★ rack_buffers.json 에 없는 랙이 있다 "
+                                   f"— 예: {stream.skipped_bad[:3]}")
             elif ORDERS_CSV:
                 from fms_stream import FileOrderStream
                 _csv = (ORDERS_CSV if os.path.isabs(ORDERS_CSV)

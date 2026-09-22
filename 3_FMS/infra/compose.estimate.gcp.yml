@@ -1,4 +1,5 @@
 # GCP 워커 — infra/compose.estimate.yml 의 GCP 판 (S15P21A106-246, 2026-09-18). EC2 판과 다른 점 셋:
+# ★ 249 부터 비상용 — 정식 경로는 EC2 k3s Deployment(infra/k8s/sim-worker-deployment.yaml). start.sh 가 더는 이 파일을 올리지 않는다.
 #   · santafactory_default(external) 네트워크가 없다 — 브로커는 EC2 공인 주소의 AMQPS 5671(nginx stream TLS 종단, infra/nginx/) 로 붙는다
 #   · 계정은 원격 워커 전용 sim-worker (sim.request 소비 · sim.result 발행만) — EC2 ~/rabbitmq-keys/sim-worker.env
 #   · replicas 기본 4 = SMT 끈 물리 코어 수 (c4-highcpu-8, 코어당 vCPU 1) · 메모리 3G (n=12·13 이 2G 한도에 닿았다 — gcp/README.md)
@@ -13,6 +14,9 @@ services:
     image: fms-estimate-worker:latest
     environment:
       RABBITMQ_URL: amqps://${RABBITMQ_USER:?.env.estimate 에 RABBITMQ_USER}:${RABBITMQ_PASSWORD:?.env.estimate 에 RABBITMQ_PASSWORD}@${RABBITMQ_HOST:-j15a106.p.ssafy.io}:${RABBITMQ_PORT:-5671}/
+      # ★ 환경변수는 EC2 판(compose.estimate.yml)과 같아야 한다(-253). θ 예측(-206)이 EC2 에만 켜져 있어 09-20 한 견적 안에서
+      #   run 마다 θ 가 달랐다. 이 줄을 지우면 고정 θ 로 돌아간다. 모델은 이미지에 구워져 있다(estimate.Dockerfile 의 COPY ai_theta/).
+      THETA_MODEL: ${THETA_MODEL-/app/ai_theta/model/theta_model.joblib}
     restart: unless-stopped
     deploy:
       replicas: ${WORKER_REPLICAS:-4}
