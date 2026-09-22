@@ -69,6 +69,20 @@ class RunSpec:
         return s if isinstance(s, int) and not isinstance(s, bool) else None
 
     @property
+    def trajectory(self) -> str | None:
+        """scenario.trajectory — FMS 가 낸 궤적 JSON 경로. 있으면 **계획을 안 한다**.
+
+        `$W` 기준 상대경로를 권한다 (`live_pibt.py:1086` 이 절대경로가 아니면
+        `$W` 를 붙인다). 절대경로도 그대로 쓰인다.
+
+        ☹ 이게 있으면 `recorder.environment()` 가 `REPLAN` 을 **0 으로 못 박는다.**
+          계획 폴더가 없어도 안 만든다 — 어차피 안 쓰기 때문이다.
+        """
+        t = (self.scenario or {}).get("trajectory")
+        t = t.strip() if isinstance(t, str) else ""
+        return t or None
+
+    @property
     def order_gap_s(self) -> float | None:
         """scenario.outbound_gap_s — 출고 주문 간격(초).
 
