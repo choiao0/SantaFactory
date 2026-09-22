@@ -282,11 +282,36 @@ function QuoteActions({ estimateId, finished }) {
   )
 }
 
+/** 권장을 고르는 점수와 같은 식 — 표에도 같은 값을 보여야 그래프의 봉우리를 표에서 확인할 수 있다. */
+function efficiency(r) {
+  return (r.throughput * r.utilization) / 100
+}
+
+/**
+ * 목표 칸 — 처리율과 가동률을 <b>둘 다</b> 넘어야 달성이다. 예전에는 처리율만 보고 찍었는데, 칸 이름이
+ * 그냥 '목표' 라 가동률이 한참 모자란 구성도 달성으로 읽혔다. 못 넘은 쪽을 이름으로 적어 어디가 모자란지
+ * 바로 보이게 한다. 칸은 머리글까지 통째로 가운데 정렬이라, 길이가 다른 '달성' 도 같은 축에 선다.
+ */
+function GoalCell({ run, estimate }) {
+  const slow = run.throughput < estimate.target_throughput
+  const idle = run.utilization < estimate.target_utilization
+  if (!slow && !idle) {
+    return <td className="goal met">달성</td>
+  }
+  const short = [slow && '처리율', idle && '가동률'].filter(Boolean).join('·')
+  return <td className="goal"><span>{short} 미달</span></td>
+}
+
 export default function QuoteStep({ estimateId, estimate, verdict }) {
   const ready = Boolean(estimate && verdict)
   const runs = estimate?.runs ?? []
   const recommended = verdict?.recommended_count ?? null
   const rec = runs.find((r) => r.amr_count === recommended) ?? null
+  // 최소 구성 — 권장과 같은 조건을 통과한 것 중 가장 적은 대수. 권장과 같으면 표식을 하나로 합친다
+  const minimal = verdict?.minimal_count ?? null
+  const min = runs.find((r) => r.amr_count === minimal) ?? null
+  const saving = rec && min && minimal !== recommended ? rec.total_cost - min.total_cost : null
+  const effLoss = saving == null ? null : efficiency(rec) - efficiency(min)
   const cancelled = verdict?.status === 'CANCELLED'
 
   return (
@@ -324,7 +349,7 @@ export default function QuoteStep({ estimateId, estimate, verdict }) {
                 <div>
                   <span className="k-label">권장 대수</span>
                   <strong>{rec.amr_count}<span>대</span></strong>
-                  <em className="ok">목표 충족 · 예산 이내 · 효율 최고</em>
+                  <em className="ok">목표 달성 · 예산 이내 · 효율 최고</em>
                 </div>
                 <div>
                   <span className="k-label">처리율</span>
@@ -391,10 +416,10 @@ export default function QuoteStep({ estimateId, estimate, verdict }) {
                   <thead>
                     <tr>
                       <th>구성</th>
-                      <th>상태</th>
                       <th>처리율</th>
-                      <th>목표</th>
                       <th>가동률</th>
+                      <th className="goal">목표</th>
+                      <th>효율 <span>처리율 × 가동률</span></th>
                       <th>처리 완료 <span>건/일</span></th>
                       <th>구축비용</th>
                       <th>예산</th>
@@ -407,8 +432,7 @@ export default function QuoteStep({ estimateId, estimate, verdict }) {
                         return (
                           <tr key={r.run_id} className="fail">
                             <td>{r.amr_count}대</td>
-                            <td>{r.status}</td>
-                            <td colSpan={4}>결과 없음{r.error ? ` · ${r.error}` : ''}</td>
+                            <td colSpan={5}>{r.status} · 결과 없음{r.error ? ` · ${r.error}` : ''}</td>
                             <td>{formatWon(r.total_cost)}</td>
                             <td>{inBudget ? '이내' : '초과'}</td>
                           </tr>
@@ -416,11 +440,19 @@ export default function QuoteStep({ estimateId, estimate, verdict }) {
                       }
                       return (
                         <tr key={r.run_id} className={r.amr_count === recommended ? 'hl' : ''}>
-                          <td>{r.amr_count}대{r.amr_count === recommended && <span className="rec-chip">권장</span>}</td>
-                          <td>완료</td>
+                          <td>
+                            {r.amr_count}대
+                            {r.amr_count === recommended && (
+                              <span className="rec-chip">{r.amr_count === minimal ? '권장 · 최소 구성' : '권장'}</span>
+                            )}
+                            {r.amr_count === minimal && r.amr_count !== recommended && (
+                              <span className="rec-chip min">최소 구성</span>
+                            )}
+                          </td>
                           <td>{formatPercent(r.throughput)}%</td>
-                          <td>{r.throughput >= estimate.target_throughput ? '충족' : <span>미달</span>}</td>
                           <td>{formatPercent(r.utilization)}%</td>
+                          <GoalCell run={r} estimate={estimate} />
+                          <td>{formatPercent(efficiency(r))}</td>
                           <td>{r.outbound != null ? r.outbound.toLocaleString() : '—'}</td>
                           <td>{formatWon(r.total_cost)}</td>
                           <td>{inBudget ? '이내' : <span>초과</span>}</td>
@@ -430,6 +462,20 @@ export default function QuoteStep({ estimateId, estimate, verdict }) {
                   </tbody>
                 </table>
               </div>
+
+              {/* 표에 대수를 두 개 표시했으면, 그 둘을 왜 나눠 놓았는지 한 줄로 말한다 */}
+              {saving != null && (
+                <p className="table-note">
+                  <b>최소 구성</b>은 목표를 만족하는 가장 적은 대수로, {minimal}대({formatWon(min.total_cost)})는
+                  권장보다 {formatWon(saving)} 적지만 효율 {formatPercent(efficiency(min))}%로
+                  권장보다 {formatPercent(effLoss)}%p 안 좋습니다.
+                </p>
+              )}
+              {saving == null && minimal != null && (
+                <p className="table-note">
+                  목표를 만족하는 가장 적은 대수가 권장 구성과 같습니다 — 더 줄일 여지가 없습니다.
+                </p>
+              )}
             </>
           )}
 

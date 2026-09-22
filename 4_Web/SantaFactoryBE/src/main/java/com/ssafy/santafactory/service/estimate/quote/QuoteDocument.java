@@ -58,9 +58,9 @@ public record QuoteDocument(
     }
 
     /** 06 로봇 대수별 비교의 한 행. */
-    public record FleetRow(int count, boolean recommended, boolean knee, String throughput, boolean targetOk,
-                           String utilization, String dailyOrders, String leadMin, String cost, boolean overBudget,
-                           String efficiency) {
+    public record FleetRow(int count, boolean recommended, boolean minimal, boolean knee,
+                           String throughput, String utilization, boolean targetOk, String targetText,
+                           String efficiency, String dailyOrders, String cost, boolean overBudget) {
     }
 
     /** 07 효율·구축 비용 그래프 — SVG 좌표는 템플릿 viewBox(672 × 175) 기준. */

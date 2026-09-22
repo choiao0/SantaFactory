@@ -266,15 +266,16 @@ public class QuoteDocumentFactory {
 
     // ── 06 ─────────────────────────────────────────────────────────────────
 
-    /** 권장 · 효과 정체 · 양끝 · 예산 경계 앞뒤는 항상, 나머지는 간격을 고르게 채워 최대 12행. */
-    static List<Integer> pickRows(List<Integer> counts, Integer recommended, Integer knee, Integer firstOverBudget) {
+    /** 권장 · 최소 구성 · 효과 정체 · 양끝 · 예산 경계 앞뒤는 항상, 나머지는 간격을 고르게 채워 최대 12행. */
+    static List<Integer> pickRows(List<Integer> counts, Integer recommended, Integer minimal, Integer knee,
+                                  Integer firstOverBudget) {
         if (counts.size() <= FLEET_ROWS) {
             return counts;
         }
         TreeSet<Integer> picked = new TreeSet<>();
         picked.add(counts.get(0));
         picked.add(counts.get(counts.size() - 1));
-        for (Integer must : Arrays.asList(recommended, knee, firstOverBudget)) {
+        for (Integer must : Arrays.asList(recommended, minimal, knee, firstOverBudget)) {
             if (must != null && counts.contains(must)) {
                 picked.add(must);
             }
@@ -303,25 +304,65 @@ public class QuoteDocumentFactory {
         List<Integer> counts = done.stream().map(Run::amrCount).toList();
         Integer firstOver = done.stream().filter(r -> r.totalCost() != null && r.totalCost() > d.budgetLimit())
                 .map(Run::amrCount).findFirst().orElse(null);
-        List<Integer> picked = pickRows(counts, d.recommendedCount(), d.kneeCount(), firstOver);
+        List<Integer> picked = pickRows(counts, d.recommendedCount(), d.minimalCount(), d.kneeCount(), firstOver);
         return done.stream().filter(r -> picked.contains(r.amrCount())).map(r -> new FleetRow(
                 r.amrCount(),
                 r.amrCount().equals(d.recommendedCount()),
+                r.amrCount().equals(d.minimalCount()) && !r.amrCount().equals(d.recommendedCount()),
                 r.amrCount().equals(d.kneeCount()) && !r.amrCount().equals(d.recommendedCount()),
                 pct(r.throughput()) + " %",
-                r.throughput() >= d.targetThroughput(),
                 pct(r.utilization()) + " %",
+                targetMet(r, d),
+                targetText(r, d),
+                r.utilization() == null ? "—" : oneDecimal(efficiency(r)),
                 r.outbound() == null ? "—" : comma(r.outbound()) + "건",
-                minutes(r.leadTimeP90()),
                 r.totalCost() == null ? "—" : won(r.totalCost()),
-                r.totalCost() != null && r.totalCost() > d.budgetLimit(),
-                r.utilization() == null ? "—" : oneDecimal(efficiency(r)))).toList();
+                r.totalCost() != null && r.totalCost() > d.budgetLimit())).toList();
+    }
+
+    /** 목표는 처리율과 가동률을 <b>둘 다</b> 넘어야 달성이다 — 처리율만 보면 로봇이 노는 구성도 달성으로 읽힌다. */
+    private static boolean targetMet(Run r, EstimateDetailResponse d) {
+        return r.throughput() >= d.targetThroughput() && r.utilization() >= d.targetUtilization();
+    }
+
+    /** 못 넘은 쪽을 이름으로 적는다 — 웹 리포트의 표와 같은 말을 쓴다. */
+    private static String targetText(Run r, EstimateDetailResponse d) {
+        if (targetMet(r, d)) {
+            return "달성";
+        }
+        List<String> missed = new ArrayList<>();
+        if (r.throughput() < d.targetThroughput()) {
+            missed.add("처리율");
+        }
+        if (r.utilization() < d.targetUtilization()) {
+            missed.add("가동률");
+        }
+        return String.join("·", missed) + " 미달";
+    }
+
+    /**
+     * 최소 구성 한 줄 — 얼마를 아끼는 대신 효율을 얼마나 내주는지. 두 대수가 같으면 더 줄일 여지가 없다는
+     * 뜻이라 금액·효율 차이가 없고, 그 사실만 적는다.
+     */
+    private String minimalNote(EstimateDetailResponse d, Run rec, List<Run> done) {
+        if (d.minimalCount() == null) {
+            return "";
+        }
+        if (d.minimalCount().equals(d.recommendedCount())) {
+            return "권장이 곧 목표를 만족하는 가장 적은 대수입니다. ";
+        }
+        Run min = done.stream().filter(r -> d.minimalCount().equals(r.amrCount())).findFirst().orElse(null);
+        if (min == null || min.totalCost() == null || rec.totalCost() == null || min.utilization() == null) {
+            return "";
+        }
+        return "최소 구성은 목표를 만족하는 가장 적은 대수로, " + min.amrCount() + "대(" + won(min.totalCost()) + ")는 "
+                + "권장보다 " + won(rec.totalCost() - min.totalCost()) + " 적지만 효율 " + oneDecimal(efficiency(min))
+                + " %로 권장보다 " + oneDecimal(efficiency(rec) - efficiency(min)) + " %p 안 좋습니다. ";
     }
 
     private String fleetNote(EstimateDetailResponse d, Run rec, List<Run> done) {
         StringBuilder note = new StringBuilder(
-                "* 주문 접수부터 처리 완료까지 걸린 시간으로, 평균이 아니라 주문의 90 %가 이 시간 안에 끝나는 기준입니다(느린 주문까지 감안한 값). "
-                        + "효율 점수 = 주문 처리율 × 로봇 가동률 ÷ 100, 주문을 많이 처리하면서 로봇이 놀지 않을수록 높습니다. ");
+                "효율 점수 = 주문 처리율 × 로봇 가동률 ÷ 100, 주문을 많이 처리하면서 로봇이 놀지 않을수록 높습니다. ");
         if (rec != null) {
             note.append("권장은 목표와 예산을 만족하는 대수 중 효율 점수가 가장 높은 대수입니다");
             List<String> excluded = done.stream()
@@ -331,6 +372,7 @@ public class QuoteDocumentFactory {
                 note.append("(").append(String.join(" · ", excluded)).append("는 처리율 미달로 제외)");
             }
             note.append(". ");
+            note.append(minimalNote(d, rec, done));
         }
         note.append("빨간 비용은 예산 초과.");
         if (done.size() > FLEET_ROWS) {

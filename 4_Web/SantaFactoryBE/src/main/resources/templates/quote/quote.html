@@ -64,6 +64,7 @@ td.num,th.num{text-align:right}
 td .ok{color:var(--ok);font-weight:600}
 td .over{color:var(--red-dark);font-weight:600}
 td .miss{color:var(--muted2)}
+th.goal,td.goal{text-align:center}
 tr.hl td{background:var(--hl);font-weight:700}
 tr.total td{border-top:1.5px solid var(--ink);border-bottom:0;font-weight:800;font-size:13px;padding-top:9px}
 .chip{display:inline-block;font-size:8.5px;font-weight:600;color:var(--red-dark);border:1px solid var(--red-dark);padding:1px 5px;border-radius:2px;margin-left:6px;vertical-align:1px}
@@ -247,19 +248,20 @@ tr.total td{border-top:1.5px solid var(--ink);border-bottom:0;font-weight:800;fo
     <div class="eyebrow"><span th:text="${#numbers.formatInteger(base + 1, 2)}"></span> <span class="t">로봇 대수별 비교</span></div>
     <table>
       <thead><tr>
-        <th>로봇 대수</th><th class="num">주문 처리율</th><th>목표</th><th class="num">로봇 가동률</th><th class="num">하루 처리 주문</th>
-        <th class="num">주문 처리 시간 (90 %)*</th><th class="num">예상 구축 비용</th><th class="num">효율 점수</th>
+        <th>로봇 대수</th><th class="num">주문 처리율</th><th class="num">로봇 가동률</th><th class="goal">목표</th>
+        <th class="num">효율 점수</th><th class="num">하루 처리 주문</th>
+        <th class="num">예상 구축 비용</th><th class="goal">예산</th>
       </tr></thead>
       <tbody>
         <tr th:each="f : ${q.fleet}" th:classappend="${f.recommended} ? 'hl'">
-          <td><span th:text="${f.count} + '대'"></span><span th:if="${f.recommended}" class="chip">권장</span><span th:if="${f.knee}" class="chip g">효과 정체 시작</span></td>
+          <td><span th:text="${f.count} + '대'"></span><span th:if="${f.recommended}" class="chip">권장</span><span th:if="${f.minimal}" class="chip g">최소 구성</span><span th:if="${f.knee}" class="chip g">효과 정체 시작</span></td>
           <td class="num" th:text="${f.throughput}"></td>
-          <td><span th:classappend="${f.targetOk} ? 'ok' : 'miss'" th:text="${f.targetOk} ? '달성' : '미달'"></span></td>
           <td class="num" th:text="${f.utilization}"></td>
-          <td class="num" th:text="${f.dailyOrders}"></td>
-          <td class="num" th:text="${f.leadMin}"></td>
-          <td class="num"><span th:classappend="${f.overBudget} ? 'over'" th:text="${f.cost}"></span></td>
+          <td class="goal"><span th:classappend="${f.targetOk} ? 'ok' : 'miss'" th:text="${f.targetText}"></span></td>
           <td class="num" th:text="${f.efficiency}"></td>
+          <td class="num" th:text="${f.dailyOrders}"></td>
+          <td class="num"><span th:classappend="${f.overBudget} ? 'over'" th:text="${f.cost}"></span></td>
+          <td class="goal" th:text="${f.overBudget} ? '초과' : '이내'"></td>
         </tr>
       </tbody>
     </table>

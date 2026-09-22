@@ -93,7 +93,6 @@ class QuoteDocumentFactoryTest {
         assertThat(counts).hasSize(12).contains(1, 14, 15, 19, 20, 28).isSorted();
         QuoteDocument.FleetRow rec = q.fleet().stream().filter(QuoteDocument.FleetRow::recommended).findFirst().orElseThrow();
         assertThat(rec.count()).isEqualTo(14);
-        assertThat(rec.leadMin()).isEqualTo("6.4분");
         assertThat(rec.cost()).isEqualTo("2억 1,700만 원");
         assertThat(rec.efficiency()).isEqualTo("67.1");
         assertThat(q.fleet().stream().filter(QuoteDocument.FleetRow::knee).map(QuoteDocument.FleetRow::count)).containsExactly(15);
@@ -104,7 +103,7 @@ class QuoteDocumentFactoryTest {
     @Test
     void small_sweeps_keep_every_run() {
         List<Integer> all = IntStream.rangeClosed(3, 9).boxed().toList();
-        assertThat(QuoteDocumentFactory.pickRows(all, 6, 7, null)).isEqualTo(all);
+        assertThat(QuoteDocumentFactory.pickRows(all, 6, 5, 7, null)).isEqualTo(all);
     }
 
     @Test
