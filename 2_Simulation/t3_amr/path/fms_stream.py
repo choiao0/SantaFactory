@@ -173,6 +173,10 @@ class FileOrderStream(object):
         self._by_tick = collections.defaultdict(list)
         self.skipped_late = 0        # 창 밖이라 버린 것
         self.skipped_bad = []        # 칸을 못 찾은 것
+        # 대형 주문 제외 — 이산 `OrderStream.orders_oversize` 와 같은 정의.
+        # 상한은 상류에서 읽는다 (`max_order_totes()`), 0 이면 안 거른다.
+        self.skipped_oversize = 0
+        self.max_totes = max_order_totes()
         self.total = 0
 
     def __init__(self, csv_path, geom, free, map_dir, horizon,
@@ -522,10 +526,21 @@ class JsonOrderStream(FileOrderStream):
                 continue
             if not group:
                 continue
+            totes = _totes(group, tote_units)
+            # ★ 대형 주문 제외 (2026-09-23) — 이산 `order_stream._filter_orders`
+            #   와 **같은 자리**다. 토트 합계가 상한을 넘으면 팔레트 흐름이라
+            #   시뮬 밖이고, 주문을 **통째로** 뺀다 (일부만 실으면 수요가
+            #   조용히 줄어 비교가 깨진다 — `_group_by_buffer` 와 같은 이유).
+            #
+            #   ☹ 이게 없으면 **물리 수요만 조용히 더 크다.** 이산은 빼고
+            #     우리는 안 빼는데 로그에도 결과에도 안 남았다.
+            if self.max_totes and sum(n for _, n in totes) > self.max_totes:
+                self.skipped_oversize += 1
+                continue
             # ★ 포장대는 **주문당 한 번** 뽑는다. 토트마다 뽑으면 한 주문이
             #   여러 포장대로 흩어져 FMS 와 다른 문제가 된다.
             to = self._resolve("packing[%d]" % int(rng.integers(n_pack)))
-            for b, n_tote in _totes(group, tote_units):
+            for b, n_tote in totes:
                 self._add(b, to, n_tote, t)
 
     def _add(self, buf, to, n_tote, t):
@@ -545,6 +560,12 @@ class JsonOrderStream(FileOrderStream):
         if self.skipped_bad:
             print(f"[fms_stream]   ★ 랙을 못 찾음 {len(self.skipped_bad)}건 — "
                   f"예: {self.skipped_bad[:3]}", flush=True)
+        # ★ 이산 `OrderStream.orders_oversize` 와 **같은 정의**다. 0 건이어도
+        #   찍는다 — 「안 거른 것」과 「걸 게 없던 것」이 로그에서 갈려야 한다.
+        print(f"[fms_stream]   대형 주문 제외 {self.skipped_oversize:,}건 "
+              f"(토트 > {self.max_totes})" if self.max_totes else
+              "[fms_stream]   ☹ 대형 주문을 **안 걸렀다** — 이산과 수요가 다르다",
+              flush=True)
         print("[fms_stream]   ☹ 포장대는 우리 난수로 배정했다 (seed %d) — "
               "FMS 와 **같은 정책, 다른 뽑기**다" % int(seed), flush=True)
 
@@ -568,6 +589,32 @@ def _arrival_tick(order, dt, window_start_s, horizon):
         return None
     t = int(round(t_s / dt))
     return None if t >= horizon else t
+
+
+def max_order_totes():
+    """주문 하나가 넘으면 **통째로 빼는** 토트 수. 상류에서 읽는다.
+
+    ★ 값을 베끼지 않는다 (2026-09-23). 이산 쪽 `order_stream.MAX_ORDER_TOTES`
+      를 직접 본다 — `pibt_core_v2` 가 계획 코어에 쓰는 것과 같은 방식이다.
+      사본을 두면 상류가 바뀔 때 **조용히** 갈리고, 그러면 물리 수요만 커진다.
+
+    무엇을 거르나 — 토트 합계가 이 수를 넘는 주문은 팔레트 흐름이라 시뮬
+    밖이다 (`order_stream._filter_orders`, 2026-09-14 결정). 로봇 한 대
+    적재(6)를 넘는 것까지 거르는 게 아니다. 그건 커널이 여러 왕복으로 나른다.
+
+    상류를 못 찾으면 **끄지 않고 알린다** — 조용히 안 거르면 이산과 수요가
+    달라지는데 그게 지표에 안 남는다.
+    """
+    try:
+        import pibt_core_v2 as _pc                # ★ 먼저 — 이것이 sim_engine 을 sys.path 에 넣는다
+        del _pc
+        import order_stream as _os                # 이산 원본 (sim_engine/ 은 flat import)
+        return int(_os.MAX_ORDER_TOTES)
+    except Exception as e:                        # noqa: BLE001
+        print(f"[fms_stream] ★ 상류 MAX_ORDER_TOTES 를 못 읽었다 — "
+              f"대형 주문을 **안 거른다** (이산과 수요가 달라진다): {e!r}",
+              flush=True)
+        return 0
 
 
 def _group_by_buffer(lines, racks):

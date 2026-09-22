@@ -97,3 +97,48 @@ def test_scenario_orders_rejects_a_payload_without_orders(tmp_path):
     p.write_text(json.dumps({"run_id": "r"}), encoding="utf-8")
     with pytest.raises(RuntimeError):
         FS._scenario_orders(str(p))
+
+
+# ── 대형 주문 제외 (2026-09-23) ───────────────────────────────────────
+#   이산은 토트 합계가 `MAX_ORDER_TOTES` 를 넘는 주문을 **통째로** 뺀다
+#   (팔레트 흐름이라 시뮬 밖, 2026-09-14 결정). 우리는 안 뺐다 — 그래서
+#   **물리 수요만 조용히 더 컸다.** 로그에도 결과에도 안 남았다.
+def test_max_order_totes_is_read_from_upstream_not_copied():
+    """값을 베끼면 상류가 바뀔 때 조용히 갈린다 — `pibt_core_v2` 와 같은 이유.
+
+    상류를 못 찾으면 0(= 안 거름)을 주되 **소리내어** 알린다. 그 경우 이 테스트는
+    건너뛴다 — sim_engine 이 없는 기계에서 실패로 잡을 일이 아니다.
+    """
+    n = FS.max_order_totes()
+    if n == 0:
+        import pytest
+        pytest.skip("3_FMS/sim_engine 이 없다 — 상류를 못 읽는 환경")
+    import order_stream as OS          # max_order_totes() 가 sys.path 를 이미 깔았다
+    assert n == OS.MAX_ORDER_TOTES, "상류에서 읽지 않고 사본을 두면 조용히 갈린다"
+
+
+def test_oversize_orders_are_dropped_whole_like_the_discrete_side():
+    """일부만 싣지 않는다 — `_group_by_buffer` 가 랙을 못 찾을 때와 같은 규칙.
+
+    토트 수 = ceil(qty / tote_units) 이므로 tote_units=1 이면 qty 가 곧 토트다.
+    """
+    n = FS.max_order_totes()
+    if n == 0:
+        import pytest
+        pytest.skip("3_FMS/sim_engine 이 없다")
+    # 상한 바로 아래 / 바로 위
+    ok = _totes_of({"A1": n})
+    over = _totes_of({"A1": n + 1})
+    assert sum(c for _, c in ok) == n
+    assert sum(c for _, c in over) == n + 1
+    # 여러 버퍼로 흩어져도 **합계**로 판정한다 — 버퍼별이 아니다
+    split = _totes_of({"A1": n, "B1": 1})
+    assert sum(c for _, c in split) == n + 1
+
+
+def _totes_of(qty_by_rack, tote_units=1):
+    """{랙: qty} → [(버퍼, 토트수)]. 상류 `_parse_order` 와 같은 식."""
+    lines = [{"rack_id": r, "qty": q} for r, q in qty_by_rack.items()]
+    group, bad = FS._group_by_buffer(lines, RACKS)
+    assert not bad
+    return FS._totes(group, tote_units)
