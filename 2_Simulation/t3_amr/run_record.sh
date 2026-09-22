@@ -216,6 +216,15 @@ if [ -d "$PLAN_DIR" ]; then
 else
     _SEED_NOTE=""
 fi
+# ★ 궤적을 쓰면 계획 폴더가 필요 없다 (2026-09-22).
+#   `PIBT_TRAJ` 는 `live_pibt.py:1084` 에서 **계획을 통째로 건너뛴다.** 그런데
+#   아래 검사가 계획 폴더를 요구해서, 「궤적으로 돌리는데 계획이 없다」는 이유로
+#   죽었다. 백엔드가 `scenario.trajectory` 를 보내는 경로(-261)가 정확히 그 모양이다.
+#   검사를 없애지는 않는다 — 궤적이 없는 판은 종전대로 계획을 요구한다.
+if [ -n "${PIBT_TRAJ:-}" ] && [ ! -d "$PLAN_DIR" ]; then
+    echo "[preflight] 궤적을 쓰므로 계획 폴더 검사를 건너뜁니다 ($PLAN_DIR 없음)"
+    SKIP_PLAN_CHECK=1
+fi
 if [ ! -d "$PLAN_DIR" ] && [ "${SKIP_PLAN_CHECK:-0}" != "1" ]; then
     echo "★ ${PIBT_N}대 계획이 없습니다: $PLAN_DIR" >&2
     echo "  먼저:  python amr/main.py plan --planner pibt_h --n $PIBT_N" >&2
