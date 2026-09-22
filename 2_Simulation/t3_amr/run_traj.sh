@@ -5,6 +5,7 @@
 #     bash run_traj.sh                       13대 · r13 궤적 · 헤드리스
 #     PIBT_TURN_BODY_MAX=30 bash run_traj.sh 한도만 바꿔 비교
 #     PIBT_W_ACCEL=0 bash run_traj.sh        회전 가속 제한만 꺼서 비교
+#     PIBT_TOL_TURN_POS=0.100 bash run_traj.sh   회전 완료 관문을 코드 기본으로
 #     RENDER=1 bash run_traj.sh              렌더까지 (영상이 필요할 때)
 #
 # 왜 이 파일이 필요한가
@@ -74,6 +75,34 @@ export PIBT_TURN_YIELD="${PIBT_TURN_YIELD:-1}"
 #     회전 밀림은 기하 예산 41.3 mm 를 먹는 두 항 중 큰 쪽이다.
 export PIBT_W_ACCEL="${PIBT_W_ACCEL:-20}"
 
+# --- 회전 완료 관문 · 복구 기동 ---
+#   ★ 이 둘을 **여기서 고정하는 이유** (2026-09-22 실측).
+#
+#   2026-09-22 판이 sim 439s 에서 죽었다. 접촉이 아니라 회전 교착이었다.
+#
+#       agent1 turn(43,64,2)->(43,64,3)   21초 미완
+#       각도 err -0.1도                  <- 각도는 완벽했다
+#       위치 51.3 mm > 허용 50           <- 1.3 mm 초과로 죽었다
+#       시작 36.6 mm -> 지금 51.3 mm     <- 회전이 14.7 mm 를 만들었다
+#       복구 기동 꺼짐 (PIBT_RECOVER=0)  <- 탈출구가 없었다
+#
+#   회전은 제자리 각도 제어라 **위치를 못 고친다.** 그런데 완료 판정에는 위치가
+#   들어 있다(-240). 회전이 끝난 뒤 위치가 관문을 넘으면 그 액션 안에 고칠
+#   수단이 없어 **영영 안 끝난다.** 복구 기동이 유일한 탈출구다.
+#
+#   그리고 그 「허용 50」은 코드 기본(0.100)이 아니라 **셸에 남아 있던
+#   export 였다.** run_traj.sh 가 이 값을 안 고정해서, 판이 무엇이었는지
+#   로그로 되짚어야 했다. pibt_scene.py 주석이 같은 사고를 이미 적어 뒀다 —
+#   「한 번 export 하고 같은 셸에서 run_record.sh 를 돌릴 때 계획만 배정표로
+#   서고 주행은 난수로 돌았다」. 고정하고 배너에 찍는다.
+#
+#   ☹ 0.05 는 코드 기본 0.100 보다 **엄하다.** 일부러 그렇다 — 100 으로 풀면
+#     51.3 mm 가 그냥 통과하지만 밀림이 줄었는지는 알 수 없다. 코드 주석이
+#     못 박아 뒀다: 「밀린 판은 여전히 못 쓴다. 진단을 싸게 만들 뿐이다.」
+#     엄한 관문 + 복구 기동으로 **재면서 넘어간다.**
+export PIBT_TOL_TURN_POS="${PIBT_TOL_TURN_POS:-0.05}"
+export PIBT_RECOVER="${PIBT_RECOVER:-1}"      # ★ 코드 기본은 0(꺼짐)
+
 # --- 공차 ---
 #   0.02 는 회전 교착이 난다. 제어 정착 바닥이 20.0 mm 라 기하 요구(20.65 mm)와
 #   창이 0.65 mm 뿐이다. 0.03 이 실측으로 도는 유일한 값이다.
@@ -89,6 +118,7 @@ echo "  궤적        $PIBT_TRAJ"
 echo "  회전 한도   ${PIBT_TURN_BODY_MAX}s   (관문 $PIBT_TURN_BODY_GATE · 양보 $PIBT_TURN_YIELD)"
 echo "  공차        pos $PIBT_TOL_POS · cross $PIBT_TOL_CROSS"
 echo "  회전 가속   ${PIBT_W_ACCEL} rad/s^2   (0 이면 끔 — 계단 그대로)"
+echo "  회전 관문   ${PIBT_TOL_TURN_POS} m   (복구 기동 $PIBT_RECOVER)"
 echo "  앞 칸 규칙  $PIBT_FRONT_RULE   (ADG 순위 $PIBT_ADG_RANK · 몸 $PIBT_ADG_BODY)"
 echo "════════════════════════════════════════════════════"
 
