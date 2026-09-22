@@ -240,7 +240,7 @@ def test_timeout_default_is_1200():
 # ------------------------------------------------------------
 # 리플레이 내보내기 (S15P21A106-205) — 시뮬 없이 산출물만 흉내 낸다
 # ------------------------------------------------------------
-def _write_export(tag, ticks, dt_s=0.5, robots=2, move_from=None):
+def _write_export(tag, ticks, dt_s=0.5, robots=2, move_from=None, yaw_at=None):
     """export_isaac 이 만드는 모양의 디렉터리를 세운다. 경로를 돌려준다.
 
     move_from 을 주면 그 틱부터만 로봇이 움직인다 — 구간 선택을 시험하는 데 쓴다."""
@@ -257,7 +257,8 @@ def _write_export(tag, ticks, dt_s=0.5, robots=2, move_from=None):
 
     traj = {"dt_s": dt_s, "model": "heading",
             "robots": {str(i): [[t * dt_s, x_at(t) + i, 2.0] for t in range(ticks)] for i in range(robots)},
-            "headings": {str(i): [0.0] * ticks for i in range(robots)},
+            # 실제 내보내기와 같은 [시각, yaw] 쌍. yaw_at 이 없으면 내내 동쪽(0.0)
+            "headings": {str(i): [[t * dt_s, (yaw_at or (lambda _t: 0.0))(t)] for t in range(ticks)] for i in range(robots)},
             # 주문 7 은 토트 2개(틱 4·20)로 나뉘었다 — 마지막이 배달된 20 이 그 주문의 완료다
             "tasks": [{"kind": "out", "order": 7, "completed": 20},
                       {"kind": "in", "order": 1, "completed": 10},
@@ -278,7 +279,7 @@ def test_replay_thins_the_whole_run(monkeypatch):
     try:
         r = w._read_replay("thin_case")
         assert len(r["robots"]["0"]) == 100                  # 400 ÷ 4
-        assert len(r["headings"]["0"]) == 100
+        assert r["headings"]["0"] == [[0.0, 0.0]]            # 내내 동쪽 → 첫 기록 하나만 남는다 (-255)
         assert r["stride"] == 4
         # 샘플 간격이 화면의 dt 다. 원본 dt 를 주면 재생이 4배 느려진다
         assert r["dt_s"] == 2.0
@@ -288,6 +289,17 @@ def test_replay_thins_the_whole_run(monkeypatch):
         import shutil
         shutil.rmtree(d, ignore_errors=True)
     assert not os.path.exists(d)                              # 읽고 나면 지운다 (상주 워커 디스크 보호)
+
+
+def test_replay_headings_keep_only_changes_with_exact_tick_times(monkeypatch):
+    """헤딩은 값이 바뀐 시점만 남긴다 (-255). 솎기 전 원본에서 뽑으므로 stride 사이(틱 5·6)의 회전도 정확한 시각으로 남는다."""
+    monkeypatch.setattr(w, "REPLAY_STRIDE", 4)
+    yaw = {0: 1.5708, 5: 3.1416, 6: -1.5708, 12: -1.5708, 20: 0.0}     # 틱 12 는 같은 값 반복 → 빠진다
+    _write_export("head_case", ticks=40, dt_s=0.5, robots=1,
+                  yaw_at=lambda t: yaw[max(k for k in yaw if k <= t)])
+    r = w._read_replay("head_case")
+    assert r["headings"]["0"] == [[0.0, 1.5708], [2.5, 3.1416], [3.0, -1.5708], [10.0, 0.0]]
+    assert len(r["robots"]["0"]) == 10                       # 위치는 여전히 40 ÷ 4
 
 
 def test_replay_keeps_every_tick_when_stride_is_one(monkeypatch):
