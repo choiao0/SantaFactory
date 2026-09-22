@@ -16,6 +16,7 @@ import java.util.List;
  * 견적 상태 + 대수별 결과표 + 권장 대수 (명세 §3-1 GET /estimates/{id}).
  *
  * @param recommendedCount 3조건 만족 최소 대수. 없으면 null 이고 이때만 reasonCode 가 채워진다
+ * @param minimalCount     같은 조건을 만족하는 대수 중 가장 적은 대수. 권장과 같을 수 있다
  * @param kneeCount        이 대수 이상은 늘려도 처리율이 거의 오르지 않는다
  * @param elapsedSeconds   생성 → 완료 소요시간(초). 진행 중이면 null (90초 목표 측정)
  * @param verifyVideoUrl   물리 검증 영상(상단 시점)의 presigned GET URL. 만료가 있어 저장하지 말고 조회할 때마다 받는다.
@@ -31,6 +32,7 @@ public record EstimateDetailResponse(
         Double targetUtilization,
         Long budgetLimit,
         Integer recommendedCount,
+        Integer minimalCount,
         Integer kneeCount,
         ReasonCode reasonCode,
         LocalDateTime createdAt,
@@ -137,6 +139,7 @@ public record EstimateDetailResponse(
                 estimate.getTargetUtilization(),
                 estimate.getBudgetLimit(),
                 estimate.getRecommendedCount(),
+                estimate.getMinimalCount(),
                 estimate.getKneeCount(),
                 estimate.getReasonCode(),
                 estimate.getCreatedAt(),

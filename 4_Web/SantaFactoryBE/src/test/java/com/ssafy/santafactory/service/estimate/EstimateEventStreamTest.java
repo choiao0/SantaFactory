@@ -39,7 +39,7 @@ class EstimateEventStreamTest {
         stream.onRunUpdated(new RunUpdated(77L, run(3, RunStatus.DONE)));
         assertThat(stream.subscriberCount(77L)).isEqualTo(1);
 
-        stream.onEstimateFinished(new EstimateFinished(77L, EstimateStatus.DONE, 9, 11, null));
+        stream.onEstimateFinished(new EstimateFinished(77L, EstimateStatus.DONE, 9, 9, 11, null));
         assertThat(stream.subscriberCount(77L)).isZero();
     }
 
@@ -75,14 +75,14 @@ class EstimateEventStreamTest {
         when(estimateService.snapshot(79L)).thenReturn(detail(EstimateStatus.RUNNING));
         stream.subscribe(79L);
 
-        stream.onEstimateFinished(new EstimateFinished(80L, EstimateStatus.DONE, 5, null, null));
+        stream.onEstimateFinished(new EstimateFinished(80L, EstimateStatus.DONE, 5, 5, null, null));
 
         assertThat(stream.subscriberCount(79L)).isEqualTo(1);
     }
 
     private static EstimateDetailResponse detail(EstimateStatus status) {
         return new EstimateDetailResponse(77L, status, "iw.hub", 95.0, 80.0, 300_000_000L,
-                null, null, null, LocalDateTime.now(), null, null, null, null, List.of(run(1, RunStatus.QUEUED)), null);
+                null, null, null, null, LocalDateTime.now(), null, null, null, null, List.of(run(1, RunStatus.QUEUED)), null);
     }
 
     private static EstimateDetailResponse.Run run(int amrCount, RunStatus status) {

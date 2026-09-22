@@ -62,7 +62,7 @@ final class QuoteFixtures {
 
     static EstimateDetailResponse detail(long estimateId, Integer recommended, Integer knee, Verification verification) {
         return new EstimateDetailResponse(estimateId, EstimateStatus.DONE, "iw.hub", 95.0, 60.0, BUDGET,
-                recommended, knee, null, LocalDateTime.of(2026, 9, 17, 14, 13, 50), LocalDateTime.of(2026, 9, 17, 14, 32, 32),
+                recommended, recommended, knee, null, LocalDateTime.of(2026, 9, 17, 14, 13, 50), LocalDateTime.of(2026, 9, 17, 14, 32, 32),
                 1122L, null, null, runs(estimateId, 28), verification);
     }
 

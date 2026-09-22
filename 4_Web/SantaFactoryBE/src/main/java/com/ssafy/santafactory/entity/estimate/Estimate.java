@@ -73,6 +73,13 @@ public class Estimate {
     @Column(name = "knee_count")
     private Integer kneeCount;
 
+    /**
+     * 목표를 모두 만족하는 대수 중 가장 적은 대수 — 권장과 같은 조건을 통과하되 효율이 아니라 비용을 본다.
+     * 권장과 같은 값일 수도 있고, 그때는 화면이 두 표시를 하나로 합친다. 판정 불가면 null.
+     */
+    @Column(name = "minimal_count")
+    private Integer minimalCount;
+
     @Enumerated(EnumType.STRING)
     @Column(name = "reason_code", length = 30)
     private ReasonCode reasonCode;
@@ -152,11 +159,13 @@ public class Estimate {
      *
      * @param anyFailed 실패·타임아웃 run 이 하나라도 있었나 (있으면 PARTIAL)
      */
-    public void complete(Integer recommendedCount, Integer kneeCount, ReasonCode reasonCode, boolean anyFailed) {
+    public void complete(Integer recommendedCount, Integer minimalCount, Integer kneeCount,
+                         ReasonCode reasonCode, boolean anyFailed) {
         if (status == EstimateStatus.CANCELLED) {
             return;
         }
         this.recommendedCount = recommendedCount;
+        this.minimalCount = minimalCount;
         this.kneeCount = kneeCount;
         this.reasonCode = reasonCode;
         this.status = anyFailed ? EstimateStatus.PARTIAL : EstimateStatus.DONE;

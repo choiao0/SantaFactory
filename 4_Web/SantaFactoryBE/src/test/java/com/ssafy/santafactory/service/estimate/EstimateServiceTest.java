@@ -645,7 +645,7 @@ class EstimateServiceTest {
         four.markDone(96.0, 80.0, 96L, 384.0);
         four.applyKpiDetail(new RunKpiDetail(100, 96, 212.0, 48.0, 159.0, 0.068, 171_400L));
         ReflectionTestUtils.setField(estimate, "createdAt", LocalDateTime.now());   // @PrePersist 가 없어 직접
-        estimate.complete(4, null, null, false);
+        estimate.complete(4, 4, null, null, false);
         when(estimateRepository.findById(77L)).thenReturn(Optional.of(estimate));
         when(scenarioRepository.findByEstimateIdOrderByAmrCountAsc(77L)).thenReturn(List.of(two, four));
 
@@ -669,7 +669,7 @@ class EstimateServiceTest {
     @Test
     void verify_result_never_changes_the_verdict() {
         Estimate estimate = withId(estimate(85.0, 90.0, 1_000_000_000L), 77L);
-        estimate.complete(4, 6, null, false);
+        estimate.complete(4, 4, 6, null, false);
         when(estimateRepository.findById(77L)).thenReturn(Optional.of(estimate));
 
         service().applyVerifyResult(new VerifyResultResponse("verify_77", "failed", "runner NDEATH", 77L,
@@ -708,7 +708,7 @@ class EstimateServiceTest {
     @Test
     void rejects_a_second_verification_while_the_first_is_still_running() {
         Estimate estimate = withId(estimate(85.0, 90.0, 1_000_000_000L), 77L);
-        estimate.complete(4, 6, null, false);
+        estimate.complete(4, 4, 6, null, false);
         estimate.markVerifyRequested(LocalDateTime.now().minusMinutes(3));   // 아직 창(10분) 안
         when(estimateRepository.findById(77L)).thenReturn(Optional.of(estimate));
 
@@ -721,7 +721,7 @@ class EstimateServiceTest {
     @Test
     void rejects_verification_that_already_finished_normally() {
         Estimate estimate = withId(estimate(85.0, 90.0, 1_000_000_000L), 77L);
-        estimate.complete(4, 6, null, false);
+        estimate.complete(4, 4, 6, null, false);
         estimate.applyVerifyResult(new VerifySnapshot(
                 "verify_77", "done", "window elapsed", null, 4, 4, 600, null,
                 null, null, null, LocalDateTime.now()));
@@ -737,7 +737,7 @@ class EstimateServiceTest {
     @Test
     void allows_verification_again_when_the_earlier_request_went_stale() {
         Estimate estimate = withId(estimate(85.0, 90.0, 1_000_000_000L), 77L);
-        estimate.complete(4, 6, null, false);
+        estimate.complete(4, 4, 6, null, false);
         estimate.markVerifyRequested(LocalDateTime.now().minusHours(1));
         when(estimateRepository.findById(77L)).thenReturn(Optional.of(estimate));
         when(scenarioRepository.findByEstimateIdAndAmrCount(77L, 4)).thenReturn(Optional.of(run(estimate, 4)));
@@ -750,7 +750,7 @@ class EstimateServiceTest {
     @Test
     void publishes_a_fixed_run_id_for_the_recommended_run() {
         Estimate estimate = withId(estimate(85.0, 90.0, 1_000_000_000L), 77L);
-        estimate.complete(4, 6, null, false);
+        estimate.complete(4, 4, 6, null, false);
         SimScenario recommendedRun = run(estimate, 4);
         when(estimateRepository.findById(77L)).thenReturn(Optional.of(estimate));
         when(scenarioRepository.findByEstimateIdAndAmrCount(77L, 4)).thenReturn(Optional.of(recommendedRun));
@@ -771,7 +771,7 @@ class EstimateServiceTest {
     @Test
     void ships_the_full_outbound_order_list_as_the_verify_scenario() throws Exception {
         Estimate estimate = withId(estimate(85.0, 90.0, 1_000_000_000L), 77L);
-        estimate.complete(4, 6, null, false);
+        estimate.complete(4, 4, 6, null, false);
         List<SimulationRequest.Outbound> orders = List.of(
                 new SimulationRequest.Outbound(1L, 120L, List.of(new SimulationRequest.Line(5L, "A1", 2))));
         estimate.applyOutboundOrders(objectMapper.writeValueAsString(orders));

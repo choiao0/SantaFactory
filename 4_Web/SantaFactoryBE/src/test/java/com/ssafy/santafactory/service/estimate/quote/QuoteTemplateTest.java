@@ -59,7 +59,7 @@ class QuoteTemplateTest {
     void renders_without_a_recommendation_and_renumbers_the_appendix() {
         var d = QuoteFixtures.detail(9L, null, null, null);
         var noRec = new com.ssafy.santafactory.dto.estimate.EstimateDetailResponse(d.estimateId(), d.status(), d.amrModel(),
-                d.targetThroughput(), d.targetUtilization(), d.budgetLimit(), null, null,
+                d.targetThroughput(), d.targetUtilization(), d.budgetLimit(), null, null, null,
                 com.ssafy.santafactory.entity.estimate.ReasonCode.THROUGHPUT_SHORT, d.createdAt(), d.completedAt(), d.elapsedSeconds(),
                 null, null, d.runs(), null);
 
