@@ -348,13 +348,31 @@ if SHOTS:
 
 
 def _save_one(annot, out_dir, sim_t):
-    """rgb 한 장을 live_pibt 와 **같은 파일명**으로 저장한다."""
+    """rgb 한 장을 live_pibt 와 **같은 파일명**으로 저장한다.
+
+    ★ **원자적으로 쓴다** (2026-09-23). `.part` 로 쓰고 `os.replace` 로 옮긴다.
+
+      검증 런은 **항상 SIGINT 로 끝난다** (`recorder.request_stop`). 그게
+      `Image.save()` 한가운데를 끊으면 반쪽 PNG 가 남고, 조립이 그걸 만나
+
+          [png] chunk too big
+          Decoding error: Invalid data found when processing input
+          frame= 219        <- 220장 중 219장
+
+      으로 한 장을 버린다 (`side2` 실측). 영상은 나오지만 매 런 마지막
+      프레임이 이렇게 빈다.
+
+      `.part` 는 조립 glob(`f_*.png`)에 안 걸리므로, 끊겨서 남더라도
+      무해하다 — 프레임이 **온전하거나 없거나** 둘 중 하나가 된다.
+    """
     data = annot.get_data()
     if data is None or not len(data):
         raise RuntimeError("rgb 버퍼가 비었다")
     from PIL import Image
-    Image.fromarray(data[:, :, :3]).save(
-        os.path.join(out_dir, f"f_{int(round(sim_t * 100)):09d}.{SHOT_EXT}"))
+    final = os.path.join(out_dir, f"f_{int(round(sim_t * 100)):09d}.{SHOT_EXT}")
+    tmp = final + ".part"
+    Image.fromarray(data[:, :, :3]).save(tmp)
+    os.replace(tmp, final)
 
 
 def _save_replicator(sim_t):
