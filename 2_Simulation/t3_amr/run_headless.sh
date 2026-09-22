@@ -55,6 +55,10 @@ export PIBT_MODE="${PIBT_MODE:-lifelong}"
 export PIBT_SEED="${PIBT_SEED:-104}"
 export PIBT_PITCH="${PIBT_PITCH:-1.0}"
 
+# 주행 스위치 한 벌 — run_record.sh 와 **같은 파일**을 읽는다.
+#   pitch 를 정한 뒤라야 배너가 그것도 찍는다.
+source "$W_DIR/switches.sh"
+
 # ⑤ 준비 프레임 상한 — 헤드리스는 프레임이 빨라 12,000 이 4초다
 export PIBT_HL_SETUP_CAP="${PIBT_HL_SETUP_CAP:-400000}"
 
