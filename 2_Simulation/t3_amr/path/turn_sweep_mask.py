@@ -191,7 +191,13 @@ def prepare_contact(geom, map_dir, verbose=True):
     _ZONE = zone if bool(zone.any()) else None
     k = int(round(geom.pitch / 0.1))
     R, C = obst.shape[0] // k, obst.shape[1] // k
-    hit = obst[:R * k, :C * k].reshape(R, k, C, k).any(axis=(1, 3))
+    # ★ 거름망은 랙 + 구역 **합집합**이다 (2026-09-22). `step()` 이 이걸로
+    #   `_check_static` 을 부를지 거르는데, 랙만 넣으면 피커 구역에만 들어간
+    #   자세를 통째로 놓친다 (`zone_intrusion_events` 가 0 으로 나온다).
+    #   판정은 `_OBST[0]`(원본)와 `_ZONE` 이 각각 한다 — 거름망은 「볼지 말지」만
+    #   정하므로 넓어도 비용만 들지 결과는 안 바뀐다.
+    hit = full[:R * k, :C * k].reshape(R, k, C, k).any(axis=(1, 3))
+    hit_rack = obst[:R * k, :C * k].reshape(R, k, C, k).any(axis=(1, 3))
     cells = frozenset((int(r), int(c)) for r, c in zip(*np.nonzero(hit)))
     _OBST = (obst, cells, src)
     if _ZONE is not None:
@@ -199,7 +205,9 @@ def prepare_contact(geom, map_dir, verbose=True):
               f"{int(_ZONE.sum()):,}개 (랙과 **갈라 센다**)", flush=True)
     # ★ 이것도 **항상** 찍는다. 이 줄이 없으면 합불(`clean`)이 랙을 보고 있는지
     #   모르는 채로 「완주했다」를 쓰게 된다 — 그게 L 을 만든 이유다.
-    print(f"[static] ★ 랙 접촉 감시 켬 — {src} · 장애물 칸 {len(cells):,}개",
+    _n_rack = int(hit_rack.sum())
+    print(f"[static] ★ 랙 접촉 감시 켬 — {src} · 랙 칸 {_n_rack:,}개 "
+          f"· 거름망 {len(cells):,}칸 (랙+구역)",
           flush=True)
     return _OBST
 
