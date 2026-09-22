@@ -23,6 +23,16 @@ RAM, VRAM, LAST_ERROR = "Runner/RamMB", "Runner/VramMB", "Runner/LastError"
 ISAAC = "Runner/IsaacInstances"
 SCENARIO_SHA = "Runner/ScenarioSha"
 VIDEO_URL = "Runner/VideoUrl"          # t3_amr 엣지(-215)가 런 종료 NDATA 에 싣는 mp4 공개 URL → artifacts.video
+# ★★ 러너가 지금까지 돈 **시뮬 시각**(초). 창을 이 값으로 끊는다 (2026-09-22).
+#
+#   예전에는 창이 벽시계였다 — `now - started_at >= window_s`. 그런데 배속(RTF)이
+#   판마다 0.33~1.64배로 달라서 **같은 `window_s` 가 판마다 다른 분량**을 돌았다.
+#   13대 실측에서 벽시계 600 s 창이 시뮬 219 s, 즉 창의 36 %만 담았다. 그 상태로
+#   KPI 를 DES 와 비교하면 분모가 서로 다르다 — 견적은 시뮬 초로 계산한다.
+#
+#   러너가 이 값을 안 보내면(Kit `--exec` 경로는 시뮬 시각을 로그에 안 찍는다)
+#   예전처럼 벽시계로 끊는다. 보내는 판에서는 벽시계가 백스톱이다.
+SIM_TIME = "Runner/SimTime"
 FMS_STATE, FMS_RUN_ID, FMS_LAST_ERROR, FMS_TICK = "Fms/State", "Fms/RunId", "Fms/LastError", "Fms/Tick"
 KPI_EVENT = "kpi_summary"
 CMD_START, CMD_STOP, REBIRTH = "Run Control/Start", "Run Control/Stop", "Node Control/Rebirth"
@@ -354,8 +364,41 @@ class Job:
             self._begin_stop(cmd, now, "FAILED", "heartbeat lost", f"no NDATA for {now - node.last_seen:.0f}s")
         elif self.fms is not None and self._fms_running_fault(now, cmd):
             return
-        elif now - self.started_at >= self.req.window_s:
+        elif self._window_filled(node):
             self._begin_stop(cmd, now, "DONE", "window elapsed")
+        elif self.sim_time(node) is None and now - self.started_at >= self.req.window_s:
+            # 시뮬 시각을 안 보내는 러너 — 예전처럼 벽시계로 끊는다
+            self._begin_stop(cmd, now, "DONE", "window elapsed")
+        elif now - self.started_at >= self._wall_backstop():
+            # 시뮬 시각이 창을 못 채운 채 벽시계가 다 갔다. 창을 덜 돈 판을
+            # 조용히 DONE 으로 적으면 KPI 분모가 DES 와 달라진다 — 그게 이
+            # 변경 이전의 동작이었다. 여기서는 실패로 적고 이유를 남긴다.
+            self._begin_stop(cmd, now, "FAILED", "wall-clock backstop",
+                             f"sim {self.sim_time(node)}s of {self.req.window_s:g}s "
+                             f"after {now - self.started_at:.0f}s wall")
+
+    def sim_time(self, node: Optional[Node]) -> Optional[float]:
+        """러너가 보고한 시뮬 시각(초). 안 보내면 None — 그러면 벽시계로 후퇴한다.
+
+        0.0 은 **안 보낸 것으로 본다.** NBIRTH 가 모든 메트릭을 기본값으로 한 번
+        싣기 때문에, 0 을 「시뮬 0초를 돌았다」로 읽으면 벽시계 후퇴가 막힌다."""
+        if node is None:
+            return None
+        v = node.get(SIM_TIME)
+        if v is None or isinstance(v, bool) or not isinstance(v, (int, float)):
+            return None
+        return float(v) if v > 0 else None
+
+    def _window_filled(self, node: Optional[Node]) -> bool:
+        """창을 다 돌았나 — **시뮬 시각 기준**. 보고가 없으면 False(호출부가 벽시계로 간다)."""
+        sim = self.sim_time(node)
+        return sim is not None and sim >= self.req.window_s
+
+    def _wall_backstop(self) -> float:
+        """시뮬 시각으로 끊는 판의 벽시계 한계. 러너 자신의 `timeout_s` **뒤**다 —
+        러너가 스스로 접을 기회를 먼저 주고, 그래도 안 끝나면 여기서 잡는다."""
+        return float(self.req.timeout_s if self.req.timeout_s is not None
+                     else self.req.window_s + START_MARGIN_S) + self.cfg.stop_timeout_s
 
     def _fms_running_fault(self, now: float, cmd: Any) -> bool:
         """RUNNING 중 fms-core 가 접었거나(ERROR·IDLE·NDEATH) 조용하면 잡을 접는다. 접었으면 True."""
