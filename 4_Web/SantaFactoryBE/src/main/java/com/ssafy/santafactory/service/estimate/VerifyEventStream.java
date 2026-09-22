@@ -7,6 +7,7 @@ import com.ssafy.santafactory.repository.EstimateRepository;
 import com.ssafy.santafactory.service.estimate.EstimateEvents.EstimateVerified;
 import java.io.IOException;
 import java.time.Duration;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -42,6 +43,7 @@ public class VerifyEventStream {
 
     private final EstimateRepository estimateRepository;
     private final VerifyVideoPresigner videoPresigner;
+    private final EstimateProperties properties;
     private final Map<Long, List<SseEmitter>> emitters = new ConcurrentHashMap<>();
 
     @Transactional(readOnly = true)
@@ -52,8 +54,11 @@ public class VerifyEventStream {
         String video = estimate.getVerifyVideoUrl();
         if (video == null) {
             register(estimateId, emitter);
+            // 요청은 갔는데 결과가 아직인 상태를 알려 준다 — 이게 없으면 새로고침한 화면이 "아직 시작 전"
+            // 으로 보여 시작 버튼을 다시 내놓고, 눌러 봐야 중복 가드에 막힌다 (S15P21A106-265)
             send(estimateId, emitter, EVENT_SNAPSHOT,
-                    new EstimateVerified(estimateId, "PENDING", null, null, null));
+                    new EstimateVerified(estimateId, verifyingNow(estimate) ? "RUNNING" : "PENDING",
+                            null, null, null));
         } else {
             send(estimateId, emitter, EVENT_DONE,
                     new EstimateVerified(estimateId, "done", videoPresigner.sign(video),
@@ -61,6 +66,13 @@ public class VerifyEventStream {
             emitter.complete();
         }
         return emitter;
+    }
+
+    /** 발행해 놓고 결과를 기다리는 중인가. 너무 오래된 요청은 재요청을 열어야 하므로 진행 중으로 보지 않는다. */
+    private boolean verifyingNow(Estimate estimate) {
+        LocalDateTime requestedAt = estimate.getVerifyRequestedAt();
+        return requestedAt != null
+                && requestedAt.isAfter(LocalDateTime.now().minus(properties.verifyStaleAfter()));
     }
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)

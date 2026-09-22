@@ -35,7 +35,7 @@ function placeholderFor({ estimateId, ready, verify, recommendedCount, started }
     return { tag: 'FAILED', label: '실패', text: `물리 검증에 실패했습니다 — ${verify.error}` }
   }
   // 워커가 끝났다고 알렸는데 영상이 없는 경우 — 검증은 돌았으니 진행 중이라고 하면 안 된다
-  if (verify.status && verify.status !== 'PENDING') {
+  if (verify.status && verify.status !== 'PENDING' && verify.status !== 'RUNNING') {
     return { tag: 'PARTIAL', label: '영상 없음', text: '물리 검증은 끝났지만 재생할 영상이 남지 않았습니다.' }
   }
   return {
