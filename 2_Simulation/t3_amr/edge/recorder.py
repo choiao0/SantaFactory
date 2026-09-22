@@ -226,13 +226,27 @@ class Recorder:
         p = os.path.join(self.cfg.out_dir, f"demo_{self.tag()}_side.mp4")
         return p if self.spec and os.path.isfile(p) and os.path.getsize(p) > 0 else None
 
+    def side_shots_dir(self) -> str:
+        """두 번째 시점의 프레임 폴더 — `run_record.sh:116` 의 `shots_<TAG>_side`."""
+        return os.path.join(self.cfg.out_dir, f"shots_{self.tag()}_side")
+
     def remove_frames(self) -> int:
-        """shots_<TAG>/ 를 통째로 지운다 — mp4 가 올라간 뒤에만 부른다(-241). 지운 파일 수를 돌려주고, 없으면 0."""
-        d = self.shots_dir()
-        if not self.spec or not os.path.isdir(d):
+        """프레임 폴더를 통째로 지운다 — mp4 가 **올라간 뒤에만** 부른다(-241).
+
+        ★ 상단과 측면을 **둘 다** 지운다 (-264). 측면이 생기면서 한 런의
+          프레임이 두 배가 됐는데(13대 10분 판에서 상단만 14 GB) 청소가
+          상단에만 걸려 있었다.
+
+        지운 파일 수(두 폴더 합)를 돌려주고, 없으면 0.
+        """
+        if not self.spec:
             return 0
-        n = sum(len(files) for _, _, files in os.walk(d))
-        shutil.rmtree(d, ignore_errors=True)
+        n = 0
+        for d in (self.shots_dir(), self.side_shots_dir()):
+            if not os.path.isdir(d):
+                continue
+            n += sum(len(files) for _, _, files in os.walk(d))
+            shutil.rmtree(d, ignore_errors=True)
         return n
 
     def write_scenario(self, spec: RunSpec) -> str | None:
