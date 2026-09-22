@@ -83,6 +83,30 @@ export PIBT_TOL_TURN_POS="${PIBT_TOL_TURN_POS:-0.100}"
 #     조향을 직접 줘야 풀리는 그 경우다.
 export PIBT_RECOVER="${PIBT_RECOVER:-1}"
 
+# --- 작업부하 (계획 판에만 걸린다) ------------------------
+#   ★★ 2026-09-22 — **우리 기본값이 FMS 판과 다른 문제를 풀고 있었다.**
+#
+#   r13 궤적에서 직접 셌다 (추측 아님)
+#
+#       태스크 258건 = 43트립 x 6토트 · 단독 트립 0건 · 전부 out
+#       서비스 연속 구간 121틱(33.61 s)이 57/59건 = 96.6 %
+#
+#   그런데 우리 기본은 CAPACITY=1 · SVC_PER_TOTE=0 이라 서비스가 4틱(1.11 s)
+#   이다. **30배 짧다.** 그 기본으로 만든 판은 FMS 판과 비교할 수 없다.
+#   lifelong.py:131 이 「그쪽과 맞댈 판에서는 같은 값을 줘야 한다」고 이미
+#   적어 뒀는데 기본값이 따라가지 않았다.
+#
+#   ☹ 남는 9틱 — 우리 모델은 service_steps(4) + 6 x svc_per_tote(18) = 112틱
+#     인데 관측은 121틱이다. `4 + 6*per = 121` 을 만족하는 정수 per 가 없다.
+#     틱 해상도 차이인지 라벨 경계인지 **안 밝혔다.** FMS 에 물을 것.
+#
+#   ☹ 이 값을 켜면 서비스가 길어져 **처리량이 크게 떨어진다.** 맞는 값이지만,
+#     우리 옛 판들(기본 1/0)과는 직접 비교하면 안 된다.
+#
+#   궤적 재생 판에는 영향이 없다 — 계획을 안 하므로 배차가 안 돈다.
+export PIBT_CAPACITY="${PIBT_CAPACITY:-6}"
+export PIBT_SVC_PER_TOTE="${PIBT_SVC_PER_TOTE:-18}"
+
 # --- ADG --------------------------------------------------
 #   ☹ **이 둘은 확정이 아니다.** docs/LOCAL_작업순서.md 가 대가를 적어 뒀다 —
 #     `-6.2 % · 포기 5.8배 · 정체 8배 · 최소간격 42 -> 0.64 mm`. 그리고
@@ -104,6 +128,7 @@ echo "  회전 관문   대기 ${PIBT_TURN_BODY_MAX}s (켬 $PIBT_TURN_BODY_GATE 
 echo "  회전 가속   ${PIBT_W_ACCEL} rad/s^2$([ "$PIBT_W_ACCEL" = "0" ] && echo '   ☹ 꺼짐 — 계단 그대로')"
 echo "  복구 기동   $PIBT_RECOVER   (회전에는 안 듣는다)"
 echo "  ADG         몸 $PIBT_ADG_BODY · 순위 $PIBT_ADG_RANK"
+echo "  작업부하    토트 ${PIBT_CAPACITY}개 · 토트당 ${PIBT_SVC_PER_TOTE}틱   (궤적 재생 판에는 무관)"
 echo "  격자        pitch ${PIBT_PITCH:-?} · 앞 칸 규칙 ${PIBT_FRONT_RULE:-?} · FMS 격자 ${PIBT_FMS_GRID:-0}"
 echo "  회전 마스크 ${PIBT_TURN_SWEEP:-1}$([ -n "${PIBT_TRAJ:-}" ] && echo '   (궤적 재생 — 계획을 안 하므로 무의미)')"
 echo "─────────────────────────────────────"
