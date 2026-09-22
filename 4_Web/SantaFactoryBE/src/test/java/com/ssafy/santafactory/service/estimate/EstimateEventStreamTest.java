@@ -10,6 +10,7 @@ import com.ssafy.santafactory.service.estimate.EstimateEvents.EstimateFinished;
 import com.ssafy.santafactory.service.estimate.EstimateEvents.RunUpdated;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
@@ -40,6 +41,24 @@ class EstimateEventStreamTest {
 
         stream.onEstimateFinished(new EstimateFinished(77L, EstimateStatus.DONE, 9, 11, null));
         assertThat(stream.subscriberCount(77L)).isZero();
+    }
+
+    /**
+     * 스냅샷을 읽는 동안에도 워커 결과가 커밋될 수 있다. 그때 아직 구독자로 등록돼 있지 않으면 그
+     * run 이벤트는 스냅샷에도 브로드캐스트에도 안 잡혀 사라지고, 화면에서 그 대수만 "대기" 로 굳었다가
+     * 결과가 와서야 "완료" 로 튄다 (S15P21A106-263).
+     */
+    @Test
+    void a_run_event_during_the_snapshot_read_still_reaches_the_subscriber() {
+        AtomicInteger subscribersWhileReading = new AtomicInteger(-1);
+        when(estimateService.snapshot(81L)).thenAnswer(invocation -> {
+            subscribersWhileReading.set(stream.subscriberCount(81L));
+            return detail(EstimateStatus.RUNNING);
+        });
+
+        stream.subscribe(81L);
+
+        assertThat(subscribersWhileReading).hasValue(1);
     }
 
     @Test
