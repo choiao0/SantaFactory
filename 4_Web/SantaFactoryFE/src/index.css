@@ -625,7 +625,7 @@ footer a:hover { color: #fff; }
 /* 역할 표식. .status 를 빌려 쓰지 않는다 — 견적 상태와 의미가 달라서, 상태 색이 바뀔 때
    같이 흔들리면 안 된다 */
 .admin-badge {
-  float: right; margin-left: 10px;
+  position: absolute; top: 20px; right: 22px;
   display: inline-flex; align-items: center;
   font: 600 13px var(--font-mono); letter-spacing: .06em;
   padding: 6px 11px; border: 1px dashed #8a8985; color: #5d5d58;
@@ -651,3 +651,7 @@ footer a:hover { color: #fff; }
 .admin-card .status.FAILED, .admin-card .status.TIMEOUT, .admin-card .status.PARTIAL {
   color: #b8860b; border-color: var(--warn); background: rgba(224, 160, 30, .16);
 }
+/* 띄우기(float)로 두면 회사명 줄뿐 아니라 그 아래 연락처 줄까지 폭을 뺏겨 접힌다
+   (관리자 카드만 두 줄이 됐다) — 카드 모서리에 고정해 글줄에서 빼낸다 */
+.admin-card:has(.admin-badge) { position: relative; }
+.admin-card:has(.admin-badge) h4 { padding-right: 78px; }
