@@ -52,10 +52,12 @@ public class VerifyEventStream {
         String video = estimate.getVerifyVideoUrl();
         if (video == null) {
             register(estimateId, emitter);
-            send(estimateId, emitter, EVENT_SNAPSHOT, new EstimateVerified(estimateId, "PENDING", null, null));
+            send(estimateId, emitter, EVENT_SNAPSHOT,
+                    new EstimateVerified(estimateId, "PENDING", null, null, null));
         } else {
             send(estimateId, emitter, EVENT_DONE,
-                    new EstimateVerified(estimateId, "done", videoPresigner.sign(video), null));
+                    new EstimateVerified(estimateId, "done", videoPresigner.sign(video),
+                            videoPresigner.sign(estimate.getVerifyVideoSideUrl()), null));
             emitter.complete();
         }
         return emitter;

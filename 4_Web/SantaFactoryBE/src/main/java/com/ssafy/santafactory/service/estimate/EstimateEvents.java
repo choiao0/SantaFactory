@@ -49,6 +49,7 @@ public final class EstimateEvents {
      * 구독 시작 스냅샷이다(status: PENDING, {@link VerifyEventStream} 이 로컬로만 만든다).
      */
     @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
-    public record EstimateVerified(Long estimateId, String status, String videoUrl, String error) {
+    public record EstimateVerified(Long estimateId, String status, String videoUrl,
+                                   String videoSideUrl, String error) {
     }
 }

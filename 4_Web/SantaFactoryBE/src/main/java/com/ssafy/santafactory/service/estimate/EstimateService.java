@@ -283,7 +283,9 @@ public class EstimateService {
 
     private EstimateDetailResponse toDetail(Estimate estimate) {
         List<SimScenario> runs = scenarioRepository.findByEstimateIdOrderByAmrCountAsc(estimate.getId());
-        return EstimateDetailResponse.of(estimate, runs, videoPresigner.sign(estimate.getVerifyVideoUrl()),
+        return EstimateDetailResponse.of(estimate, runs,
+                videoPresigner.sign(estimate.getVerifyVideoUrl()),
+                videoPresigner.sign(estimate.getVerifyVideoSideUrl()),
                 verifyComparator.compare(estimate.getVerify(), recommendedRun(estimate, runs)));
     }
 
@@ -490,14 +492,18 @@ public class EstimateService {
             return;
         }
         estimate.applyVerifyResult(toVerifySnapshot(response));
-        String video = response.artifacts() != null ? response.artifacts().video() : null;
+        VerifyResultResponse.Artifacts artifacts = response.artifacts();
+        String video = artifacts != null ? artifacts.video() : null;
+        String videoSide = artifacts != null ? artifacts.videoSide() : null;
+        // 상단이 없으면 측면만 남기지 않는다 — 화면이 기본으로 보여줄 것이 없어진다
         if (video != null) {
-            estimate.applyVerifyVideo(video);
+            estimate.applyVerifyVideo(video, videoSide);
         }
-        log.info("물리 검증 결과 반영: estimateId={}, status={}, video={}",
-                estimate.getId(), response.status(), video);
+        log.info("물리 검증 결과 반영: estimateId={}, status={}, video={}, videoSide={}",
+                estimate.getId(), response.status(), video, videoSide);
         eventPublisher.publishEvent(new EstimateVerified(
-                estimate.getId(), response.status(), videoPresigner.sign(video), response.error()));
+                estimate.getId(), response.status(), videoPresigner.sign(video),
+                videoPresigner.sign(videoSide), response.error()));
     }
 
     /** 계약 §3 페이로드에서 견적에 남길 것만 뽑는다. verify·kpi 가 없는 옛 페이로드는 성패만 남는다. */

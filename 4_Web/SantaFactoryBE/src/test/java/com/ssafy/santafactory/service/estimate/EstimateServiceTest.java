@@ -964,7 +964,7 @@ class EstimateServiceTest {
 
     private VerifyResultResponse verifyDone(String runId, Long estimateId, String videoUrl) {
         return new VerifyResultResponse(runId, "done", null, estimateId, null,
-                new VerifyResultResponse.Artifacts(videoUrl), null, null);
+                new VerifyResultResponse.Artifacts(videoUrl, null), null, null);
     }
 
     /** 검증 런의 모양 — 종료 사유, 로봇 수, 가동 수, fms 경고. */
@@ -979,7 +979,7 @@ class EstimateServiceTest {
                                             SimulationResponse.Kpi kpi) {
         return new VerifyResultResponse(runId, "done", null, estimateId,
                 "est_%d_n%d".formatted(estimateId, shape.nRobots()),
-                videoUrl == null ? null : new VerifyResultResponse.Artifacts(videoUrl),
+                videoUrl == null ? null : new VerifyResultResponse.Artifacts(videoUrl, null),
                 new VerifyResultResponse.Verify(shape.nRobots(), shape.robotsOnline(), 600, shape.reason(),
                         new VerifyResultResponse.Fms("done", null, shape.warnings())),
                 kpi);

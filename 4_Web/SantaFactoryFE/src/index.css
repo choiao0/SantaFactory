@@ -472,6 +472,10 @@ section.step > p.desc { font-size: 18px; line-height: 1.7; max-width: 760px; mar
 }
 .verify-placeholder .amr-run { color: #6f6f6b; margin-bottom: 4px; }
 .verify-placeholder .amr-run svg { width: 86px; height: auto; }
+/* 카메라 시점 고르기. 영상 바로 위에 붙여 무엇을 바꾸는 버튼인지 드러낸다 */
+.verify-views { display: flex; gap: 8px; margin: 0 0 12px; }
+.verify-views .ghost.on { border-color: var(--red); color: #fff; background: rgba(231, 45, 45, .16); }
+
 /* 마지막 줄만 짧게 남지 않도록 균형 잡아 끊는다 */
 .vp-text {
   margin: 0; max-width: 34ch;
@@ -480,6 +484,8 @@ section.step > p.desc { font-size: 18px; line-height: 1.7; max-width: 760px; mar
 }
 /* 대기·실패처럼 한 줄로 알리는 상태 — 강조할 것이 없으니 옅은 모노 한 문단으로 둔다 */
 .vp-note {
+/* 시작 버튼은 문구 아래에 둔다 — 무엇을 하는 버튼인지 읽고 누르는 순서가 된다 */
+.verify-placeholder .button { margin-top: 6px; }
   margin: 0; max-width: 52ch;
   font: 500 14px/1.8 var(--font-mono); color: #8f8f8b; letter-spacing: .03em;
   text-wrap: balance;

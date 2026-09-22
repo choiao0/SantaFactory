@@ -91,6 +91,10 @@ public class Estimate {
     @Column(name = "verify_video_url", length = 500)
     private String verifyVideoUrl;
 
+    /** 같은 검증의 측면 시점 영상. 측면을 찍지 않은 회차는 null 이고 화면은 상단만 보여준다. */
+    @Column(name = "verify_video_side_url", length = 500)
+    private String verifyVideoSideUrl;
+
     /**
      * 이 견적의 대수 스윕 전체가 공유하는 출고 주문 목록(JSON 직렬화, {@code SimulationRequest.Outbound[]}).
      * 대수마다 다시 생성하지 않고 여기 저장된 걸 재사용한다 — 그래야 "같은 주문량을 몇 대가 처리하는가"를
@@ -163,9 +167,10 @@ public class Estimate {
         return status == EstimateStatus.CANCELLED;
     }
 
-    /** 물리 검증 결과로 받은 리플레이 영상 URL을 반영한다. */
-    public void applyVerifyVideo(String url) {
+    /** 물리 검증 결과로 받은 시점별 영상 URL을 반영한다. 측면은 없을 수 있다. */
+    public void applyVerifyVideo(String url, String sideUrl) {
         this.verifyVideoUrl = url;
+        this.verifyVideoSideUrl = sideUrl;
     }
 
     /** 물리 검증 결과를 반영한다. 영상과 같이 성패를 가리지 않고 마지막 결과를 남긴다. */
