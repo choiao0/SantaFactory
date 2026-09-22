@@ -214,6 +214,18 @@ class Recorder:
         p = os.path.join(self.cfg.out_dir, f"demo_{self.tag()}.mp4")
         return p if self.spec and os.path.isfile(p) and os.path.getsize(p) > 0 else None
 
+    def side_video_path(self) -> str | None:
+        """두 번째 시점 (-264). **이름만** 다르다 — `demo_<run_id>_side.mp4`.
+
+        백엔드는 상단 객체 키에서 `_side` 를 계산해 MinIO 에 실제로 있는지
+        확인한 뒤 화면에 버튼을 띄운다. 그래서 결과 페이로드(artifacts)도
+        NDATA 메트릭도 안 바뀐다. **이름이 어긋나면 오류 없이 버튼만 안 생긴다.**
+
+        없으면 None 이다 — 측면은 **선택**이고, 없다고 런을 실패로 보지 않는다.
+        """
+        p = os.path.join(self.cfg.out_dir, f"demo_{self.tag()}_side.mp4")
+        return p if self.spec and os.path.isfile(p) and os.path.getsize(p) > 0 else None
+
     def remove_frames(self) -> int:
         """shots_<TAG>/ 를 통째로 지운다 — mp4 가 올라간 뒤에만 부른다(-241). 지운 파일 수를 돌려주고, 없으면 0."""
         d = self.shots_dir()

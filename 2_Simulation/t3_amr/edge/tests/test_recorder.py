@@ -138,6 +138,21 @@ class TestLifecycle:
             f.write(b"\x00" * 16)
         assert r.video_path() == p
 
+    def test_side_video_path_is_the_top_name_plus_side(self, tmp_path):
+        """백엔드가 상단 키에서 `_side` 를 계산한다 — 이름이 어긋나면 버튼만 안 생긴다 (-264)."""
+        c, r = self.make(tmp_path)
+        r.start(spec(), 0.0)
+        assert r.side_video_path() is None                      # 없으면 None
+        p = os.path.join(c.out_dir, "demo_verify_77_n3_side.mp4")
+        open(p, "wb").close()
+        assert r.side_video_path() is None                      # 0바이트는 없는 것
+        with open(p, "wb") as f:
+            f.write(b"side-mp4-bytes")
+        assert r.side_video_path() == p
+        # 상단과 **이름만** 다르다
+        top = os.path.join(c.out_dir, "demo_verify_77_n3.mp4")
+        assert r.side_video_path() == top.replace(".mp4", "_side.mp4")
+
     def test_remove_frames_deletes_the_shots_dir_and_is_a_noop_afterwards(self, tmp_path):
         r = REC.Recorder(cfg(tmp_path), spawn=FakePopen)
         r.spec = spec()

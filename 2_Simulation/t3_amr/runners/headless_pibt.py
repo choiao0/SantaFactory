@@ -104,6 +104,18 @@ os.environ["PIBT_HEADLESS"] = "1"
 os.environ.setdefault("AMR_BASE", _BASE)
 
 SHOTS = (os.environ.get("PIBT_SHOTS", "") or "").strip()
+
+# ★★ **두 번째 시점** (2026-09-22, -264). 비면 종전과 완전히 같다.
+#
+#   백엔드가 상단 키에서 `_side` 를 계산해 MinIO 에 있는지 확인하고 버튼을
+#   띄운다. 그래서 **파일 이름만** 지키면 되고 결과 페이로드는 안 바뀐다.
+#
+#   ☹ 부하 — 리플리케이터 경로는 **저장할 스텝에만** 렌더한다(1/STRIDE).
+#     시점이 둘이면 그 스텝에서 render product 가 둘이라 렌더가 대략 2배,
+#     디스크·조립·업로드도 2배다. 다만 물리는 그대로다 — 매 스텝 도는 물리에
+#     비하면 3 Hz 렌더의 2배는 작다. **실측 전이다.**
+SHOTS_SIDE = (os.environ.get("PIBT_SHOTS_SIDE", "") or "").strip()
+CAMERA_SIDE = (os.environ.get("PIBT_CAMERA_SIDE", "") or "").strip()
 SHOT_STRIDE = max(1, int(os.environ.get("PIBT_SHOT_STRIDE", "20")))
 SHOT_EXT = os.environ.get("PIBT_SHOT_EXT", "png")
 SHOT_RES = (os.environ.get("PIBT_HL_SHOT_RES", "") or "1280x720").lower()
@@ -217,6 +229,7 @@ def _render_once():
 # 공식이 거기 묶여 있다), 없으면 리플리케이터로 같은 이름을 쓴다.
 _cap = None                 # None | "viewport" | "replicator"
 _rep_annot = None
+_rep_annot2 = None          # 측면. None 이면 상단만 찍는다
 _shot_n, _shot_fail = 0, 0
 
 if SHOTS:
@@ -237,6 +250,19 @@ if SHOTS:
             _rp = rep.create.render_product(_cam, (_w, _h))
             _rep_annot = rep.AnnotatorRegistry.get_annotator("rgb")
             _rep_annot.attach([_rp])
+            # ★ 두 번째 시점 — 같은 렌더 스텝에 함께 받는다 (-264).
+            #   카메라가 없거나 붙지 않으면 **경고만 하고 하나로 간다** —
+            #   측면이 없다고 검증 런을 죽이면 안 된다.
+            if SHOTS_SIDE and CAMERA_SIDE:
+                try:
+                    os.makedirs(SHOTS_SIDE, exist_ok=True)
+                    _rp2 = rep.create.render_product(CAMERA_SIDE, (_w, _h))
+                    _rep_annot2 = rep.AnnotatorRegistry.get_annotator("rgb")
+                    _rep_annot2.attach([_rp2])
+                    print(f"[hl] 촬영 ON (측면) {SHOTS_SIDE} · 카메라 {CAMERA_SIDE}")
+                except Exception as _e2:
+                    _rep_annot2 = None
+                    print(f"[hl] ☹ 측면 촬영을 못 켠다 — 상단만 찍는다: {_e2!r}")
             _render_once()                  # 첫 프레임에서 버퍼가 생긴다
             _cap = "replicator"
             print(f"[hl] 촬영 ON (리플리케이터) {SHOTS} · {SHOT_STRIDE}스텝마다 "
@@ -252,16 +278,31 @@ if SHOTS:
         print(f"[hl]   조립 시 {_sp:.1f}배속 · 렌더 호출이 1/{SHOT_STRIDE} 로 준다")
 
 
+def _save_one(annot, out_dir, sim_t):
+    """rgb 한 장을 live_pibt 와 **같은 파일명**으로 저장한다."""
+    data = annot.get_data()
+    if data is None or not len(data):
+        raise RuntimeError("rgb 버퍼가 비었다")
+    from PIL import Image
+    Image.fromarray(data[:, :, :3]).save(
+        os.path.join(out_dir, f"f_{int(round(sim_t * 100)):09d}.{SHOT_EXT}"))
+
+
 def _save_replicator(sim_t):
-    """리플리케이터 rgb 를 live_pibt 와 **같은 파일명**으로 저장한다."""
-    global _shot_n, _shot_fail
+    """상단을 저장하고, 측면이 켜져 있으면 같이 저장한다 (-264).
+
+    ☹ 측면 실패가 상단을 죽이면 안 된다 — 백엔드가 기다리는 것은 상단이다.
+      측면은 따로 잡아 경고만 하고 그 뒤로 끈다.
+    """
+    global _shot_n, _shot_fail, _rep_annot2
     try:
-        data = _rep_annot.get_data()
-        if data is None or not len(data):
-            raise RuntimeError("rgb 버퍼가 비었다")
-        path = os.path.join(SHOTS, f"f_{int(round(sim_t * 100)):09d}.{SHOT_EXT}")
-        from PIL import Image
-        Image.fromarray(data[:, :, :3]).save(path)
+        _save_one(_rep_annot, SHOTS, sim_t)
+        if _rep_annot2 is not None:
+            try:
+                _save_one(_rep_annot2, SHOTS_SIDE, sim_t)
+            except Exception as e2:
+                print(f"[hl] ☹ 측면 저장 실패 — 측면만 끈다: {e2!r}")
+                _rep_annot2 = None
         _shot_n += 1
     except Exception as e:
         _shot_fail += 1
