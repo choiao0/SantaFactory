@@ -83,6 +83,22 @@ export PIBT_TOL_TURN_POS="${PIBT_TOL_TURN_POS:-0.100}"
 #     조향을 직접 줘야 풀리는 그 경우다.
 export PIBT_RECOVER="${PIBT_RECOVER:-1}"
 
+#   ★★ 도착 판정에 「서 있는가」 — 기본 **0 = 꺼짐** (2026-09-22, 미검증).
+#
+#   지금 오차는 물리 한계가 아니라 **판정이 만든다.** 도착이 원에 **들어오는
+#   순간**이라 로봇은 목표가 아니라 원의 가장자리에 선다 (실측 중앙 -45.7 mm
+#   / 허용 50). 그래서 회전 위치오차 중앙이 32.32 mm 인데, 그중 ~30 mm 가
+#   tol.pos 그 자체다. 평상 분포는 중앙 5.32 mm 다.
+#
+#   0.02 를 주면 감속 램프가 목표까지 끝난다. 오차가 공차가 아니라 램프
+#   해상도(~3 mm)에 묶인다.
+#
+#   ☹ 완주 판(2026-09-22)의 `worst_gap` 이 **3.39 mm** 였다. 접촉은 0 이지만
+#     설계 예산 41.3 mm 의 8 % 다. 이 대책은 그 여유를 되찾으려는 것이다.
+#   ☹ 대가 — 마지막 몇 cm 를 저속으로 가서 액션마다 조금 느려진다.
+#     이어달리기(exit_v > 0)에는 안 걸린다 (걸면 교착).
+export PIBT_TOL_STOP_V="${PIBT_TOL_STOP_V:-0}"
+
 # --- 작업부하 (계획 판에만 걸린다) ------------------------
 #   ★★ 2026-09-22 — **우리 기본값이 FMS 판과 다른 문제를 풀고 있었다.**
 #
@@ -127,6 +143,7 @@ echo "  공차        pos $PIBT_TOL_POS · cross $PIBT_TOL_CROSS"
 echo "  회전 관문   대기 ${PIBT_TURN_BODY_MAX}s (켬 $PIBT_TURN_BODY_GATE · 양보 $PIBT_TURN_YIELD) · 완료 ${PIBT_TOL_TURN_POS} m"
 echo "  회전 가속   ${PIBT_W_ACCEL} rad/s^2$([ "$PIBT_W_ACCEL" = "0" ] && echo '   ☹ 꺼짐 — 계단 그대로')"
 echo "  복구 기동   $PIBT_RECOVER   (회전에는 안 듣는다)"
+echo "  정지 판정   ${PIBT_TOL_STOP_V} m/s$([ "$PIBT_TOL_STOP_V" = "0" ] && echo "   (꺼짐 — 원 가장자리에 선다)")"
 echo "  ADG         몸 $PIBT_ADG_BODY · 순위 $PIBT_ADG_RANK"
 echo "  작업부하    토트 ${PIBT_CAPACITY}개 · 토트당 ${PIBT_SVC_PER_TOTE}틱   (궤적 재생 판에는 무관)"
 echo "  격자        pitch ${PIBT_PITCH:-?} · 앞 칸 규칙 ${PIBT_FRONT_RULE:-?} · FMS 격자 ${PIBT_FMS_GRID:-0}"
