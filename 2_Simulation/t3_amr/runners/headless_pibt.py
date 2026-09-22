@@ -231,6 +231,54 @@ _cap = None                 # None | "viewport" | "replicator"
 _rep_annot = None
 _rep_annot2 = None          # 측면. None 이면 상단만 찍는다
 _shot_n, _shot_fail = 0, 0
+_side_n = 0                 # 측면 장수 — 상단과 따로 센다 (경로가 다르다)
+
+
+def _attach_side():
+    """측면 카메라를 **리플리케이터로** 붙인다. 실패하면 None.
+
+    ★ 상단 경로와 **무관하게** 돈다 (2026-09-23).
+      상단이 뷰포트면 `live_pibt` 의 `capture_viewport_to_file` 이 찍고, 상단이
+      리플리케이터면 `_rep_annot` 이 찍는다. 측면은 어느 쪽이든 자기 render
+      product 를 갖는다 — 뷰포트는 하나뿐이라 카메라를 바꿔 끼울 수 없고,
+      바꿔 끼우면 캡처가 비동기라(`live_pibt.py:497`) 엉뚱한 프레임이 찍힌다.
+
+    ☹ 2026-09-22 에 이 함수가 **리플리케이터 분기 안에만** 있었다. 그런데 이
+      서버는 뷰포트 분기로 돌아서 측면이 한 장도 안 나왔다 (`hl264c`: 상단
+      6,861장 · 측면 0장). 오류도 경고도 없었다 — 백엔드가 `_side` 키를
+      못 찾아 버튼만 안 생긴다.
+
+    부하 — 실측 1.0 ms/step 이하 (촬영 ON 16.58 vs OFF 15.60, STRIDE 20).
+    """
+    if not (SHOTS_SIDE and CAMERA_SIDE):
+        return None
+    try:
+        import omni.kit.app as _ka
+        _ka.get_app().get_extension_manager() \
+           .set_extension_enabled_immediate("omni.replicator.core", True)
+        import omni.replicator.core as rep                # noqa: E402
+        os.makedirs(SHOTS_SIDE, exist_ok=True)
+        _w, _h = (int(x) for x in SHOT_RES.split("x"))
+        annot = rep.AnnotatorRegistry.get_annotator("rgb")
+        annot.attach([rep.create.render_product(CAMERA_SIDE, (_w, _h))])
+        print(f"[hl] 촬영 ON (측면) {SHOTS_SIDE} · 카메라 {CAMERA_SIDE}")
+        return annot
+    except Exception as e:                                # noqa: BLE001
+        print(f"[hl] ☹ 측면 촬영을 못 켠다 — 상단만 찍는다: {e!r}")
+        return None
+
+
+def _save_side(sim_t):
+    """측면 한 장. 실패하면 **측면만** 끈다 — 백엔드가 기다리는 것은 상단이다."""
+    global _rep_annot2, _side_n
+    if _rep_annot2 is None:
+        return
+    try:
+        _save_one(_rep_annot2, SHOTS_SIDE, sim_t)
+        _side_n += 1
+    except Exception as e:                                # noqa: BLE001
+        print(f"[hl] ☹ 측면 저장 실패 — 측면만 끈다: {e!r}")
+        _rep_annot2 = None
 
 if SHOTS:
     os.makedirs(SHOTS, exist_ok=True)
@@ -250,19 +298,6 @@ if SHOTS:
             _rp = rep.create.render_product(_cam, (_w, _h))
             _rep_annot = rep.AnnotatorRegistry.get_annotator("rgb")
             _rep_annot.attach([_rp])
-            # ★ 두 번째 시점 — 같은 렌더 스텝에 함께 받는다 (-264).
-            #   카메라가 없거나 붙지 않으면 **경고만 하고 하나로 간다** —
-            #   측면이 없다고 검증 런을 죽이면 안 된다.
-            if SHOTS_SIDE and CAMERA_SIDE:
-                try:
-                    os.makedirs(SHOTS_SIDE, exist_ok=True)
-                    _rp2 = rep.create.render_product(CAMERA_SIDE, (_w, _h))
-                    _rep_annot2 = rep.AnnotatorRegistry.get_annotator("rgb")
-                    _rep_annot2.attach([_rp2])
-                    print(f"[hl] 촬영 ON (측면) {SHOTS_SIDE} · 카메라 {CAMERA_SIDE}")
-                except Exception as _e2:
-                    _rep_annot2 = None
-                    print(f"[hl] ☹ 측면 촬영을 못 켠다 — 상단만 찍는다: {_e2!r}")
             _render_once()                  # 첫 프레임에서 버퍼가 생긴다
             _cap = "replicator"
             print(f"[hl] 촬영 ON (리플리케이터) {SHOTS} · {SHOT_STRIDE}스텝마다 "
@@ -273,7 +308,11 @@ if SHOTS:
             print("[hl]   더 빠르고 배속도 사후에 고를 수 있다.")
             _cap = None
 
+    # ★ 측면은 **상단 경로가 정해진 뒤** 따로 붙인다 (2026-09-23). 상단이
+    #   뷰포트든 리플리케이터든 같은 자리다 — `_attach_side` 머리말 참조.
     if _cap:
+        _rep_annot2 = _attach_side()
+        _render_once()                      # 측면 버퍼도 첫 프레임에서 생긴다
         _sp = SHOT_STRIDE * int(os.environ.get("PIBT_SHOT_FPS", "30")) / 60.0
         print(f"[hl]   조립 시 {_sp:.1f}배속 · 렌더 호출이 1/{SHOT_STRIDE} 로 준다")
 
@@ -289,22 +328,12 @@ def _save_one(annot, out_dir, sim_t):
 
 
 def _save_replicator(sim_t):
-    """상단을 저장하고, 측면이 켜져 있으면 같이 저장한다 (-264).
-
-    ☹ 측면 실패가 상단을 죽이면 안 된다 — 백엔드가 기다리는 것은 상단이다.
-      측면은 따로 잡아 경고만 하고 그 뒤로 끈다.
-    """
-    global _shot_n, _shot_fail, _rep_annot2
+    """상단 한 장 (리플리케이터 경로). 측면은 `_save_side` 가 따로 한다."""
+    global _shot_n, _shot_fail
     try:
         _save_one(_rep_annot, SHOTS, sim_t)
-        if _rep_annot2 is not None:
-            try:
-                _save_one(_rep_annot2, SHOTS_SIDE, sim_t)
-            except Exception as e2:
-                print(f"[hl] ☹ 측면 저장 실패 — 측면만 끈다: {e2!r}")
-                _rep_annot2 = None
         _shot_n += 1
-    except Exception as e:
+    except Exception as e:                                # noqa: BLE001
         _shot_fail += 1
         if _shot_fail <= 3:
             print(f"[hl] 캡처 실패 {_shot_fail}회: {e!r}")
@@ -369,8 +398,11 @@ try:
         #     프레임이다. 이 호출이 없으면 예약만 쌓이고 파일은 안 생긴다.
         if _cap and state["n"] % SHOT_STRIDE == 0:
             _render_once()
+            # 상단 — 뷰포트면 live_pibt 가 자기 틱에서 찍는다 (여기서는 안 한다).
             if _cap == "replicator":
                 _save_replicator(state["t"])
+            # 측면 — **상단 경로와 무관하게** 같은 렌더 프레임에서 받는다.
+            _save_side(state["t"])
 
         _step(DT, t_sim)
         t_sim += DT
@@ -428,6 +460,13 @@ if _cap:
               f"-c:v libx264 -pix_fmt yuv420p -crf 20 ../demo.mp4")
     else:
         print("[hl]   ★ 한 장도 안 나왔다 — 카메라 경로와 PIBT_SHOT_STRIDE 를 보라")
+    # 측면 — 켠 적이 있으면 반드시 장수를 낸다. 0 장이면 그 자리에서 보이게 한다
+    # (백엔드는 `_side` 키가 없으면 **오류 없이** 버튼만 안 띄운다).
+    if SHOTS_SIDE and CAMERA_SIDE:
+        print(f"[hl] 촬영(측면) {_side_n:,}장 -> {SHOTS_SIDE}"
+              + ("" if _side_n else
+                 "   ★ 한 장도 안 나왔다 — 카메라 "
+                 f"{CAMERA_SIDE} 가 씬에 있는지 보라"))
 try:
     quit_fn(0)                             # 자세 기록 저장 (PIBT_RECORD 가 경로일 때)
 except Exception as e:
