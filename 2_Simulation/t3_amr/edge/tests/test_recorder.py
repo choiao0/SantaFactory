@@ -147,3 +147,90 @@ class TestLifecycle:
 
         assert r.remove_frames() == 2 and not os.path.exists(r.shots_dir())
         assert r.remove_frames() == 0
+
+
+class TestHeadlessServicePath:
+    """서비스 런은 **헤드리스로 촬영하고, 창을 시뮬 초로 끊고, 접촉으로 안 죽는다** (2026-09-22).
+
+    셋 다 같은 이유에서 나온다 — 검증 한 판이 창의 36 %만 돌고(벽시계 창),
+    첫 접촉에 죽고, 12~30분 걸렸다. 그 상태로는 이산·물리 대조를 한 번 할
+    때마다 30분을 태운다.
+    """
+
+    def env(self, tmp_path, **over):
+        return REC.environment(cfg(tmp_path, **over), spec(), base={}, plan_exists=True)
+
+    def test_service_runs_capture_headless(self, tmp_path):
+        e = self.env(tmp_path)
+        # Kit `--exec` 경로는 매 스텝 렌더하고 그린 것의 95 %를 버린다 (실시간 0.36배).
+        assert e["HEADLESS"] == "1"
+        # 준비 프레임 상한 — 기본 12,000 은 헤드리스에서 4초라 준비를 못 넘긴다.
+        assert int(e["PIBT_HL_SETUP_CAP"]) >= 400000
+
+    def test_the_runner_is_not_given_a_sim_second_cap(self, tmp_path):
+        """창을 끊는 주체는 **host-orch 하나**여야 한다.
+
+        host-orch 가 `Runner/SimTime` 으로 시뮬 초 창을 끊는다. 러너에게도
+        상한을 걸면 시계가 둘이 되고, 러너가 먼저 멈추면 host-orch 가 그것을
+        「런이 스스로 끝났다」= FAILED 로 적는다. 폭주 방지는 벽시계
+        `spec.timeout_s` 가 이미 한다."""
+        e = self.env(tmp_path)
+        assert "PIBT_HL_MAX_SIM" not in e
+        # 계획 지평은 창보다 길다 — 창 끝은 host-orch Stop 이 자른다.
+        assert int(e["PIBT_HORIZON"]) > spec().window_s / REC.DEFAULT_TICK_S
+
+    def test_sim_time_is_reported_so_the_window_can_be_cut_in_sim_seconds(self, tmp_path):
+        """헤드리스 러너가 시뮬 시각을 찍고, 엣지가 그걸 읽어 NDATA 로 싣는다.
+
+        이 사슬이 끊기면 host-orch 가 벽시계로 후퇴한다 — 깨져도 **조용하다.**"""
+        from edge import runner as RUN
+        assert RUN.SIM_TIME == "Runner/SimTime"
+        assert RUN.SIM_TIME in RUN.NODE_METRICS          # NBIRTH 에 선언돼야 읽힌다
+        assert hasattr(REC.Recorder, "sim_time")
+
+    def test_contact_counts_instead_of_killing_the_run(self, tmp_path):
+        # 검증이 낼 답은 「실패」가 아니라 「몇 번 닿았다」다.
+        assert self.env(tmp_path)["PIBT_CONTACT_ABORT"] == "0"
+
+
+class TestHeadlessLogMarkers:
+    """헤드리스 러너는 Kit 과 **다른 말**을 쓴다. 감시하는 쪽이 그 말을 알아야 한다."""
+
+    def make(self, tmp_path):
+        c = cfg(tmp_path)
+        os.makedirs(c.t3amr_dir)
+        os.makedirs(c.out_dir)
+        os.makedirs(c.logs_dir, exist_ok=True)
+        r = REC.Recorder(c, spawn=FakePopen, send=lambda proc, sig: None)
+        r.start(spec(), 0.0)
+        return c, r
+
+    def write(self, r, text):
+        with open(r.record_log(), "a", encoding="utf-8") as f:
+            f.write(text)
+
+    def test_headless_capture_marker_counts_as_ready(self, tmp_path):
+        _, r = self.make(tmp_path)
+        assert not r.ready()
+        self.write(r, "[hl] 촬영 ON (리플리케이터) /out/shots · 20스텝마다 .png\n")
+        assert r.ready()
+
+    def test_headless_finish_marker_counts_as_finished(self, tmp_path):
+        _, r = self.make(tmp_path)
+        assert not r.finished_normally()
+        self.write(r, "[hl] 주행 종료 — sim 600.0s · 벽시계 366.0s · 평균 배속 1.64x\n")
+        assert r.finished_normally()
+
+    def test_sim_time_reads_the_last_progress_line(self, tmp_path):
+        _, r = self.make(tmp_path)
+        assert r.sim_time() is None                       # Kit 경로 = 보고 없음
+        self.write(r, "[hl] sim     10.0s | 벽시계      6.1s | 배속  1.64x\n")
+        self.write(r, "[hl] sim    123.4s | 벽시계     75.2s | 배속  1.64x\n")
+        assert r.sim_time() == 123.4
+
+    def test_sim_time_survives_a_long_log(self, tmp_path):
+        """뒤에서만 읽는다 — 런이 길어져도 비용이 일정해야 한다."""
+        _, r = self.make(tmp_path)
+        self.write(r, "채워넣기\n" * 20000)
+        self.write(r, "[hl] sim    600.0s | 벽시계    366.0s | 배속  1.64x\n")
+        assert r.sim_time() == 600.0

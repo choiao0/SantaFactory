@@ -596,8 +596,10 @@ SCRIPT_PID=$!
   _parent_gone && exit 0                                   # 부모가 죽었으면 나도 끝
   n=$(find "$SHOTS" -maxdepth 1 -name "f_*.$SHOT_EXT" 2>/dev/null | wc -l)
   if [ "$n" -gt 0 ]; then exit 0; fi                       # 촬영 중
-  if grep -aq "캡처 ON" "$MYLOG" 2>/dev/null; then exit 0; fi
-  if grep -aq "전원 완주\|시작 pose 불일치\|계획 정체\|겹침" \
+  # ★ 「촬영 ON」은 헤드리스 경로(`headless_pibt.py:226,242`)의 말이다.
+  #   안 보면 HEADLESS=1 판이 ${WATCH_SEC}초에 무조건 끊긴다 (2026-09-22).
+  if grep -aq "캡처 ON\|촬영 ON" "$MYLOG" 2>/dev/null; then exit 0; fi
+  if grep -aq "전원 완주\|주행 종료\|시작 pose 불일치\|계획 정체\|겹침" \
        "$MYLOG" 2>/dev/null; then exit 0; fi               # 다른 이유로 끝났다
   echo
   echo "★★★ ${WATCH_SEC}초가 지났는데 프레임이 0장입니다 — 촬영이 꺼진 상태입니다."
@@ -642,7 +644,8 @@ SLOW_EVERY=7                           # 무거운 확인(Carb 로그 grep · �
       # ── 매 회(2초): 완주 표시 — 이것만 빠르면 된다 ──────────
       seen=0
       if [ "$marker_at" = 0 ]; then
-          grep -aq "post_quit\|전원 완주" "$MYLOG" 2>/dev/null && seen=1
+          # 「주행 종료」는 헤드리스 경로의 완주 표시 (`headless_pibt.py:369`).
+          grep -aq "post_quit\|전원 완주\|주행 종료" "$MYLOG" 2>/dev/null && seen=1
       fi
 
       # ── 7회마다(약 14초): 무거운 확인 ───────────────────────

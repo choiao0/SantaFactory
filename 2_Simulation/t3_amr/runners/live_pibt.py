@@ -931,22 +931,40 @@ def _tick(f, dt):
             state["done"] = True
             return
 
-    if f.stats.contact_events:
+    # ★★ 차체 접촉 — **판을 죽일지가 스위치다** (2026-09-22).
+    #
+    #   예전에는 무조건 멈췄다. 손으로 돌리는 판에서는 그게 맞다 — 접촉이 나면
+    #   그 뒤는 볼 것이 없고 빨리 아는 편이 낫다. 그래서 **기본은 그대로 멈춘다.**
+    #
+    #   그런데 **검증 런에서는 틀린 동작이다.** 검증이 내야 할 답은 「실패」가
+    #   아니라 「몇 번 닿았다」다. 1.0 m 통로에서 제어 허용 오차(tol pos 50 mm)가
+    #   설계 여유(41.3 mm)보다 크므로 접촉은 확률 문제이고 반드시 난다. 죽이면
+    #   그 뒤 구간의 지표(완주 태스크·지연률·대기율)를 영영 못 본다 — 실제로
+    #   13대 판이 시뮬 338.6 s 에서 접촉 1건으로 끊겼다 (2026-09-22).
+    #
+    #   랙 접촉(`PIBT_STATIC_ABORT`, 위)이 이미 같은 모양이다. 이름만 맞춘다.
+    #   엣지는 서비스 런에 `PIBT_CONTACT_ABORT=0` 을 세운다 (`edge/recorder.py`).
+    if f.stats.contact_events and not state.get("_contact_said"):
+        state["_contact_said"] = True
+        _abort = os.environ.get("PIBT_CONTACT_ABORT", "1") not in ("0", "", "false", "no", "off")
         # ★ **접촉 쌍**을 찍는다 (-240, 2026-09-18). 여기가 `overlap_pairs`(칸 공유)를
         #   찍고 있어서, 접촉 1건인데 목록에 30쌍이 나와 어느 쌍인지 못 골랐다.
         #   칸 공유 수는 뒤에 참고로만 붙인다.
         carb.log_error(f"[pibt] ★★ 차체 접촉 {f.stats.contact_events}건  "
                        f"**접촉 쌍** {sorted(f.stats.contact_pairs)}  "
                        f"차체 최소거리 {f.stats.worst_gap:.3f} m  — 브리지 버그"
-                       f"   (칸 공유는 별건: {len(f.stats.overlap_pairs)}쌍)")
+                       f"   (칸 공유는 별건: {len(f.stats.overlap_pairs)}쌍)"
+                       + ("  (PIBT_CONTACT_ABORT=1 — 중단한다)" if _abort
+                          else "  (세기만 한다. 멈추려면 PIBT_CONTACT_ABORT=1)"))
         try:
             for line in str(f.diagnose()).splitlines()[:25]:
                 carb.log_error("   " + line)
         except Exception as e:
             carb.log_error(f"   diagnose 실패: {e}")
-        _shot_report()
-        state["done"] = True
-        return
+        if _abort:
+            _shot_report()
+            state["done"] = True
+            return
 
     # 접촉이 아닌 칸 공유 — **한 번만** 알리고 주행은 계속한다.
     if f.stats.overlap_events and not state.get("cell_warned"):

@@ -5,7 +5,8 @@ run_record.sh(t3_amr) 의 규약:
   PIBT_N     → 로봇 대수. 계획 폴더 plan/traj_pibt_h/fleet_NN 이 없으면 REPLAN=1 로 만들어야 한다
   PIBT_SEED · PIBT_MODE · PIBT_HORIZON → live_pibt.py (lifelong 발주, 창 길이)
   SIGINT     → trap 이 Kit 자손을 정리하고 프레임을 mp4 로 조립한 뒤 종료한다 (끊어도 그 시점까지 영상이 나온다)
-  "캡처 ON" 로그 / 프레임 파일 → 촬영 시작,  "post_quit" · "전원 완주" → 스스로 끝남
+  "캡처 ON"·"촬영 ON" 로그 / 프레임 파일 → 촬영 시작,  "post_quit"·"전원 완주"·"주행 종료" → 스스로 끝남
+  "[hl] sim <초>s" 로그 → 시뮬 시각 (헤드리스 경로만. host-orch 가 창을 이 값으로 끊는다)
 """
 from __future__ import annotations
 
@@ -13,6 +14,7 @@ import glob
 import logging
 import math
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -65,8 +67,19 @@ def tick_seconds(env: dict | None = None) -> float:
 PLAN_PITCH_M = plan_pitch_m()                # 기록·로그용 (읽는 시점의 실제 값)
 DEFAULT_TICK_S = tick_seconds()
 HORIZON_MARGIN_S = 60.0                      # 창보다 조금 길게 계획 — 창 끝은 host-orch Stop 이 자른다
-READY_MARKER = "캡처 ON"
-FINISHED_MARKERS = ("post_quit", "전원 완주")
+# 촬영이 켜졌다는 표시. ★ 경로마다 말이 다르다 — Kit 경로(`live_pibt.py:486`)는
+# 「캡처 ON」, 헤드리스 경로(`headless_pibt.py:226,242`)는 「촬영 ON」이다.
+# 하나만 보면 헤드리스 판이 `ready()` 를 영영 못 넘고 ready_timeout 에 걸린다.
+READY_MARKERS = ("캡처 ON", "촬영 ON")
+# 스스로 잘 끝났다는 표시. 위와 같은 이유로 경로마다 다르다 —
+# Kit 은 `post_quit`(`live_pibt.py:565`)·「전원 완주」(:961), 헤드리스는
+# 「주행 종료」(`headless_pibt.py:369`)다. 헤드리스 판이 전원 완주하거나 계획
+# 지평을 다 쓰고 끝나면 이 줄만 남으므로 반드시 들어가야 한다 — 빠지면
+# `_tick_running` 이 `recorder died` 로 정상 종료를 실패 처리한다.
+FINISHED_MARKERS = ("post_quit", "전원 완주", "주행 종료")
+# 시뮬 시각 보고 줄 — `headless_pibt.py:343` 의 형식. 뒤에서 이만큼만 읽는다.
+SIM_TIME_RE = re.compile(r"\[hl\]\s+sim\s+([0-9]+(?:\.[0-9]+)?)s")
+SIM_TIME_TAIL_BYTES = 64 * 1024
 INT_GRACE_S = 240.0                          # SIGINT 뒤 조립(ffmpeg) 대기 — 프레임 수천 장이면 1 분 넘게 걸린다
 TERM_GRACE_S = 5.0
 
@@ -121,6 +134,32 @@ def environment(cfg: RecorderConfig, spec: RunSpec, base: dict | None = None,
         "STRICT": "1",
         "WATCH_SEC": str(int(cfg.watch_s)),
         "VIDEO": "1",
+        # ── 촬영 경로 (2026-09-22) ─────────────────────────────────────
+        # ★ 서비스는 **헤드리스로 촬영한다.** Kit `--exec` 경로는 매 스텝
+        #   렌더하고 그린 것의 95 %를 버린다 — 실시간의 0.36배다. 헤드리스는
+        #   저장할 스텝에만 그려 1.64배가 나온다 (13대·seed 101 실측,
+        #   프레임 2,031장 실패 0). 창 600 s 가 GPU 7~8분에 끝난다.
+        "HEADLESS": "1",
+        # 준비 단계 프레임 상한. 기본 12,000 은 헤드리스에서 **4초**라
+        # 준비(계획·probe·재정렬, 30~80 s)를 못 넘긴다 — `run_headless.sh:57`
+        # 이 같은 이유로 같은 값을 쓴다.
+        "PIBT_HL_SETUP_CAP": "400000",
+        # ☹ `PIBT_HL_MAX_SIM`(러너가 스스로 멈추는 시뮬 초 상한)은 **주지 않는다.**
+        #
+        #   창을 끊는 주체는 **host-orch 하나**다 — 위 `HORIZON_MARGIN_S` 주석이
+        #   정해 둔 그대로다. host-orch 는 `Runner/SimTime`(아래 `sim_time()` 이
+        #   읽어 `edge/runner.py` 가 싣는다)을 보고 **시뮬 초**로 창을 끊는다
+        #   (`orchestrator._window_filled`).
+        #
+        #   여기에 러너 자신의 시뮬 초 상한을 같이 걸면 시계가 둘이 되고, 러너가
+        #   먼저 멈추면 host-orch 가 그것을 「런이 스스로 끝났다」= FAILED 로
+        #   적는다. 폭주 방지는 이미 벽시계 `spec.timeout_s` 가 한다
+        #   (`runner._tick_running`) — 시계를 하나 더 들일 이유가 없다.
+        # ★★ 접촉으로 판을 죽이지 않는다 (`live_pibt.py` 차체 접촉 분기).
+        #   검증이 낼 답은 「실패」가 아니라 「몇 번 닿았다」다. 1.0 m 통로에서
+        #   제어 허용 오차(50 mm)가 설계 여유(41.3 mm)보다 크므로 접촉은
+        #   확률 문제이고, 죽이면 그 뒤 구간을 영영 못 본다.
+        "PIBT_CONTACT_ABORT": "0",
     })
     if spec.seed is not None:
         e["PIBT_SEED"] = str(spec.seed)
@@ -228,9 +267,34 @@ class Recorder:
     def frames(self) -> int:
         return len(glob.glob(os.path.join(self.shots_dir(), "f_*.*")))
 
+    def sim_time(self) -> float | None:
+        """지금까지 돈 **시뮬 시각**(초). 못 읽으면 None.
+
+        ★ 왜 로그를 파나 — 시뮬 시각은 Isaac 프로세스 안에만 있고, 엣지와
+        그 프로세스 사이의 채널은 이 로그뿐이다 (`_log_has` 가 쓰는 것과 같은
+        typescript). 헤드리스 러너가 `PIBT_HL_REPORT` 스텝마다 한 줄 찍는다
+        (`headless_pibt.py:343`) — 기본 600스텝 = 시뮬 10초마다다.
+
+            [hl] sim    123.4s | 벽시계    75.2s | 배속  1.64x (순간 ...
+
+        마지막 줄을 쓴다. 파일 끝에서만 읽으므로 런이 길어져도 비용이 일정하다.
+        Kit(`--exec live_pibt.py`) 경로는 이 줄을 안 찍는다 — 그 경로에서는
+        None 이 나오고, host-orch 가 예전처럼 벽시계로 창을 끊는다.
+        """
+        try:
+            with open(self.record_log(), "rb") as f:
+                f.seek(0, os.SEEK_END)
+                back = min(f.tell(), SIM_TIME_TAIL_BYTES)
+                f.seek(-back, os.SEEK_END)
+                tail = f.read().decode("utf-8", "replace")
+        except OSError:
+            return None
+        hits = SIM_TIME_RE.findall(tail)
+        return float(hits[-1]) if hits else None
+
     def ready(self) -> bool:
         """촬영이 실제로 켜졌나 = RUNNING 조건."""
-        return self.frames() > 0 or self._log_has((READY_MARKER,))
+        return self.frames() > 0 or self._log_has(READY_MARKERS)
 
     def finished_normally(self) -> bool:
         return self._log_has(FINISHED_MARKERS)

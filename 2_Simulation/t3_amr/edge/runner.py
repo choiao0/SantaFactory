@@ -28,6 +28,11 @@ STATE, RUN_ID, HEARTBEAT, RTF = "Runner/State", "Runner/RunId", "Runner/Heartbea
 ISAAC, RAM, VRAM, LAST_ERROR = "Runner/IsaacInstances", "Runner/RamMB", "Runner/VramMB", "Runner/LastError"
 CMD_START, CMD_STOP = "Run Control/Start", "Run Control/Stop"
 SCENARIO_SHA = "Runner/ScenarioSha"
+# ★ 지금까지 돈 **시뮬 시각**(초). host-orch 가 창을 벽시계가 아니라 이 값으로
+#   끊는다 (`orchestrator._step_running`). 벽시계로 끊으면 배속(0.33~1.64배)에
+#   따라 같은 `window_s` 가 판마다 다른 분량을 담는다 — KPI 를 DES 와 비교할 때
+#   분모가 달라진다. 못 읽으면 발행하지 않는다(= host-orch 는 벽시계로 후퇴).
+SIM_TIME = "Runner/SimTime"
 # (-215) 런이 끝나며 올린 mp4 를 가리킨다. 값은 URL 이 아니라 버킷 없는 객체 키 `<run_id>/<파일>` 이다(-233).
 # host-orch 가 sim.verify.result.artifacts.video 로 그대로 옮긴다.
 VIDEO_URL = "Runner/VideoUrl"
@@ -39,7 +44,7 @@ NODE_METRICS = {d.name: d for d in (
     MetricDef(ISAAC, spb.INT32, 6, 0), MetricDef(RAM, spb.INT32, 7, 0), MetricDef(VRAM, spb.INT32, 8, 0),
     MetricDef(LAST_ERROR, spb.STRING, 9, ""), MetricDef(CMD_START, spb.TEXT, 10, ""),
     MetricDef(CMD_STOP, spb.BOOLEAN, 11, False), MetricDef(SCENARIO_SHA, spb.STRING, 12, ""),
-    MetricDef(VIDEO_URL, spb.STRING, 13, ""))}
+    MetricDef(VIDEO_URL, spb.STRING, 13, ""), MetricDef(SIM_TIME, spb.DOUBLE, 14, 0.0))}
 
 
 @dataclass(frozen=True)
@@ -267,6 +272,11 @@ class Runner:
         vram = self.vram_mb()
         sample = {ISAAC: self.rec.isaac_count() if self.rec else 0,
                   RAM: self.ram_mb(pids) if pids else 0, VRAM: vram if vram is not None else self.values[VRAM]}
+        # 시뮬 시각 — 읽히는 판(헤드리스)에서만 싣는다. Kit 경로는 None 이라
+        # 아예 안 보내고, host-orch 는 그 경우 벽시계로 창을 끊는다.
+        sim_t = self.rec.sim_time() if self.rec else None
+        if sim_t is not None:
+            sample[SIM_TIME] = float(sim_t)
         return {k: v for k, v in sample.items() if v != self.values[k]}
 
     def snapshot(self) -> dict:
