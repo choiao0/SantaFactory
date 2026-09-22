@@ -347,6 +347,11 @@ if SHOTS:
         print(f"[hl]   조립 시 {_sp:.1f}배속 · 렌더 호출이 1/{SHOT_STRIDE} 로 준다")
 
 
+# PIL 포맷 이름 — 확장자와 철자가 다르다 (jpg -> JPEG).
+_PIL_FORMAT = {"jpg": "JPEG", "jpeg": "JPEG", "png": "PNG"}.get(
+    SHOT_EXT.lower(), SHOT_EXT.upper())
+
+
 def _save_one(annot, out_dir, sim_t):
     """rgb 한 장을 live_pibt 와 **같은 파일명**으로 저장한다.
 
@@ -371,7 +376,9 @@ def _save_one(annot, out_dir, sim_t):
     from PIL import Image
     final = os.path.join(out_dir, f"f_{int(round(sim_t * 100)):09d}.{SHOT_EXT}")
     tmp = final + ".part"
-    Image.fromarray(data[:, :, :3]).save(tmp)
+    # ★ 포맷을 **명시**한다. PIL 은 확장자로 포맷을 정하는데 `.part` 를 모른다
+    #   — `ValueError: unknown file extension: .part` (r13peak 실측, 2026-09-23).
+    Image.fromarray(data[:, :, :3]).save(tmp, format=_PIL_FORMAT)
     os.replace(tmp, final)
 
 
