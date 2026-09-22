@@ -93,12 +93,25 @@ ZONE_CLAIM = (TO_HOME, TO_CHARGE, TO_CHARGE_HI, CHARGING)
 #   가 이 값을 쓴다. 저쪽이 바꾸면 여기도 같이 바꿔야 비교가 선다.
 HD_AFTER = int(os.environ.get("PIBT_HD_AFTER", "16"))
 
-# ★ 서비스 틱 — FMS `core.py:54  service_steps: int = 4` 와 **같은 값**이어야 한다.
+# ★ 서비스 틱 — **13** 이다. FMS 의 dataclass 기본 4 를 보면 안 된다 (FMS-43).
 #
-#   2026-09-22 까지 3 이었다. 주석은 「FMS SERVICE_STEPS 와 같은 자리」라고
-#   적혀 있었는데 값이 하나 달랐다 — 동승 누락과 같은 종류의 조용한 갈림이다.
-#   픽·드롭 각각에 걸리므로 트립당 2틱, 258태스크 판이면 누적이 크다.
-SERVICE_TICKS = 4
+#   `core.py:54  service_steps: int = 4` 는 dataclass 기본값이고, CLI 경로가
+#   **항상 덮는다** (`sim_v2_tasks.py:380`)
+#
+#       service_steps = round(SERVICE_TIME_S / dt) = round((40/11) / 0.2778) = 13
+#
+#   그래서 서비스 길이는 `13 + 토트수 x svc_per_tote` 다.
+#
+#       6토트 121 · 5토트 103 · 4토트 85 · 3토트 67 · 2토트 49 · 1토트 31 틱
+#
+#   r13 3h 전체 서비스 975건 중 **121 이 876건**. peak10 조각에서 보였던
+#   95·87 은 전체 궤적에 없다 — 창 앞뒤 경계에서 잘린 것이다.
+#
+#   ☹ 2026-09-22 에 두 번 틀렸다. 3 이었다가 dataclass 기본을 보고 4 로
+#     고쳤고, FMS-43 이 13 이라고 알려 줬다. **기본값이 아니라 CLI 가 넣는
+#     값이 진실**이다 — `tools/port_audit.py` 도 같은 실수를 해서 「4/4 일치」로
+#     통과시켰다. 그쪽도 같이 고쳤다.
+SERVICE_TICKS = 13
 
 # ★★ 드롭 도달성 가드 — FMS 원본과 **선언된 차이 중 하나** (미해결 A, -240).
 #   ☹ 2026-09-22 정정 — 예전에 「유일한 차이」라고 적혀 있었는데 사실이

@@ -39,6 +39,9 @@ def rd(p):
 core = rd(UP + "kernel/core.py")
 states = rd(UP + "kernel/states.py")
 ostream = rd(UP + "order_stream.py")
+sim_cli = rd(UP + "sim_v2_tasks.py")          # CLI 가 넣는 **실제** 값이 여기 있다
+# 계획 틱[s] — 궤적의 dt_s 와 같아야 한다. pitch / (v_max x MOVE_TICKS).
+TICK_S = 1.0 / (0.9 * 4)
 ll = rd(MY + "path/lifelong.py")
 sw = rd(MY + "switches.sh")
 
@@ -48,9 +51,22 @@ def chk(name, up, mine, ok=None):
     rows.append((ok, name, up, mine))
 
 # 1 서비스 틱
-chk("service_steps / SERVICE_TICKS",
-    re.search(r"service_steps: int = (\d+)", core).group(1),
-    re.search(r"^SERVICE_TICKS = (\d+)", ll, re.M).group(1))
+#   ★★ **dataclass 기본값을 보면 안 된다** (2026-09-22, FMS-43 이 알려 줬다).
+#      `core.py:54  service_steps: int = 4` 는 기본값이고 CLI 가 **항상 덮는다**
+#      (`sim_v2_tasks.py:380`).  실제 값은
+#
+#          round(SERVICE_TIME_S / dt) = round((40/11) / 0.2778) = 13
+#
+#      이 도구의 초판이 그 기본값(4)을 보고 「4/4 일치」로 통과시켰다. 값이
+#      틀린 채로 **✓ 가 찍히는 것**이 제일 나쁘다 — 그래서 여기서 계산한다.
+_svc_s = eval(re.search(r"SERVICE_TIME_S = ([0-9./ ]+)", sim_cli).group(1))
+_up_svc = int(round(_svc_s / TICK_S))
+chk("service_steps (CLI 환산) / SERVICE_TICKS",
+    "%d  (=%.4fs/%.4fs · dataclass 기본 %s 는 무시)"
+    % (_up_svc, _svc_s, TICK_S,
+       re.search(r"service_steps: int = (\d+)", core).group(1)),
+    re.search(r"^SERVICE_TICKS = (\d+)", ll, re.M).group(1),
+    ok=(str(_up_svc) == re.search(r"^SERVICE_TICKS = (\d+)", ll, re.M).group(1)))
 # 2 hd_after
 chk("hd_after / HD_AFTER",
     re.search(r"hd_after: int = (\d+)", core).group(1),
