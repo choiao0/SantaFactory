@@ -1,8 +1,8 @@
+import TimeField from './TimeField.jsx'
 import { formatWon } from '../utils/format.js'
 
 export default function WarehouseStep({ form, onChange, models, modelsError, model, onSelectModel }) {
   const number = (key) => (e) => onChange({ [key]: e.target.value === '' ? '' : Number(e.target.value) })
-  const text = (key) => (e) => onChange({ [key]: e.target.value })
   const digits = (key) => (e) => {
     const v = e.target.value.replace(/[^0-9]/g, '')
     onChange({ [key]: v === '' ? '' : Number(v) })
@@ -39,17 +39,17 @@ export default function WarehouseStep({ form, onChange, models, modelsError, mod
             <div className="span2">
               <label htmlFor="inbound-start">입고 시간대</label>
               <div className="timerange">
-                <input id="inbound-start" type="time" value={form.inboundStart} onChange={text('inboundStart')} />
+                <TimeField id="inbound-start" label="입고 시작 시각" value={form.inboundStart} onChange={(v) => onChange({ inboundStart: v })} />
                 <span>–</span>
-                <input id="inbound-end" type="time" value={form.inboundEnd} onChange={text('inboundEnd')} />
+                <TimeField id="inbound-end" label="입고 종료 시각" value={form.inboundEnd} onChange={(v) => onChange({ inboundEnd: v })} />
               </div>
             </div>
             <div className="span2">
               <label htmlFor="outbound-start">출고 시간대</label>
               <div className="timerange">
-                <input id="outbound-start" type="time" value={form.outboundStart} onChange={text('outboundStart')} />
+                <TimeField id="outbound-start" label="출고 시작 시각" value={form.outboundStart} onChange={(v) => onChange({ outboundStart: v })} />
                 <span>–</span>
-                <input id="outbound-end" type="time" value={form.outboundEnd} onChange={text('outboundEnd')} />
+                <TimeField id="outbound-end" label="출고 종료 시각" value={form.outboundEnd} onChange={(v) => onChange({ outboundEnd: v })} />
               </div>
             </div>
 

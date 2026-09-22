@@ -163,7 +163,9 @@ section.step > p.desc { font-size: 18px; line-height: 1.7; max-width: 760px; mar
 .formgrid label {
   font: 500 14px var(--font-mono);
   letter-spacing: .05em; color: #5d5d58;
-  display: block; margin-bottom: 8px;
+  /* 글자만큼만 누르게 한다 — 한 줄을 꽉 채우면 <label for> 특성상 칸 바깥 빈자리를 눌러도
+     브라우저가 입력에 클릭을 대신 쏴서 시간 선택창이 열리고 닫히지 않는다 */
+  display: block; width: fit-content; margin-bottom: 8px;
 }
 .formgrid input, .formgrid select {
   width: 100%;
@@ -178,8 +180,44 @@ section.step > p.desc { font-size: 18px; line-height: 1.7; max-width: 760px; mar
 .field .suffix { position: absolute; right: 14px; top: 50%; transform: translateY(-50%); font: 500 14px var(--font-mono); color: #77776f; letter-spacing: .02em; pointer-events: none; }
 .formgrid .span2 { grid-column: span 2; }
 .timerange { display: flex; align-items: center; gap: 8px; }
-.timerange input { flex: 1; min-width: 0; }
-.timerange span { color: #8a8983; font-size: 16px; }
+.timerange > span { color: #8a8983; font-size: 16px; }
+
+/* 시각 입력 (TimeField). 값 버튼은 옆 숫자 칸과 같은 테두리·바탕을 쓰되, 한 줄에 둘이 들어가고
+   "오후 06:00" + 아이콘까지 담아야 해서 서체와 좌우 여백만 줄인다 */
+.tf { position: relative; flex: 1; min-width: 0; }
+.tf-value {
+  width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  border: 1px solid #b7b5b0; background: #f7f6f3; color: #111;
+  font: 600 18px var(--font-head); padding: 12px 10px;
+  text-align: left; cursor: pointer;
+}
+.tf-value:hover { border-color: #555; }
+.tf-value:focus-visible { outline: 2px solid var(--red); }
+.tf-value svg { flex: none; color: #5d5d58; }
+/* 칸에 딱 맞춰 바로 아래 붙인다 — 브라우저 기본 피커가 제멋대로 서던 자리를 대신한다 */
+.tf-pop {
+  position: absolute; z-index: 40; top: calc(100% + 4px); left: 0; right: 0;
+  display: grid; grid-template-columns: 1.2fr 1fr 1fr;
+  background: #fff; border: 1px solid #b7b5b0;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, .16);
+}
+.tf-col {
+  list-style: none; margin: 0; padding: 4px;
+  max-height: 236px; overflow-y: auto; overscroll-behavior: contain;
+  /* 스크롤바는 감춘다 — 고른 값이 맨 위에 오고 휠로 넘기면 되는 목록이라 막대가 붙으면
+     세 열이 다 지저분해진다. 스크롤 자체는 그대로 된다 */
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.tf-col::-webkit-scrollbar { display: none; }
+.tf-col + .tf-col { border-left: 1px solid #e0ded9; }
+.tf-opt {
+  display: block; width: 100%; border: 0; background: none; cursor: pointer;
+  font: 600 15px var(--font-mono); letter-spacing: .04em; color: #4a4a46;
+  padding: 8px 6px; text-align: center;
+}
+.tf-opt:hover { background: #ece9e4; }
+.tf-opt.on { background: var(--red); color: #fff; }
 
 .spec {
   border: 1px solid #b7b5b0; background: #f7f6f3;
@@ -533,6 +571,12 @@ footer a:hover { color: #fff; }
   .formgrid { grid-template-columns: 1fr; }
   .formgrid .span2 { grid-column: auto; }
   /* 여기서는 버튼만 남긴다. 누구로 보고 있는지는 전체 견적·로그아웃보다 뒤로 밀린다 */
+/* 시간대 칸은 한 블록에 입력이 둘이라 다른 입력의 절반 폭씩만 갖는다. 화면이 좁아지면 "오후 06:00"
+   + 시계 아이콘이 안 들어가 끝자리가 잘린다 — 이 구간에서는 한 줄을 통째로 쓰게 한다.
+   860px 아래는 formgrid 가 2열이 되므로 그 위로만 건다(4열을 넘기면 암시적 열이 생겨 넘친다) */
+@media (min-width: 861px) and (max-width: 1340px) {
+  .formgrid .span2:has(.timerange) { grid-column: span 4; }
+}
   .header-account .mono.dim { display: none; }
 }
 @media (max-width: 440px) {
