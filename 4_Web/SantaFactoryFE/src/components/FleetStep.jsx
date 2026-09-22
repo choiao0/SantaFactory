@@ -73,13 +73,13 @@ export default function FleetStep({ fleet, onChange, model, requesting, error, o
     <section className="step section-dark reveal" id="s2">
       <div className="eyebrow red">
         <span className="live-dot" />
-        02 — FLEET
+        02 — 대수 범위
       </div>
       <h2>Pick the range.</h2>
       <p className="desc">비교할 AMR 대수 범위를 정합니다.</p>
 
       <div className="fleetbox">
-        <div className="mono dim">FLEET SIZE SWEEP · 최대 {MAX}대</div>
+        <div className="mono dim">대수 스윕 · 최대 {MAX}대</div>
         <div
           className="range"
           ref={trackRef}
@@ -144,7 +144,7 @@ export default function FleetStep({ fleet, onChange, model, requesting, error, o
         </div>
 
         <p className="fleetnote">
-          RUNS <b>{counts.length}건</b> — {fleet.min}대 ~ {fleet.max}대
+          시뮬레이션 <b>{counts.length}회</b> — {fleet.min}대 ~ {fleet.max}대
           <br />
           {model ? (
             <>
@@ -157,7 +157,7 @@ export default function FleetStep({ fleet, onChange, model, requesting, error, o
 
         <div className="runcta">
           <button type="button" className="button" disabled={!canRequest} onClick={onRequest}>
-            {requesting ? '요청 중…' : `견적 요청 — ${counts.length} RUNS ↗`}
+            {requesting ? '요청 중…' : `견적 요청 — ${counts.length}회 ↗`}
           </button>
           {error && <span className="form-error">요청 실패: {error}</span>}
         </div>

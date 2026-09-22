@@ -12,7 +12,7 @@ export default function WarehouseStep({ form, onChange, models, modelsError, mod
     <section className="step section-light reveal" id="s1">
       <div className="eyebrow red">
         <span className="live-dot" />
-        01 — WAREHOUSE
+        01 — 운영 조건
       </div>
       <h2>Define the operation.</h2>
       <p className="desc">창고 운영 조건과 목표, 예산을 입력하고 시뮬레이션에 쓸 AMR 모델을 선택합니다.</p>
@@ -76,7 +76,7 @@ export default function WarehouseStep({ form, onChange, models, modelsError, mod
 
         <aside className="models">
           <div className="models-head">
-            <span className="mono dim">AMR MODEL</span>
+            <span className="mono dim">AMR 모델</span>
             <span className="mono dim">단일 모델 · 1개 선택</span>
           </div>
           {modelsError && <p className="form-error">모델 목록을 불러오지 못했습니다. {modelsError}</p>}
@@ -91,7 +91,7 @@ export default function WarehouseStep({ form, onChange, models, modelsError, mod
                 onClick={() => onSelectModel(m.model)}
                 aria-pressed={on}
               >
-                <span className="lock">{on ? '✓ SELECTED' : 'SELECT'}</span>
+                <span className="lock">{on ? '✓ 선택됨' : '선택'}</span>
                 <h4>{m.model}</h4>
                 <div className="sub">AMR · 사양 · 단가</div>
                 <dl>

@@ -134,7 +134,7 @@ function OutboundPanel({ replay, seconds }) {
       <dl className="rp-stat">
         <dt>완료</dt>
         <dd>{now.toLocaleString()}<span>건</span></dd>
-        <dt>최근 1시간</dt>
+        <dt>시간당 처리량</dt>
         <dd>{perHour.toLocaleString()}<span>건/시간</span></dd>
       </dl>
       <div className="rp-progress" role="img" aria-label={`처리 ${total}건 중 ${now}건 완료`}>
@@ -178,7 +178,7 @@ function ReplayPlayer({ replay, playing, speed, onTogglePlay, onSpeed }) {
           <OutboundPanel replay={replay} seconds={seconds} />
           <div className="rp-controls">
             <button type="button" className="button rp-btn" onClick={onTogglePlay}>
-              {playing ? '⏸︎ PAUSE' : '▶︎ PLAY'}
+              {playing ? '⏸︎ 일시정지' : '▶︎ 재생'}
             </button>
             {/* 고르는 목록이다 — 순환 버튼은 "SPEED ×64" 가 현재 배속인지 누르면 될 배속인지
                 구분되지 않아, 바로 위 PAUSE(누르면 일어날 일)와 규칙이 엇갈렸다 */}
@@ -188,7 +188,7 @@ function ReplayPlayer({ replay, playing, speed, onTogglePlay, onSpeed }) {
               value={speed}
               onChange={(e) => onSpeed(Number(e.target.value))}
             >
-              {SPEEDS.map((v) => <option key={v} value={v}>SPEED ×{v}</option>)}
+              {SPEEDS.map((v) => <option key={v} value={v}>배속 ×{v}</option>)}
             </select>
           </div>
         </div>
@@ -223,13 +223,13 @@ function ReplayBoard({ estimateId, amrCount }) {
   return (
     <div className="rp-wrap">
       <div className="rp-bar">
-        <h4>RUN REPLAY</h4>
+        <h4>주행 재생</h4>
       </div>
 
       <div className="sim-board">
         <div className="board-head">
-          <span>SIMPY ENGINE</span>
-          <span>1 CELL = 1 m</span>
+          <span>SimPy 엔진</span>
+          <span>1칸 = 1 m</span>
         </div>
         <div className="hud tl"><b>{amrCount ?? '—'}</b> AMR</div>
 
@@ -283,13 +283,13 @@ export default function RunsStep({ estimateId, estimate, connected, error }) {
     <section className="step section-dark reveal" id="s3">
       <div className="eyebrow red">
         <span className="live-dot" />
-        03 — RUNS
+        03 — 시뮬레이션
       </div>
       <h2>Watch the sweep.</h2>
-      <p className="desc">대수마다 run 하나가 큐에 들어가 순서대로 계산됩니다. 결과가 도착하는 대로 카드가 갱신됩니다.</p>
+      <p className="desc">대수마다 시뮬레이션 하나가 큐에 들어가 순서대로 계산됩니다. 결과가 도착하는 대로 카드가 갱신됩니다.</p>
 
       {estimateId == null && (
-        <div className="runs-empty">02 단계에서 견적을 요청하면 run 진행 상황이 여기에 표시됩니다.</div>
+        <div className="runs-empty">02 단계에서 견적을 요청하면 시뮬레이션 진행 상황이 여기에 표시됩니다.</div>
       )}
 
       {estimateId != null && !estimate && !error && (
@@ -303,7 +303,7 @@ export default function RunsStep({ estimateId, estimate, connected, error }) {
           <div className="runs-head">
             <span className="mono">
               {formatDateTime(estimate.created_at)}
-              <b>{finished} / {runs.length} DONE</b>
+              <b>{runs.length}회 중 {finished}회 완료</b>
             </span>
             <div className="runs-legend">
               <span><i className="DONE" />완료</span>

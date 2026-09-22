@@ -2,11 +2,11 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/authContext.js'
 
 const LINKS = [
-  ['#s1', 'WAREHOUSE'],
-  ['#s2', 'FLEET'],
-  ['#s3', 'RUNS'],
-  ['#verify', 'VERIFY'],
-  ['#quote', 'QUOTE'],
+  ['#s1', '운영 조건'],
+  ['#s2', '대수 범위'],
+  ['#s3', '시뮬레이션'],
+  ['#verify', '물리 검증'],
+  ['#quote', '견적'],
 ]
 
 /**
@@ -40,7 +40,6 @@ export default function Header({ sections = true }) {
         <img className="brand-mark" src="/santafactory-logo.png" alt="Santa Factory" width={30} height={30} />
         {/* 좁은 화면에서 이 글자만 접으려면 요소여야 한다 — 텍스트 노드는 CSS 로 못 가린다 */}
         <span className="brand-text">SANTA FACTORY</span>
-        <small>AMR FLEET QUOTE</small>
       </a>
       {sections && (
         <nav className="header-links">

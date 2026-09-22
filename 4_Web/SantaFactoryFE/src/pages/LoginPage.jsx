@@ -40,7 +40,7 @@ export default function LoginPage() {
         </a>
         <span className="eyebrow red login-eyebrow">
           <span className="live-dot" />
-          <span>LOGIN</span>
+          <span>로그인</span>
         </span>
       </div>
 
