@@ -1,8 +1,8 @@
+import TimeField from './TimeField.jsx'
 import { formatWon } from '../utils/format.js'
 
 export default function WarehouseStep({ form, onChange, models, modelsError, model, onSelectModel }) {
   const number = (key) => (e) => onChange({ [key]: e.target.value === '' ? '' : Number(e.target.value) })
-  const text = (key) => (e) => onChange({ [key]: e.target.value })
   const digits = (key) => (e) => {
     const v = e.target.value.replace(/[^0-9]/g, '')
     onChange({ [key]: v === '' ? '' : Number(v) })
@@ -12,7 +12,7 @@ export default function WarehouseStep({ form, onChange, models, modelsError, mod
     <section className="step section-light reveal" id="s1">
       <div className="eyebrow red">
         <span className="live-dot" />
-        01 — WAREHOUSE
+        01 — 운영 조건
       </div>
       <h2>Define the operation.</h2>
       <p className="desc">창고 운영 조건과 목표, 예산을 입력하고 시뮬레이션에 쓸 AMR 모델을 선택합니다.</p>
@@ -39,17 +39,17 @@ export default function WarehouseStep({ form, onChange, models, modelsError, mod
             <div className="span2">
               <label htmlFor="inbound-start">입고 시간대</label>
               <div className="timerange">
-                <input id="inbound-start" type="time" value={form.inboundStart} onChange={text('inboundStart')} />
+                <TimeField id="inbound-start" label="입고 시작 시각" value={form.inboundStart} onChange={(v) => onChange({ inboundStart: v })} />
                 <span>–</span>
-                <input id="inbound-end" type="time" value={form.inboundEnd} onChange={text('inboundEnd')} />
+                <TimeField id="inbound-end" label="입고 종료 시각" value={form.inboundEnd} onChange={(v) => onChange({ inboundEnd: v })} />
               </div>
             </div>
             <div className="span2">
               <label htmlFor="outbound-start">출고 시간대</label>
               <div className="timerange">
-                <input id="outbound-start" type="time" value={form.outboundStart} onChange={text('outboundStart')} />
+                <TimeField id="outbound-start" label="출고 시작 시각" value={form.outboundStart} onChange={(v) => onChange({ outboundStart: v })} />
                 <span>–</span>
-                <input id="outbound-end" type="time" value={form.outboundEnd} onChange={text('outboundEnd')} />
+                <TimeField id="outbound-end" label="출고 종료 시각" value={form.outboundEnd} onChange={(v) => onChange({ outboundEnd: v })} />
               </div>
             </div>
 
@@ -76,7 +76,7 @@ export default function WarehouseStep({ form, onChange, models, modelsError, mod
 
         <aside className="models">
           <div className="models-head">
-            <span className="mono dim">AMR MODEL</span>
+            <span className="mono dim">AMR 모델</span>
             <span className="mono dim">단일 모델 · 1개 선택</span>
           </div>
           {modelsError && <p className="form-error">모델 목록을 불러오지 못했습니다. {modelsError}</p>}
@@ -91,7 +91,7 @@ export default function WarehouseStep({ form, onChange, models, modelsError, mod
                 onClick={() => onSelectModel(m.model)}
                 aria-pressed={on}
               >
-                <span className="lock">{on ? '✓ SELECTED' : 'SELECT'}</span>
+                <span className="lock">{on ? '✓ 선택됨' : '선택'}</span>
                 <h4>{m.model}</h4>
                 <div className="sub">AMR · 사양 · 단가</div>
                 <dl>

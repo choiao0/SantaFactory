@@ -327,11 +327,47 @@ def _pick(map_dir, *names):
     raise SystemExit(f"맵 파일을 찾을 수 없습니다: {map_dir} 에서 {names}")
 
 
-def build_free(map_dir, pitch, mode="cross"):
+#: ★★ 풀링 방식 (-240, 2026-09-20). 기본은 종전대로 **cross**.
+#
+#   ☹ `cross` 는 10x10 픽셀 블록을 **십자로만** 표본한다. 그래서 블록을
+#     **대각으로 지나가는** 벽·기둥 조각이 십자를 피해 가고, 그 칸이
+#     「통행가능」으로 남는다. 실측:
+#
+#         cross 가 free 라고 한 칸 중 장애물 픽셀이 있는 칸  **185개** (2.1 %)
+#         그중 작업 성분(1,969칸) 안                        **38개**
+#
+#     실제로 터졌다 (n=16, seed 103). `(58,104)` 에 장애물 픽셀 7개가 대각으로
+#     늘어서 있는데 cross 는 못 봤다. agent13 의 **첫 액션**이 그 칸으로
+#     들어가 차체가 **300 mm** 파고들었고, 벽·기둥은 씬에 콜라이더가 있어
+#     물리적으로 막혔다. 잔차가 안 줄어 워치독이 24초에 판을 끊었다.
+#
+#   `strict` = 픽셀이 하나라도 있으면 막힘. **FMS `load_map` 의 max 풀링과
+#   같은 뜻**이다 (아래 독스트링이 「FMS 도 같다」고 적어 두었는데, 정작
+#   기본값은 그게 아니었다).
+#
+#       cross    free 8,919 · 작업성분 1,969 · 스테이션 57칸 · 숨은 칸 **38**
+#       strict   free 8,734 · 작업성분 1,911 · 스테이션 57칸 · 숨은 칸 **0**
+#
+#   대가는 작업 면적 **−2.9 %**(58칸)뿐이고 **스테이션은 하나도 안 잃는다.**
+#
+#   ☹ 그래도 기본은 안 바꾼다 — 완주 세 판(s101·s103·s104)이 `cross` 위에서
+#     섰다. 격자가 바뀌면 그 판들을 다시 떠야 한다. 재측정이 끝나면 그때 뒤집는다.
+POOL = os.environ.get("PIBT_POOL", "cross").strip().lower()
+
+
+def build_free(map_dir, pitch, mode=None):
     """0.1 m 마스크 -> pitch 격자의 통행가능 불리언 (r=y, c=x).
 
     반환 (free, k). k = pitch / 0.1 (정수여야 한다).
+
+    `mode` 를 안 주면 `PIBT_POOL`(기본 `cross`)을 쓴다 — 위 주석 참고.
     """
+    if mode is None:
+        mode = POOL
+    if mode != "cross":
+        # ★ 기본과 다른 상태는 `verbose` 와 무관하게 **항상** 보여야 한다
+        #   (트러블슈팅 (더) — `live_pibt` 가 verbose=False 로 부른다).
+        print(f"[scene] ★★ 풀링 **{mode}** (기본 cross 아님) — PIBT_POOL", flush=True)
     k = round(pitch / 0.1)
     if abs(k * 0.1 - pitch) > 1e-9:
         raise SystemExit(f"pitch 는 0.1 m 의 배수여야 합니다: {pitch}")
@@ -788,18 +824,46 @@ def _fms_headings(free, homes, n):
 
 
 def _fms_mask(free, fms_map, pitch, on, diag, verbose):
-    """마스크도 그쪽 것 — 여유 0.05 · 0.05 m 점 표본 · 1도 간격 (M′ 이 여기서 닫힌다)."""
+    """마스크도 그쪽 것 — 여유 0.05 · 0.05 m 점 표본 · 1도 간격 (M′ 이 여기서 닫힌다).
+
+    ☹☹ **이 경로가 조용했다** (2026-09-22). 둘이 겹쳐서 났다.
+
+      ① `live_pibt` 는 `setup_lifelong(..., verbose=False)` 로 부른다.
+         그래서 아래 print 가 **실주행에서 한 번도 안 찍혔다.**
+      ② `turn_sweep_mask._APPLIED` 를 안 건드렸다. `report()` 가 그걸 보므로
+         **마스크가 걸렸는데도 `turn_sweep: 0`** 으로 나온다.
+
+    그래서 로그 145판을 「`[turn_sweep] 계획기에 걸었다` 가 있나」로 훑었더니
+    FMS 격자 판이 전부 「없음」으로 나왔고, **우리가 그걸 「마스크 안 걸림」으로
+    읽었다.** 실제로는 그쪽 마스크가 걸려 있었다 — 구별이 안 됐다.
+
+    `turn_sweep_mask.apply` 가 같은 이유로 이미 「verbose 와 무관하게 항상
+    찍는다」로 고쳐져 있었다(-240). 이쪽만 안 따라왔다. 맞춘다.
+
+    ☹ 금지 **건수**는 우리 경로와 기준이 다르다 (그쪽은 (H,W,4,4) 전체, 우리는
+      인접 헤딩 쌍만 채운다). 판끼리 비교할 때는 **비율**을 봐야 한다.
+    """
     from turn_sweep_mask import TURN_SWEEP_ON as TURN_SWEEP
     if not TURN_SWEEP:
+        print("[scene] ☹ FMS 회전 마스크 **안 걸었다** (PIBT_TURN_SWEEP=0)",
+              flush=True)
         return
     import map_loader as ML
     import pibt.geometry as _geo
     mask = ML.turn_mask(fms_map, ML.ROBOT_DIMS, _geo.FOOTPRINT_MARGIN_M)
     _geo.configure(turn_mask=mask, front_swing=on, front_diag=diag,
                    robot_dims=ML.ROBOT_DIMS, pitch=pitch)
-    if verbose:
-        print(f"[scene] ★★ FMS 회전 마스크 · 여유 {_geo.FOOTPRINT_MARGIN_M} m "
-              f"· 금지 비율 {ML.masked_turn_ratio(free, mask) * 100:.2f} %")
+    # ★ `report()` 와 로그가 같은 값을 보게 한다.
+    import numpy as _np
+    import turn_sweep_mask as _TSM
+    _TSM._APPLIED = int((~_np.asarray(mask)).sum())
+    try:
+        ratio = f" · 금지 비율 {ML.masked_turn_ratio(free, mask) * 100:.2f} %"
+    except Exception as e:                      # 비율을 못 재도 걸린 것은 걸린 것
+        ratio = f" · 비율 못 쟀다: {e!r}"
+    # ★ `verbose` 와 무관하게 **항상** 찍는다 — 위 머리말이 이유다.
+    print(f"[scene] ★★ FMS 회전 마스크를 걸었다 — 회전 {_TSM._APPLIED:,}건 금지 "
+          f"· 여유 {_geo.FOOTPRINT_MARGIN_M} m{ratio}", flush=True)
 
 
 def _fms_stations(st_cell):
@@ -853,7 +917,7 @@ def _fms_setup(n, pitch, verbose, map_dir_for_contact=None):
     return geom, free, starts, cells
 
 
-def setup_lifelong(map_dir, n, pitch, seed, mode="cross", verbose=True):
+def setup_lifelong(map_dir, n, pitch, seed, mode=None, verbose=True):
     """lifelong 용 진입점. 목표 대신 **스테이션 후보 집합**을 돌려준다.
 
     one-shot 은 로봇마다 목표를 하나 뽑아 동시에 출발시키는데, 통로차단 이후
@@ -883,7 +947,7 @@ def setup_lifelong(map_dir, n, pitch, seed, mode="cross", verbose=True):
     free, n_comp, n_hit = keep_station_component(free, geom, map_dir)
     if verbose:
         print(f"[scene] {geom.describe()}")
-        print(f"[scene] 격자 {free.shape} ({pitch} m, {k}x {mode} 풀링)")
+        print(f"[scene] 격자 {free.shape} ({pitch} m, {k}x {mode or POOL} 풀링)")
         print(f"[scene] 성분 {n_comp}개 중 스테이션 {n_hit}곳이 붙은 것만 사용 "
               f"({raw} -> {int(free.sum())}칸)")
     # ★★ 회전 스윕 마스크 (-240). `PIBT_TURN_SWEEP` 이 꺼져 있으면 아무것도 안 한다.
@@ -906,7 +970,7 @@ def setup_lifelong(map_dir, n, pitch, seed, mode="cross", verbose=True):
     return geom, free, starts, cells
 
 
-def setup(map_dir, n, pitch, seed, mode="cross", verbose=True):
+def setup(map_dir, n, pitch, seed, mode=None, verbose=True):
     """로컬·서버가 공통으로 부르는 진입점. 같은 인자면 같은 결과."""
     geom = make_geom(pitch)
     free, k = build_free(map_dir, pitch, mode)
@@ -920,7 +984,7 @@ def setup(map_dir, n, pitch, seed, mode="cross", verbose=True):
         lo, hi = geom.pitch_window
         ok = "OK" if lo < pitch < hi else "★ 범위 밖 — 2칸/스윙 모델이 안 맞는다"
         print(f"[scene] pitch {pitch} m (유효 구간 {lo:.3f} ~ {hi:.3f})  {ok}")
-        print(f"[scene] 격자 {free.shape} ({pitch} m, {k}x {mode} 풀링)  "
+        print(f"[scene] 격자 {free.shape} ({pitch} m, {k}x {mode or POOL} 풀링)  "
               f"통행가능 {100*free.mean():.1f}%")
     starts, goals = pick_start_goal(free, geom, n, map_dir, seed, verbose)
     return geom, free, starts, goals

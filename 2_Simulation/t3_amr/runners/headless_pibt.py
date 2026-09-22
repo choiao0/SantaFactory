@@ -1,0 +1,395 @@
+# -*- coding: utf-8 -*-
+"""★ PIBT/ADG 주행을 **그림 없이** 돌린다. standalone python (--exec 아님).
+
+왜 이 파일이 필요한가
+---------------------
+어제 3시간짜리 판이 **벽시계 12시간**을 먹었다. 분해하면 이렇다.
+
+    계획 3.0 h   ->   물리 6.9 h   ->   벽시계 12 h
+                 2.3x (대기)        1.7x (시뮬 속도)
+
+뒤쪽 1.7 배가 **렌더 비용**이다. `STREAM=0` 은 인코딩·전송만 끄고 RTX 렌더는
+계속 돌린다 (50.51 -> 27.03 ms/step 에서 멈춘다). 그런데 `live_pibt.py` 는
+Kit 의 `--exec` 용이라 **렌더를 끌 자리가 없다**:
+
+    앱이 주루프를 쥔다  ->  렌더/물리를 번갈아 돌린다
+    우리는 subscribe_physics_step_events 로 물리 콜백에 얹혀 갈 뿐이다
+    -> step() 을 우리가 안 부르니 render=False 를 넘길 곳이 없다
+
+`PIBT_RENDER_EVERY` 로 렌더만 솎으려던 시도는 실패했다. `RenderingManager.set_dt`
+가 **물리 텐서 뷰를 무효화**해서 주행 3초 만에 죽는다 (2026-09-21 실측:
+`Failed to get root link transforms from backend`).
+
+그래서 반대로 간다 — **앱에서 주루프를 뺏는다.** `headless_wppl.py` 가 이미
+같은 방식이다 (`world.step(render=False)`, 루프에 `app.update()` 가 없다).
+
+무엇을 새로 짰나 — **아무것도 안 짰다**
+---------------------------------------
+계획·ADG·probe·시작 재정렬·주행·통계는 `live_pibt.py` 것을 **그대로** 쓴다.
+사본을 만들면 두 파일이 갈라지고, 갈라지는 순간 "헤드리스 결과"가 증거가 되지
+못한다. 이 파일이 하는 일은 셋뿐이다.
+
+    ① SimulationApp 을 헤드리스로 띄운다        (--exec 대신)
+    ② live_pibt.py 를 이 프로세스 안에서 실행    (runpy)
+    ③ 준비가 끝나면 **루프를 우리가 돈다**       (렌더 없이)
+
+`live_pibt.py` 쪽 변경은 `PIBT_HEADLESS=1` 분기 다섯 줄이 전부다. 그 분기는
+구독을 건너뛰고 `state["ready"]=True` 로 fleet 을 넘겨줄 뿐, 주행 로직을
+한 줄도 바꾸지 않는다.
+
+물리 결과는 같은가 — 같다
+-------------------------
+적분은 physics_dt(1/60) 단위이고 벽시계와 무관하다. 렌더를 안 그린다고
+접촉 판정이 달라지지 않는다. 달라지는 건 **속도뿐**이다. 그래도 믿지 말고
+재라 — 검증은 같은 시드로 돌려 네 값이 맞는지 보는 것이다.
+
+    completed · contact_events · worst_gap · turn_body_gaveup
+
+쓰는 법
+-------
+    cd <t3_amr>
+    PIBT_MODE=lifelong PIBT_N=12 PIBT_PITCH=1.0 PIBT_SEED=104 \
+    PIBT_HORIZON=1260 \
+    PIBT_POOL=strict PIBT_ADG_BODY=1 PIBT_ADG_RANK=1 \
+    PIBT_TURN_PAIR_NEXT=1 PIBT_TURN_YIELD=1 \
+      python runners/headless_pibt.py 2>&1 | tee logs/hl_s104.log
+
+`python` 은 `headless_wppl.py` 를 돌릴 때 쓰는 것과 **같은 것**이다 (서버의
+python 이 곧 Isaac python 이다 — run.sh:132 참조).
+
+☹ `isaacsim ... --exec runners/headless_pibt.py` 로 부르면 **안 된다.** 그러면
+  앱이 다시 주루프를 쥐고 렌더를 돌린다 — 이 파일이 존재하는 이유가 사라진다.
+  `run_record.sh` / `run.sh` 도 마찬가지다. 그쪽은 `--exec live_pibt.py` 경로다.
+
+이 파일 전용 스위치
+    PIBT_HL_DT          물리 dt          (기본 1/60 — live_pibt 와 같아야 한다)
+    PIBT_HL_MAX_SIM     시뮬 시간 상한(초). 0 이면 무제한 (기본 0)
+    PIBT_HL_MAX_WALL    벽시계 상한(초). 0 이면 무제한 (기본 0)
+    PIBT_HL_REPORT      배속 보고 주기(스텝). 기본 600 (=10초)
+    PIBT_HL_STEPPER     physx | world    (기본 physx)
+    PIBT_HL_SETUP_CAP   준비 단계 프레임 상한. 기본 12000
+    PIBT_HL_SHOT_RES    촬영 해상도 "1280x720" (리플리케이터 경로에서만 쓴다)
+
+===========================================================================
+촬영 — **그린 것을 버리지 않는다**
+===========================================================================
+`run_record.sh` 는 `PIBT_SHOT_STRIDE=20`, 즉 물리 20스텝마다 한 장을 저장한다.
+그런데 Kit `--exec` 경로에서는 **렌더가 매 스텝 돈다.** 그린 것의 95%를 버린다.
+
+여기서는 그 낭비가 없다. 기본은 아예 안 그리고, `PIBT_SHOTS` 를 주면
+**저장할 그 스텝에만** 한 장 그린다.
+
+    PIBT_SHOTS=<폴더> PIBT_SHOT_STRIDE=20  ->  렌더 호출이 1/20 로 준다
+
+이름과 조립 공식은 `live_pibt.py` 것을 **그대로** 쓴다 (f_<sim시각 0.01s 9자리>).
+배속 = STRIDE x SHOT_FPS / 60 도 그대로다.
+
+★ 렌더는 **물리를 밀지 않는다.** `/app/player/playSimulations` 를 잠깐 꺼서
+  `SimulationContext.render()` 와 같은 보호를 건다. 이게 없으면 촬영한 스텝만
+  물리가 두 번 밟혀 **결과가 달라진다** — 촬영 여부로 판정이 바뀌면 안 된다.
+
+☹ 그래도 촬영을 켜면 느려진다. 숫자만 필요하면 켜지 마라. 완전한 시연 영상은
+  `PIBT_RECORD=out/rec_pibt12.npz` 로 자세만 남기고 `runners/replay_wppl.py` /
+  `render_video_wppl.py` 로 따로 뽑는 쪽이 더 빠르고 배속도 사후에 고를 수 있다.
+"""
+import os
+import sys
+import time
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_BASE = os.path.dirname(_HERE)
+
+# ★ SimulationApp 보다 먼저 세운다 — live_pibt.py 가 임포트 시점에 읽는다.
+os.environ["PIBT_HEADLESS"] = "1"
+os.environ.setdefault("AMR_BASE", _BASE)
+
+SHOTS = (os.environ.get("PIBT_SHOTS", "") or "").strip()
+SHOT_STRIDE = max(1, int(os.environ.get("PIBT_SHOT_STRIDE", "20")))
+SHOT_EXT = os.environ.get("PIBT_SHOT_EXT", "png")
+SHOT_RES = (os.environ.get("PIBT_HL_SHOT_RES", "") or "1280x720").lower()
+
+DT = float(os.environ.get("PIBT_HL_DT", "") or (1.0 / 60.0))
+MAX_SIM = float(os.environ.get("PIBT_HL_MAX_SIM", "0") or 0.0)
+MAX_WALL = float(os.environ.get("PIBT_HL_MAX_WALL", "0") or 0.0)
+REPORT = max(1, int(os.environ.get("PIBT_HL_REPORT", "600")))
+STEPPER = os.environ.get("PIBT_HL_STEPPER", "physx").strip().lower()
+SETUP_CAP = int(os.environ.get("PIBT_HL_SETUP_CAP", "12000"))
+
+# ===========================================================================
+# ① 앱 기동 — 헤드리스
+# ===========================================================================
+from isaacsim import SimulationApp                      # noqa: E402
+
+_CFG = {"headless": True}
+# GPU 선택. `--exec` 경로에서는 Kit 플래그(--/renderer/activeGpu=$GPU)가 했는데
+# 여기는 Kit 을 안 띄우므로 SimulationApp 설정으로 넘긴다. 팀원과 겹칠 때
+# `GPU=1 bash run.sh ...` 가 그대로 먹어야 한다.
+_gpu = (os.environ.get("GPU", "") or "").strip()
+if _gpu.isdigit():
+    _CFG["active_gpu"] = int(_gpu)
+    _CFG["multi_gpu"] = False
+
+print(f"[hl] SimulationApp 기동 (headless) · dt={DT:.6f} · stepper={STEPPER}"
+      + (f" · GPU {_gpu}" if _gpu.isdigit() else ""))
+simulation_app = SimulationApp(_CFG)
+
+import carb                                             # noqa: E402
+import omni.physx                                       # noqa: E402
+
+# ===========================================================================
+# ② live_pibt.py 를 이 프로세스 안에서 실행한다
+# ===========================================================================
+#   임포트가 아니라 실행이다 — live_pibt 는 모듈 최상위에서 전부 하고
+#   마지막 줄이 asyncio.ensure_future(_run()) 이다. 그 코루틴은 아직 안 돈다.
+import runpy                                            # noqa: E402
+
+_LIVE = os.path.join(_HERE, "live_pibt.py")
+if not os.path.isfile(_LIVE):
+    print(f"[hl] ★ live_pibt.py 가 없다: {_LIVE}")
+    simulation_app.close()
+    sys.exit(2)
+
+print(f"[hl] live_pibt.py 실행 -> {_LIVE}")
+G = runpy.run_path(_LIVE, run_name="live_pibt_headless")
+
+state = G["state"]
+on_physics = G["_on_physics"]
+quit_fn = G["_quit"]
+task = state.get("task")
+
+# --- 준비가 끝날 때까지 앱을 민다 ---
+#   여기서는 렌더가 돈다. 스테이지 로딩(낱박스 1,923개) · probe · 시작 재정렬이
+#   전부 프레임 수로 세는 대기라서 앱 루프가 있어야 한다. 40초쯤 걸린다.
+#   **주행이 시작되면 그 뒤로는 앱을 한 번도 밀지 않는다.**
+print("[hl] 준비 대기 (스테이지 로드 · 계획 · probe · 재정렬) …")
+_w0 = time.time()
+_frames = 0
+while not state.get("ready") and not state.get("done"):
+    if task is not None and task.done():
+        break
+    if _frames >= SETUP_CAP:
+        print(f"[hl] ★ 준비가 {SETUP_CAP} 프레임 안에 안 끝났다 — 중단")
+        break
+    simulation_app.update()
+    _frames += 1
+
+if not state.get("ready"):
+    print(f"[hl] ★ 주행에 못 들어갔다 (프레임 {_frames:,} · "
+          f"{time.time() - _w0:.0f}s). 위 로그의 [pibt] 오류를 보라")
+    if task is not None and task.done():
+        try:
+            _e = task.exception()
+            if _e is not None:
+                import traceback
+                print("[hl] _run 예외:")
+                traceback.print_exception(type(_e), _e, _e.__traceback__)
+        except Exception:
+            pass
+    simulation_app.close()
+    sys.exit(3)
+
+fleet = state["fleet"]
+print(f"[hl] 준비 완료 — 프레임 {_frames:,} · {time.time() - _w0:.0f}s. "
+      + (f"여기서부터 렌더는 **{SHOT_STRIDE}스텝에 한 번**뿐" if SHOTS
+         else "여기서부터 **렌더 없음**"))
+
+# ===========================================================================
+# 촬영 (선택) — 저장할 스텝에만 한 장 그린다
+# ===========================================================================
+#   ★ 렌더가 물리를 밀지 않게 막는다. `SimulationContext.render()` 가 쓰는 것과
+#     같은 보호다 — 이게 없으면 `simulation_app.update()` 가 타임라인을 한 칸
+#     밀어서, **촬영한 스텝만 물리가 두 번** 밟힌다. 그러면 촬영 여부로 접촉
+#     판정이 달라진다. 그건 증거로 못 쓴다.
+import carb.settings                                    # noqa: E402
+
+_settings = carb.settings.get_settings()
+
+
+def _render_once():
+    _settings.set("/app/player/playSimulations", False)
+    try:
+        simulation_app.update()
+    finally:
+        _settings.set("/app/player/playSimulations", True)
+
+
+# 캡처 경로는 둘이다. 뷰포트가 있으면 live_pibt 것을 그대로 쓰고(파일명·조립
+# 공식이 거기 묶여 있다), 없으면 리플리케이터로 같은 이름을 쓴다.
+_cap = None                 # None | "viewport" | "replicator"
+_rep_annot = None
+_shot_n, _shot_fail = 0, 0
+
+if SHOTS:
+    os.makedirs(SHOTS, exist_ok=True)
+    if state.get("vp") is not None:
+        _cap = "viewport"
+        print(f"[hl] 촬영 ON (뷰포트) {SHOTS} · {SHOT_STRIDE}스텝마다 .{SHOT_EXT}")
+    else:
+        # 헤드리스 experience 에는 활성 뷰포트가 없을 수 있다. 그때는 카메라에
+        # render product 를 직접 걸어 rgb 를 받는다 (합성데이터 표준 경로).
+        try:
+            import omni.kit.app as _ka
+            _ka.get_app().get_extension_manager() \
+               .set_extension_enabled_immediate("omni.replicator.core", True)
+            import omni.replicator.core as rep          # noqa: E402
+            _cam = os.environ.get("PIBT_CAMERA", "/World/Cameras/Cam_Top")
+            _w, _h = (int(x) for x in SHOT_RES.split("x"))
+            _rp = rep.create.render_product(_cam, (_w, _h))
+            _rep_annot = rep.AnnotatorRegistry.get_annotator("rgb")
+            _rep_annot.attach([_rp])
+            _render_once()                  # 첫 프레임에서 버퍼가 생긴다
+            _cap = "replicator"
+            print(f"[hl] 촬영 ON (리플리케이터) {SHOTS} · {SHOT_STRIDE}스텝마다 "
+                  f".{SHOT_EXT} · {_w}x{_h} · 카메라 {_cam}")
+        except Exception as e:
+            print(f"[hl] ★ 촬영을 켤 수 없다 — 끄고 주행만 한다: {e!r}")
+            print("[hl]   영상은 PIBT_RECORD=<npz> + runners/replay_wppl.py 쪽이")
+            print("[hl]   더 빠르고 배속도 사후에 고를 수 있다.")
+            _cap = None
+
+    if _cap:
+        _sp = SHOT_STRIDE * int(os.environ.get("PIBT_SHOT_FPS", "30")) / 60.0
+        print(f"[hl]   조립 시 {_sp:.1f}배속 · 렌더 호출이 1/{SHOT_STRIDE} 로 준다")
+
+
+def _save_replicator(sim_t):
+    """리플리케이터 rgb 를 live_pibt 와 **같은 파일명**으로 저장한다."""
+    global _shot_n, _shot_fail
+    try:
+        data = _rep_annot.get_data()
+        if data is None or not len(data):
+            raise RuntimeError("rgb 버퍼가 비었다")
+        path = os.path.join(SHOTS, f"f_{int(round(sim_t * 100)):09d}.{SHOT_EXT}")
+        from PIL import Image
+        Image.fromarray(data[:, :, :3]).save(path)
+        _shot_n += 1
+    except Exception as e:
+        _shot_fail += 1
+        if _shot_fail <= 3:
+            print(f"[hl] 캡처 실패 {_shot_fail}회: {e!r}")
+
+# ===========================================================================
+# ③ 주행 루프 — 우리가 민다
+# ===========================================================================
+#   Kit 의 `--exec` 경로에서는 앱 루프가 매 프레임 이것을 부른다(+렌더).
+#   우리는 렌더만 뺀다. 순서는 같아야 한다 —
+#       제어(_tick: pose 읽고 바퀴 명령) -> 적분(update_simulation)
+#   콜백을 구독하지 않았으므로 _tick 이 두 번 불릴 일은 없다.
+_physx = omni.physx.get_physx_interface()
+
+
+def _step_physx(dt, t):
+    _physx.update_simulation(dt, t)
+    # 물리 결과를 USD 로 밀어 준다. probe 가 고른 pose 소스가 USD xform 이면
+    # 이게 없으면 자세가 영영 안 변한다 (= 개루프로 잡힌다).
+    try:
+        _physx.update_transformations(False, True, False)
+    except TypeError:                      # 시그니처가 버전마다 다르다
+        try:
+            _physx.update_transformations(updateToFastCache=False,
+                                          updateToUsd=True,
+                                          updateVelocitiesToUsd=False)
+        except Exception:
+            pass
+
+
+_world = None
+if STEPPER == "world":
+    # 대안 경로. physx 직행이 안 될 때만 쓴다 — World 는 물리 씬 설정을
+    # 건드릴 수 있어서 기본으로 두지 않는다.
+    from isaacsim.core.api import World                 # noqa: E402
+    _world = World(stage_units_in_meters=1.0, physics_dt=DT, rendering_dt=DT)
+    print("[hl] stepper=world — World.step(render=False) 로 민다")
+
+
+def _step(dt, t):
+    if _world is not None:
+        _world.step(render=False)
+    else:
+        _step_physx(dt, t)
+
+
+t_sim = 0.0
+n = 0
+wall0 = time.time()
+last_n, last_wall = 0, wall0
+print(f"[hl] 주행 시작 — {len(fleet.drivers) if hasattr(fleet, 'drivers') else '?'}대")
+
+try:
+    while not state.get("done"):
+        # 제어 (live_pibt 의 물리 콜백과 같은 함수다 — 통계·로그·중단판정 포함)
+        on_physics(DT)
+        if state.get("done"):
+            break
+
+        # 촬영 — **저장할 스텝에만** 그린다. 나머지 스텝은 렌더를 아예 안 부른다.
+        #   viewport 경로: _tick 안에서 capture_viewport_to_file 이 이미 예약됐다.
+        #     그것은 비동기라 **다음 렌더 프레임에 기록된다** — 여기 렌더가 그
+        #     프레임이다. 이 호출이 없으면 예약만 쌓이고 파일은 안 생긴다.
+        if _cap and state["n"] % SHOT_STRIDE == 0:
+            _render_once()
+            if _cap == "replicator":
+                _save_replicator(state["t"])
+
+        _step(DT, t_sim)
+        t_sim += DT
+        n += 1
+
+        if n % REPORT == 0:
+            wall = time.time() - wall0
+            d_n, d_w = n - last_n, time.time() - last_wall
+            last_n, last_wall = n, time.time()
+            inst = (d_n * DT) / d_w if d_w > 0 else 0.0
+            print(f"[hl] sim {t_sim:8.1f}s | 벽시계 {wall:8.1f}s | "
+                  f"배속 {t_sim / wall if wall > 0 else 0:5.2f}x "
+                  f"(순간 {inst:5.2f}x) | {d_w / d_n * 1000:6.2f} ms/step",
+                  flush=True)
+
+        if MAX_SIM and t_sim >= MAX_SIM:
+            print(f"[hl] ★ 시뮬 상한 {MAX_SIM:.0f}s 도달 — 끊는다")
+            state["done"] = True
+            break
+        if MAX_WALL and (time.time() - wall0) >= MAX_WALL:
+            print(f"[hl] ★ 벽시계 상한 {MAX_WALL:.0f}s 도달 — 끊는다")
+            state["done"] = True
+            break
+except KeyboardInterrupt:
+    print("[hl] 중단 (Ctrl-C)")
+    state["done"] = True
+except Exception:
+    import traceback
+    print("[hl] ★ 루프 예외:")
+    traceback.print_exc()
+    state["done"] = True
+
+# ===========================================================================
+# 마무리 — 기록 저장은 _quit 이 한다 (멱등)
+# ===========================================================================
+wall = time.time() - wall0
+print(f"[hl] 주행 종료 — sim {t_sim:.1f}s · 벽시계 {wall:.1f}s · "
+      f"평균 배속 {t_sim / wall if wall > 0 else 0:.2f}x · 스텝 {n:,}")
+try:
+    print(f"[hl] {fleet.stats}")
+except Exception as e:
+    print(f"[hl] stats 출력 실패: {e!r}")
+
+if _cap:
+    # viewport 경로는 live_pibt 가 세므로(state) 그 값을, 리플리케이터는 우리 값을.
+    _n = state.get("shots", 0) if _cap == "viewport" else _shot_n
+    _f = state.get("shot_fail", 0) if _cap == "viewport" else _shot_fail
+    _fps = int(os.environ.get("PIBT_SHOT_FPS", "30"))
+    print(f"[hl] 촬영 {_n:,}장 · 실패 {_f}회 -> {SHOTS}")
+    if _n:
+        print(f"[hl]   영상 {_n / _fps:.0f}초 @{_fps}fps = "
+              f"{SHOT_STRIDE * _fps / 60.0:.1f}배속")
+        print(f"[hl]   조립: cd {SHOTS} && ffmpeg -framerate {_fps} "
+              f"-pattern_type glob -i 'f_*.{SHOT_EXT}' "
+              f"-c:v libx264 -pix_fmt yuv420p -crf 20 ../demo.mp4")
+    else:
+        print("[hl]   ★ 한 장도 안 나왔다 — 카메라 경로와 PIBT_SHOT_STRIDE 를 보라")
+try:
+    quit_fn(0)                             # 자세 기록 저장 (PIBT_RECORD 가 경로일 때)
+except Exception as e:
+    print(f"[hl] 마무리 예외: {e!r}")
+
+simulation_app.close()

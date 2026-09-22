@@ -254,6 +254,20 @@ def _thin(series, stride):
     return series[::stride] if isinstance(series, list) else series
 
 
+def _changes(series):
+    """[시각, 값] 기록에서 값이 바뀐 시점만 남긴다(첫 기록 포함). 화면은 기록 없는 구간을 마지막 값으로 읽는다 (-255)."""
+    if isinstance(series, dict):
+        return {k: _changes(v) for k, v in series.items() if isinstance(v, list)}
+    out, last = [], object()
+    for item in series or []:
+        if not (isinstance(item, list) and len(item) == 2):
+            continue
+        if item[1] != last:
+            out.append(item)
+            last = item[1]
+    return out
+
+
 def _outbound_done_seconds(traj, dt_s):
     """출고 <b>주문</b>이 완료된 시각(초) 목록. 화면이 "지금까지 몇 건 나갔나"를 세는 데 쓴다.
 
@@ -300,7 +314,7 @@ def _read_replay(tag):
         covered = max((len(v) for v in robots.values()), default=0) * sample_dt
         return {"dt_s": sample_dt, "model": traj.get("model"), "seconds": round(covered, 1),
                 "stride": REPLAY_STRIDE,
-                "robots": robots, "headings": _thin(traj.get("headings") or {}, REPLAY_STRIDE),
+                "robots": robots, "headings": _changes(traj.get("headings") or {}),
                 "outbound_done": _outbound_done_seconds(traj, dt_s),
                 "scene": scene}
     except (OSError, ValueError) as e:

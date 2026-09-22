@@ -109,7 +109,7 @@ export default function SignupPage() {
         </a>
         <span className="eyebrow red login-eyebrow">
           <span className="live-dot" />
-          <span>SIGN UP</span>
+          <span>회원가입</span>
         </span>
       </div>
 

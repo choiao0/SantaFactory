@@ -1,6 +1,6 @@
 package com.ssafy.santafactory.controller;
 
-import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.util.RawValue;
 import com.ssafy.santafactory.dto.estimate.EstimateCreateRequest;
 import com.ssafy.santafactory.dto.estimate.EstimateCreateResponse;
 import com.ssafy.santafactory.dto.estimate.EstimateDetailResponse;
@@ -108,10 +108,11 @@ public class EstimateController {
             description = "그 대수 run 의 앞 구간 궤적과 맵. 견적을 돌릴 때 함께 만들어 둔 것이라 즉시 응답한다. "
                     + "아직 결과가 없거나 그 run 이 실패했으면 404 — 프론트는 두 경우를 같게 다루면 된다.")
     @GetMapping("/{estimateId}/runs/{amrCount}/replay")
-    public ApiResponse<JsonNode> replay(@PathVariable Long estimateId,
+    public ApiResponse<RawValue> replay(@PathVariable Long estimateId,
                                         @PathVariable int amrCount,
                                         @AuthenticationPrincipal AuthenticatedMember me) {
-        return ApiResponse.onSuccess(estimateService.replay(estimateId, amrCount, me));
+        // 저장된 JSON 문자열을 파싱 없이 그대로 result 자리에 넣는다 — 일반 String 이면 따옴표로 감싸져 나간다
+        return ApiResponse.onSuccess(new RawValue(estimateService.replay(estimateId, amrCount, me)));
     }
 
     /**

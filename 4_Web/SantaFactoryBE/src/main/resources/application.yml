@@ -49,6 +49,10 @@ spring:
 
 server:
   port: 8080
+  # 리플레이 JSON 이 대수에 비례해 수 MB 다(11대 8.6 MB). 압축하면 약 1/6 (S15P21A106-255).
+  # mime-types 는 기본값 사용 — application/json 은 포함되고 text/event-stream(SSE)은 포함되지 않아 스트림은 압축되지 않는다.
+  compression:
+    enabled: true
 
 sim:
   request-queue: sim.request

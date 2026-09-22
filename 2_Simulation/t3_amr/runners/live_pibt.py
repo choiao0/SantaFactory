@@ -246,6 +246,17 @@ ORDERS_CSV = os.environ.get("PIBT_ORDERS", "").strip()
 #   ☹ **발자국을 계획과 맞춰야 한다.** `exact,front_2cell` 로 만든 궤적을 4칸으로
 #     세우면 ADG 가 순환한다 (실측: 끔 순환 · 2칸 비순환 · 4칸 순환).
 TRAJ_JSON = os.environ.get("PIBT_TRAJ", "").strip()
+
+# ★ 백엔드 주문 (2026-09-21). `scenario.orders` 는 **배정 전** 형태다 —
+#   rack_id 만 있고 목적지가 없다. `fms_stream.JsonOrderStream` 이 FMS 와 같은
+#   규칙으로 버퍼·토트·포장대를 정한다.
+#
+#     SIM_SCENARIO_PATH  edge 가 세운다. **있으면 이긴다** (백엔드가 실제로 보낸 것)
+#     PIBT_ORDERS_JSON   손으로 줄 때 (tools/_orders/orders6000_s104_cap10.json)
+#     PIBT_ORDERS        FMS 배정표 CSV — 이미 frm/to 가 정해져 있다
+#     (없음)             시드 난수. 종전과 비트 동일
+ORDERS_JSON = (os.environ.get("SIM_SCENARIO_PATH", "").strip()
+               or os.environ.get("PIBT_ORDERS_JSON", "").strip())
 CAMERA = os.environ.get("PIBT_CAMERA", "/World/Cameras/Cam_Top")
 SPAWN_Z = float(os.environ.get("PIBT_SPAWN_Z", "0.081"))   # build_amr_scene 의 WHEEL_R
 LEFT_IDX, RIGHT_IDX = 0, 1
@@ -262,8 +273,20 @@ SHOT_FPS = int(os.environ.get("PIBT_SHOT_FPS", "30"))  # 조립 fps (배속 계�
 #   1 이면 아무것도 건드리지 않는다 (기존 동작과 완전히 같다).
 RENDER_EVERY = max(1, int(os.environ.get("PIBT_RENDER_EVERY", "1")))
 
+# --- 헤드리스 (runners/headless_pibt.py 가 켠다) -----------------------
+#   이 파일은 본래 Kit 의 `--exec` 용이다. 그때는 앱이 주루프를 쥐고
+#   렌더와 물리를 번갈아 돌리며, 우리는 물리 콜백에 얹혀 갈 뿐이다.
+#   그래서 **렌더를 끌 자리가 없다** (PIBT_RENDER_EVERY 는 물리 텐서 뷰를
+#   무효화해 3초 만에 죽는다 — 2026-09-21 실측).
+#
+#   PIBT_HEADLESS=1 이면 달라지는 것은 딱 하나다:
+#       구독하지 않고, **준비된 fleet 을 넘겨준다.**
+#   그 뒤 루프는 런처가 돌린다 — 매 스텝 world.step(render=False) 로.
+#   계획·ADG·probe·재정렬·주행 로직은 **한 줄도 다르지 않다.**
+HEADLESS = os.environ.get("PIBT_HEADLESS", "0") not in ("0", "", "false", "no")
+
 state = {"sub": None, "fleet": None, "n": 0, "t": 0.0, "done": False,
-         "vp": None, "shots": 0, "shot_fail": 0}
+         "vp": None, "shots": 0, "shot_fail": 0, "ready": False}
 
 
 def wrap_pi(a):
@@ -513,7 +536,10 @@ def _quit(code=0):
     if state.get("quitting"):
         return
     state["quitting"] = True
-    if os.environ.get("PIBT_AUTOQUIT", "1") in ("0", "", "false", "False"):
+    # ★ 헤드리스에서는 AUTOQUIT 이 무의미하다 — 앱을 닫는 건 런처다.
+    #   여기서 일찍 return 하면 **자세 기록이 통째로 샌다** (아래 _rec_save).
+    if (not HEADLESS
+            and os.environ.get("PIBT_AUTOQUIT", "1") in ("0", "", "false", "False")):
         carb.log_warn("[pibt] PIBT_AUTOQUIT=0 — 앱을 종료하지 않는다 "
                       "(GPU·로그를 계속 점유한다)")
         return
@@ -527,6 +553,12 @@ def _quit(code=0):
         state["sub"] = None                      # 물리 콜백 해지
     except Exception:
         pass
+    if HEADLESS:
+        # 앱을 여기서 끝내지 않는다 — 런처가 루프를 빠져나와 닫는다.
+        # post_quit 을 부르면 standalone 에서는 루프가 먼저 죽어 기록이 샌다.
+        state["quit_code"] = int(code)
+        carb.log_warn("[pibt] (headless) 주행 종료 — 런처가 앱을 닫는다")
+        return
     try:
         import omni.kit.app
         omni.kit.app.get_app().post_quit(int(code))
@@ -547,6 +579,10 @@ def _setup_render_rate():
     ★ `minFrameRate` 를 같이 내려야 한다. `maxSubSteps ≈ timeStepsPerSecond
       / minFrameRate` 이므로, 기본(30)이면 서브스텝이 2 로 잘린다.
     """
+    if HEADLESS:
+        # 헤드리스는 렌더를 **건너뛰는** 것이 아니라 아예 **안 부른다**.
+        # 여기서 RenderingManager.set_dt 를 건드리면 물리 텐서 뷰가 무효화된다.
+        return
     if RENDER_EVERY <= 1:
         return
     phys_dt = 1.0 / 60.0
@@ -985,12 +1021,16 @@ async def _run():
     for _ in range(120):
         await app.next_update_async()
 
-    try:
-        from omni.kit.viewport.utility import get_active_viewport
-        get_active_viewport().camera_path = CAMERA
-        carb.log_warn(f"[pibt] camera -> {CAMERA}")
-    except Exception as e:
-        carb.log_warn(f"[pibt] camera: {e}")
+    if HEADLESS and not SHOTS:
+        # 볼 사람도 저장할 것도 없다. 뷰포트 확장이 안 올라와 있을 수도 있다.
+        carb.log_warn("[pibt] (headless) 촬영 없음 — 카메라를 걸지 않는다")
+    else:
+        try:
+            from omni.kit.viewport.utility import get_active_viewport
+            get_active_viewport().camera_path = CAMERA
+            carb.log_warn(f"[pibt] camera -> {CAMERA}")
+        except Exception as e:
+            carb.log_warn(f"[pibt] camera: {e}")
 
     # --- 계획 (Isaac 불필요, 순수 numpy — 로컬과 같은 시드면 같은 결과) ---
 
@@ -1099,6 +1139,29 @@ async def _run():
             stream = None
             if TRAJ_JSON:
                 pass                       # 궤적을 쓰면 주문 스트림이 필요 없다
+            elif ORDERS_JSON:
+                from fms_stream import JsonOrderStream
+                _js = (ORDERS_JSON if os.path.isabs(ORDERS_JSON)
+                       else os.path.join(os.environ["W"], ORDERS_JSON))
+                stream = JsonOrderStream.from_file(
+                    _js, geom, free, MAP, HORIZON, seed=SEED,
+                    tote_units=int(os.environ.get("PIBT_TOTE_UNITS", "10")),
+                    order_end=oe, verbose=False)
+                carb.log_warn(
+                    f"[pibt] ★★ 주문 = **백엔드 주문**(rack_id) "
+                    f"{os.path.basename(_js)} · 주문 {stream.total:,}건 -> "
+                    f"토트 {stream.loaded:,}개"
+                    + (f" · 창 밖 {stream.skipped_late:,}건 뺌"
+                       if stream.skipped_late else "")
+                    + (f" · ★ 랙 못 찾음 {len(stream.skipped_bad)}건"
+                       if stream.skipped_bad else ""))
+                carb.log_warn(
+                    "[pibt]    ☹ 포장대는 우리 난수로 배정했다 — FMS 와 같은 "
+                    "정책이지만 **뽑기가 다르다.** 정합성 대조에는 "
+                    "PIBT_ORDERS(배정표) 나 PIBT_TRAJ(궤적)를 써라")
+                if stream.skipped_bad:
+                    carb.log_error(f"[pibt] ★★ rack_buffers.json 에 없는 랙이 있다 "
+                                   f"— 예: {stream.skipped_bad[:3]}")
             elif ORDERS_CSV:
                 from fms_stream import FileOrderStream
                 _csv = (ORDERS_CSV if os.path.isabs(ORDERS_CSV)
@@ -1322,9 +1385,18 @@ async def _run():
 
     # ★ 여기서 켠다 — 위의 프레임 수 기반 대기들이 끝난 뒤여야 한다
     _setup_render_rate()
+    if HEADLESS:
+        # 구독하지 않는다. 런처가 물리를 직접 밟으며 _tick 을 부른다.
+        state["ready"] = True
+        carb.log_warn(f"[pibt] READY(headless) — {len(drivers)}대 "
+                      "ADG 주행 시작 (렌더 없음, 런처가 스텝을 민다)")
+        return
     state["sub"] = omni.physx.get_physx_interface() \
         .subscribe_physics_step_events(_on_physics)
     carb.log_warn(f"[pibt] READY — {len(drivers)}대 ADG 주행 시작 (시간표 없음)")
 
 
-asyncio.ensure_future(_run())
+# ★ 태스크를 남긴다 — headless 런처가 "준비 전에 _run 이 끝났나"를 본다.
+#   실패 경로(스테이지 없음·pose 안 변함·verify_start 불일치)는 전부 return 이라
+#   ready 가 안 서고 done 도 안 선다. 그때 무한 대기하지 않으려면 이게 필요하다.
+state["task"] = asyncio.ensure_future(_run())

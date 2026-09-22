@@ -2,9 +2,21 @@
 # ============================================================
 # run_record.sh — 시연 영상 한 번에 (녹화 -> mp4)
 #
-#   bash run_record.sh                       pibt_h 12대, 10배속 73초 영상
+#   bash run_record.sh                       pibt_h 12대 · **시드 104**, 10배속 73초 영상
+#   bash run_record.sh 16                    16대 · 시드 104
+#   bash run_record.sh 16 103                16대 · **시드 103**   ← 대수 다음이 시드
+#   bash run_record.sh --seed 103            12대 · 시드 103
 #   bash run_record.sh --planner pibt_h      같음 (명시)
 #   bash run_record.sh --rebuild             씬 재빌드부터
+#
+#   ★ 시드 기본값은 **104** 다. 12대 3시간 창에서 랙·차체 접촉을 둘 다 0 으로
+#     완주한 유일한 시드라 시연·회귀의 기준판으로 쓴다.
+#     안 주면 `pibt_h.py` 의 모듈 상수 9 로 돌던 것을 여기서 막는다.
+#
+#   ☹ 시드를 바꾸면 `plan/traj_pibt_h/fleet_NN/` 의 계획은 **다른 시나리오**다
+#     (디렉터리 이름에 대수만 박혀 있다). 주행은 in-process 로 다시 계획하니
+#     옳지만, 영상·검증이 읽는 `trajectories.json` 은 안 맞는다.
+#     머리말이 「계획은 시드 N 으로 만들어졌다」로 알려 준다. 맞추려면 REPLAN=1.
 #
 # `run.sh` 를 **고치지 않고 감싼다.** 하는 일 네 가지:
 #   1. PIBT_SHOTS 등 촬영 환경변수를 넣는다
@@ -95,17 +107,55 @@ fi
 SHOTS="$OUT/shots_$TAG"
 MP4="$OUT/demo_$TAG.mp4"
 MYLOG="$LOGS/record_$TAG.log"
+# [patch_record_seed] `--seed N` 을 **인자 목록에서 빼낸다** (2026-09-20).
+#   남은 인자는 그대로 run.sh 로 가므로, 여기서 안 빼면 run.sh 가 모르는
+#   플래그를 받는다. 위치 인자(아래)보다 먼저 처리해야 `run_record.sh --seed 7 20`
+#   같은 순서도 받는다.
+_PASS=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --seed|-s) PIBT_SEED="${2:-}"; shift 2 ;;
+        --seed=*)  PIBT_SEED="${1#*=}"; shift ;;
+        *)         _PASS+=("$1"); shift ;;
+    esac
+done
+set -- ${_PASS[@]+"${_PASS[@]}"}
+
 # [patch_record_n] 첫 인자가 순수 정수면 로봇 대수로 먹는다
+# [patch_record_seed] **두 번째** 순수 정수는 시드로 먹는다
 #   bash run_record.sh 20 --rebuild  →  PIBT_N=20, run.sh 로는 --rebuild 만 간다
+#   bash run_record.sh 16 103        →  16대 · 시드 103
+#   bash run_record.sh --seed 103    →  대수는 기본값, 시드 103
 #   대수를 안 주면 환경변수 PIBT_N, 그것도 없으면 12.
 if [ $# -ge 1 ] && [[ "$1" =~ ^[0-9]+$ ]]; then
     PIBT_N="$1"; shift
+    if [ $# -ge 1 ] && [[ "$1" =~ ^[0-9]+$ ]]; then
+        PIBT_SEED="$1"; shift
+    fi
 fi
 PIBT_N="${PIBT_N:-12}"
 if [ "$PIBT_N" -lt 1 ] 2>/dev/null; then
     echo "★ 대수는 1 이상의 정수여야 합니다: $PIBT_N" >&2; exit 1
 fi
 export PIBT_N
+
+# [patch_record_seed] ★ 시드 기본값 **104** (2026-09-20).
+#
+#   왜 여기서 정하나 — `pibt_h.py:_e()` 는 셸을 먼저 보고 없을 때만 모듈 상수
+#   (`SEED`, 9)를 쓴다. 즉 **여기서 export 안 하면 9 로 돈다.** pitch·horizon 이
+#   이미 같은 이유로 이 파일에서 기본값을 정하고 있고, 시드만 빠져 있었다.
+#
+#   왜 104 인가 — 12대 3시간 창에서 **랙·차체 접촉을 둘 다 0 으로 완주한
+#   유일한 시드**다 (`s104_strict`, 24,882.4 s · 108,476 액션). 시연·회귀
+#   기본판으로 이것을 쓴다.
+#
+#   ☹ 시드는 **주문 스트림과 배차**를 정한다. 출발 칸은 충전존 슬롯이라
+#     시드와 무관하니 스폰은 안 틀어진다 (pibt_h.py:118 의 근거와 같다).
+if ! [[ "${PIBT_SEED:-104}" =~ ^[0-9]+$ ]]; then
+    echo "★ 시드는 0 이상의 정수여야 합니다: $PIBT_SEED" >&2; exit 1
+fi
+PIBT_SEED="${PIBT_SEED:-104}"
+export PIBT_SEED
 
 # ★ 격자·규칙을 **계획보다 먼저** 정한다 (2026-09-17, S15P21A106-224).
 #
@@ -135,13 +185,45 @@ PLAN_DIR="$PLAN/traj_pibt_h/fleet_$(printf '%02d' "$PIBT_N")"
 #   궤적이 그대로 재생되는 일이 여기서 나왔다.
 #   기본값은 그대로 0 이므로, 안 주던 사람의 동작은 바뀌지 않는다.
 if [ "${REPLAN:-0}" = "1" ]; then
-    echo "── 계획 생성 (PIBT_N=$PIBT_N) ──────────────────────"
+    echo "── 계획 생성 (PIBT_N=$PIBT_N · PIBT_SEED=$PIBT_SEED) ──────"
     [ -d "$PLAN_DIR" ] && echo "  기존 계획을 지우고 다시 만듭니다: $PLAN_DIR"
     rm -rf "$PLAN_DIR"                     # 남은 옛 파일이 섞이지 않게
 # [patch_record_n_fix] `--n` 을 넘겨야 한다. main.py:164 의 default 는 12다.
     ( cd "$W" && python amr/main.py plan --planner pibt_h --n "$PIBT_N" ) || exit 1
     cp -a "$W/v2/traj_pibt_h/." "$PLAN/traj_pibt_h/" || exit 1
+    # [patch_record_seed] 어느 시드로 만든 계획인지 **남긴다**.
+    #   계획 디렉터리 이름에는 대수만 박혀 있어서(`fleet_16`), 시드를 바꿔 돌면
+    #   다른 시나리오의 `trajectories.json` 이 그대로 남는다. 파일이 없으면
+    #   아래 검사가 「모름」으로 경고한다.
+    echo "$PIBT_SEED" > "$PLAN_DIR/.seed" 2>/dev/null || true
     echo "── 계획 완료 ───────────────────────────────────────"
+fi
+
+# [patch_record_seed] ☹ **계획의 시드와 이번 판의 시드가 다르면 알린다** (2026-09-20).
+#
+#   주행은 `live_pibt` 가 in-process 로 다시 계획하므로 **주행 자체는 옳다.**
+#   틀리는 것은 저장된 `trajectories.json` 을 읽는 쪽 — 씬 빌더·검증·영상이다.
+#   둘을 같은 판으로 알고 비교하면 조용히 틀린다 (pibt_h.py:121 의 그 함정).
+if [ -d "$PLAN_DIR" ]; then
+    _PLAN_SEED="$(cat "$PLAN_DIR/.seed" 2>/dev/null || echo "")"
+    if [ -z "$_PLAN_SEED" ]; then
+        _SEED_NOTE="☹ 계획의 시드 **모름** (.seed 없음 — REPLAN=1 로 만들면 남는다)"
+    elif [ "$_PLAN_SEED" != "$PIBT_SEED" ]; then
+        _SEED_NOTE="☹☹ 계획은 시드 **$_PLAN_SEED** 로 만들어졌다 — 주행은 $PIBT_SEED"
+    else
+        _SEED_NOTE="계획도 같은 시드 ✓"
+    fi
+else
+    _SEED_NOTE=""
+fi
+# ★ 궤적을 쓰면 계획 폴더가 필요 없다 (2026-09-22).
+#   `PIBT_TRAJ` 는 `live_pibt.py:1084` 에서 **계획을 통째로 건너뛴다.** 그런데
+#   아래 검사가 계획 폴더를 요구해서, 「궤적으로 돌리는데 계획이 없다」는 이유로
+#   죽었다. 백엔드가 `scenario.trajectory` 를 보내는 경로(-261)가 정확히 그 모양이다.
+#   검사를 없애지는 않는다 — 궤적이 없는 판은 종전대로 계획을 요구한다.
+if [ -n "${PIBT_TRAJ:-}" ] && [ ! -d "$PLAN_DIR" ]; then
+    echo "[preflight] 궤적을 쓰므로 계획 폴더 검사를 건너뜁니다 ($PLAN_DIR 없음)"
+    SKIP_PLAN_CHECK=1
 fi
 if [ ! -d "$PLAN_DIR" ] && [ "${SKIP_PLAN_CHECK:-0}" != "1" ]; then
     echo "★ ${PIBT_N}대 계획이 없습니다: $PLAN_DIR" >&2
@@ -173,9 +255,33 @@ for a in "${ARGS[@]}"; do
         exit 2
     fi
 done
-if [ "${STREAM:-1}" = "0" ]; then
-    echo "★ STREAM=0 은 헤드리스라 뷰포트가 없어 촬영이 불가능합니다."
-    exit 2
+# ★ 촬영은 **뷰포트가 있어야** 한다. 2026-09-21 부터 `run.sh` 의 기본이
+#   그림 없음(HEADLESS=1)으로 바뀌었으므로, 촬영 경로에서는 되돌려 놓는다.
+#   안 되돌리면 run.sh 가 Kit 을 안 띄워 프레임이 0장 나온다.
+# ── 렌더 경로 (2026-09-21) ──────────────────────────────────
+# 기본은 **예전 그대로** Kit 을 띄운다. `run.sh` 의 기본이 그림 없음으로
+# 바뀌었으므로 여기서 되돌려 놓는다 — 안 되돌리면 프레임이 0장 나온다.
+#
+# `HEADLESS=1` 로 주면 **새 경로**를 쓴다. 다른 점은 하나뿐이다.
+#
+#     기존       매 스텝 렌더 -> STRIDE 스텝마다 한 장 저장 (그린 것의 95% 버림)
+#     HEADLESS=1 저장할 스텝에만 렌더                      (버리는 것이 없다)
+#
+# 파일명·조립 공식·배속 계산은 완전히 같다. 다만 **아직 실측 전이다** —
+# 헤드리스 experience 에 활성 뷰포트가 없으면 리플리케이터로 넘어가는데,
+# 거기서 막히면 긴 주행 끝에 0장이 나올 수 있다. 짧은 판으로 먼저 확인하라.
+if [ "${HEADLESS:-0}" = "1" ]; then
+    echo "[rec] ★ 새 경로: 저장할 스텝에만 렌더합니다 (HEADLESS=1)."
+    echo "[rec]   아직 실측 전입니다. 짧은 판으로 프레임이 나오는지 먼저 보세요."
+    export STREAM=0
+else
+    export HEADLESS=0
+    export STREAM="${STREAM:-1}"
+    if [ "$STREAM" = "0" ]; then
+        echo "★ STREAM=0 은 WebRTC 만 끈 것이지만, 이 경로는 뷰포트가 필요합니다."
+        echo "  더 빠른 촬영을 원하면:  HEADLESS=1 bash run_record.sh ..."
+        exit 2
+    fi
 fi
 if [ "${PIBT_RENDER_EVERY:-1}" != "1" ]; then
     echo "★ PIBT_RENDER_EVERY>1 은 물리 뷰를 무효화합니다 (2026-09-08 미해결)."
@@ -239,12 +345,47 @@ SPEED=$(awk -v s="$SHOT_STRIDE" -v f="$SHOT_FPS" 'BEGIN{printf "%.1f", s*f/60}')
 EXPN=$(awk -v s="$SHOT_STRIDE" 'BEGIN{printf "%d", 43800/s}')
 EXPSEC=$(awk -v n="$EXPN" -v f="$SHOT_FPS" 'BEGIN{printf "%d", n/f}')
 
+# ── 띄우기 전 검사 (2026-09-22) ─────────────────────────────
+#   Isaac 을 45초 띄운 뒤에야 드러나던 둘을 여기서 0.1초에 잡는다.
+if [ -n "${PIBT_TRAJ:-}" ]; then
+    # ① 궤적 파일이 실제로 있나.
+    #    `live_pibt.py:1086` 은 **절대경로가 아니면** $W 를 붙인다. 그래서
+    #    `PIBT_TRAJ="$W/..."` 를 $W 가 빈 채로 쓰면 "/docs/..." 가 되고,
+    #    맨 앞 슬래시 때문에 절대경로로 보여 $W 가 안 붙는다.
+    case "$PIBT_TRAJ" in
+        /*) _TJ="$PIBT_TRAJ" ;;
+        *)  _TJ="$W/$PIBT_TRAJ" ;;
+    esac
+    if [ ! -f "$_TJ" ]; then
+        echo "★ 궤적 파일이 없습니다: $_TJ"
+        echo "  PIBT_TRAJ=$PIBT_TRAJ"
+        [ -z "${W:-}" ] && echo "  ☹ \$W 가 비어 있습니다 — source paths.sh 를 먼저 하세요."
+        echo "  ※ \$W 기준 **상대경로**로 주는 편이 안전합니다:"
+        echo "      export PIBT_TRAJ=\"docs/모음/r13_peak10/trajectories.json\""
+        exit 1
+    fi
+    echo "[preflight] 궤적 확인 — $_TJ"
+
+    # ② 앞 칸 규칙 4 + ADG_RANK 없음 = ADG 순환 (fms_traj.build 독스트링).
+    if [ "$PIBT_FRONT_RULE" = "4" ] && [ -z "${PIBT_ADG_RANK:-}" ]; then
+        echo "★ 궤적 재생인데 PIBT_FRONT_RULE=4 이고 PIBT_ADG_RANK 가 없습니다."
+        echo "  이 조합은 **ADG 순환**으로 죽습니다 (앞 2칸은 비순환 · 4칸은 순환)."
+        echo "  둘 중 하나를 주세요:"
+        echo "      export PIBT_ADG_RANK=1      # 틱 순위로 편다 (259 이상)"
+        echo "      export PIBT_FRONT_RULE=2    # 궤적 발자국에 맞춘다"
+        exit 1
+    fi
+fi
+
 echo "════════════════════════════════════════════════════"
 echo " run_record  $TAG"
 echo "  인자        ${ARGS[*]}"
 # [patch_record_n] 플래그가 걸렸는지 로그로 증명한다 (규칙 1번)
 echo "  대수        ${PIBT_N}대"
+# [patch_record_seed] 시드도 찍는다 — 안 찍으면 어느 판인지 나중에 못 가린다
+echo "  시드        ${PIBT_SEED}   (기본 104)"
 echo "  계획        $PLAN_DIR"
+[ -n "${_SEED_NOTE:-}" ] && echo "              $_SEED_NOTE"
 # 플래그가 실제로 걸렸는지 로그로 증명한다 (규칙 1번).
 #   '규칙 적용' 이 '아니오' 인데 규칙을 기대했다면 지금 끊는 편이 낫다.
 echo "  격자        pitch $PIBT_PITCH   (기본 1.0 — 바뀐 ADG 가 사는 격자)"
@@ -297,6 +438,8 @@ BUSY="$(_busy_pids)"
 #   돌고 있으면 **즉시 exit 2** 였다. 그래서
 #
 #       for S in 7 14 101 103 104; do PIBT_SEED=$S bash run_record.sh 12; done
+#   [patch_record_seed] 이제 더 짧게도 쓴다 — 둘 다 같은 뜻이다
+#       for S in 7 14 101 103 104; do WAIT_BUSY=3600 bash run_record.sh 12 $S; done
 #
 #   이 앞 판이 아직 도는 동안 **1초 안에 다섯 번 튕겼다.** 로그만 다섯 벌
 #   남고 주행은 하나도 안 했다. 실제로 그렇게 날렸다.

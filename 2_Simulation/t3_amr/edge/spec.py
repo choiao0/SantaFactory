@@ -69,6 +69,48 @@ class RunSpec:
         return s if isinstance(s, int) and not isinstance(s, bool) else None
 
     @property
+    def trajectory(self) -> str | None:
+        """scenario.trajectory — FMS 가 낸 궤적 JSON 경로. 있으면 **계획을 안 한다**.
+
+        `$W` 기준 상대경로를 권한다 (`live_pibt.py:1086` 이 절대경로가 아니면
+        `$W` 를 붙인다). 절대경로도 그대로 쓰인다.
+
+        ☹ 이게 있으면 `recorder.environment()` 가 `REPLAN` 을 **0 으로 못 박는다.**
+          계획 폴더가 없어도 안 만든다 — 어차피 안 쓰기 때문이다.
+        """
+        t = (self.scenario or {}).get("trajectory")
+        t = t.strip() if isinstance(t, str) else ""
+        return t or None
+
+    @property
+    def order_gap_s(self) -> float | None:
+        """scenario.outbound_gap_s — 출고 주문 간격(초).
+
+        계약 §2 에 「없으면 **출고 전용**」이라고 적혀 있다. 검증 런은 견적
+        지평선 안의 출고 창 한 조각만 재생하므로 `inbound_gap_s` 는 안 본다.
+        None 이면 러너 기본값(`PIBT_ORDER_GAP`, 60틱)이 그대로 쓰인다.
+        """
+        g = (self.scenario or {}).get("outbound_gap_s")
+        if isinstance(g, (int, float)) and not isinstance(g, bool) and g > 0:
+            return float(g)
+        return None
+
+    @property
+    def orders(self) -> dict | None:
+        """scenario.orders — 백엔드가 견적 생성 시 저장한 주문 목록.
+
+        ☹ **아직 러너로 못 넘긴다.** 계약의 주문은 `{rack_id, product_id, qty}`
+          인데 우리 `fms_stream.FileOrderStream` 이 읽는 CSV 는
+          `order_id,task_id,frm_name,to_name,created_tick` 이고, `frm_name` 은
+          `aisle_buf[2]` 처럼 **스테이션 카테고리+인덱스**다. `rack_id "A3"` 를
+          그 이름으로 옮기는 규칙과 목적지(포장대)를 정하는 규칙이 어디에도
+          없다 — 그건 FMS/WMS 가 정할 일이다.
+          그래서 지금은 **받아만 두고**, 간격(`order_gap_s`)으로만 재생한다.
+        """
+        o = (self.scenario or {}).get("orders")
+        return o if isinstance(o, dict) else None
+
+    @property
     def window_s(self) -> float:
         """녹화 창(초). Start 에는 window_s 가 없고 timeout_s = window_s + 300 이라 거기서 되돌린다.
         scenario.window_s 가 오면 그 값이 이긴다. host-orch 가 창 끝에 Stop 을 보내므로 이 값은 상한일 뿐이다."""

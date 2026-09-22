@@ -108,6 +108,34 @@ SERVICE_TICKS = 3          # 픽/드롭 서비스 시간. FMS SERVICE_STEPS 와 
 #   0 이면 이 차이는 이 판에서 없었던 것이고, 크면 A 의 남은 물음이 여기다.
 DROP_GUARD = os.environ.get("PIBT_DROP_GUARD", "1") not in ("0", "", "off", "no")
 
+# ★★ 동승 (2026-09-21) — **포팅 누락이었다.**
+#
+#   이 파일 머리말의 「FMS 와 맞춘 것」에 `배차` 가 들어 있는데, FMS
+#   `3_FMS/sim_engine/kernel/core.py:297` 의 동승 여섯 줄이 안 옮겨져 있었다.
+#   「FMS 와 다른 것」 목록에도 없으니 의도한 차이가 아니다 — `pibt_core_v2.py`
+#   로더 머리말이 경고한 **「사본은 상류가 바뀌면 조용히 갈린다」** 의 실제 사례다.
+#
+#   무엇이 갈렸나 (시드 104 · 3h · packing_assign_s104.csv, 2026-09-21 실측)
+#
+#       완료 주문   FMS 2,677   우리 630        -76.5 %
+#       트립 수     FMS   476   우리 630        ★ 우리가 32 % **더** 움직였다
+#       트립당      FMS  5.62   우리 1.00
+#
+#     이동이 느려서 난 차이가 아니다. 한 번에 하나씩 나른 것뿐이다.
+#
+#   규칙은 FMS 와 같다 — 같은 **버퍼(frm)** 에서 기다리는 것을 먼저 온 순서로
+#   태우고, **목적지는 리더의 것으로 덮는다.** r13 궤적에서 6건 묶음 431개가
+#   전부 같은 `to_name` 인 이유가 그것이다 (원래 같아서가 아니다).
+#
+#   기본 1 = 예전 동작과 **비트 동일**이고, FMS `core.py:55` 의 기본값과도 같다.
+#   FMS 운영 스윕은 `--capacity=6 --svc-per-tote=18` 로 돈다 — 그쪽과 맞댈
+#   판에서는 같은 값을 줘야 한다.
+#
+#       PIBT_CAPACITY      왕복당 토트 수 (FMS 운영값 6)
+#       PIBT_SVC_PER_TOTE  픽·드롭 **각각** 토트당 추가 틱 (FMS 운영값 18)
+CAPACITY = max(1, int(os.environ.get("PIBT_CAPACITY", "") or 1))
+SVC_PER_TOTE = max(0, int(os.environ.get("PIBT_SVC_PER_TOTE", "") or 0))
+
 # ★★ 회전 옆 이웃 규칙 — pitch 1.0 에서 옆 칸에 남이 있으면 제자리 회전 금지 (-240).
 #
 #   `tools/turn_pair_margin.py` 가 차체 치수와 pitch 에서 **위치 불변 상수표**를 굽는다
@@ -116,6 +144,10 @@ DROP_GUARD = os.environ.get("PIBT_DROP_GUARD", "1") not in ("0", "", "off", "no"
 #       PIBT_TURN_PAIR=1   켠다
 #       (기본 꺼짐)        비트 동일
 TURN_PAIR = os.environ.get("PIBT_TURN_PAIR", "0") not in ("0", "", "off", "no")
+# ★★ 이웃의 **다음** 상태까지 본다 (-240, 2026-09-21). 기본 **꺼짐**.
+#   근거는 `_pair_blocked` 의 주석 — 계획 한 틱이 실행 5틱이라, 출발 순간만
+#   보면 도착해 들어오는 이웃을 놓친다. 실측 사고 하나가 정확히 그거였다.
+PAIR_NEXT = os.environ.get("PIBT_TURN_PAIR_NEXT", "0") not in ("0", "", "off", "no")
 _PAIR_TAB = None
 
 
@@ -173,9 +205,35 @@ def _pair_key(s0, q):
     return ((dr * c + dc * s, -dr * s + dc * c), (q[2] - s0[2]) % 4)
 
 
-def _pair_blocked(states, agents, a, s0, hit):
-    """A 의 회전을 막는 이웃이 **하나라도** 있나. (원래의 `break` 와 같은 단축평가)"""
-    return any(_pair_key(s0, states[b]) in hit for b in agents if b != a)
+def _pair_blocked(states, new, agents, a, s0, hit):
+    """A 의 회전을 막는 이웃이 **하나라도** 있나. (원래의 `break` 와 같은 단축평가)
+
+    ★★ 이웃의 **현재**와 **다음** 상태를 둘 다 본다 (-240, 2026-09-21).
+
+    ☹ 왜 둘인가 — **계획의 한 틱이 실행의 5틱**이다 (`TURN_TICKS=5`).
+      회전이 도는 동안 이웃은 1.25칸 움직인다. 출발 순간만 보면 **도착해
+      들어오는 이웃**을 못 본다.
+
+      실측 (s101_rank · t=13,989.6 s 차체 접촉 (0,6)):
+
+          A6  (45,89,3) -> (45,89,2) 로 회전
+          A0  states (43,88,2)  키 ((1,-2),3)  금지 **False**   <- 지금 코드가 본 것
+              new    (44,88,2)  키 ((1,-1),3)  금지 **True**    <- 사고를 만든 것
+
+      **금지 조합표에 이미 있었다.** 여유 30 mm 로 낮춰도 들어 있다. 표가
+      모자란 게 아니라 **조회 시점이 하나 모자랐다.**
+
+    `PIBT_TURN_PAIR_NEXT=0` 으로 옛 동작(현재만). 대가는 처리량이다 — 막는
+    회전이 늘어난다.
+    """
+    for b in agents:
+        if b == a:
+            continue
+        if _pair_key(s0, states[b]) in hit:
+            return True
+        if PAIR_NEXT and _pair_key(s0, new[b]) in hit:
+            return True
+    return False
 
 
 def _turn_pair_veto(states, new, agents):
@@ -193,7 +251,7 @@ def _turn_pair_veto(states, new, agents):
         if sgn is None:
             continue
         hit = tab.get(sgn) or ()
-        if hit and _pair_blocked(states, agents, a, s0, hit):
+        if hit and _pair_blocked(states, new, agents, a, s0, hit):
             new[a] = s0                            # ★ 제자리 대기로 되돌린다
             n += 1
     return n
@@ -520,6 +578,8 @@ class Kernel(object):
         for task in list(self.waiting):
             if not elig:
                 break
+            if task not in self.waiting:      # 앞 태스크의 동승 토트로 이미 실렸다
+                continue
             fr, fc = task["frm"]
             # ★ 픽 칸만 보면 안 된다. 드롭 칸이 도달 불가인 태스크를 받으면
             #   그 로봇은 거리장이 전부 -1 이라 TO_DROP(RANK 1)으로 **영구 정지**
@@ -542,17 +602,42 @@ class Kernel(object):
             r = self.rb[a]
             r["state"], r["task"], r["goal"] = TO_PICK, task, task["frm"]
             self.waiting.remove(task)
+            self._load_riders(task)
             elig.remove(a)
             if self.states[a][:2] == r["goal"]:
-                r["state"], r["svc"] = SVC_PICK, SERVICE_TICKS
+                r["state"], r["svc"] = SVC_PICK, self._svc_ticks(r)
+
+    def _load_riders(self, task):
+        """같은 버퍼에서 기다리는 토트를 먼저 온 순서로 태운다 (FMS core.py:297).
+
+        **목적지를 리더 것으로 덮는다** — 동승자가 원래 다른 포장대로 갈 예정이어도
+        리더를 따라간다. 이게 없으면 한 트립이 여러 포장대를 도는 얘기가 되어
+        FMS 와 전혀 다른 문제가 된다.
+        """
+        if CAPACITY <= 1 or task.get("kind") != "out":
+            return
+        riders = [tk for tk in self.waiting
+                  if tk.get("kind") == "out" and tk["frm"] == task["frm"]][:CAPACITY - 1]
+        for tk in riders:
+            tk["to"] = task["to"]
+            self.waiting.remove(tk)
+        if riders:
+            task["riders"] = riders
+
+    def _svc_ticks(self, r):
+        """서비스 틱 — 실은 토트 수만큼 늘어난다 (FMS `_begin_service`)."""
+        if SVC_PER_TOTE <= 0:
+            return SERVICE_TICKS
+        task = r.get("task") or {}
+        return SERVICE_TICKS + (1 + len(task.get("riders") or ())) * SVC_PER_TOTE
 
     def _arrive(self, a):
         """목표 도착 처리 — 상태를 한 칸 진행시킨다."""
         r = self.rb[a]
         if r["state"] == TO_PICK:
-            r["state"], r["svc"] = SVC_PICK, SERVICE_TICKS
+            r["state"], r["svc"] = SVC_PICK, self._svc_ticks(r)
         elif r["state"] == TO_DROP:
-            r["state"], r["svc"] = SVC_DROP, SERVICE_TICKS
+            r["state"], r["svc"] = SVC_DROP, self._svc_ticks(r)
         elif r["state"] == TO_HOME:
             r["state"], r["goal"] = IDLE, None
 
@@ -561,10 +646,13 @@ class Kernel(object):
         if r["state"] == SVC_PICK:
             r["state"], r["goal"] = TO_DROP, r["task"]["to"]
         else:                                            # SVC_DROP → 일 끝
-            self.done += 1
+            # ★ 동승 토트도 같이 내린다 — 한 트립이 주문 여러 건을 끝낸다.
+            #   FMS 의 「완료 태스크」도 **주문 수**를 센다 (r13: 트립 476 · 태스크 2,677).
+            n = 1 + len((r["task"] or {}).get("riders") or ())
+            self.done += n
             # 시그니처는 못 바꾼다 — `battery.BatteryKernel` 이 이 메서드를
             # 오버라이드하고 `super()._service_done(a)` 로 부른다.
-            self.done_ticks.append(self._t)
+            self.done_ticks.extend([self._t] * n)
             r["state"], r["task"], r["goal"] = FREED, None, None
 
     def step(self, t):
@@ -820,8 +908,17 @@ class Kernel(object):
         """`run_lifelong` 이 info 에 합친다. 존이 꺼져 있으면 한 줄만."""
         zs = self.zone_stats
         # ★ 존을 꺼도 `guard_flipped` 은 낸다 — FMS 패리티 지표라 판마다 필요하다.
+        # ★ 마스크가 실제로 걸렸나 (2026-09-22, FMS 답신 ②). **0 이면 안 걸린
+        #   판이다.** 스위치만 보면 안 된다 — 맵을 못 읽어 조용히 빈 마스크가
+        #   될 수도 있다. `_APPLIED` 는 실제로 금지한 회전 수라 그걸 가른다.
+        try:
+            import turn_sweep_mask as _TSM
+            _sweep = int(_TSM._APPLIED)
+        except Exception:                      # 모듈이 없어도 report 는 살아야 한다
+            _sweep = 0
         g = {"guard_flipped": self.guard_flipped, "drop_guard": DROP_GUARD,
-             "pair_blocked": self.pair_blocked, "turn_pair": TURN_PAIR}
+             "pair_blocked": self.pair_blocked, "turn_pair": TURN_PAIR,
+             "turn_sweep": _sweep}
         if not self.zone:
             return {"zone": False, **g}
         occ = zs["occ"]
