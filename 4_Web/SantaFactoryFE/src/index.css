@@ -146,6 +146,11 @@ section.step > p.desc { font-size: 18px; line-height: 1.7; max-width: 760px; mar
 }
 .button:hover { background: #c92222; }
 .button:disabled { opacity: .45; cursor: not-allowed; }
+/* aria-disabled 는 잠긴 것처럼 보이되 클릭은 받는다 — 왜 못 누르는지 알려주려면 클릭이 와야 한다.
+   커서는 기본 화살표로 둔다. 손 모양은 "지금 누르면 된다"는 뜻이라 잠긴 버튼에는 안 맞고,
+   금지 표시는 눌러도 소용없다고 읽혀 안내를 보러 누를 생각을 막는다 */
+.button[aria-disabled='true'] { opacity: .45; cursor: default; }
+.button[aria-disabled='true']:hover { background: var(--red); }
 .ghost {
   background: none; border: 1px solid #3a3a3a; color: #ccc;
   font: 600 15px var(--font-head);
@@ -279,7 +284,11 @@ section.step > p.desc { font-size: 18px; line-height: 1.7; max-width: 760px; mar
 .fleetnote { font: 500 15px var(--font-mono); letter-spacing: .02em; line-height: 1.8; color: #9a9a96; margin: 20px 0 0; }
 .fleetnote b { color: #eee; }
 .runcta { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; margin-top: 24px; }
+/* 버튼 옆이 아니라 아래 줄에 오게 한다 — 한 줄을 통째로 차지하면 다음 행으로 밀린다 */
+.runcta .form-hint { flex-basis: 100%; margin-top: -4px; }
 .form-error { font: 500 14px var(--font-mono); color: #ff6b6b; letter-spacing: .02em; margin: 0; }
+/* 아직 못 누르는 이유를 알려주는 안내 — 실패가 아니라 남은 할 일이라 빨강을 쓰지 않는다 */
+.form-hint { font: 500 14px var(--font-mono); color: #8f8f8b; letter-spacing: .02em; margin: 0; }
 .section-light .form-error { color: var(--red-dark); }
 
 .runs-empty {
@@ -463,6 +472,10 @@ section.step > p.desc { font-size: 18px; line-height: 1.7; max-width: 760px; mar
 
 .verify-video { display: block; width: 100%; max-height: 520px; background: #000; }
 /* 영상이 아직 없을 때 보드 안을 채운다 — 높이를 영상과 비슷하게 잡아 영상이 붙어도 화면이 덜 흔들린다 */
+/* 카메라 시점 고르기. 영상 바로 위에 붙여 무엇을 바꾸는 버튼인지 드러낸다 */
+.verify-views { display: flex; gap: 8px; margin: 0 0 12px; }
+.verify-views .ghost.on { border-color: var(--red); color: #fff; background: rgba(231, 45, 45, .16); }
+
 /* 검증을 기다리는 자리. 움직이는 AMR(03 단계 카드와 같은 표식) 아래로 한 줄 요약과 부연을
    세로로 쌓는다. 문구는 한글 문장이라 본문 서체를 쓴다 — 모노는 자간이 벌어져 읽기 나쁘다 */
 .verify-placeholder {
@@ -471,6 +484,8 @@ section.step > p.desc { font-size: 18px; line-height: 1.7; max-width: 760px; mar
   background: #0d0d0d; border: 1px dashed #3a3a3a;
 }
 .verify-placeholder .amr-run { color: #6f6f6b; margin-bottom: 4px; }
+/* 시작 버튼은 문구 아래에 둔다 — 무엇을 하는 버튼인지 읽고 누르는 순서가 된다 */
+.verify-placeholder .button { margin-top: 6px; }
 .verify-placeholder .amr-run svg { width: 86px; height: auto; }
 /* 마지막 줄만 짧게 남지 않도록 균형 잡아 끊는다 */
 .vp-text {

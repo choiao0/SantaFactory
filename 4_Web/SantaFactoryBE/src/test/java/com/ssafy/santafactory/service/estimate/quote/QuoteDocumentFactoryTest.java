@@ -136,7 +136,7 @@ class QuoteDocumentFactoryTest {
     void no_recommendation_gives_a_reason_and_no_cost_or_targets() {
         EstimateDetailResponse d = new EstimateDetailResponse(7L, EstimateStatus.DONE, "iw.hub", 95.0, 60.0, 50_000_000L,
                 null, null, ReasonCode.BUDGET_EXCEEDED, LocalDateTime.of(2026, 9, 17, 10, 0), LocalDateTime.of(2026, 9, 17, 10, 5),
-                300L, null, QuoteFixtures.runs(7L, 5), null);
+                300L, null, null, QuoteFixtures.runs(7L, 5), null);
 
         QuoteDocument q = factory.build(new QuoteSource(d, QuoteFixtures.warehouse()));
 

@@ -92,6 +92,17 @@ public class Estimate {
     private String verifyVideoUrl;
 
     /**
+     * 물리 검증을 큐에 발행한 시각. 결과가 오기 전까지 "요청했다" 를 알 수 있는 유일한 흔적이라,
+     * 중복 발행을 막는 데 쓴다. 검증한 적이 없으면 null.
+     */
+    @Column(name = "verify_requested_at")
+    private LocalDateTime verifyRequestedAt;
+
+    /** 같은 검증의 측면 시점 영상. 측면을 찍지 않은 회차는 null 이고 화면은 상단만 보여준다. */
+    @Column(name = "verify_video_side_url", length = 500)
+    private String verifyVideoSideUrl;
+
+    /**
      * 이 견적의 대수 스윕 전체가 공유하는 출고 주문 목록(JSON 직렬화, {@code SimulationRequest.Outbound[]}).
      * 대수마다 다시 생성하지 않고 여기 저장된 걸 재사용한다 — 그래야 "같은 주문량을 몇 대가 처리하는가"를
      * 대수별로 비교하는 게 의미 있다.
@@ -163,9 +174,15 @@ public class Estimate {
         return status == EstimateStatus.CANCELLED;
     }
 
-    /** 물리 검증 결과로 받은 리플레이 영상 URL을 반영한다. */
-    public void applyVerifyVideo(String url) {
+    /** 물리 검증을 큐에 발행했다고 표시한다. 재요청이면 시각을 새로 덮는다. */
+    public void markVerifyRequested(LocalDateTime at) {
+        this.verifyRequestedAt = at;
+    }
+
+    /** 물리 검증 결과로 받은 시점별 영상 URL을 반영한다. 측면은 없을 수 있다. */
+    public void applyVerifyVideo(String url, String sideUrl) {
         this.verifyVideoUrl = url;
+        this.verifyVideoSideUrl = sideUrl;
     }
 
     /** 물리 검증 결과를 반영한다. 영상과 같이 성패를 가리지 않고 마지막 결과를 남긴다. */

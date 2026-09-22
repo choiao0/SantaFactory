@@ -18,7 +18,8 @@ import java.util.List;
  * @param recommendedCount 3조건 만족 최소 대수. 없으면 null 이고 이때만 reasonCode 가 채워진다
  * @param kneeCount        이 대수 이상은 늘려도 처리율이 거의 오르지 않는다
  * @param elapsedSeconds   생성 → 완료 소요시간(초). 진행 중이면 null (90초 목표 측정)
- * @param verifyVideoUrl   물리 검증 영상의 presigned GET URL. 만료가 있어 저장하지 말고 조회할 때마다 받는다.
+ * @param verifyVideoUrl   물리 검증 영상(상단 시점)의 presigned GET URL. 만료가 있어 저장하지 말고 조회할 때마다 받는다.
+ * @param verifyVideoSideUrl 같은 검증의 측면 시점. 측면을 찍지 않은 회차는 null 이고 화면은 상단만 보여준다.
  *                         검증 전이거나 영상이 없으면 null
  */
 @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
@@ -36,6 +37,7 @@ public record EstimateDetailResponse(
         LocalDateTime completedAt,
         Long elapsedSeconds,
         String verifyVideoUrl,
+        String verifyVideoSideUrl,
         List<Run> runs,
         /** 물리 검증 결과와 계산 대비 (S15P21A106-236). 검증 전이면 null. */
         Verification verification
@@ -124,7 +126,8 @@ public record EstimateDetailResponse(
         }
     }
 
-    public static EstimateDetailResponse of(Estimate estimate, List<SimScenario> runs, String verifyVideoUrl,
+    public static EstimateDetailResponse of(Estimate estimate, List<SimScenario> runs,
+                                           String verifyVideoUrl, String verifyVideoSideUrl,
                                             Verification verification) {
         return new EstimateDetailResponse(
                 estimate.getId(),
@@ -140,6 +143,7 @@ public record EstimateDetailResponse(
                 estimate.getCompletedAt(),
                 estimate.elapsedSeconds(),
                 verifyVideoUrl,
+                verifyVideoSideUrl,
                 runs.stream().map(Run::from).toList(),
                 verification);
     }
