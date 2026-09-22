@@ -32,6 +32,8 @@
     SHOOT_D       거리 [m] (기본 6)
     SHOOT_RES     해상도 (기본 1600x1000 — 정지컷이라 크게 찍는다)
     SHOOT_FOCAL   초점거리 [mm] (기본 45 — 6 m 에서 AMR 이 화면의 54 %)
+    SHOOT_RT_SUBFRAMES  레이트레이서 수렴 프레임 (기본 16). 노이즈가 남으면 올린다
+    SHOOT_SETTLE  버퍼가 찬 뒤 더 밟을 횟수 (기본 6)
     SHOOT_OUT     저장 폴더 (기본 $OUT/amr_shot)
     PIBT_STAGE    씬 USD (기본 $STAGE/pibt<N>.usd, N=PIBT_N 또는 13)
 """
@@ -53,6 +55,8 @@ RES = (os.environ.get("SHOOT_RES", "") or "1600x1000").lower()
 #   28 mm -> 화각 41.5도, 6 m 에서 프레임 4.5 m (1.5 m AMR 이 3분의 1)
 #   45 mm -> 화각 26.3도, 6 m 에서 프레임 2.8 m (절반 넘게 찬다)  <- 기본
 FOCAL = float(os.environ.get("SHOOT_FOCAL", "") or 45.0)
+RT_SUB = int(os.environ.get("SHOOT_RT_SUBFRAMES", "") or 16)   # 레이트레이서 수렴 프레임
+SETTLE = int(os.environ.get("SHOOT_SETTLE", "") or 6)          # 버퍼가 찬 뒤 더 밟을 횟수
 SHOT_OUT = os.environ.get("SHOOT_OUT") or os.path.join(OUT, "amr_shot")
 
 if not os.path.isfile(STAGE_USD):
@@ -138,6 +142,65 @@ omni.kit.app.get_app().get_extension_manager() \
 import omni.replicator.core as rep                       # noqa: E402
 from PIL import Image                                    # noqa: E402
 
+# ★★ 리플리케이터 **그래프를 밟아야** 버퍼가 찬다 (2026-09-23).
+#
+#   `headless_pibt` 에서는 타임라인이 돌고 있어서 `simulation_app.update()` 만으로
+#   버퍼가 찼다. 정지컷은 타임라인이 멈춰 있어 그것만으로는 **영영 비어 있다**
+#   (첫 판에서 세 장 다 「rgb 버퍼가 비었다」였다).
+#
+#   `rep.orchestrator.step` 은 Isaac 판마다 시그니처가 다르다. 되는 것을 한 번
+#   찾아 두고 그 뒤로는 그것만 쓴다 — 무엇이 먹혔는지 로그에 남긴다.
+_STEP = None
+
+
+def _step_once():
+    global _STEP
+    if _STEP is not None:
+        _STEP()
+        return
+    for label, fn in (
+            # rt_subframes 는 레이트레이서에 수렴할 프레임을 더 준다 — 정지컷이라
+            # 노이즈가 남으면 안 된다. 안 받는 판이면 다음 후보로 내려간다.
+            ("orchestrator.step(delta_time=0, rt_subframes=%d)" % RT_SUB,
+             lambda: rep.orchestrator.step(delta_time=0.0, rt_subframes=RT_SUB)),
+            ("orchestrator.step(delta_time=0)", lambda: rep.orchestrator.step(delta_time=0.0)),
+            ("orchestrator.step()", lambda: rep.orchestrator.step()),
+            ("app.update()", lambda: simulation_app.update())):
+        try:
+            fn()
+        except Exception as e:                           # noqa: BLE001
+            print("[shot]   렌더 스텝 %s 안 됨: %r" % (label, e))
+            continue
+        _STEP = fn
+        print("[shot] 렌더 스텝 = %s" % label)
+        return
+    _STEP = lambda: simulation_app.update()              # noqa: E731
+    _STEP()
+
+
+def _as_array(d):
+    """판에 따라 ndarray 를 그대로 주기도 하고 dict 로 싸서 주기도 한다."""
+    if isinstance(d, dict):
+        d = d.get("data")
+    return d
+
+
+def _grab(annot, tries=20):
+    """버퍼가 찰 때까지 밟으며 기다린다. (배열, 몇 번 만에) 또는 (None, tries).
+
+    ★ 버퍼가 찬 **뒤에도 몇 장 더 밟는다.** 첫 프레임은 레이트레이싱이 덜
+      수렴해 노이즈가 낀다 — 주행 영상은 흘러가서 티가 안 나지만 정지컷은 남는다.
+    """
+    for k in range(tries):
+        _step_once()
+        got = _as_array(annot.get_data())
+        if got is not None and getattr(got, "size", 0):
+            for _ in range(SETTLE):
+                _step_once()
+            return _as_array(annot.get_data()), k + 1
+    return None, tries
+
+
 os.makedirs(SHOT_OUT, exist_ok=True)
 w, h = (int(v) for v in RES.split("x"))
 made = []
@@ -145,18 +208,18 @@ for i, (name, (f_, r_, up_)) in enumerate(VIEWS):
     cam_path = place(i, f_, r_, up_)
     annot = rep.AnnotatorRegistry.get_annotator("rgb")
     annot.attach([rep.create.render_product(cam_path, (w, h))])
-    for _ in range(8):                                   # ★ 워밍업 — 없으면 버퍼가 빈다
-        simulation_app.update()
-    data = annot.get_data()
-    if data is None or not len(data):
-        print("[shot] ☹ %s — rgb 버퍼가 비었다. 건너뛴다" % name)
+    data, tries = _grab(annot)
+    if data is None:
+        raw = annot.get_data()
+        print("[shot] ☹ %s — %d번 밟아도 rgb 버퍼가 비었다 (받은 것: %s). 건너뛴다"
+              % (name, tries, type(raw).__name__))
         annot.detach()
         continue
     out = os.path.join(SHOT_OUT, "amr_%s.png" % name)
     Image.fromarray(data[:, :, :3]).save(out, format="PNG")   # ★ 포맷 명시
     annot.detach()
     made.append(out)
-    print("[shot] %s -> %s (%d x %d)" % (name, out, w, h))
+    print("[shot] %s -> %s (%d x %d · %d번 만에)" % (name, out, w, h, tries))
 
 print("[shot] %d장 · %s" % (len(made), SHOT_OUT))
 simulation_app.close()
