@@ -99,8 +99,14 @@ DIRS = [(1, 0), (0, 1), (-1, 0), (0, -1)]
 # (이 모듈은 마스크만 만든다. 회전 대기 게이트 상수는 `isaac_drive` 에 있다.)
 
 
-def load_obstacle_mask(map_dir):
-    """원본 0.1 m 장애물 마스크 (True = 막힘). `pibt_scene.build_free` 와 같은 출처·같은 규칙."""
+def load_obstacle_mask(map_dir, aisle=True):
+    """원본 0.1 m 장애물 마스크 (True = 막힘). `pibt_scene.build_free` 와 같은 출처·같은 규칙.
+
+    ★ `aisle=False` 면 **통로 차단을 안 얹는다** — 물리 장애물만 (FMS-42).
+      통로 차단은 FMS 에서 **통행 규칙**(피커 전용 구역)이지 벽이 아니다.
+      충돌 판정은 물리 사실이어야 하므로 `prepare_contact` 가 이 쪽을 쓴다.
+      기본을 True 로 둔 것은 다른 호출자(`build` · `tools/`)의 동작을 안 바꾸려는 것이다.
+    """
     import pibt_scene as PS
     src = PS._pick(map_dir, "occupancy_grid.npy", "obstacle_mask.npy",
                    "obstacle_mask_wallA.npy")
@@ -112,7 +118,7 @@ def load_obstacle_mask(map_dir):
     else:
         m = g.astype(bool)
     cfg = getattr(PS, "_CFG", None)
-    if cfg is not None and getattr(cfg, "AISLE_BLOCK", False):
+    if aisle and cfg is not None and getattr(cfg, "AISLE_BLOCK", False):
         m = cfg.apply_aisle_block(m.copy())
     return m, os.path.basename(src)
 
@@ -161,17 +167,36 @@ def penetrate(obst, geom, r, c, h0, h1, samples=SAMPLES):
 #     거기 안 닿으면 SAT 를 아예 안 돌린다. 통로 한가운데서는 공짜다.
 
 _OBST = None            # (0.1 m bool 배열, 장애물이 있는 1 m 칸 집합, 출처)
+_ZONE = None            # 통로 차단 구역만 (0.1 m bool). 벽이 아니라 통행 규칙이다
+
+
+def zone_mask():
+    """통로 차단(피커 전용) 구역의 0.1 m 마스크. 준비 전이거나 없으면 None."""
+    return _ZONE
 
 
 def prepare_contact(geom, map_dir, verbose=True):
-    """정적 접촉 감시 준비. `setup_lifelong` 이 판마다 한 번 부른다."""
-    global _OBST
-    obst, src = load_obstacle_mask(map_dir)
+    """정적 접촉 감시 준비. `setup_lifelong` 이 판마다 한 번 부른다.
+
+    ★ **둘을 만든다** (FMS-42).
+        `_OBST`  물리 장애물만          -> 합불 기준 `static_contact_events`
+        `_ZONE`  통로 차단 구역만        -> `zone_intrusion_events`
+      예전에는 둘을 합쳐 놓고 전부 「랙 접촉」이라 불렀다. 랙에 안 닿았는데
+      닿았다고 세면 합불이 오염된다.
+    """
+    global _OBST, _ZONE
+    obst, src = load_obstacle_mask(map_dir, aisle=False)      # ★ 물리만
+    full, _ = load_obstacle_mask(map_dir, aisle=True)
+    zone = full & ~obst                                       # 통로 차단 몫
+    _ZONE = zone if bool(zone.any()) else None
     k = int(round(geom.pitch / 0.1))
     R, C = obst.shape[0] // k, obst.shape[1] // k
     hit = obst[:R * k, :C * k].reshape(R, k, C, k).any(axis=(1, 3))
     cells = frozenset((int(r), int(c)) for r, c in zip(*np.nonzero(hit)))
     _OBST = (obst, cells, src)
+    if _ZONE is not None:
+        print(f"[static] ★ 피커 구역 진입 감시도 켬 — 통로 차단 픽셀 "
+              f"{int(_ZONE.sum()):,}개 (랙과 **갈라 센다**)", flush=True)
     # ★ 이것도 **항상** 찍는다. 이 줄이 없으면 합불(`clean`)이 랙을 보고 있는지
     #   모르는 채로 「완주했다」를 쓰게 된다 — 그게 L 을 만든 이유다.
     print(f"[static] ★ 랙 접촉 감시 켬 — {src} · 장애물 칸 {len(cells):,}개",

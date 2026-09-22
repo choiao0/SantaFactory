@@ -2598,6 +2598,13 @@ class FleetStats:
     #   원인이 어느 지표에도 안 잡히니 증상 쪽을 오래 만졌다.
     static_contact_events: int = 0
     static_worst_pen: float = 0.0      # 최대 침투 [m]. 0 이면 한 번도 안 닿았다
+    # ★ 피커 전용 구역(통로 차단) 진입 — **랙과 갈라 센다** (FMS-42).
+    #   FMS 에서 통로 차단은 **통행 규칙**이지 벽이 아니다. 그걸 벽으로 세는 바람에
+    #   r13 재생 판의 「랙 접촉 593 스텝 · 58.75 mm」가 나왔는데, 실제로는 코가
+    #   피커 구역 입구에 들어간 것이고 **랙에는 안 닿았다**.
+    #   충돌이 아니므로 `clean()` 에 넣지 않는다. 다만 사람이 있는 자리라 센다.
+    zone_intrusion_events: int = 0
+    zone_worst_pen: float = 0.0
     # ★ 회전 대기 게이트 (-240). 대기 스텝 수와 **한도를 넘겨 그냥 간 횟수**.
     #   뒤엣것이 0 이 아니면 그만큼 접촉 위험을 그대로 안고 간 것이다.
     turn_body_waits: int = 0
@@ -3619,10 +3626,17 @@ class FleetController:
         try:
             import turn_sweep_mask as TSM
             pen = TSM.pose_penetration(self.g, pose[0], pose[1], pose[2])
+            # ★ 피커 구역은 **따로** 센다 (FMS-42). 벽이 아니라 통행 규칙이다.
+            _z = TSM.zone_mask()
+            zpen = (TSM.pose_penetration(self.g, pose[0], pose[1], pose[2], obst=_z)
+                    if _z is not None else 0.0)
         except Exception as e:                  # 감시가 주행을 죽이면 안 된다
             self._obst_cells = None             # 한 번 실패하면 끈다
             print(f"[static] ☹ 감시 실패 — 이후 끕니다: {e!r}")
             return
+        if zpen > 0.0:
+            self.stats.zone_intrusion_events += 1
+            self.stats.zone_worst_pen = max(self.stats.zone_worst_pen, zpen)
         if pen <= 0.0:
             return
         self.stats.static_contact_events += 1
