@@ -22,6 +22,15 @@ function placeholderFor({ estimateId, ready, verify, recommendedCount, started }
   if (!ready) {
     return { tag: 'RUNNING', label: '계산 중', live: true, text: '시뮬레이션 판정이 끝나면 권장 대수로 물리 검증을 돌립니다.' }
   }
+  // 권장 대수가 없으면 Isaac 에게 "몇 대로 재현하라" 를 말할 수 없어 서버가 요청을 거부한다.
+  // 그대로 두면 아래 "검증하고 있습니다" 로 떨어져, 시작할 수도 없는 검증이 도는 것처럼 보였다
+  if (recommendedCount == null && (!verify.status || verify.status === 'PENDING') && !verify.error) {
+    return {
+      tag: 'QUEUED', label: '대기',
+      text: '권장 대수가 없어 물리 검증을 돌릴 수 없습니다',
+      hint: ['목표를 만족하는 구성이 나오면 이 자리에서 검증을 시작할 수 있습니다.'],
+    }
+  }
   // 아직 시작 전 — 여기서 사람이 버튼을 눌러야 Isaac 이 돈다. 이 분기가 없으면 요청도 안 했는데
   // "검증하고 있습니다" 가 떠서, 10분을 기다려도 아무 일이 안 일어난다
   if (!started && recommendedCount != null && (!verify.status || verify.status === 'PENDING') && !verify.error) {
