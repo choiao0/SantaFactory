@@ -1,4 +1,4 @@
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/authContext.js'
 
 const LINKS = [
@@ -15,7 +15,19 @@ const LINKS = [
  */
 export default function Header({ sections = true }) {
   const navigate = useNavigate()
+  const { pathname } = useLocation()
   const { member, isAdmin, logout } = useAuth()
+
+  // 로고는 홈으로 가는 자리다. #top 앵커는 견적 화면에만 있어서 다른 화면에서는 눌러도
+  // 아무 일이 없었다 (S15P21A106-263). 견적 화면에서는 예전처럼 맨 위로 올린다
+  const goHome = (e) => {
+    e.preventDefault()
+    if (pathname === '/estimate') {
+      document.getElementById('top')?.scrollIntoView({ behavior: 'smooth' })
+    } else {
+      navigate('/estimate')
+    }
+  }
 
   const handleLogout = async () => {
     await logout()
@@ -24,7 +36,7 @@ export default function Header({ sections = true }) {
 
   return (
     <header className="header">
-      <a className="brand" href="#top">
+      <a className="brand" href="/estimate" onClick={goHome}>
         <img className="brand-mark" src="/santafactory-logo.png" alt="Santa Factory" width={30} height={30} />
         {/* 좁은 화면에서 이 글자만 접으려면 요소여야 한다 — 텍스트 노드는 CSS 로 못 가린다 */}
         <span className="brand-text">SANTA FACTORY</span>

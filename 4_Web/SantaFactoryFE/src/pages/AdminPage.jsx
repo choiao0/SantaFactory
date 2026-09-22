@@ -80,7 +80,7 @@ export default function AdminPage() {
   return (
     <>
       <header className="header">
-        <a className="brand" href="/admin">
+        <a className="brand" href="/estimate" onClick={(e) => { e.preventDefault(); navigate('/estimate') }}>
           <img className="brand-mark" src="/santafactory-logo.png" alt="Santa Factory" width={30} height={30} />
           <span>SANTA FACTORY</span>
           <small>ADMIN</small>
