@@ -345,10 +345,10 @@ section.step > p.desc { font-size: 18px; line-height: 1.7; max-width: 760px; mar
 /* 글자 없이 AMR 만 — 카드 테두리가 이미 "도는 중"을 말해 준다 */
 .run.RUNNING .wait { color: #fff; }
 /* 계산 중인 run — AMR 이 앞으로 나아간다. 정의도 없던 blink 애니메이션을 여기로 대체했다 */
-.run .amr-run { flex: none; display: inline-flex; line-height: 0; }
-.run .amr-run svg { animation: amr-forward 1.2s ease-in-out infinite; }
+.amr-run { flex: none; display: inline-flex; line-height: 0; }
+.amr-run svg { animation: amr-forward 1.2s ease-in-out infinite; }
 /* 주행선은 차체와 반대로 흘러야 앞으로 가는 것처럼 보인다 */
-.run .amr-run .dash { animation: amr-dash .6s linear infinite; }
+.amr-run .dash { animation: amr-dash .6s linear infinite; }
 @keyframes amr-forward {
   0%, 100% { transform: translateX(-2px); }
   55%      { transform: translateX(3px); }
@@ -358,7 +358,7 @@ section.step > p.desc { font-size: 18px; line-height: 1.7; max-width: 760px; mar
   to   { opacity: 1;  transform: translateX(-2.5px); }
 }
 @media (prefers-reduced-motion: reduce) {
-  .run .amr-run svg, .run .amr-run .dash { animation: none; }
+  .amr-run svg, .amr-run .dash { animation: none; }
 }
 .run .ghost.sm { align-self: flex-start; border-color: #a5730e; color: #ffc14d; }
 .run .ghost.sm:hover { border-color: var(--warn); }
@@ -463,12 +463,32 @@ section.step > p.desc { font-size: 18px; line-height: 1.7; max-width: 760px; mar
 
 .verify-video { display: block; width: 100%; max-height: 520px; background: #000; }
 /* 영상이 아직 없을 때 보드 안을 채운다 — 높이를 영상과 비슷하게 잡아 영상이 붙어도 화면이 덜 흔들린다 */
+/* 검증을 기다리는 자리. 움직이는 AMR(03 단계 카드와 같은 표식) 아래로 한 줄 요약과 부연을
+   세로로 쌓는다. 문구는 한글 문장이라 본문 서체를 쓴다 — 모노는 자간이 벌어져 읽기 나쁘다 */
 .verify-placeholder {
-  display: flex; align-items: center; justify-content: center; gap: 10px;
-  min-height: 260px; padding: 24px 28px; text-align: center;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px;
+  min-height: 260px; padding: 28px; text-align: center;
   background: #0d0d0d; border: 1px dashed #3a3a3a;
 }
-.verify-placeholder p { margin: 0; font: 500 14px var(--font-mono); color: #8f8f8b; letter-spacing: .03em; line-height: 1.8; }
+.verify-placeholder .amr-run { color: #6f6f6b; margin-bottom: 4px; }
+.verify-placeholder .amr-run svg { width: 86px; height: auto; }
+/* 마지막 줄만 짧게 남지 않도록 균형 잡아 끊는다 */
+.vp-text {
+  margin: 0; max-width: 34ch;
+  font: 700 18px/1.6 var(--font-sans); letter-spacing: -.01em; color: #fff;
+  text-wrap: balance;
+}
+/* 대기·실패처럼 한 줄로 알리는 상태 — 강조할 것이 없으니 옅은 모노 한 문단으로 둔다 */
+.vp-note {
+  margin: 0; max-width: 52ch;
+  font: 500 14px/1.8 var(--font-mono); color: #8f8f8b; letter-spacing: .03em;
+  text-wrap: balance;
+}
+/* 줄바꿈을 문장 단위로 직접 넣으므로 폭은 보드에 맡기고 balance 는 걸지 않는다 */
+.vp-hint {
+  margin: 0; max-width: min(100%, 620px);
+  font: 400 15px/1.8 var(--font-sans); color: #8f8f8b;
+}
 
 .paper { background: var(--white); color: var(--ink); }
 /* 위 여백은 다른 섹션의 큰 제목(section.step h2)과 같은 18px — QUOTE 만 제목이 없어
@@ -551,6 +571,12 @@ footer a:hover { color: #fff; }
 @media (max-width: 1200px) {
   .brand small { display: none; }
 }
+/* 시간대 칸은 한 블록에 입력이 둘이라 다른 입력의 절반 폭씩만 갖는다. 화면이 좁아지면 "오후 06:00"
+   + 시계 아이콘이 안 들어가 끝자리가 잘린다 — 이 구간에서는 한 줄을 통째로 쓰게 한다.
+   860px 아래는 formgrid 가 2열이 되므로 그 위로만 건다(4열을 넘기면 암시적 열이 생겨 넘친다) */
+@media (min-width: 861px) and (max-width: 1340px) {
+  .formgrid .span2:has(.timerange) { grid-column: span 4; }
+}
 @media (max-width: 1100px) {
   /* 섹션 링크가 가장 먼저 나간다 — 스크롤로도 닿지만 로그아웃은 대체 수단이 없다 */
   .header-links { display: none; }
@@ -571,12 +597,6 @@ footer a:hover { color: #fff; }
   .formgrid { grid-template-columns: 1fr; }
   .formgrid .span2 { grid-column: auto; }
   /* 여기서는 버튼만 남긴다. 누구로 보고 있는지는 전체 견적·로그아웃보다 뒤로 밀린다 */
-/* 시간대 칸은 한 블록에 입력이 둘이라 다른 입력의 절반 폭씩만 갖는다. 화면이 좁아지면 "오후 06:00"
-   + 시계 아이콘이 안 들어가 끝자리가 잘린다 — 이 구간에서는 한 줄을 통째로 쓰게 한다.
-   860px 아래는 formgrid 가 2열이 되므로 그 위로만 건다(4열을 넘기면 암시적 열이 생겨 넘친다) */
-@media (min-width: 861px) and (max-width: 1340px) {
-  .formgrid .span2:has(.timerange) { grid-column: span 4; }
-}
   .header-account .mono.dim { display: none; }
 }
 @media (max-width: 440px) {
@@ -668,6 +688,10 @@ footer a:hover { color: #fff; }
 
 /* 역할 표식. .status 를 빌려 쓰지 않는다 — 견적 상태와 의미가 달라서, 상태 색이 바뀔 때
    같이 흔들리면 안 된다 */
+/* 띄우기(float)로 두면 회사명 줄뿐 아니라 그 아래 연락처 줄까지 폭을 뺏겨 접힌다
+   (관리자 카드만 두 줄이 됐다) — 카드 모서리에 고정해 글줄에서 빼낸다 */
+.admin-card:has(.admin-badge) { position: relative; }
+.admin-card:has(.admin-badge) h4 { padding-right: 78px; }
 .admin-badge {
   position: absolute; top: 20px; right: 22px;
   display: inline-flex; align-items: center;
@@ -695,7 +719,3 @@ footer a:hover { color: #fff; }
 .admin-card .status.FAILED, .admin-card .status.TIMEOUT, .admin-card .status.PARTIAL {
   color: #b8860b; border-color: var(--warn); background: rgba(224, 160, 30, .16);
 }
-/* 띄우기(float)로 두면 회사명 줄뿐 아니라 그 아래 연락처 줄까지 폭을 뺏겨 접힌다
-   (관리자 카드만 두 줄이 됐다) — 카드 모서리에 고정해 글줄에서 빼낸다 */
-.admin-card:has(.admin-badge) { position: relative; }
-.admin-card:has(.admin-badge) h4 { padding-right: 78px; }
