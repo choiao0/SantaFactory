@@ -232,6 +232,7 @@ _rep_annot = None
 _rep_annot2 = None          # 측면. None 이면 상단만 찍는다
 _shot_n, _shot_fail = 0, 0
 _side_n = 0                 # 측면 장수 — 상단과 따로 센다 (경로가 다르다)
+_side_fail = 0              # 측면 저장 실패 누적 (상단처럼 몇 번은 참는다)
 
 
 def _attach_side():
@@ -268,17 +269,43 @@ def _attach_side():
         return None
 
 
+SIDE_FAIL_MAX = int(os.environ.get("PIBT_SIDE_FAIL_MAX", "") or 20)
+
+
 def _save_side(sim_t):
-    """측면 한 장. 실패하면 **측면만** 끈다 — 백엔드가 기다리는 것은 상단이다."""
-    global _rep_annot2, _side_n
+    """측면 한 장. 실패가 `SIDE_FAIL_MAX` 회 쌓이면 **측면만** 끈다.
+
+    ☹ 2026-09-23: 처음엔 **첫 실패에 바로 껐다.** 그런데 리플리케이터
+      annotator 는 render product 를 붙인 직후 몇 프레임 동안 버퍼가 비어 있고
+      (`rgb 버퍼가 비었다`), 그 한 번에 측면이 영영 꺼졌다 — `side1` 실측에서
+      「촬영 ON (측면)」이 찍혔는데도 0 장이 나온 이유다.
+
+      상단 경로는 같은 상황을 이미 관용한다 — `live_pibt._shot` 이 20회까지
+      참고 그제서야 끈다. **같은 관용으로 맞춘다.**
+
+    ★ 여기서 20회를 다 쓰고도 안 되면 그건 지연이 아니라 **구조 문제**다
+      (뷰포트가 있는 판에서 리플리케이터가 데이터를 못 받는 것). 그때는 마지막
+      줄이 그렇게 말하므로 다음 판을 안 태우고 바로 안다.
+    """
+    global _rep_annot2, _side_n, _side_fail
     if _rep_annot2 is None:
         return
     try:
         _save_one(_rep_annot2, SHOTS_SIDE, sim_t)
         _side_n += 1
     except Exception as e:                                # noqa: BLE001
-        print(f"[hl] ☹ 측면 저장 실패 — 측면만 끈다: {e!r}")
-        _rep_annot2 = None
+        _side_fail += 1
+        if _side_fail <= 3:
+            print(f"[hl] 측면 저장 실패 {_side_fail}회 (계속 시도): {e!r}")
+        if _side_fail >= SIDE_FAIL_MAX:
+            print(f"[hl] ☹ 측면 저장이 {SIDE_FAIL_MAX}회 실패 — 측면을 끈다. "
+                  f"마지막: {e!r}")
+            if _side_n == 0:
+                print("[hl]   ★ 한 장도 못 받았다 = 지연이 아니라 구조 문제다. "
+                      "뷰포트가 있는 판에서는 리플리케이터 대신 **두 번째 "
+                      "뷰포트**(create_viewport_window + capture_viewport_to_file, "
+                      "상단이 쓰는 그 API)로 가야 한다.")
+            _rep_annot2 = None
 
 if SHOTS:
     os.makedirs(SHOTS, exist_ok=True)
@@ -312,7 +339,10 @@ if SHOTS:
     #   뷰포트든 리플리케이터든 같은 자리다 — `_attach_side` 머리말 참조.
     if _cap:
         _rep_annot2 = _attach_side()
-        _render_once()                      # 측면 버퍼도 첫 프레임에서 생긴다
+        # ★ 붙인 직후 몇 프레임을 **버린다.** annotator 는 첫 렌더에 버퍼가
+        #   안 차는 일이 흔하다 (`_save_side` 머리말). 주행 전이라 공짜다.
+        for _ in range(3 if _rep_annot2 is not None else 1):
+            _render_once()
         _sp = SHOT_STRIDE * int(os.environ.get("PIBT_SHOT_FPS", "30")) / 60.0
         print(f"[hl]   조립 시 {_sp:.1f}배속 · 렌더 호출이 1/{SHOT_STRIDE} 로 준다")
 
@@ -463,10 +493,9 @@ if _cap:
     # 측면 — 켠 적이 있으면 반드시 장수를 낸다. 0 장이면 그 자리에서 보이게 한다
     # (백엔드는 `_side` 키가 없으면 **오류 없이** 버튼만 안 띄운다).
     if SHOTS_SIDE and CAMERA_SIDE:
-        print(f"[hl] 촬영(측면) {_side_n:,}장 -> {SHOTS_SIDE}"
+        print(f"[hl] 촬영(측면) {_side_n:,}장 · 실패 {_side_fail}회 -> {SHOTS_SIDE}"
               + ("" if _side_n else
-                 "   ★ 한 장도 안 나왔다 — 카메라 "
-                 f"{CAMERA_SIDE} 가 씬에 있는지 보라"))
+                 f"   ★ 한 장도 안 나왔다 (카메라 {CAMERA_SIDE})"))
 try:
     quit_fn(0)                             # 자세 기록 저장 (PIBT_RECORD 가 경로일 때)
 except Exception as e:
