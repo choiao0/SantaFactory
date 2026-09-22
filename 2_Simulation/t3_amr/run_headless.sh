@@ -55,9 +55,6 @@ export PIBT_MODE="${PIBT_MODE:-lifelong}"
 export PIBT_SEED="${PIBT_SEED:-104}"
 export PIBT_PITCH="${PIBT_PITCH:-1.0}"
 
-# 주행 스위치 한 벌 — run_record.sh 와 **같은 파일**을 읽는다.
-#   pitch 를 정한 뒤라야 배너가 그것도 찍는다.
-source "$W_DIR/switches.sh"
 
 # ⑤ 준비 프레임 상한 — 헤드리스는 프레임이 빨라 12,000 이 4초다
 export PIBT_HL_SETUP_CAP="${PIBT_HL_SETUP_CAP:-400000}"
@@ -67,6 +64,23 @@ export PIBT_SHOTS=""
 
 TAG="${TAG:-$(date +%Y%m%d_%H%M%S)}"
 LOG="$LOGS/hl_$TAG.log"
+
+# ★★ **여기서부터 모든 출력이 로그에 남는다** (2026-09-22).
+#
+#   예전 마지막 줄이 `exec python ... | tee "$LOG"` 였다. 그러면 tee 가
+#   **파이썬 출력만** 받는다 — 그 앞의 echo 는 전부 터미널로만 간다.
+#   그래서 「이 판이 무슨 설정이었나」가 로그에 안 남았고, 2026-09-22 에
+#   그걸 로그 본문에서 되짚느라 판을 세 번 헛돌렸다.
+#
+#   stdout 을 먼저 tee 로 바꿔 두면 **이 줄 아래 전부**가 남는다.
+#   run_record.sh 는 이 문제가 없다 — 백엔드가 자식 stdout 을 파일로
+#   받고(edge/recorder.py:211), 손으로 돌릴 때는 터미널에 보인다.
+mkdir -p "$LOGS"
+exec > >(tee "$LOG") 2>&1
+
+# 주행 스위치 한 벌 — run_record.sh 와 **같은 파일**을 읽는다.
+#   pitch 를 정한 뒤라야 배너가 그것도 찍고, tee 뒤라야 로그에 남는다.
+source "$W_DIR/switches.sh"
 
 if [ ! -f "$PIBT_STAGE" ]; then
     echo "★ 씬이 없습니다: $PIBT_STAGE"
@@ -86,5 +100,5 @@ fi
 echo "  로그    $LOG"
 echo "════════════════════════════════════════════════════"
 
-mkdir -p "$LOGS"
-exec python runners/headless_pibt.py 2>&1 | tee "$LOG"
+# stdout 은 위에서 이미 tee 로 갈아 뒀다 — 여기서 다시 파이프하면 안 된다.
+exec python runners/headless_pibt.py
