@@ -1,4 +1,4 @@
-import { useRef } from 'react'
+import { useRef, useState } from 'react'
 import { formatWon } from '../utils/format.js'
 
 const MIN = 1
@@ -7,7 +7,7 @@ const TICKS = [1, 4, 8, 12, 16, 20, 24, 28]
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v))
 
-export default function FleetStep({ fleet, onChange, model, requesting, error, onRequest }) {
+export default function FleetStep({ fleet, onChange, model, requesting, error, missing = [], onRequest }) {
   const trackRef = useRef(null)
   const dragging = useRef(null)
 
@@ -67,7 +67,18 @@ export default function FleetStep({ fleet, onChange, model, requesting, error, o
     dragging.current = null
   }
 
-  const canRequest = Boolean(model) && counts.length > 0 && !requesting
+  // 안 채운 칸이 있으면 눌러도 서버 검증에서 막힌다. 다만 disabled 로 잠그면 클릭 자체가 안 와서
+  // 왜 못 누르는지 말해 줄 기회가 없다 — 보기에만 잠그고(aria-disabled) 눌렀을 때 이유를 띄운다
+  const [blockedNotice, setBlockedNotice] = useState(false)
+  const blocked = !model || counts.length === 0 || missing.length > 0
+
+  const handleRequest = () => {
+    if (blocked) {
+      setBlockedNotice(true)
+      return
+    }
+    onRequest()
+  }
 
   return (
     <section className="step section-dark reveal" id="s2">
@@ -156,9 +167,18 @@ export default function FleetStep({ fleet, onChange, model, requesting, error, o
         </p>
 
         <div className="runcta">
-          <button type="button" className="button" disabled={!canRequest} onClick={onRequest}>
+          <button
+            type="button"
+            className="button"
+            aria-disabled={blocked}
+            disabled={requesting}
+            onClick={handleRequest}
+          >
             {requesting ? '요청 중…' : `견적 요청 — ${counts.length}회 ↗`}
           </button>
+          {blockedNotice && blocked && (
+            <span className="form-hint">운영 조건에 미입력한 사항들이 있습니다.</span>
+          )}
           {error && <span className="form-error">요청 실패: {error}</span>}
         </div>
       </div>

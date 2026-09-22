@@ -82,7 +82,7 @@ class EstimateEventStreamTest {
 
     private static EstimateDetailResponse detail(EstimateStatus status) {
         return new EstimateDetailResponse(77L, status, "iw.hub", 95.0, 80.0, 300_000_000L,
-                null, null, null, LocalDateTime.now(), null, null, null, List.of(run(1, RunStatus.QUEUED)), null);
+                null, null, null, LocalDateTime.now(), null, null, null, null, List.of(run(1, RunStatus.QUEUED)), null);
     }
 
     private static EstimateDetailResponse.Run run(int amrCount, RunStatus status) {

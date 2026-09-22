@@ -182,6 +182,13 @@ export PIBT_SEED
 export PIBT_FRONT_RULE="${PIBT_FRONT_RULE:-4}"
 export PIBT_PITCH="${PIBT_PITCH:-1.0}"
 
+# ★ 주행 스위치 한 벌 (2026-09-22). **백엔드가 띄우는 것이 이 파일이다**
+#   (edge/recorder.py:104). 여기 안 걸면 백엔드 주행만 코드 기본값으로
+#   도는데, 공차 0.05 는 isaac_drive.py:1633 이 「5판 중 2판이 차체
+#   접촉으로 중단됐다」고 적어 둔 값이다.
+#   ★ pitch·앞 칸 규칙을 **정한 뒤**에 읽는다 — 배너가 그 둘도 찍는다.
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/switches.sh"
+
 # [patch_record_n] 계획과 대수가 일치해야 한다 — 계획 디렉터리 이름에 대수가 박혀 있다.
 #   안 맞으면 35초 부팅하고 계획 로드까지 간 뒤에야 죽는다. 0초에 막는다.
 # [patch_record_n_fix] 계획 디렉터리는 0 패딩이다 — pibt_h.py 의 f"fleet_{n:02d}"

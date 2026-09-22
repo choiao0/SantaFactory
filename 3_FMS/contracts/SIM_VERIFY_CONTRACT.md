@@ -80,7 +80,10 @@ DES 요청의 `horizon_s · shifts · inbound_gap_s · outbound_gap_s · warehou
            "lead_time_mean_s": 61.2, "lead_time_p90_s": 90.0, "queue_time_mean_s": 3.1, "throughput_orders_per_h": 274.6,
            "throughput_tasks_per_h": 335.6, "amr_utilization": 0.71, "conflict_wait_ratio": 0.02, "distance_total_m": 140,
            "charge_downtime_s": 0 },       // fms-core 의 kpi_summary(MQTT_CONTRACT §4.4) — DES 견적 워커 to_kpi 와 같은 14개 키. 분모(makespan_s) = 실제로 돈 커널 틱 수. fms-core 가 없거나 플래너 전에 끝났으면 null
-  "artifacts": { "video": "verify_77_n3/demo_verify_77_n3.mp4" },
+  "artifacts": {                        // 시점별 mp4. video 는 상단 시점(기존 키 그대로), video_side 는 추가
+    "video":      "verify_77_n3/demo_verify_77_n3.mp4",
+    "video_side": "verify_77_n3/demo_verify_77_n3_side.mp4"
+  },
                                         // (-215/-233) 러너가 Runner/VideoUrl 로 준 mp4 의 **객체 키** `<run_id>/<파일>` — URL 이 아니고 버킷 이름도 안 붙는다(버킷은 양쪽 설정).
                                         // 버킷은 비공개, 화면용 서명 URL 은 BE 가 조회 시 만든다(§7). 영상이 없으면 artifacts 는 null. replay·heatmap 키는 예정
   "source_run_id": "est_77_n3", "estimate_id": 77

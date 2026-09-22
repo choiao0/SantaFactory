@@ -1,10 +1,15 @@
 import { useState } from 'react'
 import { requestVerify } from '../api/estimates.js'
 
-const BUTTON_LABEL = { idle: '물리 검증 시작 (임시)', loading: '요청 중…', done: '검증 요청됨', error: '물리 검증 시작 (임시)' }
+const BUTTON_LABEL = { idle: '물리 검증 시작', loading: '요청 중…', done: '검증 요청됨', error: '다시 시도' }
 
-// 임시 컴포넌트 — 물리 검증 자동 트리거가 생기면 이 파일과 App.jsx 의 사용 지점을 지운다.
-export default function VerifyTrigger({ estimateId, recommendedCount }) {
+/**
+ * 물리 검증을 사람이 시작한다 (S15P21A106-265 에서 수동 유지로 결정).
+ *
+ * <p>자동 발행을 안 하는 이유 — Isaac 은 한 번에 한 건씩 약 10분을 문다. 견적이 끝날 때마다
+ * 자동으로 걸면 큐가 그대로 쌓여 뒤 요청이 몇십 분씩 밀린다. 언제 돌릴지는 사람이 정한다.
+ */
+export default function VerifyTrigger({ estimateId, recommendedCount, onStarted }) {
   const [state, setState] = useState('idle') // idle | loading | done | error
   const [error, setError] = useState(null)
 
@@ -16,6 +21,7 @@ export default function VerifyTrigger({ estimateId, recommendedCount }) {
     try {
       await requestVerify(estimateId)
       setState('done')
+      onStarted?.()
     } catch (e) {
       setState('error')
       setError(e.message)
@@ -23,11 +29,11 @@ export default function VerifyTrigger({ estimateId, recommendedCount }) {
   }
 
   return (
-    <section className="step section-dark">
+    <>
       <button type="button" className="button" onClick={onClick} disabled={state === 'loading' || state === 'done'}>
         {BUTTON_LABEL[state]}
       </button>
       {state === 'error' && <p className="form-error">{error}</p>}
-    </section>
+    </>
   )
 }

@@ -36,14 +36,14 @@ class VerifyEventStreamTest {
         assertThat(emitter).isNotNull();
         assertThat(stream.subscriberCount(77L)).isEqualTo(1);
 
-        stream.onEstimateVerified(new EstimateVerified(77L, "done", "https://minio/videos/77.mp4", null));
+        stream.onEstimateVerified(new EstimateVerified(77L, "done", "https://minio/videos/77.mp4", null, null));
         assertThat(stream.subscriberCount(77L)).isZero();
     }
 
     @Test
     void an_estimate_that_already_has_a_video_is_closed_right_after_the_snapshot() {
         Estimate estimate = Estimate.open(null, "iw.hub", 95.0, 80.0, 300_000_000L);
-        estimate.applyVerifyVideo("verify_78/demo.mp4");
+        estimate.applyVerifyVideo("verify_78/demo.mp4", null);
         when(estimateRepository.findById(78L)).thenReturn(Optional.of(estimate));
 
         stream.subscribe(78L);
@@ -57,7 +57,7 @@ class VerifyEventStreamTest {
         when(estimateRepository.findById(79L)).thenReturn(Optional.of(Estimate.open(null, "iw.hub", 95.0, 80.0, 300_000_000L)));
         stream.subscribe(79L);
 
-        stream.onEstimateVerified(new EstimateVerified(80L, "done", "https://minio/videos/80.mp4", null));
+        stream.onEstimateVerified(new EstimateVerified(80L, "done", "https://minio/videos/80.mp4", null, null));
 
         assertThat(stream.subscriberCount(79L)).isEqualTo(1);
     }
