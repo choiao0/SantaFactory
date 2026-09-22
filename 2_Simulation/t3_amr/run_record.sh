@@ -112,7 +112,12 @@ MP4="$OUT/demo_$TAG.mp4"
 #   띄운다. 그래서 **이름만** 지키면 되고 결과 페이로드는 안 바뀐다.
 #   Cam_Overview 는 남쪽 62 m 에서 비스듬히 본다 — 위치와 높이가 한
 #   화면에 들어와 시연용으로 맞다 (build_amr_scene_v2.py:288).
-SIDE_CAM="${SIDE_CAM:-/World/Cameras/Cam_Overview}"
+# ★ 기본은 **한 대를 대각선 뒤에서** 잡는 근접 화면이다 (2026-09-23).
+#   `Cam_Overview`(창고 전체 조망)로 시작했는데, 1.5 m 짜리 AMR 이 점이라
+#   선반의 상자가 안 보였다. `Cam_Spot` 을 `PIBT_SIDE_FOLLOW` 로봇 뒤에 붙여
+#   따라다니게 한다 (`headless_pibt._side_track`).
+#   조망으로 되돌리려면:  SIDE_CAM=/World/Cameras/Cam_Overview PIBT_SIDE_FOLLOW=-1
+SIDE_CAM="${SIDE_CAM:-/World/Cameras/Cam_Spot}"
 SHOTS_SIDE="$OUT/shots_${TAG}_side"
 MP4_SIDE="$OUT/demo_${TAG}_side.mp4"
 MYLOG="$LOGS/record_$TAG.log"
@@ -323,6 +328,11 @@ if [ "$CAPTURE" = "0" ] || [ -z "$SIDE_CAM" ] || [ "${HEADLESS:-0}" != "1" ]; th
 else
     export PIBT_SHOTS_SIDE="$SHOTS_SIDE"
     export PIBT_CAMERA_SIDE="$SIDE_CAM"
+    # 근접 화면이라 조망만큼 클 필요가 없다. **복사량이 곧 비용**이다 —
+    # 1280x720 두 시점이 28 ms/step(배속 0.60)이었다 (2026-09-23 실측).
+    export PIBT_SIDE_RES="${PIBT_SIDE_RES:-960x540}"
+    export PIBT_SIDE_FOLLOW="${PIBT_SIDE_FOLLOW:-0}"
+    export PIBT_SIDE_DIST="${PIBT_SIDE_DIST:-6}"
 fi
 export PIBT_SHOT_STRIDE="$SHOT_STRIDE"
 export PIBT_SHOT_FPS="$SHOT_FPS"

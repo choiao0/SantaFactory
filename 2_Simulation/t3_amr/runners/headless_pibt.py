@@ -259,10 +259,12 @@ def _attach_side():
            .set_extension_enabled_immediate("omni.replicator.core", True)
         import omni.replicator.core as rep                # noqa: E402
         os.makedirs(SHOTS_SIDE, exist_ok=True)
-        _w, _h = (int(x) for x in SHOT_RES.split("x"))
+        _w, _h = (int(x) for x in SIDE_RES.split("x"))
         annot = rep.AnnotatorRegistry.get_annotator("rgb")
         annot.attach([rep.create.render_product(CAMERA_SIDE, (_w, _h))])
-        print(f"[hl] 촬영 ON (측면) {SHOTS_SIDE} · 카메라 {CAMERA_SIDE}")
+        print(f"[hl] 촬영 ON (측면) {SHOTS_SIDE} · 카메라 {CAMERA_SIDE} · {_w}x{_h}"
+              + (f" · 로봇 {SIDE_FOLLOW} 추종 {SIDE_DIST:g}m" if SIDE_FOLLOW >= 0
+                 else " · 고정"))
         return annot
     except Exception as e:                                # noqa: BLE001
         print(f"[hl] ☹ 측면 촬영을 못 켠다 — 상단만 찍는다: {e!r}")
@@ -270,6 +272,68 @@ def _attach_side():
 
 
 SIDE_FAIL_MAX = int(os.environ.get("PIBT_SIDE_FAIL_MAX", "") or 20)
+
+# ★★ 측면은 **AMR 한 대를 대각선 뒤에서** 잡는다 (2026-09-23).
+#
+#   처음엔 `Cam_Overview`(창고 전체 조망)를 썼는데 요청은 「한 대의 대각 측면」
+#   이었다. 조망으로는 1.5 m 짜리 AMR 이 점이라 선반의 상자가 안 보인다.
+#
+#   고정 카메라(`Cam_Spot`)로는 **로봇이 그 자리를 지날 때만** 잡힌다 — 빈
+#   통로가 찍힌 영상이 백엔드로 올라갈 수 있다. 그래서 매 캡처마다 카메라를
+#   대상 로봇 뒤로 옮긴다.
+#
+#       PIBT_SIDE_FOLLOW   따라갈 로봇 번호. 비우거나 -1 이면 안 옮긴다(고정)
+#       PIBT_SIDE_DIST     거리 [m]
+#       PIBT_SIDE_SIDE     좌/우  (-1 왼쪽 · +1 오른쪽)
+_sf = (os.environ.get("PIBT_SIDE_FOLLOW", "") or "0").strip()
+SIDE_FOLLOW = int(_sf) if _sf.lstrip("-").isdigit() else 0
+SIDE_DIST = float(os.environ.get("PIBT_SIDE_DIST", "") or 6.0)
+SIDE_LR = 1.0 if (os.environ.get("PIBT_SIDE_SIDE", "") or "-1").strip() != "-1" else -1.0
+# 근접 화면이라 조망만큼 클 필요가 없다. **복사량이 곧 비용**이다 —
+# 리플리케이터는 텍스처를 호스트로 직접 복사하고(Kit 이 그렇게 경고한다),
+# 1280x720 두 시점이 28 ms/step(배속 0.60)이었다.
+SIDE_RES = (os.environ.get("PIBT_SIDE_RES", "") or "960x540").lower()
+_side_cam_warned = False
+
+
+def _side_track(fleet_):
+    """측면 카메라를 대상 로봇의 **대각선 뒤 위**로 옮긴다.
+
+    실패해도 주행을 죽이지 않는다 — 한 번만 알리고 그 뒤로 조용히 넘어간다.
+    카메라가 안 움직이면 마지막 자리에 머물 뿐이다.
+    """
+    global _side_cam_warned
+    if SIDE_FOLLOW < 0 or _rep_annot2 is None or not CAMERA_SIDE:
+        return
+    try:
+        drv = fleet_.drivers[SIDE_FOLLOW]
+        x, y, yaw = drv.axle_pose()
+        import math as _m
+        from pxr import Gf, UsdGeom                      # noqa: E402
+        import omni.usd                                  # noqa: E402
+        d = SIDE_DIST
+        fx, fy = _m.cos(yaw), _m.sin(yaw)
+        # 뒤로 0.75d, 옆으로 0.5d, 높이 0.55d — build_amr_scene_v2.look_at 과 같은 비율
+        ex = x - 0.75 * d * fx - 0.5 * d * (-fy) * SIDE_LR
+        ey = y - 0.75 * d * fy - 0.5 * d * (fx) * SIDE_LR
+        ez = 0.55 * d
+        tgt = Gf.Vec3d(x, y, 0.75)                       # 선반 중간 높이 — 상자가 화면에
+        eye = Gf.Vec3d(ex, ey, ez)
+        f = (tgt - eye).GetNormalized()
+        r = Gf.Cross(f, Gf.Vec3d(0, 0, 1)).GetNormalized()
+        u = Gf.Cross(r, f)
+        prim = omni.usd.get_context().get_stage().GetPrimAtPath(CAMERA_SIDE)
+        if not prim or not prim.IsValid():
+            raise RuntimeError(f"카메라 prim 이 없다: {CAMERA_SIDE}")
+        xf = UsdGeom.Xformable(prim)
+        xf.ClearXformOpOrder()
+        xf.AddTransformOp().Set(Gf.Matrix4d(
+            r[0], r[1], r[2], 0, u[0], u[1], u[2], 0,
+            -f[0], -f[1], -f[2], 0, eye[0], eye[1], eye[2], 1))
+    except Exception as e:                               # noqa: BLE001
+        if not _side_cam_warned:
+            _side_cam_warned = True
+            print(f"[hl] ☹ 측면 카메라 추종 실패 — 고정 화각으로 간다: {e!r}")
 
 
 def _save_side(sim_t):
@@ -452,6 +516,8 @@ try:
         #     그것은 비동기라 **다음 렌더 프레임에 기록된다** — 여기 렌더가 그
         #     프레임이다. 이 호출이 없으면 예약만 쌓이고 파일은 안 생긴다.
         if _cap and state["n"] % SHOT_STRIDE == 0:
+            # ★ 카메라를 **렌더 전에** 옮긴다 — 그래야 이 프레임에 반영된다.
+            _side_track(fleet)
             _render_once()
             # 상단 — 뷰포트면 live_pibt 가 자기 틱에서 찍는다 (여기서는 안 한다).
             if _cap == "replicator":
