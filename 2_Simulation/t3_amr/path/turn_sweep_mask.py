@@ -55,7 +55,14 @@ import os
 
 import numpy as np
 
-TURN_SWEEP_ON = os.environ.get("PIBT_TURN_SWEEP", "0") not in ("0", "", "no", "off")
+# ★★ **기본 켜짐** (2026-09-22, FMS 답신 ②). 예전 기본은 "0" 이었다.
+#   스위치를 셸에서 손으로 붙여야 켜지는데 `report()` 가 그 여부를 안
+#   남겨서, **꺼진 채 돈 판을 나중에 못 가린다.** 같은 자리에서
+#   `SWING_HARD` 가 세 판을 날렸다 (-240).
+#   FMS 쪽은 exact 기본에 마스크가 늘 붙는다 — 그쪽에 맞춘다.
+#   ☹ 공짜가 아니다. 처리량 **−20 %** 다 (2026-09-19 실측). 끄려면
+#     `PIBT_TURN_SWEEP=0`, 그러면 `report()` 의 `turn_sweep` 이 0 이다.
+TURN_SWEEP_ON = os.environ.get("PIBT_TURN_SWEEP", "1") not in ("0", "", "no", "off")
 BAN_MM = float(os.environ.get("PIBT_TURN_SWEEP_MM", "0"))
 SAMPLES = int(os.environ.get("PIBT_TURN_SWEEP_SAMPLES", "48"))
 # ★★ 마스크 여유 (M′, FMS-32 §2). **기본 0 이다 — 아직 안 맞췄다.**
@@ -354,6 +361,20 @@ def apply(free, geom, map_dir, verbose=True):
     _APPLIED = int((~m).sum())
     print(f"[turn_sweep] ★ 계획기에 걸었다 — 회전 {_APPLIED:,}건 금지 "
           f"(PIBT_TURN_SWEEP=1 · 문턱 {BAN_MM:.0f} mm)", flush=True)
+    # ★★ 궤적 재생 판에서는 이 줄이 **거짓말이 된다** (2026-09-22).
+    #
+    #   `live_pibt` 는 씬 준비(`setup_lifelong`)를 **먼저** 하고 그 다음에
+    #   `PIBT_TRAJ` 분기로 들어간다. 그래서 궤적을 재생하는 판도 마스크를
+    #   굽고 이 줄을 찍는데, **그 판은 계획기를 안 쓴다.** 마스크는 걸려
+    #   있지만 아무것도 안 막는다.
+    #
+    #   기본이 꺼짐이던 때는 이 줄이 안 나와서 문제가 안 됐다. 기본을 켜짐으로
+    #   바꾼 순간(FMS 답신 ②) 이 줄이 **「마스크가 작동했다」로 오독된다** —
+    #   없애려던 것과 똑같은 종류의 거짓 신호다. 그래서 같이 찍는다.
+    if (os.environ.get("PIBT_TRAJ", "") or "").strip():
+        print("[turn_sweep] ☹ 그런데 PIBT_TRAJ 가 있다 — **이 판은 계획을 "
+              "하지 않는다.** 마스크는 구웠지만 아무것도 안 막는다. "
+              "궤적의 회전은 그쪽 계획이 낸 그대로다", flush=True)
     return m
 
 

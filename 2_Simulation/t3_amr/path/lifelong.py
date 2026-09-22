@@ -828,8 +828,17 @@ class Kernel(object):
         """`run_lifelong` 이 info 에 합친다. 존이 꺼져 있으면 한 줄만."""
         zs = self.zone_stats
         # ★ 존을 꺼도 `guard_flipped` 은 낸다 — FMS 패리티 지표라 판마다 필요하다.
+        # ★ 마스크가 실제로 걸렸나 (2026-09-22, FMS 답신 ②). **0 이면 안 걸린
+        #   판이다.** 스위치만 보면 안 된다 — 맵을 못 읽어 조용히 빈 마스크가
+        #   될 수도 있다. `_APPLIED` 는 실제로 금지한 회전 수라 그걸 가른다.
+        try:
+            import turn_sweep_mask as _TSM
+            _sweep = int(_TSM._APPLIED)
+        except Exception:                      # 모듈이 없어도 report 는 살아야 한다
+            _sweep = 0
         g = {"guard_flipped": self.guard_flipped, "drop_guard": DROP_GUARD,
-             "pair_blocked": self.pair_blocked, "turn_pair": TURN_PAIR}
+             "pair_blocked": self.pair_blocked, "turn_pair": TURN_PAIR,
+             "turn_sweep": _sweep}
         if not self.zone:
             return {"zone": False, **g}
         occ = zs["occ"]

@@ -824,18 +824,46 @@ def _fms_headings(free, homes, n):
 
 
 def _fms_mask(free, fms_map, pitch, on, diag, verbose):
-    """마스크도 그쪽 것 — 여유 0.05 · 0.05 m 점 표본 · 1도 간격 (M′ 이 여기서 닫힌다)."""
+    """마스크도 그쪽 것 — 여유 0.05 · 0.05 m 점 표본 · 1도 간격 (M′ 이 여기서 닫힌다).
+
+    ☹☹ **이 경로가 조용했다** (2026-09-22). 둘이 겹쳐서 났다.
+
+      ① `live_pibt` 는 `setup_lifelong(..., verbose=False)` 로 부른다.
+         그래서 아래 print 가 **실주행에서 한 번도 안 찍혔다.**
+      ② `turn_sweep_mask._APPLIED` 를 안 건드렸다. `report()` 가 그걸 보므로
+         **마스크가 걸렸는데도 `turn_sweep: 0`** 으로 나온다.
+
+    그래서 로그 145판을 「`[turn_sweep] 계획기에 걸었다` 가 있나」로 훑었더니
+    FMS 격자 판이 전부 「없음」으로 나왔고, **우리가 그걸 「마스크 안 걸림」으로
+    읽었다.** 실제로는 그쪽 마스크가 걸려 있었다 — 구별이 안 됐다.
+
+    `turn_sweep_mask.apply` 가 같은 이유로 이미 「verbose 와 무관하게 항상
+    찍는다」로 고쳐져 있었다(-240). 이쪽만 안 따라왔다. 맞춘다.
+
+    ☹ 금지 **건수**는 우리 경로와 기준이 다르다 (그쪽은 (H,W,4,4) 전체, 우리는
+      인접 헤딩 쌍만 채운다). 판끼리 비교할 때는 **비율**을 봐야 한다.
+    """
     from turn_sweep_mask import TURN_SWEEP_ON as TURN_SWEEP
     if not TURN_SWEEP:
+        print("[scene] ☹ FMS 회전 마스크 **안 걸었다** (PIBT_TURN_SWEEP=0)",
+              flush=True)
         return
     import map_loader as ML
     import pibt.geometry as _geo
     mask = ML.turn_mask(fms_map, ML.ROBOT_DIMS, _geo.FOOTPRINT_MARGIN_M)
     _geo.configure(turn_mask=mask, front_swing=on, front_diag=diag,
                    robot_dims=ML.ROBOT_DIMS, pitch=pitch)
-    if verbose:
-        print(f"[scene] ★★ FMS 회전 마스크 · 여유 {_geo.FOOTPRINT_MARGIN_M} m "
-              f"· 금지 비율 {ML.masked_turn_ratio(free, mask) * 100:.2f} %")
+    # ★ `report()` 와 로그가 같은 값을 보게 한다.
+    import numpy as _np
+    import turn_sweep_mask as _TSM
+    _TSM._APPLIED = int((~_np.asarray(mask)).sum())
+    try:
+        ratio = f" · 금지 비율 {ML.masked_turn_ratio(free, mask) * 100:.2f} %"
+    except Exception as e:                      # 비율을 못 재도 걸린 것은 걸린 것
+        ratio = f" · 비율 못 쟀다: {e!r}"
+    # ★ `verbose` 와 무관하게 **항상** 찍는다 — 위 머리말이 이유다.
+    print(f"[scene] ★★ FMS 회전 마스크를 걸었다 — 회전 {_TSM._APPLIED:,}건 금지 "
+          f"· 여유 {_geo.FOOTPRINT_MARGIN_M} m{ratio}", flush=True)
 
 
 def _fms_stations(st_cell):
