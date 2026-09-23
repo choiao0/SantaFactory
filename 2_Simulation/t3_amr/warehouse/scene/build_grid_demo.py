@@ -46,8 +46,8 @@
     follow      앞뒤로 한 칸 간격. 칸은 안 겹치는데 **차체가 500 mm 겹친다**
     rack        옆 칸이 랙. 정중앙에서 돌려도 앞 모서리가 **59 mm** 들어간다
     turn        옆 칸에 남이 있는데 회전. 뒤 모서리가 **580 mm** 파고든다
-    accel       계획(등속)과 실제(칸마다 정지)를 나란히. 3칸에 3.33 s 대 8.35 s
-    decel       v_max 에서 제동. 표시한 자리를 **675 mm** 지나쳐 선다
+    accel       계획(등속)과 실제(칸마다 정지)를 나란히. 3칸에 3.33 s 대 6.71 s
+    decel       v_max 에서 제동. 표시한 자리를 **506 mm** 지나쳐 선다
     slip        A3#253 의 그 밀림. 축이 제자리에 안 남고 **324 mm** 끌려간다
 
     ★ accel·decel 은 기하가 아니라 **운동**이라 `--video` 라야 뜻이 있다.
@@ -109,6 +109,32 @@ if A.video:
     A.shoot = True
 
 # ── 기하 계산 — 그리기 전에 숫자부터 낸다 ────────────────────────────
+def _live_geom():
+    """★ 주행이 **실제로 쓰는** 상수를 상류에서 읽는다 (2026-09-23 수정).
+
+    처음엔 `isaac_drive.RobotGeom` 의 dataclass 기본값 `a_lin=0.60` 을 베껴
+    썼다. 그런데 주행은 그 기본값으로 안 돈다 — `pibt_scene.make_geom()` 이
+    `GEOM_KW` 를 풀어 넣고, 거기 `a_lin=0.8`(config.ACCEL_MAX) 이 있다.
+    `run_record.sh` 는 `PIBT_A_EXEC` 를 안 주므로 a_exec = geom.a_lin 이다.
+
+    0.60 으로 그린 영상은 정지거리를 **675 mm 로 33 % 부풀렸다.** 그래서
+    베끼지 않고 읽는다. 못 읽으면 조용히 옛 값으로 떨어지지 말고 **말한다.**
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    root = os.environ.get("W") or os.path.abspath(os.path.join(here, "..", ".."))
+    sys.path.insert(0, os.path.join(root, "path"))
+    try:
+        import pibt_scene as _ps
+        kw = _ps.GEOM_KW
+        return float(kw["v_max"]), float(kw["a_lin"]), float(kw["w_max"]), True
+    except Exception as e:
+        print("[grid] ★ 상류 GEOM_KW 를 못 읽었다 — 박아 둔 값으로 그린다. "
+              "숫자가 주행과 어긋날 수 있다: %s" % e)
+        return 0.90, 0.80, 1.80, False
+
+
+V_MAX, A_LIN, W_MAX_G, _GEOM_LIVE = _live_geom()
+
 R_FRONT = math.hypot(FRONT, WIDTH / 2)
 R_REAR = math.hypot(REAR, WIDTH / 2)
 OVER_LEN = (FRONT + REAR) - P
@@ -118,6 +144,8 @@ PEN_NEIGHBOR = R_REAR - (P - WIDTH / 2)
 print("═" * 66)
 print("칸 %.2f m · 차체 %.3f x %.3f m (축->앞 %.3f)" % (P, FRONT + REAR, WIDTH, FRONT))
 print("  정지  길이가 칸을 앞뒤로 %+.0f mm · 옆 칸과 %.0f mm" % (OVER_LEN * 1000, SIDE_GAP * 1000))
+print("  운동  v_max %.2f m/s · a_lin %.2f m/s^2 · w_max %.2f rad/s%s"
+      % (V_MAX, A_LIN, W_MAX_G, "" if _GEOM_LIVE else "   ☹ 상류를 못 읽었다"))
 print("  회전  앞 모서리 r=%.4f -> 칸을 %+.0f mm" % (R_FRONT, (R_FRONT - P / 2) * 1000))
 print("        뒤 모서리 r=%.4f -> 칸을 %+.0f mm" % (R_REAR, (R_REAR - P / 2) * 1000))
 print("  옆 칸 로봇을 %+.0f mm %s" % (abs(PEN_NEIGHBOR) * 1000,
@@ -352,12 +380,19 @@ def build(case):
         for k in range(N_CELL + 1):
             box(stage, "/World/Mark/m%d" % k, X0 + k*P - 0.03, X0 + k*P + 0.03,
                 -P*1.6, P*1.6, 0.006, 0.014, mats["hit"])
-        pk = math.sqrt(A_LIN * P)
+        pk = min(V_MAX, math.sqrt(A_LIN * P))
+        ramp = 2.0 * D_STOP
         note.append("위 주황 = 계획(등속 %.2f m/s) · 아래 = 실제(칸마다 정지)" % V_MAX)
         note.append("한 칸 계획 %.3f s vs 실제 %.3f s  ->  **%.2f배**"
                     % (P / V_MAX, T_CELL, T_CELL / (P / V_MAX)))
-        note.append("실제 최고속도 %.3f m/s = v_max 의 %.0f %% (가속이 칸 안에서 안 끝난다)"
-                    % (pk, 100 * pk / V_MAX))
+        # ★ a_lin 0.8 에서는 최고속도가 v_max 에 **거의 닿는다** (0.894/0.90).
+        #   그러니 「속도가 안 나온다」가 아니다. 문제는 **순항 구간이 없다**는
+        #   것이다 — 가속 끝나자마자 감속이라 평균이 절반으로 떨어진다.
+        #   (a_lin 0.60 으로 잘못 알던 때는 이 줄이 「v_max 의 86 %」였다.)
+        note.append("최고속도 %.3f m/s = v_max 의 %.0f %% — 닿자마자 감속이라 "
+                    "**순항 구간이 없다**" % (pk, 100 * pk / V_MAX))
+        note.append("가속 %.3f m + 감속 %.3f m = %.3f m > 칸 %.2f m  ->  %.0f mm 모자란다"
+                    % (D_STOP, D_STOP, ramp, P, (ramp - P) * 1000))
     elif case == "decel":
         footprint(stage, "/World/A", 0, 0, 0.0, mats)
         d = D_STOP
@@ -417,7 +452,6 @@ def build(case):
 #
 #       계획  등속 v_max (MOVE_TICKS 가 가정하는 것)
 #       실제  칸마다 정지·재출발, 가속도 a_lin 의 삼각 프로파일
-V_MAX, A_LIN = 0.90, 0.60          # isaac_drive.RobotGeom 과 같은 값
 N_CELL = 3                         # 몇 칸을 달리나
 X0 = -1.0                          # 출발 x — 궤적을 격자 가운데에 놓는다
 T_CELL = 2.0 * math.sqrt(P / A_LIN)          # 칸마다 정지할 때 한 칸에 드는 시간
