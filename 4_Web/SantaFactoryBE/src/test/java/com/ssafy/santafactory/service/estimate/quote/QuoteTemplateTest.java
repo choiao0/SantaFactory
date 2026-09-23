@@ -47,10 +47,10 @@ class QuoteTemplateTest {
 
         assertThat(html).contains("EST-20260917-0142").contains("id=\"p1\"").contains("id=\"p2\"");
         for (String block : new String[]{"발행 정보", "권장 구성", "목표 달성 여부 (14대 기준)", "예상 구축 비용",
-                "권장 구성 물리 검증 결과 (3D 시뮬레이션)", "로봇 대수별 비교", "효율과 구축 비용 그래프", "권장 구성(14대)의 운영 예상", "유의 사항"}) {
+                "권장 구성 물리 검증 결과 (3D 시뮬레이션)", "로봇 대수별 비교", "효율과 구축 비용 그래프", "주문 처리율과 구축 비용 그래프", "권장 구성(14대)의 운영 예상", "유의 사항"}) {
             assertThat(html).contains(block);
         }
-        assertThat(html).contains(">06</span>").contains(">09</span>");
+        assertThat(html).contains(">06</span>").contains(">10</span>");
         assertThat(html).doesNotContain(" th:").doesNotContain("${");
         assertThat(html).contains("data:image/png;base64,");
     }
@@ -65,6 +65,6 @@ class QuoteTemplateTest {
 
         String html = service.html(factory.build(new QuoteSource(noRec, QuoteFixtures.warehouse())));
 
-        assertThat(html).contains("목표 주문 처리율에 닿지 않습니다").doesNotContain("금액 (원)").doesNotContain("목표 달성 여부").contains(">03</span>").contains(">06</span>");
+        assertThat(html).contains("목표 주문 처리율에 닿지 않습니다").doesNotContain("금액 (원)").doesNotContain("목표 달성 여부").contains(">03</span>").contains(">07</span>");
     }
 }
