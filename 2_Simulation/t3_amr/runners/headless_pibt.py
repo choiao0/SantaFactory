@@ -267,7 +267,8 @@ def _attach_side():
               + (" · 고정" if SIDE_FOLLOW < 0 else
                  f" · 로봇 {SIDE_FOLLOW} "
                  + (f"3인칭 {SIDE_DIST:g}m" if SIDE_VIEW == "chase"
-                    else f"**1인칭** 앞 {SIDE_FWD:g}m · 높이 {SIDE_EYE_Z:g}m"))
+                    else f"**1인칭** 앞 {SIDE_FWD:g}m · 높이 {SIDE_EYE_Z:g}m"
+                       f" · 초점 {SIDE_FOCAL:g}mm"))
               + (f" · {SIDE_EVERY}번에 한 번" if SIDE_EVERY > 1 else ""))
         return annot
     except Exception as e:                                # noqa: BLE001
@@ -322,6 +323,11 @@ SIDE_EVERY = max(1, int(os.environ.get("PIBT_SIDE_EVERY", "") or 1))
 SIDE_RES = (os.environ.get("PIBT_SIDE_RES", "") or "960x540").lower()
 _side_cam_warned = False
 _side_xop = None            # 카메라 transform op — 한 번만 만들고 값만 갱신한다
+# ★ 초점거리 [mm]. 씬의 `Cam_Spot` 은 **24 mm 광각**으로 만들어져 있다
+#   (`build_amr_scene_v2.py:308`). 눈높이 1.2 m 에서 화각 47도면 아래쪽이 4 m 앞
+#   바닥을 잡아 **하단 절반이 바닥**이 된다. 주행 화면으로는 35 mm 쯤이 낫다.
+#     24 mm -> 화각 47.0도    35 mm -> 33.5도    50 mm -> 23.7도
+SIDE_FOCAL = float(os.environ.get("PIBT_SIDE_FOCAL", "") or 35.0)
 _side_cam_n = 0             # 카메라를 옮긴 횟수 (로그용)
 
 
@@ -365,6 +371,11 @@ def _side_track(fleet_):
             prim = omni.usd.get_context().get_stage().GetPrimAtPath(CAMERA_SIDE)
             if not prim or not prim.IsValid():
                 raise RuntimeError(f"카메라 prim 이 없다: {CAMERA_SIDE}")
+            # 초점거리도 여기서 한 번 잡는다 — 씬 기본(24 mm)은 주행 화면에 너무 넓다.
+            try:
+                UsdGeom.Camera(prim).GetFocalLengthAttr().Set(SIDE_FOCAL)
+            except Exception as _fe:                     # noqa: BLE001
+                print(f"[hl]   [cam] 초점거리를 못 바꿨다 (씬 기본 그대로): {_fe!r}")
             xf = UsdGeom.Xformable(prim)
             xf.ClearXformOpOrder()
             _side_xop = xf.AddTransformOp()
