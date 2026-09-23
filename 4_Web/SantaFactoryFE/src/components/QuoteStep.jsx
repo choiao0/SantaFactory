@@ -19,6 +19,20 @@ const BAR = '#3f3f3d'
 const PAPER = '#fbfaf8'
 /** 권장 대수 표식의 바깥 링 반지름 — RECOMMENDED 점선이 여기서 끊긴다 */
 const MARK_R = 13
+
+/**
+ * 표식 반지름 — 대수 한 칸 간격에 맞춰 줄인다. 대수 범위가 넓으면 칸 간격이 좁아져, 고정 크기로는
+ * 권장과 최소 구성이 나란히 있을 때 두 원이 겹쳐 하나처럼 보인다.
+ *
+ * <p>최소 구성은 한 치수 더 작게 둔다. 주된 답은 권장이라 둘 중 양보할 쪽은 이쪽이고, 크기가
+ * 다르면 겹치기 직전까지 가도 어느 쪽이 권장인지 헷갈리지 않는다.
+ *
+ * @param gap 대수 한 칸의 가로 간격(px)
+ */
+function markRadius(gap) {
+  const outer = Math.max(7, Math.min(MARK_R, gap * 0.55))
+  return { rec: outer, min: outer - 4 }
+}
 const EOK = 100_000_000
 
 const REASON_TEXT = {
@@ -101,6 +115,7 @@ function CurveChart({ runs, estimate, budget, recommended, minimal, knee }) {
   const recMark = scored.find((r) => r.amr_count === recommended) != null
     ? efficiencyScore(scored.find((r) => r.amr_count === recommended))
     : null
+  const { rec: markR, min: minMarkR } = markRadius(iw / span)
   const minRun = scored.find((r) => r.amr_count === minimal) ?? null
   // 최소 구성은 목표를 만족하는 가장 적은 대수라 언제나 권장보다 왼쪽이거나 같다
   const showMin = minimal != null && minimal !== recommended && minRun != null
@@ -166,22 +181,22 @@ function CurveChart({ runs, estimate, budget, recommended, minimal, knee }) {
           표식이라는 게 안 보이고, 색이 같으면 어느 쪽이 권장인지 헷갈린다 */}
       {showMin && (
         <g>
-          <circle cx={x(minimal)} cy={y(efficiencyScore(minRun))} r={MARK_R} fill={PAPER} />
-          <circle cx={x(minimal)} cy={y(efficiencyScore(minRun))} r={MARK_R} fill="none" stroke={AMBER} strokeWidth="2.5" />
-          <circle cx={x(minimal)} cy={y(efficiencyScore(minRun))} r="6" fill={PAPER} stroke={AMBER} strokeWidth="2" />
+          <circle cx={x(minimal)} cy={y(efficiencyScore(minRun))} r={minMarkR} fill={PAPER} />
+          <circle cx={x(minimal)} cy={y(efficiencyScore(minRun))} r={minMarkR} fill="none" stroke={AMBER} strokeWidth="2.2" />
+          <circle cx={x(minimal)} cy={y(efficiencyScore(minRun))} r={minMarkR * 0.45} fill={PAPER} stroke={AMBER} strokeWidth="2" />
         </g>
       )}
       {/* 권장 대수 표식 — 흰 원반으로 곡선을 끊어 점을 띄우고, 그 위에 링과 가운데 점을 겹친다.
           같은 색 점을 키우기만 하면 선에 묻혀서 어느 대수인지 눈에 안 들어온다 */}
       {scored.filter((r) => r.amr_count === recommended).map((r) => {
-        // MARK_R 은 아래 RECOMMENDED 점선이 어디서 끊길지도 정한다
+        // markR 은 아래 RECOMMENDED 점선이 어디서 끊길지도 정한다
         const cy = y(efficiencyScore(r))
         const cx = x(r.amr_count)
         return (
           <g key={`${r.run_id}-mark`}>
-            <circle cx={cx} cy={cy} r={MARK_R} fill={PAPER} />
-            <circle cx={cx} cy={cy} r={MARK_R} fill="none" stroke={RED} strokeWidth="2.5" />
-            <circle cx={cx} cy={cy} r="6" fill={PAPER} stroke={RED} strokeWidth="2" />
+            <circle cx={cx} cy={cy} r={markR} fill={PAPER} />
+            <circle cx={cx} cy={cy} r={markR} fill="none" stroke={RED} strokeWidth="2.5" />
+            <circle cx={cx} cy={cy} r={markR * 0.46} fill={PAPER} stroke={RED} strokeWidth="2" />
           </g>
         )
       })}
@@ -194,7 +209,7 @@ function CurveChart({ runs, estimate, budget, recommended, minimal, knee }) {
       )}
       {showMin && (
         <>
-          <line x1={x(minimal)} x2={x(minimal)} y1={y(efficiencyScore(minRun)) + MARK_R} y2={pad.t + ih}
+          <line x1={x(minimal)} x2={x(minimal)} y1={y(efficiencyScore(minRun)) + minMarkR} y2={pad.t + ih}
                 stroke={AMBER} strokeDasharray="3 3" />
           {/* 제 점선의 왼쪽에 붙인다 — 최소 구성은 언제나 권장보다 왼쪽이라, 오른쪽에 쓰면 글자가
               두 점선 사이로 들어가 권장 쪽으로 밀려 보인다. 왼쪽에 자리가 없을 때만 넘긴다 */}
@@ -209,7 +224,7 @@ function CurveChart({ runs, estimate, budget, recommended, minimal, knee }) {
         <>
           {/* 표식을 관통하지 않도록 바깥 링 아래에서 시작한다 — 점이 어느 대수인지 끌어 주기만 하면 된다 */}
           <line x1={x(recommended)} x2={x(recommended)}
-                y1={recMark != null ? y(recMark) + MARK_R : pad.t} y2={pad.t + ih}
+                y1={recMark != null ? y(recMark) + markR : pad.t} y2={pad.t + ih}
                 stroke={RED} strokeDasharray="3 3" />
           <text x={x(recommended) + (recRight ? -6 : 6)} y={labelY(0)}
                 textAnchor={recRight ? 'end' : 'start'}
@@ -254,12 +269,18 @@ function ThroughputChart({ runs, estimate, budget, minimal, recommended }) {
    * 그 점이 없으므로 대신 권장을 찍는다. 처리율 그림에 표식이 최소 구성 하나뿐이면 그 대수가 왜
    * 최소인지(오른쪽이 무엇인지)를 견줄 데가 없다.
    */
+  const { rec: markR, min: minMarkR } = markRadius(iw / span)
   const fullRun = done.find((r) => r.throughput >= 99.95) ?? null
   const peak = fullRun ?? done.find((r) => r.amr_count === recommended) ?? null
   const peakLabel = fullRun != null ? '전량 처리' : '권장'
-  const showFull = peak != null && peak.amr_count !== minimal
+  const showFull = peak != null
   const full = peak
-  const minLeft = minRun != null && x(minimal) - 6 - MIN_LABEL_W >= pad.l
+  /**
+   * 빨간 표식과 같은 대수면 최소 구성 표식은 그리지 않는다 — 한 자리에 표식이 둘이면 어느 기준으로
+   * 고른 대수인지가 흐려진다. 표의 칩과 같은 규칙이다.
+   */
+  const showMin = minRun != null && (peak == null || peak.amr_count !== minRun.amr_count)
+  const minLeft = showMin && x(minimal) - 6 - MIN_LABEL_W >= pad.l
   const fullLeft = showFull && x(full.amr_count) - 6 - FULL_LABEL_W >= pad.l
   const labelY = (row) => pad.t + ih - 8 - row * 18
   // 둘 다 제 점선 왼쪽에 쓰므로, 대수가 붙어 있으면 전량 처리 글자가 최소 구성 글자를 덮는다
@@ -304,7 +325,7 @@ function ThroughputChart({ runs, estimate, budget, minimal, recommended }) {
       ))}
 
       <polyline points={tp} fill="none" stroke={RED} strokeWidth="2.5" />
-      {done.filter((r) => r.amr_count !== minimal && !(showFull && r.amr_count === full.amr_count)).map((r) => {
+      {done.filter((r) => !(showMin && r.amr_count === minimal) && !(showFull && r.amr_count === full.amr_count)).map((r) => {
         const ok = meetsGoal(r, estimate)
         return (
           <circle key={r.run_id} cx={x(r.amr_count)} cy={y(r.throughput)} r="4"
@@ -314,22 +335,22 @@ function ThroughputChart({ runs, estimate, budget, minimal, recommended }) {
 
       {showFull && (
         <g>
-          <circle cx={x(full.amr_count)} cy={y(full.throughput)} r={MARK_R} fill={PAPER} />
-          <circle cx={x(full.amr_count)} cy={y(full.throughput)} r={MARK_R} fill="none" stroke={RED} strokeWidth="2.5" />
-          <circle cx={x(full.amr_count)} cy={y(full.throughput)} r="6" fill={PAPER} stroke={RED} strokeWidth="2" />
+          <circle cx={x(full.amr_count)} cy={y(full.throughput)} r={markR} fill={PAPER} />
+          <circle cx={x(full.amr_count)} cy={y(full.throughput)} r={markR} fill="none" stroke={RED} strokeWidth="2.5" />
+          <circle cx={x(full.amr_count)} cy={y(full.throughput)} r={markR * 0.46} fill={PAPER} stroke={RED} strokeWidth="2" />
         </g>
       )}
-      {minRun != null && (
+      {showMin && (
         <g>
-          <circle cx={x(minimal)} cy={y(minRun.throughput)} r={MARK_R} fill={PAPER} />
-          <circle cx={x(minimal)} cy={y(minRun.throughput)} r={MARK_R} fill="none" stroke={AMBER} strokeWidth="2.5" />
-          <circle cx={x(minimal)} cy={y(minRun.throughput)} r="6" fill={PAPER} stroke={AMBER} strokeWidth="2" />
+          <circle cx={x(minimal)} cy={y(minRun.throughput)} r={minMarkR} fill={PAPER} />
+          <circle cx={x(minimal)} cy={y(minRun.throughput)} r={minMarkR} fill="none" stroke={AMBER} strokeWidth="2.2" />
+          <circle cx={x(minimal)} cy={y(minRun.throughput)} r={minMarkR * 0.45} fill={PAPER} stroke={AMBER} strokeWidth="2" />
         </g>
       )}
 
       {showFull && (
         <>
-          <line x1={x(full.amr_count)} x2={x(full.amr_count)} y1={y(full.throughput) + MARK_R} y2={pad.t + ih}
+          <line x1={x(full.amr_count)} x2={x(full.amr_count)} y1={y(full.throughput) + markR} y2={pad.t + ih}
                 stroke={RED} strokeDasharray="3 3" />
           <text x={x(full.amr_count) + (fullLeft ? -6 : 6)} y={labelY(fullRow)}
                 textAnchor={fullLeft ? 'end' : 'start'}
@@ -338,9 +359,9 @@ function ThroughputChart({ runs, estimate, budget, minimal, recommended }) {
           </text>
         </>
       )}
-      {minRun != null && (
+      {showMin && (
         <>
-          <line x1={x(minimal)} x2={x(minimal)} y1={y(minRun.throughput) + MARK_R} y2={pad.t + ih}
+          <line x1={x(minimal)} x2={x(minimal)} y1={y(minRun.throughput) + minMarkR} y2={pad.t + ih}
                 stroke={AMBER} strokeDasharray="3 3" />
           <text x={x(minimal) + (minLeft ? -6 : 6)} y={labelY(0)} textAnchor={minLeft ? 'end' : 'start'}
                 fontSize="11" fontWeight="700" fill={AMBER_DARK} fontFamily={MONO}>
