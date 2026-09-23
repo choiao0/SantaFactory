@@ -307,6 +307,8 @@ SIDE_AUTO = (_sf == "auto")
 SIDE_FOLLOW = 0 if SIDE_AUTO else (int(_sf) if _sf.lstrip("-").isdigit() else 0)
 # 이만큼 캡처한 뒤 고른다. STRIDE 40 이면 15회 = 물리 600스텝 = 시뮬 10초.
 SIDE_AUTO_AFTER = max(1, int(os.environ.get("PIBT_SIDE_AUTO_AFTER", "") or 15))
+# 고르기 전 구간을 영상에서 버릴지 (기본 켬). 끄면 정지 화면으로 시작한다.
+WARMSTART = (os.environ.get("PIBT_SIDE_WARMSTART", "") or "1") not in ("0", "", "no", "off")
 SIDE_VIEW = (os.environ.get("PIBT_SIDE_VIEW", "") or "fpv").strip().lower()
 SIDE_DIST = float(os.environ.get("PIBT_SIDE_DIST", "") or 6.0)
 SIDE_LR = 1.0 if (os.environ.get("PIBT_SIDE_SIDE", "") or "-1").strip() != "-1" else -1.0
@@ -370,7 +372,8 @@ def _side_track(fleet_):
                     who = _side_pick
                     print(f"[hl]   [cam] ★ 로봇 {_side_pick} 를 따라간다 "
                           f"(시뮬 초반에 {moved[_side_pick]:.1f} m 이동 · "
-                          f"가만히 있던 대수 {sum(1 for d in moved if d < 0.2)})",
+                          f"가만히 있던 대수 {sum(1 for d in moved if d < 0.2)})"
+                          + ("  — 여기서부터 녹화한다" if WARMSTART else ""),
                           flush=True)
         drv = fleet_.drivers[who]
         x, y, yaw = drv.axle_pose()
@@ -440,6 +443,16 @@ def _save_side(sim_t):
     """
     global _rep_annot2, _side_n, _side_fail
     if _rep_annot2 is None:
+        return
+    # ★ auto 로 로봇을 **고르기 전까지는 저장하지 않는다** (2026-09-23).
+    #
+    #   고르려면 시뮬 초반을 지켜봐야 하는데, 그동안은 `SIDE_FOLLOW`(기본 0)를
+    #   따라간다. 0번은 충전존에서 시작해 서 있으므로 **영상이 정지 화면으로
+    #   시작**했다. 그 구간을 통째로 버리면 첫 프레임부터 움직인다.
+    #
+    #   버리는 길이는 `PIBT_SIDE_AUTO_AFTER x SHOT_STRIDE` 물리스텝이다
+    #   (STRIDE 40 · 15회면 시뮬 10초). `PIBT_SIDE_WARMSTART=0` 으로 끌 수 있다.
+    if SIDE_AUTO and WARMSTART and _side_pick is None:
         return
     try:
         _save_one(_rep_annot2, SHOTS_SIDE, sim_t)
