@@ -430,16 +430,20 @@ if SHOTS:
             print("[hl]   더 빠르고 배속도 사후에 고를 수 있다.")
             _cap = None
 
-    # ★ 측면은 **상단 경로가 정해진 뒤** 따로 붙인다 (2026-09-23). 상단이
-    #   뷰포트든 리플리케이터든 같은 자리다 — `_attach_side` 머리말 참조.
-    if _cap:
-        _rep_annot2 = _attach_side()
-        # ★ 붙인 직후 몇 프레임을 **버린다.** annotator 는 첫 렌더에 버퍼가
-        #   안 차는 일이 흔하다 (`_save_side` 머리말). 주행 전이라 공짜다.
-        for _ in range(3 if _rep_annot2 is not None else 1):
-            _render_once()
-        _sp = SHOT_STRIDE * int(os.environ.get("PIBT_SHOT_FPS", "30")) / 60.0
-        print(f"[hl]   조립 시 {_sp:.1f}배속 · 렌더 호출이 1/{SHOT_STRIDE} 로 준다")
+# ★ 2번영상은 **1번과 독립이다** (2026-09-23). 1번을 끄고 2번만 찍는 판
+#   (`CAPTURE=side`)이 있어서, `if SHOTS:` 블록 **밖**에서 붙인다.
+#   1번 프레임이 13대 10분 판에 14 GB 라 시연 영상만 뽑을 때는 그게 아깝다.
+if SHOTS_SIDE and CAMERA_SIDE:
+    _rep_annot2 = _attach_side()
+    # ★ 붙인 직후 몇 프레임을 **버린다.** annotator 는 첫 렌더에 버퍼가
+    #   안 차는 일이 흔하다 (`_save_side` 머리말). 주행 전이라 공짜다.
+    for _ in range(3 if _rep_annot2 is not None else 1):
+        _render_once()
+
+if _cap or _rep_annot2 is not None:
+    _sp = SHOT_STRIDE * int(os.environ.get("PIBT_SHOT_FPS", "30")) / 60.0
+    print(f"[hl]   조립 시 {_sp:.1f}배속 · 렌더 호출이 1/{SHOT_STRIDE} 로 준다"
+          + ("  (1번 꺼짐 — 2번만 찍는다)" if not _cap else ""))
 
 
 # PIL 포맷 이름 — 확장자와 철자가 다르다 (jpg -> JPEG).
@@ -546,7 +550,7 @@ try:
         #   viewport 경로: _tick 안에서 capture_viewport_to_file 이 이미 예약됐다.
         #     그것은 비동기라 **다음 렌더 프레임에 기록된다** — 여기 렌더가 그
         #     프레임이다. 이 호출이 없으면 예약만 쌓이고 파일은 안 생긴다.
-        if _cap and state["n"] % SHOT_STRIDE == 0:
+        if (_cap or _rep_annot2 is not None) and state["n"] % SHOT_STRIDE == 0:
             # ★ 카메라를 **렌더 전에** 옮긴다 — 그래야 이 프레임에 반영된다.
             if _side_n_try % SIDE_EVERY == 0:
                 _side_track(fleet)
@@ -616,12 +620,17 @@ if _cap:
               f"-c:v libx264 -pix_fmt yuv420p -crf 20 ../demo.mp4")
     else:
         print("[hl]   ★ 한 장도 안 나왔다 — 카메라 경로와 PIBT_SHOT_STRIDE 를 보라")
-    # 측면 — 켠 적이 있으면 반드시 장수를 낸다. 0 장이면 그 자리에서 보이게 한다
-    # (백엔드는 `_side` 키가 없으면 **오류 없이** 버튼만 안 띄운다).
-    if SHOTS_SIDE and CAMERA_SIDE:
-        print(f"[hl] 촬영(2번영상) {_side_n:,}장 · 실패 {_side_fail}회 -> {SHOTS_SIDE}"
-              + ("" if _side_n else
-                 f"   ★ 한 장도 안 나왔다 (카메라 {CAMERA_SIDE})"))
+
+# ★ 2번영상 보고는 **`if _cap` 밖**이다 — 1번을 끈 판(`CAPTURE=side`)에서도
+#   장수가 나와야 한다. 켠 적이 있으면 0 장이어도 찍는다: 백엔드는 `_side` 키가
+#   없으면 **오류 없이** 버튼만 안 띄우므로, 조용한 0 장이 제일 나쁘다.
+if SHOTS_SIDE and CAMERA_SIDE:
+    _fps2 = int(os.environ.get("PIBT_SHOT_FPS", "30"))
+    print(f"[hl] 촬영(2번영상) {_side_n:,}장 · 실패 {_side_fail}회 -> {SHOTS_SIDE}"
+          + ("" if _side_n else f"   ★ 한 장도 안 나왔다 (카메라 {CAMERA_SIDE})"))
+    if _side_n:
+        print(f"[hl]   영상 {_side_n / _fps2:.0f}초 @{_fps2}fps = "
+              f"{SHOT_STRIDE * SIDE_EVERY * _fps2 / 60.0:.1f}배속")
 try:
     quit_fn(0)                             # 자세 기록 저장 (PIBT_RECORD 가 경로일 때)
 except Exception as e:

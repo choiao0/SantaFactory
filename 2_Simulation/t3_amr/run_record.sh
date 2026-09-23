@@ -36,6 +36,8 @@
 #   RUN_TAG=이름     출력 폴더·파일 이름 (기본 시각)
 #   VIDEO=0          조립 건너뛰고 프레임만 남긴다 (★ 캡처는 그대로 돈다)
 #   CAPTURE=0        ★ 촬영을 **아예 끈다**. 계측 판·디스크 절약용
+#   CAPTURE=side     ★ 1번(천장)을 끄고 **2번(1인칭)만** 찍는다. 시연 영상용
+#                      — 1번 프레임 14 GB 를 안 쓴다. 검증 런에는 쓰지 말 것
 #   WAIT_BUSY=3600   ★ 내 Kit 이 돌고 있으면 그만큼 기다린다 (기본 0 = 즉시 끊음)
 #                    시드를 for 루프로 돌릴 때 반드시 준다
 #   STRICT=0         촬영이 안 켜져도 끊지 않는다 (기본은 끊는다)
@@ -317,7 +319,11 @@ fi
 # ── 촬영 환경변수 (live_pibt.py 가 읽는 이름) ───────────────
 #   `live_pibt.py:191` 은 `PIBT_SHOTS` 가 **비면 아무것도 안 한다.** 그래서
 #   촬영을 끄는 방법은 이 값을 비우는 것뿐이다 — `VIDEO=0` 으로는 안 꺼진다.
-if [ "$CAPTURE" = "0" ]; then
+# ★ `CAPTURE=side` — **1번(천장)을 끄고 2번(1인칭)만** 찍는다 (2026-09-23).
+#   시연 영상만 뽑을 때 쓴다. 1번 캡처 자체는 싸지만(뷰포트 비동기, 약
+#   1.0 ms/step) **프레임 디스크가 크다** — 13대 10분 판에서 약 14 GB 다.
+#   ☹ 검증 런에는 쓰지 말 것. 백엔드가 기다리는 것은 1번(`demo_<run_id>.mp4`)이다.
+if [ "$CAPTURE" = "0" ] || [ "$CAPTURE" = "side" ]; then
     export PIBT_SHOTS=""
 else
     export PIBT_SHOTS="$SHOTS"
@@ -452,6 +458,9 @@ fi
 echo "  프레임      $SHOTS"
 echo "  영상        $MP4"
 echo "  로그        $MYLOG"
+if [ "$CAPTURE" = "side" ]; then
+    echo "  설정        ★ 1번(천장) 꺼짐 (CAPTURE=side) — 2번(1인칭)만 만듭니다"
+fi
 if [ "$CAPTURE" = "0" ]; then
     echo "  설정        ★ 촬영 꺼짐 (CAPTURE=0) — 프레임도 영상도 안 만듭니다"
 else
@@ -590,7 +599,8 @@ cleanup() {
         for _ in $(seq 25); do sleep 1; kill -0 "$SCRIPT_PID" 2>/dev/null || break; done
         kill -0 "$SCRIPT_PID" 2>/dev/null && { _kill_mine KILL; kill -KILL "$SCRIPT_PID" 2>/dev/null; }
     fi
-    assemble "$SHOTS" "$MP4" "상단 "
+    # `CAPTURE=side` 면 1번은 애초에 안 찍었다 — 「0장입니다」로 오해시키지 않는다.
+    [ "$CAPTURE" = "side" ] || assemble "$SHOTS" "$MP4" "1번(천장) "
     # ★ 측면이 켜져 있으면 이어서 만든다. 프레임이 0장이면 조용히 지나간다.
     #   업로드가 상단 -> 측면 순서로 기다리므로 여기서도 상단을 먼저 만든다.
     [ -n "${PIBT_SHOTS_SIDE:-}" ] && assemble "$SHOTS_SIDE" "$MP4_SIDE" "2번영상(1인칭) "
@@ -643,9 +653,12 @@ SCRIPT_PID=$!
   #   프레임도 「캡처 ON」도 영영 안 나오므로 ${WATCH_SEC}초에 무조건 걸려
   #   STRICT=1 기본값으로 **판을 죽인다.** 계측 판이 7분마다 끊긴다.
   [ "$CAPTURE" = "0" ] && exit 0
+  # `CAPTURE=side` 면 1번 폴더는 영영 비어 있다 — 2번 폴더를 본다.
+  _WSHOTS="$SHOTS"
+  [ "$CAPTURE" = "side" ] && _WSHOTS="$SHOTS_SIDE"
   sleep "$WATCH_SEC"
   _parent_gone && exit 0                                   # 부모가 죽었으면 나도 끝
-  n=$(find "$SHOTS" -maxdepth 1 -name "f_*.$SHOT_EXT" 2>/dev/null | wc -l)
+  n=$(find "$_WSHOTS" -maxdepth 1 -name "f_*.$SHOT_EXT" 2>/dev/null | wc -l)
   if [ "$n" -gt 0 ]; then exit 0; fi                       # 촬영 중
   # ★ 「촬영 ON」은 헤드리스 경로(`headless_pibt.py:226,242`)의 말이다.
   #   안 보면 HEADLESS=1 판이 ${WATCH_SEC}초에 무조건 끊긴다 (2026-09-22).
