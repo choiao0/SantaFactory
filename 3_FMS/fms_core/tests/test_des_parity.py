@@ -162,3 +162,68 @@ def test_verify_replays_one_outbound_window():
     """
     assert stream_options({})["shifts"] == ("out",)
     assert stream_options({"inbound_gap_s": 30, "shifts": "in,out"})["shifts"] == ("in", "out")
+
+
+# ---- 적재·서비스 기본값 (2026-09-23) ---------------------------------------------------
+#   위 `test_worker_defaults` 는 `amr.capacity` 가 **있을 때** 플래그로 잘 넘어가는지를
+#   본다. 안 보는 것이 둘 있다 — **없을 때의 기본값**과 **서비스 틱**이다. 둘 다
+#   「같아야 한다」고 주석만 달려 있고 지키는 장치가 없었다.
+def sim_v2_const(name):
+    """`sim_v2_tasks` 의 모듈 상수를 **소스에서** 읽는다.
+
+    import 하지 않는 이유는 `kernel_planner.py:23` 이 쓴 그대로다 — 그 모듈이
+    matplotlib 을 끌어온다. 그래서 fms_core 는 `SERVICE_TIME_S` 를 사본으로 두고
+    있고, **사본이 갈리는 것을 막는 장치가 이 함수다.**
+    """
+    import re
+    src = open(os.path.join(FMS, "sim_engine", "sim_v2_tasks.py"), encoding="utf-8").read()
+    m = re.search(rf"^{name}\s*=\s*([^\n#]+)", src, re.M)
+    assert m, f"sim_v2_tasks 에서 {name} 을 못 찾았다 — 이름이 바뀌었으면 이 테스트도 고친다"
+    return eval(m.group(1).strip())                      # noqa: S307 — 우리 저장소의 리터럴
+
+
+def test_service_time_copy_has_not_drifted():
+    """`kernel_planner.SERVICE_TIME_S` 는 `sim_v2_tasks` 의 **사본**이다.
+
+    이 값이 갈리면 검증 커널의 서비스 틱이 견적과 달라지는데 **아무 에러도 안 난다.**
+    t3_amr 쪽은 같은 자리에서 2026-09-22 에 두 번 틀렸다 (3 -> 4 -> 13).
+    """
+    from fms_core.kernel_planner import SERVICE_TIME_S
+    assert SERVICE_TIME_S == sim_v2_const("SERVICE_TIME_S"), \
+        "서비스 시간 사본이 상류와 갈렸다 — 검증 서비스 틱이 견적과 달라진다"
+
+
+def test_service_steps_is_the_cli_value_not_the_dataclass_default(worker):
+    """서비스 틱은 **CLI 가 넣는 값**이다 — dataclass 기본값(4)을 보면 안 된다.
+
+    견적 워커는 `--service-steps` 를 **안 넘긴다.** 그러면 sim_v2 가
+    `round(SERVICE_TIME_S / dt)` 로 정한다. 검증 커널(`kernel_planner.py:122`)도
+    같은 식이어야 한다.
+    """
+    from fms_core.kernel_planner import SERVICE_TIME_S, des_dt
+    dt = worker.tick_seconds(worker.SPEED_DEFAULT, worker.SIM_ENGINE_DIR)
+    flags = worker._orders_flags({"capacity": 3}, "/tmp/orders.json", dt)
+    assert not any(f.startswith("--service-steps") for f in flags), \
+        "워커가 --service-steps 를 넘기기 시작했으면 검증도 그 값을 따라가야 한다"
+    assert round(SERVICE_TIME_S / des_dt(None)) == round(sim_v2_const("SERVICE_TIME_S") / dt), \
+        "검증 커널의 서비스 틱이 견적과 다르다"
+
+
+def test_capacity_default_matches_the_worker_when_amr_is_absent(worker):
+    """`scenario.amr` 가 없을 때 — 워커와 fms-core 가 같은 값으로 가는가.
+
+    워커는 `amr.capacity` 가 없으면 `--capacity` 를 **안 붙인다**. 그러면 sim_v2 의
+    기본값이 쓰인다. `DEFAULT_CAPACITY` 는 그 값과 같아야 한다.
+    """
+    import re
+    dt = worker.tick_seconds(worker.SPEED_DEFAULT, worker.SIM_ENGINE_DIR)
+    flags = worker._orders_flags({}, "/tmp/orders.json", dt)
+    assert not any(f.startswith("--capacity") for f in flags), \
+        "워커가 capacity 기본값을 명시하기 시작했다 — DEFAULT_CAPACITY 도 그 값으로"
+    # sim_v2 의 `--capacity` 기본값은 `_parse_orders` 의 `_opt(..., int, N)` 에 있다.
+    src = open(os.path.join(FMS, "sim_engine", "sim_v2_tasks.py"), encoding="utf-8").read()
+    m = re.search(r'_opt\(argv,\s*"capacity",\s*int,\s*(\d+)\)', src)
+    assert m, "sim_v2_tasks 에서 --capacity 기본값을 못 찾았다"
+    from fms_core.scenario import DEFAULT_CAPACITY
+    assert DEFAULT_CAPACITY == int(m.group(1)), \
+        "amr 블록이 없을 때 워커와 fms-core 가 다른 capacity 로 간다"

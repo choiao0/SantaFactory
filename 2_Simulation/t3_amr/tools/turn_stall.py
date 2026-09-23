@@ -69,7 +69,7 @@ import sys
 
 import numpy as np
 
-PITCH = float(os.environ.get("PITCH", os.environ.get("PIBT_PITCH", "1.2")))
+PITCH = float(os.environ.get("PITCH", os.environ.get("PIBT_PITCH", "1.0")))
 V_PLAN = float(os.environ.get("PIBT_V_PLAN", "0.90"))
 MOVE_TICKS = int(os.environ.get("MOVE_TICKS", "4"))
 TURN_TICKS = int(os.environ.get("TURN_TICKS", "5"))

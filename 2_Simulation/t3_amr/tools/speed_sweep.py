@@ -32,7 +32,7 @@ from pibt_scene import setup             # noqa: E402
 
 MAP = os.environ["MAP"]
 N = int(os.environ.get("N", "12"))
-PITCH = float(os.environ.get("PIBT_PITCH", "1.2"))
+PITCH = float(os.environ.get("PIBT_PITCH", "1.0"))
 SEEDS = [int(x) for x in os.environ.get("SEEDS", "1,2").split(",")]
 VS = [float(x) for x in os.environ.get("V", "0.9,1.2,1.6,2.2").split(",")]
 AS_ = [float(x) for x in os.environ.get("A", "0.8").split(",")]

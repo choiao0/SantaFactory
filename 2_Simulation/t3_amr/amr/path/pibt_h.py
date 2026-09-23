@@ -30,7 +30,12 @@ DRIVE = "adg"
 OUT = "v2/traj_pibt_h"
 SUB = "traj_pibt_h"   # 서버 $PLAN 아래 폴더명
 USD = "pibt%d.usd"
-PITCH = 1.2
+PITCH = 1.0             # 계획 격자 m.
+#   ★ 2026-09-22: 1.2 -> 1.0. `run_record.sh:174` 의 `PIBT_PITCH:-1.0` 과
+#     **같아야 한다** — 이 값은 아래 `_e("PIBT_PITCH", str(PITCH))` 로
+#     주행 환경에도 그대로 실린다. 1.2 였을 때 `REPLAN=1` 이 1.2 로 계획하고
+#     주행은 1.0 으로 도는 어긋남이 났다 (경위는 `run_record.sh:160-172`).
+#     `plan()` 은 :110 에서 셸을 먼저 보므로 이 상수는 셸이 없을 때의 값이다.
 SEED = 1
 MODE = "lifelong"          # oneshot | lifelong
 # 배차 정책. fms=태스크 순회(FMS 이식본) / robot_first=로봇 순회

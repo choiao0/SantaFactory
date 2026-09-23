@@ -173,7 +173,7 @@ WHEEL_BASE = 0.5796          # localPos0 = ±0.28963
 CHARGE_RECT = (102.6, 48.0, 108.6, 67.0)   # warehouse/map/charge_zone.json "east"
 # ★★ 격자·홈·헤딩·마스크를 FMS 것으로 (-240). 자세한 근거는 `_fms_setup` 머리말.
 FMS_GRID = os.environ.get("PIBT_FMS_GRID", "0") not in ("0", "", "no", "off")
-CHARGE_LAT = float(os.environ.get("PIBT_PITCH", "1.2"))     # 계획 격자 pitch
+CHARGE_LAT = float(os.environ.get("PIBT_PITCH", "1.0"))     # 계획 격자 pitch
 CHARGE_STEP_X = float(os.environ.get("CHARGE_STEP_X", "2.4"))
 CHARGE_STEP_Y = float(os.environ.get("CHARGE_STEP_Y", "2.4"))
 
@@ -1025,7 +1025,7 @@ def main():
     ap.add_argument("--map", default=os.path.join(
         here, "..", "warehouse", "map"))
     ap.add_argument("--n", type=int, default=12)
-    ap.add_argument("--pitch", type=float, default=1.2)
+    ap.add_argument("--pitch", type=float, default=1.0)
     ap.add_argument("--seed", type=int, default=9)   # 12대에서 완주 확인 (4·9·11·15·17·19·22)
     ap.add_argument("--pool", choices=("strict", "cross", "center"), default="cross")
     # ★ `..` 하나다. `here` 는 `<t3_amr>/path` 이므로 `../..` 는 t3_amr 의 **부모**

@@ -66,7 +66,7 @@ import numpy as np
 #   `PITCH` · `PIBT_PITCH` 둘 다 받는다 — 저장소 안에서 두 이름이 섞여 쓰인다.
 #   `TICK_S` 는 격자에서 파생시킨다 (pitch / v_max).
 CELL = float(os.environ.get("PITCH",
-             os.environ.get("PIBT_PITCH", "1.2")))   # m  계획 격자 pitch
+             os.environ.get("PIBT_PITCH", "1.0")))   # m  계획 격자 pitch
 V_MAX = float(os.environ.get("PIBT_V_PLAN", "0.90"))  # m/s  **계획** 속도
 W_MAX = 1.80                 # rad/s
 TICK_S = CELL / V_MAX        # 계획 틱 — 격자를 따라간다

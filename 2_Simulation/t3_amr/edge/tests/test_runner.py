@@ -89,6 +89,37 @@ class TestStartToRunning:
         assert h.pub.named("NDATA")[R.STATE] == "RUNNING" and h.runner.state == R.RUNNING
 
 
+class TestSideVideo:
+    """두 번째 시점 (-264) — 둘 다 올라간 **뒤에** 보고한다."""
+
+    def _stop(self, h):
+        h.connect()
+        h.run_until_running()
+        h.rec.video = "/data/out/demo_verify_77_n3.mp4"
+        h.rec.side_video = "/data/out/demo_verify_77_n3_side.mp4"
+        h.stop(100.0)
+        h.runner.tick(101.0)
+
+    def test_both_uploaded_in_order_and_reported_once(self, h):
+        self._stop(h)
+        assert h.uploader.calls == [
+            ("/data/out/demo_verify_77_n3.mp4", "verify_77_n3"),
+            ("/data/out/demo_verify_77_n3_side.mp4", "verify_77_n3")]
+        assert h.runner.state == R.IDLE
+        # 보고는 **상단 키** 하나다 — 백엔드가 여기서 `_side` 를 계산한다
+        named = h.pub.named_with("NDATA", R.VIDEO_URL)
+        assert named[R.VIDEO_URL] == "verify_77_n3/demo_verify_77_n3.mp4"
+
+    def test_no_side_is_bit_identical(self, h):
+        h.connect()
+        h.run_until_running()
+        h.rec.video = "/data/out/demo_verify_77_n3.mp4"
+        h.stop(100.0)
+        h.runner.tick(101.0)
+        assert h.uploader.calls == [("/data/out/demo_verify_77_n3.mp4", "verify_77_n3")]
+        assert h.runner.state == R.IDLE
+
+
 class TestStopAndVideo:
     def test_stop_uploads_video_and_reports_url_with_idle_in_one_ndata(self, h):
         h.connect()
