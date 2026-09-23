@@ -2815,14 +2815,25 @@ class FleetController:
         # [patch_wexec] 회전 속도. 근거는 MotionController 쪽 같은 이름의 주석.
         self.w_exec = float(os.environ.get("PIBT_W_EXEC", "") or w_exec or geom.w_max)
         if self.w_exec < geom.w_max:
-            #   TURN_TICKS 는 계획기(FMS 와 공유) 쪽 상수라 여기 없다. 5 틱이고
-            #   한 틱은 `pitch / v_max` 다 (`isaac_drive` 머리 주석 106 줄).
-            _t_plan = 5.0 * (geom.pitch / geom.v_max)
-            _t_real = (math.pi / 2.0) / self.w_exec + self.w_exec / geom.a_ang
+            #   TURN_TICKS(5) · MOVE_TICKS(4) 는 계획기(FMS 와 공유) 쪽 상수라
+            #   여기 없다. 한 틱은 `pitch / v_max / MOVE_TICKS` = 0.2778 s 다.
+            #   ★ 처음에 `pitch / v_max` 를 한 틱으로 잡아 4배로 썼다. 그러면
+            #     기준이 5.56 s 가 돼 실제 회전(1.47 s)이 뭘 해도 안 걸린다 —
+            #     경고가 영영 안 뜬다. `pitch / v_max` 는 한 **칸**이다.
+            _tick_s = geom.pitch / geom.v_max / 4.0
+            _t_plan = 5.0 * _tick_s
+            def _t90(w):
+                return (math.pi / 2.0) / w + w / geom.a_ang
+            _t_real, _t_base = _t90(self.w_exec), _t90(geom.w_max)
+            # ☹ 기준선부터 이미 넘는다 — w_max 1.8 에서 1.47 s 대 계획 1.39 s
+            #   (1.06배). 그러니 「넘긴다」가 이 손잡이 탓만은 아니다. 얼마나
+            #   **더** 넘기는지를 같이 낸다.
             print(f"★ 회전 속도 {self.w_exec:.2f} rad/s 가 계획값 "
                   f"{geom.w_max:.2f} 보다 **낮습니다**. 90도 소요 "
-                  f"{_t_real:.2f} s 대 계획 {_t_plan:.2f} s"
-                  + (" — 틱을 넘깁니다. 완주 시간을 결론으로 쓰지 마세요."
+                  f"{_t_real:.2f} s (계획값이면 {_t_base:.2f} s) 대 "
+                  f"계획 틱 {_t_plan:.2f} s"
+                  + (f" — 틱의 {_t_real / _t_plan:.2f}배입니다. "
+                     "완주 시간을 결론으로 쓰지 마세요."
                      if _t_real > _t_plan else "."))
         # ★ 도착 판정이 속도를 못 따라가면 안 된다. 한 스텝에 움직이는 거리가
         #   허용오차 지름(2 * tol.pos)보다 크면 `at_target` 창을 건너뛰어
