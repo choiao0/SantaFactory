@@ -309,7 +309,7 @@ tr.total td{border-top:1.5px solid var(--ink);border-bottom:0;font-weight:800;fo
     <div class="eyebrow"><span th:text="${#numbers.formatInteger(base + 3, 2)}"></span> <span class="t" th:text="'권장 구성(' + ${q.verdict.count} + '대)의 운영 예상'"></span></div>
     <div class="grid4">
       <div><div class="l">평균 주문 처리 시간</div><strong class="num" th:text="${q.ops.leadMeanMin}"></strong><em>주문 접수 → 처리 완료, 전체 평균</em></div>
-      <div><div class="l">로봇 배정 대기</div><strong class="num" th:text="${q.ops.queueSec}"></strong><em>주문이 로봇을 기다린 평균 시간</em></div>
+      <div><div class="l">로봇 배정 대기</div><strong class="num" th:text="${q.ops.queueMin}"></strong><em>주문이 로봇을 기다린 평균 시간</em></div>
       <div><div class="l">통로 혼잡으로 멈춘 시간</div><strong class="num"><span th:remove="tag" th:text="${q.ops.conflictPct}"></span><span>%</span></strong><em>로봇 운행 시간 중 비율</em></div>
       <div><div class="l">로봇 총 이동 거리</div><strong class="num"><span th:remove="tag" th:text="${q.ops.distanceKm}"></span><span>km</span></strong><em th:text="${q.ops.robotsLine}"></em></div>
     </div>

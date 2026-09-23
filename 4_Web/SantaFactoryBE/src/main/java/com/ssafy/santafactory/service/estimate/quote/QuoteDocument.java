@@ -74,6 +74,6 @@ public record QuoteDocument(
     }
 
     /** 08 권장 구성의 운영 예상. */
-    public record Ops(String leadMeanMin, String queueSec, String conflictPct, String distanceKm, String robotsLine) {
+    public record Ops(String leadMeanMin, String queueMin, String conflictPct, String distanceKm, String robotsLine) {
     }
 }

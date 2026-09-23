@@ -126,7 +126,7 @@ class QuoteDocumentFactoryTest {
         QuoteDocument q = factory.build(new QuoteSource(QuoteFixtures.detail(142L, 14, 15, null), QuoteFixtures.warehouse()));
 
         assertThat(q.ops().leadMeanMin()).isEqualTo("3.5분");
-        assertThat(q.ops().queueSec()).isEqualTo("48초");
+        assertThat(q.ops().queueMin()).isEqualTo("0.8분");
         assertThat(q.ops().conflictPct()).isEqualTo("6.8");
         assertThat(q.ops().distanceKm()).isEqualTo("171");
     }

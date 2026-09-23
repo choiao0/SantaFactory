@@ -493,7 +493,8 @@ public class QuoteDocumentFactory {
 
     private static Ops ops(Run rec) {
         var k = rec.kpi();
-        return new Ops(minutes(k.leadTimeMeanS()), QuoteFormat.seconds(k.queueTimeMeanS()), ratioPct(k.conflictWaitRatio()),
+        // 옆칸(평균 주문 처리 시간)이 분이라, 초로 적으면 2935초처럼 한눈에 비교가 안 된다
+        return new Ops(minutes(k.leadTimeMeanS()), minutes(k.queueTimeMeanS()), ratioPct(k.conflictWaitRatio()),
                 QuoteFormat.km(k.distanceTotalM()), rec.amrCount() + "대 합산");
     }
 
