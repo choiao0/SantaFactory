@@ -29,10 +29,10 @@ public record VerifyResultResponse(
     @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     @JsonIgnoreProperties(ignoreUnknown = true)
     /**
-     * 시점별 영상 키. {@code video} 는 상단 시점이고 {@code videoSide} 는 측면 시점이다 —
-     * 측면을 찍지 않는 옛 러너는 보내지 않으므로 null 이 될 수 있다(계약 §3).
+     * 시점별 영상 키. {@code video} 는 상단 시점이고 {@code videoFpv} 는 1인칭 시점이다 —
+     * 1인칭을 찍지 않는 옛 러너는 보내지 않으므로 null 이 될 수 있다(계약 §3).
      */
-    public record Artifacts(String video, String videoSide) {
+    public record Artifacts(String video, String videoFpv) {
     }
 
     /** 러너가 본 실행 정보. {@code fms.warnings} 가 null 이 아니면 견적과 다른 조건에서 돌았다(계약 §3). */

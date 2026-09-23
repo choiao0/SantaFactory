@@ -105,9 +105,9 @@ public class Estimate {
     @Column(name = "verify_requested_at")
     private LocalDateTime verifyRequestedAt;
 
-    /** 같은 검증의 측면 시점 영상. 측면을 찍지 않은 회차는 null 이고 화면은 상단만 보여준다. */
-    @Column(name = "verify_video_side_url", length = 500)
-    private String verifyVideoSideUrl;
+    /** 같은 검증의 1인칭 시점 영상. 1인칭을 찍지 않은 회차는 null 이고 화면은 상단만 보여준다. */
+    @Column(name = "verify_video_fpv_url", length = 500)
+    private String verifyVideoFpvUrl;
 
     /**
      * 이 견적의 대수 스윕 전체가 공유하는 출고 주문 목록(JSON 직렬화, {@code SimulationRequest.Outbound[]}).
@@ -188,10 +188,10 @@ public class Estimate {
         this.verifyRequestedAt = at;
     }
 
-    /** 물리 검증 결과로 받은 시점별 영상 URL을 반영한다. 측면은 없을 수 있다. */
-    public void applyVerifyVideo(String url, String sideUrl) {
+    /** 물리 검증 결과로 받은 시점별 영상 URL을 반영한다. 1인칭은 없을 수 있다. */
+    public void applyVerifyVideo(String url, String fpvUrl) {
         this.verifyVideoUrl = url;
-        this.verifyVideoSideUrl = sideUrl;
+        this.verifyVideoFpvUrl = fpvUrl;
     }
 
     /** 물리 검증 결과를 반영한다. 영상과 같이 성패를 가리지 않고 마지막 결과를 남긴다. */

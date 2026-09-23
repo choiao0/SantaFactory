@@ -51,6 +51,6 @@ public final class EstimateEvents {
      */
     @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     public record EstimateVerified(Long estimateId, String status, String videoUrl,
-                                   String videoSideUrl, String error) {
+                                   String videoFpvUrl, String error) {
     }
 }

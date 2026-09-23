@@ -282,22 +282,22 @@ public class EstimateService {
     }
 
     /**
-     * 화면에 내보낼 측면 시점 키.
+     * 화면에 내보낼 1인칭 시점 키.
      *
      * <p>결과 도착 시점에 저장해 둔 값이 있으면 그것을 쓴다. 없으면 상단 키에서 다시 찾아 본다 —
      * 엣지가 mp4 를 하나씩 올리느라 상단만 올린 채 결과를 보고하면 그때 확인이 빈손이기 때문이다.
      * 여기서 저장하지 않는 이유는 조회가 읽기 전용 트랜잭션이라 써도 남지 않아서다.
      */
-    private String sideVideoKey(Estimate estimate) {
-        String saved = estimate.getVerifyVideoSideUrl();
-        return saved != null ? saved : videoPresigner.deriveSideKey(estimate.getVerifyVideoUrl());
+    private String fpvVideoKey(Estimate estimate) {
+        String saved = estimate.getVerifyVideoFpvUrl();
+        return saved != null ? saved : videoPresigner.deriveFpvKey(estimate.getVerifyVideoUrl());
     }
 
     private EstimateDetailResponse toDetail(Estimate estimate) {
         List<SimScenario> runs = scenarioRepository.findByEstimateIdOrderByAmrCountAsc(estimate.getId());
         return EstimateDetailResponse.of(estimate, runs,
                 videoPresigner.sign(estimate.getVerifyVideoUrl()),
-                videoPresigner.sign(sideVideoKey(estimate)),
+                videoPresigner.sign(fpvVideoKey(estimate)),
                 verifyComparator.compare(estimate.getVerify(), recommendedRun(estimate, runs)));
     }
 
@@ -531,20 +531,20 @@ public class EstimateService {
         estimate.applyVerifyResult(toVerifySnapshot(response));
         VerifyResultResponse.Artifacts artifacts = response.artifacts();
         String video = artifacts != null ? artifacts.video() : null;
-        String videoSide = artifacts != null ? artifacts.videoSide() : null;
-        // 러너가 측면 키를 안 싣는 동안에는 상단 키에서 이름 규칙으로 찾아 본다 (S15P21A106-265)
-        if (videoSide == null) {
-            videoSide = videoPresigner.deriveSideKey(video);
+        String videoFpv = artifacts != null ? artifacts.videoFpv() : null;
+        // 러너가 1인칭 키를 안 싣는 동안에는 상단 키에서 이름 규칙으로 찾아 본다 (S15P21A106-265)
+        if (videoFpv == null) {
+            videoFpv = videoPresigner.deriveFpvKey(video);
         }
-        // 상단이 없으면 측면만 남기지 않는다 — 화면이 기본으로 보여줄 것이 없어진다
+        // 상단이 없으면 1인칭만 남기지 않는다 — 화면이 기본으로 보여줄 것이 없어진다
         if (video != null) {
-            estimate.applyVerifyVideo(video, videoSide);
+            estimate.applyVerifyVideo(video, videoFpv);
         }
-        log.info("물리 검증 결과 반영: estimateId={}, status={}, video={}, videoSide={}",
-                estimate.getId(), response.status(), video, videoSide);
+        log.info("물리 검증 결과 반영: estimateId={}, status={}, video={}, videoFpv={}",
+                estimate.getId(), response.status(), video, videoFpv);
         eventPublisher.publishEvent(new EstimateVerified(
                 estimate.getId(), response.status(), videoPresigner.sign(video),
-                videoPresigner.sign(videoSide), response.error()));
+                videoPresigner.sign(videoFpv), response.error()));
     }
 
     /** 계약 §3 페이로드에서 견적에 남길 것만 뽑는다. verify·kpi 가 없는 옛 페이로드는 성패만 남는다. */
