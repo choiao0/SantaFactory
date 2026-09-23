@@ -48,5 +48,8 @@ docker logs --since 24h emqx 2>&1 | grep -c authentication_failure   # 다음 �
 - 대시보드(18083·9001·15672)는 compose 에서 이미 127.0.0.1 이다. 밖에 나갈 이유가 없는 포트는 publish 주소로 묶는 편이 먼저다.
 - RabbitMQ 5672 는 127.0.0.1 에만 열려 있다(tailnet 리스너는 09-18 닫음). GCP 워커는 AMQPS 5671(nginx stream, `infra/nginx/`)로 붙고,
   nginx 는 호스트 프로세스라 `ufw allow from 34.47.111.62 to any port 5671 proto tcp` 로 제한한다(-246, 적용됨).
-- k3s 6443 도 같은 방식이다(-249): `ufw allow from 34.47.111.62 to any port 6443 proto tcp`. 레지스트리는 공인 포트를 따로 열지 않고 nginx 443 `/v2/` 안에서 출발지를 제한한다(infra/nginx/registry-v2.conf).
+- k3s 6443 도 같은 방식이다(-249): `ufw allow from 34.47.111.62 to any port 6443 proto tcp`.
+  EC2 노드 위 파드(CoreDNS·웹 파드)도 API 서버를 공인 주소 52.79.145.233:6443 으로 부른다(k3s advertise 주소). AWS 를 돌아 자기 공인 IP 가
+  출발지로 들어오므로 `ufw allow from 52.79.145.233 to any port 6443 proto tcp` 가 필요하다. 없으면 CoreDNS 가 새 Service 를 못 받아
+  이름 조회가 NXDOMAIN 이 된다(-258, 2026-09-23 적용). 레지스트리는 공인 포트를 따로 열지 않고 nginx 443 `/v2/` 안에서 출발지를 제한한다(infra/nginx/registry-v2.conf).
 - Jenkins 에는 안 붙였다. 배포는 SSH 로 `apply.sh` 한 번(host-orch 와 같은 수동 관례).
