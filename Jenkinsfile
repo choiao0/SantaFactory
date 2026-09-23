@@ -122,6 +122,8 @@ pipeline {
                                     docker tag $img:$BUILD_NUMBER $REGISTRY/$img:$BUILD_NUMBER
                                     docker push $REGISTRY/$img:$BUILD_NUMBER
                                 done
+                                # compose 에 남는 넷은 여기서 최신 설정으로 맞춘다(사설 IP 포트 바인딩 등). EC2 에는 저장소가 없어 이 경로가 유일한 compose 실행 지점이다
+                                $COMPOSE up -d db rabbitmq redis minio
                                 # env 는 compose 파일이 조립한 그대로 Secret 으로 — db·rabbitmq·redis·pdf 이름은 4_Web/k8s 의 Service 가 풀어 준다
                                 $COMPOSE config --format json \\
                                     | python3 -c 'import sys,json; [print(f"{k}={v}") for k,v in json.load(sys.stdin)["services"]["backend"]["environment"].items()]' \\
