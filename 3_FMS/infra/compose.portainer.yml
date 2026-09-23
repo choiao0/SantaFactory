@@ -1,6 +1,6 @@
 # EC2 컨테이너 운영 대시보드 — Portainer CE (S15P21A106-262, 2026-09-21).
 # compose 로 도는 컨테이너 전부(브로커·DB·Redis·MinIO·EMQX·백엔드·프론트·PDF·fms-core·host-orch·registry)의 상태·로그·재시작을 웹에서 본다.
-# k3s 워커(GCP)는 여기 안 보인다 — 그쪽은 Lens(SSH 터널 + k3s.yaml) 또는 다음에 Portainer 에이전트로.
+# k3s 파드(web 3종·GCP 워커)는 도커 소켓에 안 보인다 — k3s 에이전트(k8s/portainer-agent.yaml, -269)를 두 번째 환경으로 붙인다.
 #
 # 접근: https://j15a106.p.ssafy.io/portainer/  ← nginx 443 → 127.0.0.1:9100 (infra/nginx/portainer.conf). 9100 은 루프백에만 바인딩(9000 은 SonarQube).
 # ★ docker.sock 은 호스트 루트 권한과 같다. 공인 NIC 에 직접 열지 않고, 밖에서는 nginx TLS + Portainer 로그인만 거친다.
