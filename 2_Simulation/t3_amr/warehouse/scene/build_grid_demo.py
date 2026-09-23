@@ -76,6 +76,28 @@ print("  옆 칸 로봇을 %+.0f mm %s" % (abs(PEN_NEIGHBOR) * 1000,
                                      "파고든다" if PEN_NEIGHBOR > 0 else "여유"))
 print("═" * 66)
 
+# ★★ `--shoot` 이면 **Isaac 을 먼저 띄운다** (2026-09-23).
+#
+#   `from pxr import …` 를 SimulationApp 보다 먼저 하면 venv 의 standalone USD 가
+#   먼저 로드되고, 뒤이어 Isaac 이 자기 USD(`omni.usd.libs`)를 또 올린다. 한
+#   프로세스에 USD 가 두 벌이면 이렇게 죽는다 —
+#
+#       TypeError: No to_python converter found for C++ type: …SdfPath…
+#       free(): corrupted unsorted chunks
+#
+#   `shoot_amr.py` 는 SimulationApp 뒤에 pxr 을 들여서 안 걸린다. 같은 순서로 둔다.
+#   USD 만 만들 때는 Isaac 이 필요 없으므로 안 띄운다 — 그쪽이 훨씬 빠르다.
+simulation_app = None
+if A.shoot:
+    from isaacsim import SimulationApp                 # noqa: E402
+    _cfg = {"headless": True}
+    _g = (os.environ.get("GPU", "") or "").strip()
+    if _g.isdigit():
+        _cfg["active_gpu"], _cfg["multi_gpu"] = int(_g), False
+    print("[grid] SimulationApp 기동 (--shoot)%s"
+          % (" · GPU " + _g if _g.isdigit() else ""))
+    simulation_app = SimulationApp(_cfg)
+
 from pxr import Gf, Sdf, Usd, UsdGeom, UsdShade        # noqa: E402
 
 MAT = {                                    # (색, rough, metal, 불투명도)
@@ -193,13 +215,8 @@ if not A.shoot:
     sys.exit(0)
 
 # ── 촬영 — `shoot_amr.py` 에서 검증된 경로를 그대로 ──────────────────
-from isaacsim import SimulationApp                     # noqa: E402
-
-_cfg = {"headless": True}
-_g = (os.environ.get("GPU", "") or "").strip()
-if _g.isdigit():
-    _cfg["active_gpu"], _cfg["multi_gpu"] = int(_g), False
-app = SimulationApp(_cfg)
+#   앱은 위에서 이미 떠 있다 (pxr 보다 먼저 띄워야 해서).
+app = simulation_app
 
 import omni.kit.app                                    # noqa: E402
 import omni.usd                                        # noqa: E402
