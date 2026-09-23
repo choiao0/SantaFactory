@@ -78,10 +78,6 @@ export default function WarehouseStep({ form, onChange, models, modelsError, mod
               </div>
             </div>
           </div>
-
-          <div className="runcta">
-            <button type="button" className="ghost">주문 로그 CSV 업로드 (선택)</button>
-          </div>
         </form>
 
         <aside className="models">
