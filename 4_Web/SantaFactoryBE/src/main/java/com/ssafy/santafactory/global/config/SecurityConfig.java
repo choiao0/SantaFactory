@@ -50,6 +50,7 @@ public class SecurityConfig {
             "/api/auth/email/**",   // 가입 전 이메일 인증 — 아직 회원이 아니다
             "/swagger-ui/**", "/v3/api-docs/**",
             "/", "/index.html", "/assets/**", "/favicon.ico",
+            "/actuator/health/**",  // k3s 준비·생존 확인 — 토큰 없이 호출된다. 세부 항목은 show-details: never 로 숨김
     };
 
     private final JwtAuthenticationFilter jwtFilter;
