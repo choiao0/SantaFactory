@@ -1,0 +1,106 @@
+# Portainer 에이전트 — k3s 를 EC2 Portainer(/portainer/, ../compose.portainer.yml)의 두 번째 환경으로 붙인다 (S15P21A106-269).
+# Portainer 는 도커 소켓만 봐서 k3s 파드(web 3종·GCP sim-worker)가 안 보였다 — k3s 는 도커가 아니라 자체 containerd 로 돈다.
+# 원본: https://downloads.portainer.io/ce2-45/portainer-agent-k8s-nodeport.yaml (서버와 같은 2.45.1). 바꾼 것:
+#   1. Service 를 NodePort 30778 대신 고정 ClusterIP 10.43.0.90 으로 — 보안그룹이 전 포트 개방이고 NodePort 는 kube-proxy 가
+#      ufw 보다 먼저 DNAT 해 밖에서 닿는다. ClusterIP 는 EC2 안(호스트·도커 컨테이너)에서만 닿는다. Portainer 컨테이너의
+#      도커 망(a106-portainer_default)에서 ClusterIP 로 닿는 것을 확인했다(2026-09-23, 4_Web/k8s/backend.yaml 과 같은 방식).
+#   2. 파드를 EC2 노드에 고정 — EC2 에서 GCP 노드의 파드 IP 로는 길이 없다(노드 간 파드망 없음, README). GCP 파드는 에이전트가 API 로 본다.
+#   3. LOG_LEVEL INFO, imagePullPolicy IfNotPresent(태그 고정), 자원 요청·상한.
+# 권한은 원본대로 cluster-admin — Portainer 가 클러스터 전체를 다루는 전제다. 에이전트는 처음 붙은 Portainer 서버의 키만 믿는다.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: portainer
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: portainer-sa-clusteradmin
+  namespace: portainer
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: portainer-crb-clusteradmin
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+  - kind: ServiceAccount
+    name: portainer-sa-clusteradmin
+    namespace: portainer
+---
+# Portainer 환경 주소: 10.43.0.90:9001 (Environments → Add → Kubernetes → Agent)
+apiVersion: v1
+kind: Service
+metadata:
+  name: portainer-agent
+  namespace: portainer
+spec:
+  type: ClusterIP
+  clusterIP: 10.43.0.90
+  selector:
+    app: portainer-agent
+  ports:
+    - name: http
+      protocol: TCP
+      port: 9001
+      targetPort: 9001
+---
+# 에이전트끼리 서로를 찾는 이름(AGENT_CLUSTER_ADDR). 원본 그대로
+apiVersion: v1
+kind: Service
+metadata:
+  name: portainer-agent-headless
+  namespace: portainer
+spec:
+  clusterIP: None
+  selector:
+    app: portainer-agent
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: portainer-agent
+  namespace: portainer
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app: portainer-agent
+  template:
+    metadata:
+      labels:
+        app: portainer-agent
+    spec:
+      serviceAccountName: portainer-sa-clusteradmin
+      nodeSelector:
+        kubernetes.io/hostname: ip-172-26-3-57
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: portainer-agent
+          image: portainer/agent:2.45.1
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: LOG_LEVEL
+              value: INFO
+            - name: AGENT_CLUSTER_ADDR
+              value: "portainer-agent-headless"
+            - name: KUBERNETES_POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+          ports:
+            - containerPort: 9001
+              protocol: TCP
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
