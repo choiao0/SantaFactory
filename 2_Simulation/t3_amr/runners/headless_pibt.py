@@ -265,7 +265,7 @@ def _attach_side():
         annot.attach([rep.create.render_product(CAMERA_SIDE, (_w, _h))])
         print(f"[hl] 촬영 ON (2번영상) {SHOTS_SIDE} · 카메라 {CAMERA_SIDE} · {_w}x{_h}"
               + (" · 고정" if SIDE_FOLLOW < 0 else
-                 f" · 로봇 {SIDE_FOLLOW} "
+                 f" · 로봇 {'auto' if SIDE_AUTO else SIDE_FOLLOW} "
                  + (f"3인칭 {SIDE_DIST:g}m" if SIDE_VIEW == "chase"
                     else f"**1인칭** 앞 {SIDE_FWD:g}m · 높이 {SIDE_EYE_Z:g}m"
                        f" · 초점 {SIDE_FOCAL:g}mm"))
@@ -287,7 +287,7 @@ SIDE_FAIL_MAX = int(os.environ.get("PIBT_SIDE_FAIL_MAX", "") or 20)
 #   통로가 찍힌 영상이 백엔드로 올라갈 수 있다. 그래서 매 캡처마다 카메라를
 #   대상 로봇 뒤로 옮긴다.
 #
-#       PIBT_SIDE_FOLLOW   따라갈 로봇 번호. 비우거나 -1 이면 안 옮긴다(고정)
+#       PIBT_SIDE_FOLLOW   auto(기본) | 로봇 번호 | -1(카메라 고정)
 #       PIBT_SIDE_VIEW     fpv(기본) | chase
 #       PIBT_SIDE_DIST     chase 일 때 거리 [m]
 #       PIBT_SIDE_SIDE     chase 일 때 좌/우  (-1 왼쪽 · +1 오른쪽)
@@ -298,8 +298,15 @@ SIDE_FAIL_MAX = int(os.environ.get("PIBT_SIDE_FAIL_MAX", "") or 20)
 #
 #     ☹ 복사 비용은 **안 줄어든다** — 텍스처를 호스트로 옮기는 몫은 픽셀 수에만
 #       달렸다. 줄이려면 `PIBT_SIDE_RES` 를 내리거나 `PIBT_SIDE_EVERY` 를 올린다.
-_sf = (os.environ.get("PIBT_SIDE_FOLLOW", "") or "0").strip()
-SIDE_FOLLOW = int(_sf) if _sf.lstrip("-").isdigit() else 0
+# ★ 기본은 **auto** — 초반에 가장 많이 움직인 로봇을 고른다 (2026-09-23).
+#   0번은 충전존에서 시작해 한참 서 있는 일이 잦아 영상이 심심했다. 어느 번호가
+#   바쁜지는 시드·궤적마다 달라서 손으로 고르면 매번 빗나간다.
+#       PIBT_SIDE_FOLLOW=auto  (기본)  ·  =5 특정 로봇  ·  =-1 카메라 고정
+_sf = (os.environ.get("PIBT_SIDE_FOLLOW", "") or "auto").strip().lower()
+SIDE_AUTO = (_sf == "auto")
+SIDE_FOLLOW = 0 if SIDE_AUTO else (int(_sf) if _sf.lstrip("-").isdigit() else 0)
+# 이만큼 캡처한 뒤 고른다. STRIDE 40 이면 15회 = 물리 600스텝 = 시뮬 10초.
+SIDE_AUTO_AFTER = max(1, int(os.environ.get("PIBT_SIDE_AUTO_AFTER", "") or 15))
 SIDE_VIEW = (os.environ.get("PIBT_SIDE_VIEW", "") or "fpv").strip().lower()
 SIDE_DIST = float(os.environ.get("PIBT_SIDE_DIST", "") or 6.0)
 SIDE_LR = 1.0 if (os.environ.get("PIBT_SIDE_SIDE", "") or "-1").strip() != "-1" else -1.0
@@ -329,6 +336,8 @@ _side_xop = None            # 카메라 transform op — 한 번만 만들고 �
 #     24 mm -> 화각 47.0도    35 mm -> 33.5도    50 mm -> 23.7도
 SIDE_FOCAL = float(os.environ.get("PIBT_SIDE_FOCAL", "") or 35.0)
 _side_cam_n = 0             # 카메라를 옮긴 횟수 (로그용)
+_side_pick = None           # auto 로 고른 로봇 (한 번 고르면 안 바꾼다)
+_side_home = None           # 각 로봇의 시작 자리 — 움직인 거리를 재는 기준
 
 
 def _side_track(fleet_):
@@ -337,13 +346,34 @@ def _side_track(fleet_):
     실패해도 주행을 죽이지 않는다 — 한 번만 알리고 그 뒤로 조용히 넘어간다.
     카메라가 안 움직이면 마지막 자리에 머물 뿐이다.
     """
-    global _side_cam_warned
-    if SIDE_FOLLOW < 0 or _rep_annot2 is None or not CAMERA_SIDE:
+    global _side_cam_warned, _side_pick, _side_home, _side_xop, _side_cam_n
+    if (not SIDE_AUTO and SIDE_FOLLOW < 0) or _rep_annot2 is None or not CAMERA_SIDE:
         return
     try:
-        drv = fleet_.drivers[SIDE_FOLLOW]
-        x, y, yaw = drv.axle_pose()
         import math as _m
+        # ★ auto — 초반에 **가장 많이 움직인** 로봇을 골라 그 뒤로 고정한다.
+        #   고르는 동안은 SIDE_FOLLOW(기본 0)를 따라간다. 한 번만 갈아탄다 —
+        #   매 프레임 갈아타면 화면이 튄다.
+        who = SIDE_FOLLOW
+        if SIDE_AUTO:
+            if _side_pick is not None:
+                who = _side_pick
+            else:
+                n_rb = len(fleet_.drivers)
+                poses = [fleet_.drivers[i].axle_pose() for i in range(n_rb)]
+                if _side_home is None:
+                    _side_home = [(p[0], p[1]) for p in poses]
+                if _side_cam_n >= SIDE_AUTO_AFTER:
+                    moved = [_m.hypot(p[0] - h[0], p[1] - h[1])
+                             for p, h in zip(poses, _side_home)]
+                    _side_pick = max(range(n_rb), key=lambda i: moved[i])
+                    who = _side_pick
+                    print(f"[hl]   [cam] ★ 로봇 {_side_pick} 를 따라간다 "
+                          f"(시뮬 초반에 {moved[_side_pick]:.1f} m 이동 · "
+                          f"가만히 있던 대수 {sum(1 for d in moved if d < 0.2)})",
+                          flush=True)
+        drv = fleet_.drivers[who]
+        x, y, yaw = drv.axle_pose()
         from pxr import Gf, UsdGeom                      # noqa: E402
         import omni.usd                                  # noqa: E402
         fx, fy = _m.cos(yaw), _m.sin(yaw)
@@ -366,7 +396,6 @@ def _side_track(fleet_):
         #   있는 `xformOp:transform` 을 다시 만들려다 두 번째부터 조용히 실패할
         #   수 있다. 그러면 카메라가 **첫 자리에 그대로 멈춘다** — 영상이 한
         #   장면에서 안 바뀐다.
-        global _side_xop
         if _side_xop is None:
             prim = omni.usd.get_context().get_stage().GetPrimAtPath(CAMERA_SIDE)
             if not prim or not prim.IsValid():
@@ -383,9 +412,8 @@ def _side_track(fleet_):
             r[0], r[1], r[2], 0, u[0], u[1], u[2], 0,
             -f[0], -f[1], -f[2], 0, eye[0], eye[1], eye[2], 1))
         # 움직이는지 로그로 보이게 한다 — 안 움직이면 여기 좌표가 그대로다.
-        global _side_cam_n
         if _side_cam_n < 3 or _side_cam_n % 100 == 0:
-            print(f"[hl]   [cam] #{_side_cam_n} 로봇 ({x:.2f}, {y:.2f}, "
+            print(f"[hl]   [cam] #{_side_cam_n} 로봇{who} ({x:.2f}, {y:.2f}, "
                   f"{_m.degrees(yaw):.0f}deg) -> 눈 ({eye[0]:.2f}, {eye[1]:.2f}, "
                   f"{eye[2]:.2f})", flush=True)
         _side_cam_n += 1
