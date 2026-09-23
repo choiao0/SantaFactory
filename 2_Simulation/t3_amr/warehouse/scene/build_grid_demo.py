@@ -65,7 +65,8 @@ FRONT, REAR, WIDTH = 0.390, 1.110, 0.800
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--case", default="all",
-                choices=["all", "footprint", "side", "follow", "rack", "turn"])
+                choices=["all", "footprint", "side", "follow", "rack", "turn",
+                         "accel", "decel"])
 ap.add_argument("--pitch", type=float, default=1.0)
 ap.add_argument("--cells", type=int, default=7, help="격자 칸 수 (한 변)")
 ap.add_argument("--shoot", action="store_true", help="만들고 PNG 까지 찍는다")
@@ -319,6 +320,27 @@ def build(case):
         note.append("옆 칸이 랙(빨강). 칸 **정중앙**에서 제자리 회전")
         note.append("앞 모서리 r=%.4f -> 랙 칸으로 %.1f mm 들어간다" % (R_FRONT, pen * 1000))
         note.append("t3-38 실측 58.7 mm 와 같다 — 기하가 그렇게 돼 있다")
+    elif case == "accel":
+        # 위: 계획(등속) · 아래: 실제(칸마다 정지). 같은 자리에서 같이 출발한다.
+        footprint(stage, "/World/Plan", X0, P, 0.0, mats, key="sweep")
+        footprint(stage, "/World/A", X0, 0, 0.0, mats)
+        for k in range(N_CELL + 1):
+            box(stage, "/World/Mark/m%d" % k, X0 + k*P - 0.03, X0 + k*P + 0.03,
+                -P*1.6, P*1.6, 0.006, 0.014, mats["hit"])
+        pk = math.sqrt(A_LIN * P)
+        note.append("위 주황 = 계획(등속 %.2f m/s) · 아래 = 실제(칸마다 정지)" % V_MAX)
+        note.append("한 칸 계획 %.3f s vs 실제 %.3f s  ->  **%.2f배**"
+                    % (P / V_MAX, T_CELL, T_CELL / (P / V_MAX)))
+        note.append("실제 최고속도 %.3f m/s = v_max 의 %.0f %% (가속이 칸 안에서 안 끝난다)"
+                    % (pk, 100 * pk / V_MAX))
+    elif case == "decel":
+        footprint(stage, "/World/A", 0, 0, 0.0, mats)
+        d = D_STOP
+        box(stage, "/World/Mark/target", -0.03, 0.03, -P*1.2, P*1.2, 0.006, 0.02, mats["hit"])
+        box(stage, "/World/Mark/stop", d - 0.03, d + 0.03, -P*1.2, P*1.2, 0.006, 0.02, mats["sweep"])
+        note.append("빨강 = 멈추라고 한 자리 · 주황 = 실제로 서는 자리")
+        note.append("v_max %.2f m/s 에서 정지거리 **%.3f m** = 칸 %.2f 의 %.0f %%"
+                    % (V_MAX, d, P, 100 * d / P))
     elif case == "turn":
         footprint(stage, "/World/A", 0, 0, 0.0, mats)
         footprint(stage, "/World/B", 0, P, 0.0, mats, key="hit")
@@ -340,10 +362,65 @@ def build(case):
 #
 #       prim        움직일 대상        kind  rot=제자리 회전 · app=뒤에서 접근
 #       (없으면)    카메라가 궤도를 돈다 (정적 장면)
+# ── 가감속 — 계획과 실제를 **나란히 달리게** 한다 ────────────────────
+#   표로는 「2.32배」가 와닿지 않는다. 두 대를 같이 출발시키면 간격이 벌어지는
+#   것이 그대로 보인다. 물리를 안 돌린다 — 두 프로파일 다 **상수에서 나온 식**이다.
+#
+#       계획  등속 v_max (MOVE_TICKS 가 가정하는 것)
+#       실제  칸마다 정지·재출발, 가속도 a_lin 의 삼각 프로파일
+V_MAX, A_LIN = 0.90, 0.60          # isaac_drive.RobotGeom 과 같은 값
+N_CELL = 3                         # 몇 칸을 달리나
+X0 = -1.0                          # 출발 x — 궤적을 격자 가운데에 놓는다
+T_CELL = 2.0 * math.sqrt(P / A_LIN)          # 칸마다 정지할 때 한 칸에 드는 시간
+D_STOP = V_MAX ** 2 / (2 * A_LIN)            # v_max 에서의 정지거리
+DUR = {"accel": N_CELL * T_CELL + 0.6, "decel": 3.2}
+
+
+def x_plan(t):
+    """계획 — 등속. `MOVE_TICKS x tick_s` 가 가정하는 그 움직임이다."""
+    return X0 + min(V_MAX * t, N_CELL * P)
+
+
+def x_real(t):
+    """실제 — 칸마다 서고 다시 붙는다. 한 칸 안에서 가속·감속만 하므로
+    최고속도가 `sqrt(a*P)` 에서 잘린다 (v_max 에 못 닿는다)."""
+    k, rem = divmod(t, T_CELL)
+    if k >= N_CELL:
+        return X0 + N_CELL * P
+    half = T_CELL / 2
+    d = (0.5 * A_LIN * rem ** 2 if rem <= half
+         else P - 0.5 * A_LIN * (T_CELL - rem) ** 2)
+    return X0 + k * P + d
+
+
+def x_brake(t):
+    """감속 — v_max 로 오다 목표(원점)에서 제동을 **시작**한다.
+    정지거리 v^2/(2a) 만큼 지나쳐 선다."""
+    if t <= 1.2:
+        return -V_MAX * (1.2 - t)
+    dt_ = min(t - 1.2, V_MAX / A_LIN)
+    return V_MAX * dt_ - 0.5 * A_LIN * dt_ ** 2
+
+
+# 가감속 장면은 **옆에서** 본다 — 궤도를 돌면 얼마나 갔는지 눈이 못 따라간다.
+#   (바라보는 점, 카메라 자리)
+CAM_FIX = {
+    # 거리는 **차체가 꽉 차게** 잡았다 — 35 mm · 가로 화각 54.4도 에서
+    #   가속 차체 x -2.11..2.39 (4.5 m) < 화면 5.9 m
+    #   감속 차체 x -2.19..1.07 (3.3 m) < 화면 4.7 m
+    "accel": ((X0 + N_CELL * P / 2, P / 2, 0.35),
+              (X0 + N_CELL * P / 2, -5.2, 2.8)),
+    "decel": ((D_STOP / 2 - 0.2, 0.0, 0.35),
+              (D_STOP / 2 - 0.2, -4.2, 2.2)),
+}
+
+
 MOTION = {
     "rack":   ("/World/A", "rot"),
     "turn":   ("/World/A", "rot"),
     "follow": ("/World/B", "app"),
+    "accel":  (None, "race"),
+    "decel":  (None, "brake"),
 }
 
 
@@ -353,6 +430,18 @@ def animate(stage, case, u):
     if mo is None:
         return u * 2 * math.pi * 0.5          # 정적 장면 — 반 바퀴 궤도
     path, kind = mo
+    if kind in ("race", "brake"):
+        t = u * DUR[case]
+        def put(p, x):
+            o = UsdGeom.Xformable(stage.GetPrimAtPath(p)).GetOrderedXformOps()
+            z = o[0].Get()[2]
+            o[0].Set(Gf.Vec3d(x, o[0].Get()[1], z))
+        if kind == "race":
+            put("/World/Plan", x_plan(t))
+            put("/World/A", x_real(t))
+        else:
+            put("/World/A", x_brake(t))
+        return 0.0
     ops = UsdGeom.Xformable(stage.GetPrimAtPath(path)).GetOrderedXformOps()
     if kind == "rot":
         # 0 -> 90도. 앞 모서리가 옆 칸으로 들어가는 그 구간이 한가운데 온다.
@@ -366,7 +455,7 @@ def animate(stage, case, u):
     return 0.0
 
 
-cases = (["footprint", "side", "follow", "rack", "turn"]
+cases = (["footprint", "side", "follow", "rack", "turn", "accel", "decel"]
          if A.case == "all" else [A.case])
 made = [build(c) for c in cases]
 
@@ -431,7 +520,11 @@ for usd in made:
     annot.attach([rep.create.render_product("/World/Cam", (w, h))])
 
     if not A.video:
-        look_at(cop, Gf.Vec3d(-d, -d, d * 1.15), Gf.Vec3d(0, 0, 0))
+        if case in CAM_FIX:
+            tgt, eye = CAM_FIX[case]
+            look_at(cop, Gf.Vec3d(*eye), Gf.Vec3d(*tgt))
+        else:
+            look_at(cop, Gf.Vec3d(-d, -d, d * 1.15), Gf.Vec3d(0, 0, 0))
         data = grab(annot)
         if data is None:
             print("[grid] ☹ %s — rgb 버퍼가 비었다" % name)
@@ -449,13 +542,19 @@ for usd in made:
     os.makedirs(fdir, exist_ok=True)
     for old in glob.glob(os.path.join(fdir, "f_*.png")):
         os.remove(old)
+    # 가감속 장면은 **실시간**으로 본다 — 빨리 감으면 「느리다」가 안 보인다.
+    nfr = int(DUR[case] * 30) if case in DUR else A.frames
     n_ok = 0
-    for i in range(A.frames):
-        u = i / max(1, A.frames - 1)
+    for i in range(nfr):
+        u = i / max(1, nfr - 1)
         orbit = animate(st, case, u)
-        ang = math.radians(215.0) + orbit
-        look_at(cop, Gf.Vec3d(d * math.cos(ang), d * math.sin(ang), d * 1.05),
-                Gf.Vec3d(0, 0, 0.3))
+        if case in CAM_FIX:
+            tgt, eye = CAM_FIX[case]
+            look_at(cop, Gf.Vec3d(*eye), Gf.Vec3d(*tgt))
+        else:
+            ang = math.radians(215.0) + orbit
+            look_at(cop, Gf.Vec3d(d * math.cos(ang), d * math.sin(ang), d * 1.05),
+                    Gf.Vec3d(0, 0, 0.3))
         data = grab(annot)
         if data is None:
             continue
@@ -463,7 +562,7 @@ for usd in made:
             os.path.join(fdir, "f_%04d.png" % i), format="PNG")
         n_ok += 1
         if i % 30 == 0:
-            print("[grid]   %s  %d/%d" % (name, i, A.frames), flush=True)
+            print("[grid]   %s  %d/%d" % (name, i, nfr), flush=True)
     annot.detach()
     if not n_ok:
         print("[grid] ☹ %s — 한 장도 못 받았다" % name)
