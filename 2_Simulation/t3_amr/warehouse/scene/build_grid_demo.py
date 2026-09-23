@@ -48,14 +48,17 @@
     turn        옆 칸에 남이 있는데 회전. 뒤 모서리가 **580 mm** 파고든다
     accel       계획(등속)과 실제(칸마다 정지)를 나란히. 3칸에 3.33 s 대 8.35 s
     decel       v_max 에서 제동. 표시한 자리를 **675 mm** 지나쳐 선다
+    slip        A3#253 의 그 밀림. 축이 제자리에 안 남고 **324 mm** 끌려간다
 
     ★ accel·decel 은 기하가 아니라 **운동**이라 `--video` 라야 뜻이 있다.
       정지컷은 「두 대가 서 있다」로만 보인다.
 
-☹ 「회전 첫 스텝의 바퀴 미끄러짐」은 여기 없다. 그것은 기하가 아니라 **제어**다 —
-  계단 입력과 바닥 마찰의 문제라 그려서 보여줄 수 없다. `tools/turn_error.py` ·
-  `tools/cross_track.py` 가 녹화 NPZ 에서 재는 쪽이 맞다.
-  (가속·감속은 달랐다 — 저건 상수에서 식이 나와 그릴 수 있다. 그래서 넣었다.)
+☹ 「회전을 빨리 돌려서 미끄러진다」는 **닫힌 가설이다.** 각가속 램프로 계단
+  입력을 6배 완화한 A/B 에서 363.4 -> 375.5 mm 로 안 변했다
+  (`isaac_drive.py:2346`). 그러니 `slip` 장면은 속도를 안 건드린다 —
+  **실측된 회전 중심**으로 돌려서 그 밀림을 그대로 재현한다.
+  남은 물음은 「무엇이 밀었나」이고, 후보는 꼬리(r=1.18 m)가 스치는 랙이다
+  (`tools/turn_sweep_check.py`).
 
 색
 --
@@ -79,7 +82,7 @@ FRONT, REAR, WIDTH = 0.390, 1.110, 0.800
 ap = argparse.ArgumentParser()
 ap.add_argument("--case", default="all",
                 choices=["all", "footprint", "side", "follow", "rack", "turn",
-                         "accel", "decel"])
+                         "accel", "decel", "slip"])
 ap.add_argument("--pitch", type=float, default=1.0)
 ap.add_argument("--cells", type=int, default=7, help="격자 칸 수 (한 변)")
 ap.add_argument("--shoot", action="store_true", help="만들고 PNG 까지 찍는다")
@@ -267,17 +270,26 @@ def footprint(stage, path, cx, cy, yaw, mats, key="body", h=0.62):
         box(stage, path + "/pad", -REAR, FRONT, -WIDTH/2, WIDTH/2,
             0.005 - WHEEL_R, 0.010 - WHEEL_R, mats[key])
         return prim
-    c = UsdGeom.Cube.Define(stage, path)
-    c.GetSizeAttr().Set(2.0)
-    xf = UsdGeom.Xformable(c)
+    # ★ 상자로 떨어질 때도 **축이 원점**이라야 한다 (2026-09-23 수정).
+    #   예전 판은 Cube 하나에 translate 를 걸었는데, 그러면 그 translate 가
+    #   **차체 중심**(축에서 -0.36 m)이고 rotateZ 도 그 점을 돈다. 에셋 판은
+    #   축을 돌므로 **둘이 다른 회전**이 되고, 에셋이 없는 기계에서만 그림이
+    #   조용히 틀린다. 그래서 축에 Xform 을 두고 상자를 그 밑에 offset 으로 건다.
+    #   이러면 ops[0]=축 translate · ops[1]=rotateZ 로 에셋 판과 같아진다.
+    root = UsdGeom.Xform.Define(stage, path)
+    xf = UsdGeom.Xformable(root)
     t = xf.AddTranslateOp()
     r = xf.AddRotateZOp()
-    s = xf.AddScaleOp()
-    t.Set(Gf.Vec3d(cx + (FRONT - REAR) / 2, cy, (0.02 + h) / 2))
+    xf.AddScaleOp().Set(Gf.Vec3f(1.0, 1.0, 1.0))
+    t.Set(Gf.Vec3d(cx, cy, 0.0))
     r.Set(math.degrees(yaw))
-    s.Set(Gf.Vec3f((FRONT + REAR) / 2, WIDTH / 2, (h - 0.02) / 2))
+    c = UsdGeom.Cube.Define(stage, path + "/body")
+    c.GetSizeAttr().Set(2.0)
+    cf = UsdGeom.Xformable(c)
+    cf.AddTranslateOp().Set(Gf.Vec3d((FRONT - REAR) / 2, 0.0, (0.02 + h) / 2))
+    cf.AddScaleOp().Set(Gf.Vec3f((FRONT + REAR) / 2, WIDTH / 2, (h - 0.02) / 2))
     UsdShade.MaterialBindingAPI(c.GetPrim()).Bind(mats[key])
-    return c
+    return root
 
 
 def sweep_ring(stage, path, cx, cy, r, mats, key="sweep", seg=96, t=0.03):
@@ -354,6 +366,30 @@ def build(case):
         note.append("빨강 = 멈추라고 한 자리 · 주황 = 실제로 서는 자리")
         note.append("v_max %.2f m/s 에서 정지거리 **%.3f m** = 칸 %.2f 의 %.0f %%"
                     % (V_MAX, d, P, 100 * d / P))
+    elif case == "slip":
+        # 주황 = 계획(축 중심 제자리 회전) · 본체 = 실제(실측 중심으로 회전)
+        footprint(stage, "/World/Plan", 0, 0, 0.0, mats, key="sweep")
+        footprint(stage, "/World/A", 0, 0, 0.0, mats)
+        # 회전 중심 — 어느 부품도 아닌 그 점
+        box(stage, "/World/Mark/c", C_SLIP[0]-0.035, C_SLIP[0]+0.035,
+            C_SLIP[1]-0.035, C_SLIP[1]+0.035, 0.006, 0.09, mats["hit"])
+        # 축이 지나간 자리 — 호를 점으로 깐다. 이게 밀림의 궤적이다.
+        for i in range(1, 25):
+            ax, ay = slip_axle(TURN_DEG * i / 24.0)
+            box(stage, "/World/Mark/t%d" % i, ax-0.018, ax+0.018,
+                ay-0.018, ay+0.018, 0.006, 0.012, mats["sweep"])
+        ex, ey = slip_axle(TURN_DEG)
+        end = math.hypot(ex, ey)
+        # 꼬리가 쓸고 가는 원 — 「무엇이 밀었나」의 후보가 여기 있다
+        sweep_ring(stage, "/World/SweepRear", 0, 0, R_REAR, mats, seg=96, t=0.022)
+        note.append("주황 발자국 = 계획(축 중심 제자리) · 본체 = 실제")
+        note.append("실측 회전 중심 (%+.0f, %+.0f) mm · 축에서 %.0f mm — "
+                    "구동바퀴(0,±250)도 캐스터(-1110,0)도 아니다"
+                    % (C_SLIP[0]*1000, C_SLIP[1]*1000, R_SLIP*1000))
+        note.append("90도 돌면 축이 %.0f mm 끌려간다 (sqrt(2) x %.0f). "
+                    "A3#253 실측 %.0f mm" % (end*1000, R_SLIP*1000, SLIP_MEAS*1000))
+        note.append("꼬리 반경 %.3f m 가 쓸고 간다 — 민 것의 후보는 그 칸의 랙이다"
+                    % R_REAR)
     elif case == "turn":
         footprint(stage, "/World/A", 0, 0, 0.0, mats)
         footprint(stage, "/World/B", 0, P, 0.0, mats, key="hit")
@@ -386,7 +422,8 @@ N_CELL = 3                         # 몇 칸을 달리나
 X0 = -1.0                          # 출발 x — 궤적을 격자 가운데에 놓는다
 T_CELL = 2.0 * math.sqrt(P / A_LIN)          # 칸마다 정지할 때 한 칸에 드는 시간
 D_STOP = V_MAX ** 2 / (2 * A_LIN)            # v_max 에서의 정지거리
-DUR = {"accel": N_CELL * T_CELL + 0.6, "decel": 3.2}
+#   slip 만 **느린 그림**이다 — 실제 90도는 0.76 초라 실시간으로는 눈이 못 쫓는다.
+DUR = {"accel": N_CELL * T_CELL + 0.6, "decel": 3.2, "slip": 4.0}
 
 
 def x_plan(t):
@@ -415,6 +452,37 @@ def x_brake(t):
     return V_MAX * dt_ - 0.5 * A_LIN * dt_ ** 2
 
 
+# ── 회전 밀림 — **실측된 회전 중심**으로 돌린다 ──────────────────────
+#   제자리 회전이면 축은 그 자리에 남아야 한다. A3#253 은 90도를 돌고 축이
+#   363.4 mm 가 있었다. 그 궤적에서 역산한 회전 중심이 차체 (+187, -133) mm,
+#   축에서 229 mm 떨어진 점이다 (`isaac_drive.py:2346`).
+#
+#   ★ 어느 부품도 아닌 점이다 — 구동바퀴는 (0, ±250), 캐스터는 (-1110, 0).
+#     부품이 아닌 점이 중심이면 순수 회전이 아니라 **밖에서 밀린 것**이다.
+#
+#   그래서 이 장면은 속도를 안 건드린다. 계단 입력 가설은 각가속 램프 A/B 에서
+#   이미 닫혔다 (363.4 -> 375.5, 안 변했다). 여기서는 **그 중심으로 돌리면
+#   무엇이 보이는지**만 낸다 — 축이 끌려가는 그림이 곧 밀림이다.
+C_SLIP = (0.187, -0.133)                     # 실측 회전 중심 (차체 좌표) [m]
+R_SLIP = math.hypot(*C_SLIP)                 # 0.229 m
+SLIP_MEAS = 0.3634                           # A3#253 실측 종료 오차 [m]
+TURN_DEG = 90.0
+TURN_REAL_S = 0.76                           # 실제 90도 소요 (Isaac 실측)
+
+
+def slip_axle(deg):
+    """중심 C 로 deg 만큼 돌았을 때 **축이 가 있는 자리.**
+
+    축은 처음 원점에 있었다. C 를 중심으로 돌면 축도 같이 끌려간다 —
+    A(t) = C + R(t)*(0 - C). 90도 에서 |A| = sqrt(2)*|C| 가 된다.
+    """
+    a = math.radians(deg)
+    ca, sa = math.cos(a), math.sin(a)
+    dx, dy = -C_SLIP[0], -C_SLIP[1]
+    return (C_SLIP[0] + dx * ca - dy * sa,
+            C_SLIP[1] + dx * sa + dy * ca)
+
+
 # 가감속 장면은 **옆에서** 본다 — 궤도를 돌면 얼마나 갔는지 눈이 못 따라간다.
 #   (바라보는 점, 카메라 자리)
 CAM_FIX = {
@@ -425,6 +493,8 @@ CAM_FIX = {
               (X0 + N_CELL * P / 2, -5.2, 2.8)),
     "decel": ((D_STOP / 2 - 0.2, 0.0, 0.35),
               (D_STOP / 2 - 0.2, -4.2, 2.2)),
+    # 밀림은 **위에서** 본다 — 축이 얼마나 끌려갔나가 요점이라 옆에서는 안 보인다.
+    "slip":  ((0.05, -0.16, 0.15), (0.05, -2.2, 4.3)),
 }
 
 
@@ -434,6 +504,7 @@ MOTION = {
     "follow": ("/World/B", "app"),
     "accel":  (None, "race"),
     "decel":  (None, "brake"),
+    "slip":   (None, "slip"),
 }
 
 
@@ -443,6 +514,18 @@ def animate(stage, case, u):
     if mo is None:
         return u * 2 * math.pi * 0.5          # 정적 장면 — 반 바퀴 궤도
     path, kind = mo
+    if kind == "slip":
+        # 같은 각도를 둘 다 돈다. 다른 것은 **무엇을 중심으로 도느냐**뿐이다.
+        deg = u * TURN_DEG
+        pl = UsdGeom.Xformable(stage.GetPrimAtPath("/World/Plan")) \
+            .GetOrderedXformOps()
+        pl[1].Set(deg)                       # 계획 — 축이 중심, 제자리
+        ax, ay = slip_axle(deg)              # 실제 — 축이 끌려간다
+        rl = UsdGeom.Xformable(stage.GetPrimAtPath("/World/A")) \
+            .GetOrderedXformOps()
+        rl[0].Set(Gf.Vec3d(ax, ay, rl[0].Get()[2]))
+        rl[1].Set(deg)
+        return 0.0
     if kind in ("race", "brake"):
         t = u * DUR[case]
         def put(p, x):
@@ -461,14 +544,18 @@ def animate(stage, case, u):
         ops[1].Set(u * 90.0)
     else:
         # 뒤에서 한 칸 간격까지 다가온다. 마지막 30 % 는 멈춰 겹침을 보여준다.
+        #   ★ ops[0] 은 **축** 자리다 — 차체 중심이 아니다. 예전엔 여기에
+        #     (FRONT-REAR)/2 를 더했는데, 그건 상자 판의 옛 규약이었고 에셋
+        #     판에서는 로봇이 360 mm 어긋나 섰다. `footprint` 가 둘 다 축을
+        #     원점으로 쓰게 고치면서 같이 걷어낸다.
         v = min(1.0, u / 0.7)
         x0, x1 = -2.8 * P, -P
         cx = x0 + (x1 - x0) * v
-        ops[0].Set(Gf.Vec3d(cx + (FRONT - REAR) / 2, 0.0, ops[0].Get()[2]))
+        ops[0].Set(Gf.Vec3d(cx, 0.0, ops[0].Get()[2]))
     return 0.0
 
 
-cases = (["footprint", "side", "follow", "rack", "turn", "accel", "decel"]
+cases = (["footprint", "side", "follow", "rack", "turn", "accel", "decel", "slip"]
          if A.case == "all" else [A.case])
 made = [build(c) for c in cases]
 
