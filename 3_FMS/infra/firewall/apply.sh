@@ -30,14 +30,15 @@ for a in "$@"; do
 done
 
 render() {
-    local IFACE=ens5 ALLOW_1883="" ALLOW_9002=""
+    local IFACE=ens5 ALLOW_1883="" ALLOW_9002="" ALLOW_5432="" ALLOW_5672="" ALLOW_6379=""
     if [ -f "$ENV_FILE" ]; then
         # shellcheck disable=SC1090
         . "$ENV_FILE"
     else
-        echo "※ $ENV_FILE 없음 — 허용 목록 비움(공인 NIC 에서 1883·9002 전부 차단)" >&2
+        echo "※ $ENV_FILE 없음 — 허용 목록 비움(공인 NIC 에서 1883·9002·5432·5672·6379 전부 차단)" >&2
     fi
-    awk -v iface="$IFACE" -v a1883="$ALLOW_1883" -v a9002="$ALLOW_9002" '
+    awk -v iface="$IFACE" -v a1883="$ALLOW_1883" -v a9002="$ALLOW_9002" \
+        -v a5432="$ALLOW_5432" -v a5672="$ALLOW_5672" -v a6379="$ALLOW_6379" '
         function emit(port, list,   n, arr, i) {
             n = split(list, arr, /[ ,]+/)
             for (i = 1; i <= n; i++) if (arr[i] != "")
@@ -45,6 +46,9 @@ render() {
         }
         /^#@ALLOW 1883$/ { emit("1883", a1883); next }
         /^#@ALLOW 9002$/ { emit("9002", a9002); next }
+        /^#@ALLOW 5432$/ { emit("5432", a5432); next }
+        /^#@ALLOW 5672$/ { emit("5672", a5672); next }
+        /^#@ALLOW 6379$/ { emit("6379", a6379); next }
         { gsub(/@IFACE@/, iface); print }
     ' "$TEMPLATE"
 }

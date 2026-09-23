@@ -10,6 +10,13 @@
 -A DOCKER-USER -i @IFACE@ -p tcp -m conntrack --ctorigdstport 1883 --ctdir ORIGINAL -j DROP
 #@ALLOW 9002
 -A DOCKER-USER -i @IFACE@ -p tcp -m conntrack --ctorigdstport 9002 --ctdir ORIGINAL -j DROP
+# 5432·5672·6379 는 k3s 파드용으로 EC2 사설 IP 에 publish 했다(4_Web/docker-compose.yml, -258). 사설 IP 도 공인 IP 와 1:1 NAT 라 밖에서 닿는다 — 여기서 막는다
+#@ALLOW 5432
+-A DOCKER-USER -i @IFACE@ -p tcp -m conntrack --ctorigdstport 5432 --ctdir ORIGINAL -j DROP
+#@ALLOW 5672
+-A DOCKER-USER -i @IFACE@ -p tcp -m conntrack --ctorigdstport 5672 --ctdir ORIGINAL -j DROP
+#@ALLOW 6379
+-A DOCKER-USER -i @IFACE@ -p tcp -m conntrack --ctorigdstport 6379 --ctdir ORIGINAL -j DROP
 -A DOCKER-USER -j RETURN
 COMMIT
 # END S15P21A106 DOCKER-USER

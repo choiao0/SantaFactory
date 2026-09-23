@@ -1,0 +1,95 @@
+# 백엔드 (Spring Boot) — 4_Web/docker-compose.yml 의 backend 서비스를 k3s 로 (S15P21A106-258).
+# 목적은 무중단 배포: 새 파드가 readiness 를 통과한 뒤에야 옛 파드를 내린다(maxSurge 1, maxUnavailable 0).
+# env 는 Secret backend-env 하나로 받는다 — Jenkins 가 compose 파일이 조립한 환경(db·rabbitmq·redis·pdf 이름 그대로)을
+# 그대로 Secret 으로 만들어 넣는다(README). 그 이름들은 compose-services.yaml 과 pdf.yaml 의 Service 가 풀어 준다.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  namespace: web
+  labels:
+    app: backend
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app: backend
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # 컬럼 삭제 같은 파괴적 마이그레이션을 내는 release 는 maxSurge 0 으로 바꿔 한 번 내리고 올린다 — 두 버전이 같은 스키마를 못 쓴다
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: backend
+    spec:
+      automountServiceAccountToken: false
+      # DB·브로커가 EC2 에 있으니 같은 노드에. control-plane taint 는 이 파드만 넘는다(워커는 GCP 로)
+      nodeSelector:
+        kubernetes.io/hostname: ip-172-26-3-57
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+      # preStop 5초 + graceful 30초(application.yml) 안에 끝나야 한다
+      terminationGracePeriodSeconds: 45
+      containers:
+        - name: backend
+          image: j15a106.p.ssafy.io/santafactory-be:latest
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            - secretRef:
+                name: backend-env
+          # Spring 기동이 30~60초. 그동안은 startupProbe 만 보고, 통과한 뒤 readiness·liveness 가 시작된다
+          startupProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: http
+            periodSeconds: 5
+            failureThreshold: 30
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: http
+            periodSeconds: 15
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              # 엔드포인트 목록에서 빠지는 데 몇 초 걸린다. 그 사이 들어온 요청을 받아 주고 내려간다
+              exec:
+                command: ["sh", "-c", "sleep 5"]
+          resources:
+            # JVM 은 -XX:MaxRAMPercentage=70 (Dockerfile) 이라 상한 2Gi 면 힙 약 1.4Gi. CPU 상한은 두지 않는다 — 기동 때 필요하다
+            requests:
+              cpu: 500m
+              memory: 1536Mi
+            limits:
+              memory: 2Gi
+---
+# host nginx 가 /api 를 이 고정 주소로 넘긴다(server-setup/nginx-santafactory.conf). NodePort 는 쓰지 않는다 —
+# 보안그룹이 전 포트 개방이라 밖에서도 닿는다. ClusterIP 는 EC2 안의 프로세스만 닿는다.
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend
+  namespace: web
+spec:
+  type: ClusterIP
+  clusterIP: 10.43.0.80
+  selector:
+    app: backend
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
