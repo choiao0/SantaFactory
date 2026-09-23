@@ -2108,6 +2108,14 @@ def dump_turn_trace(trace, half: float = 0.0, n: int = 12) -> str:
 # ☹ ★ 기본 **꺼짐**이다. 대책이 아직 안 섰다 — 켜면 **더 나빠진다** (아래).
 #   `PIBT_RECOVER=1` 은 위 검출/기동을 실험해 보는 용도다.
 RECOV_ON = os.environ.get("PIBT_RECOVER", "0") not in ("0", "", "no", "off")
+
+# ★ 사건 장부 (2026-09-23) — `FleetController._event` 참조.
+#   개수만 세면 「몇 번」은 아는데 **언제·어디서**를 모른다. 그 장면을 다시 찍거나
+#   문서에 자리를 쓰려면 좌표가 있어야 한다.
+EVENT_LOG = os.environ.get("PIBT_EVENT_LOG", "1") not in ("0", "", "no", "off")
+# 같은 (종류·주체)를 이 간격 안에서는 한 번만 남긴다 [시뮬 초]. 0 이면 전부.
+#   60 Hz 라 랙 침투 한 번이 수백 스텝 이어진다 — 안 묶으면 로그가 그것만으로 찬다.
+EVENT_GAP = float(os.environ.get("PIBT_EVENT_GAP", "") or 1.0)
 RECOV_AFTER = _tol_env("PIBT_RECOVER_AFTER", 1.0)     # 평형이 이만큼 이어지면 [s]
 RECOV_W = _tol_env("PIBT_RECOVER_W", 0.02)            # |w| 가 이 아래면 수렴 [rad/s]
 RECOV_D = _tol_env("PIBT_RECOVER_D", 0.30)            # 한 번에 물러날 거리 [m]
@@ -2850,6 +2858,7 @@ class FleetController:
         #   `PIBT_STATIC_CONTACT=0` 으로 끌 수 있다.
         self._obst_cells = None
         self._static_log_next = 0.0
+        self._event_seen: dict = {}          # 사건 장부의 중복 억제 (종류·주체 -> 마지막 시각)
         # ★ 회전 대기 게이트 상태 (-240). agent -> 기다린 시간 [s].
         self._turn_wait: dict[int, float] = {}
         self._uid_map: dict[int, Action] | None = None   # 양보 판정용 (지연 생성)
@@ -3662,6 +3671,40 @@ class FleetController:
         self.stats.turn_gaveup_other += 1
         return "교착 아님 — ADG 가 이 쌍을 안 묶었다"
 
+    # ═══ 사건 장부 ═══════════════════════════════════════════════════════
+    #   ★ 왜 따로 찍나 (2026-09-23)
+    #
+    #   지금까지 런이 내는 것은 **개수**뿐이었다 — `contact_events=1`. 그런데
+    #   「몇 번」으로는 아무것도 못 한다. 그 장면을 다시 찍으려면 **언제·어디서**
+    #   가 있어야 하고, 문서에 쓸 때도 「1건」보다 「(46.2, 50.8)에서 1건」이 낫다.
+    #
+    #   기계가 읽을 수 있게 **한 줄 한 사건**, 고정 형식으로 낸다. 사람이 읽는
+    #   상세 보고(위 `★★ 차체 접촉 …`)는 그대로 두고 이것을 **덧붙인다** — 상세는
+    #   깊어질 때만 찍지만 장부는 **모든 사건**을 남긴다.
+    #
+    #       [event] kind=contact t=338.6 x=46.20 y=50.83 a=5 b=12 gap=-0.004
+    #       [event] kind=rack    t=412.1 x=68.04 y=41.02 a=3 pen=0.058
+    #       [event] kind=zone    t=455.0 x=67.10 y=41.00 a=3 pen=0.012
+    #
+    #   `tools/` 가 이 줄만 grep 하면 촬영할 시각·좌표 목록이 나온다.
+    #   `PIBT_EVENT_LOG=0` 으로 끈다.
+    def _event(self, kind: str, x: float, y: float, **kw) -> None:
+        if not EVENT_LOG:
+            return
+        # 같은 사건이 60 Hz 로 수천 줄 나오지 않게, 같은 (종류·주체)는
+        # `EVENT_GAP` 초에 한 번만 남긴다. 0 이면 전부 남긴다.
+        key = (kind, kw.get("a"), kw.get("b"))
+        now = self.stats.sim_time
+        if EVENT_GAP > 0.0:
+            last = self._event_seen.get(key)
+            if last is not None and now - last < EVENT_GAP:
+                return
+            self._event_seen[key] = now
+        tail = " ".join(f"{k}={v:.3f}" if isinstance(v, float) else f"{k}={v}"
+                        for k, v in kw.items() if v is not None)
+        print(f"[event] kind={kind} t={now:.2f} x={x:.2f} y={y:.2f} {tail}",
+              flush=True)
+
     def _check_static(self, a, pose, body) -> None:
         """차체가 **랙**을 파고들었나 (L, -240).
 
@@ -3682,9 +3725,11 @@ class FleetController:
         if zpen > 0.0:
             self.stats.zone_intrusion_events += 1
             self.stats.zone_worst_pen = max(self.stats.zone_worst_pen, zpen)
+            self._event("zone", pose[0], pose[1], a=a, pen=zpen)
         if pen <= 0.0:
             return
         self.stats.static_contact_events += 1
+        self._event("rack", pose[0], pose[1], a=a, pen=pen)
         first = pen > self.stats.static_worst_pen
         self.stats.static_worst_pen = max(self.stats.static_worst_pen, pen)
         # 60 Hz 라 매 스텝 찍으면 로그가 수천 줄이 된다. **더 깊어질 때만** 찍는다 —
@@ -3712,6 +3757,10 @@ class FleetController:
         # ★ **한 덩어리로** 내보낸다 (-240, 2026-09-18). 여러 번 나눠 찍었더니
         #   `carb` 로그와 엉켜 두 번째 줄부터 통째로 잘렸다 — 정작 상대편
         #   agent 의 자세를 잃었고, 그 한 줄이 이 사건의 핵심이었다.
+        # 장부 먼저 — 아래 상세가 예외로 죽어도 사건은 남아야 한다.
+        _pa, _pb = poses[a], poses[b]
+        self._event("contact", (_pa[0] + _pb[0]) / 2, (_pa[1] + _pb[1]) / 2,
+                    a=a, b=b, gap=gap)
         lines = [f"★★ 차체 접촉  쌍 ({a},{b})  최소거리 {gap:.4f} m  "
                  f"공유칸 {sorted(shared)}  t={self.stats.sim_time:.1f}s"]
         try:
