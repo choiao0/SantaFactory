@@ -82,6 +82,7 @@ print("═" * 72)
 robots = range(N) if A.robot < 0 else [A.robot]
 runs, stops, turns = [], [], []
 best = None                                    # 그림으로 낼 한 구간
+seen = {"v": [], "w": [], "seg": 0, "short": 0}   # 못 찾았을 때 이유를 말하려고
 
 for r in robots:
     x, y, th = P[:, r, 0], P[:, r, 1], P[:, r, 2]
@@ -89,6 +90,8 @@ for r in robots:
     w = smooth(np.abs(wrap(np.diff(th))) / dt, A.smooth)
     moving = (v > A.vmin) & (w < A.wmin)       # 전진 구간
     spin = w >= A.wmin                         # 회전 구간
+    seen["v"].append(v)
+    seen["w"].append(w)
 
     # ── [1][2] 전진 구간 — 칸 하나를 가는 동안의 v 곡선 ────────────
     i = 0
@@ -101,6 +104,9 @@ for r in robots:
             j += 1
         seg = v[i:j]
         dist = float(np.sum(seg) * dt)
+        seen["seg"] += 1
+        if len(seg) < 4 or dist <= A.pitch * 0.5:
+            seen["short"] += 1
         if len(seg) >= 4 and dist > A.pitch * 0.5:
             peak = float(seg.max())
             runs.append((peak, dist, (j - i) * dt))
@@ -129,7 +135,26 @@ for r in robots:
         i = j
 
 if not runs:
-    print("전진 구간을 못 찾았다 — --vmin/--wmin 을 조절하거나 녹화가 짧다.")
+    # ☹ 「못 찾았다」만 찍으면 왜인지 모른다. 분포를 보여 주고 어느 문턱이
+    #   걸렸는지 말한다 — 문턱이 높은 건지, 정말 안 움직인 건지.
+    vv = np.concatenate(seen["v"]) if seen["v"] else np.zeros(1)
+    ww = np.concatenate(seen["w"]) if seen["w"] else np.zeros(1)
+    print("\n☹ 쓸 만한 전진 구간이 없다. 왜인지 보자.")
+    print("   v 분포  p50 %.3f · p90 %.3f · p99 %.3f · 최대 %.3f m/s  (문턱 --vmin %.2f)"
+          % (np.percentile(vv, 50), np.percentile(vv, 90), np.percentile(vv, 99), vv.max(), A.vmin))
+    print("   w 분포  p50 %.3f · p90 %.3f · p99 %.3f · 최대 %.3f rad/s (문턱 --wmin %.2f)"
+          % (np.percentile(ww, 50), np.percentile(ww, 90), np.percentile(ww, 99), ww.max(), A.wmin))
+    print("   후보 구간 %d개 중 %d개가 **너무 짧다** (거리 <= 칸의 절반 %.2f m)"
+          % (seen["seg"], seen["short"], A.pitch * 0.5))
+    print()
+    if vv.max() <= A.vmin:
+        print("   -> 로봇이 사실상 **안 움직였다**. 주행이 짧거나 다 대기였다.")
+    elif seen["seg"] and seen["short"] == seen["seg"]:
+        print("   -> 움직이긴 하는데 구간이 짧다. **칸마다 멈추고 있다**는 뜻일 수 있다")
+        print("      (그 자체가 `measure_seq.py` 가 답하는 질문이다).")
+        print("      한 칸을 통째로 보려면:  --pitch 0.5  또는 --vmin 0.02")
+    else:
+        print("   -> 문턱을 낮춰 보라:  --vmin 0.02 --wmin 0.30")
     sys.exit(1)
 
 pk = np.array([r[0] for r in runs])
