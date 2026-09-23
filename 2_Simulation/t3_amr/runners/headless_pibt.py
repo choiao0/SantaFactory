@@ -321,6 +321,8 @@ SIDE_EVERY = max(1, int(os.environ.get("PIBT_SIDE_EVERY", "") or 1))
 # 1280x720 두 시점이 28 ms/step(배속 0.60)이었다.
 SIDE_RES = (os.environ.get("PIBT_SIDE_RES", "") or "960x540").lower()
 _side_cam_warned = False
+_side_xop = None            # 카메라 transform op — 한 번만 만들고 값만 갱신한다
+_side_cam_n = 0             # 카메라를 옮긴 횟수 (로그용)
 
 
 def _side_track(fleet_):
@@ -353,14 +355,29 @@ def _side_track(fleet_):
         f = (tgt - eye).GetNormalized()
         r = Gf.Cross(f, Gf.Vec3d(0, 0, 1)).GetNormalized()
         u = Gf.Cross(r, f)
-        prim = omni.usd.get_context().get_stage().GetPrimAtPath(CAMERA_SIDE)
-        if not prim or not prim.IsValid():
-            raise RuntimeError(f"카메라 prim 이 없다: {CAMERA_SIDE}")
-        xf = UsdGeom.Xformable(prim)
-        xf.ClearXformOpOrder()
-        xf.AddTransformOp().Set(Gf.Matrix4d(
+        # ★ transform op 은 **한 번만 만들고 값만 갱신**한다 (2026-09-23).
+        #   매 프레임 `ClearXformOpOrder()` + `AddTransformOp()` 를 하면 이미
+        #   있는 `xformOp:transform` 을 다시 만들려다 두 번째부터 조용히 실패할
+        #   수 있다. 그러면 카메라가 **첫 자리에 그대로 멈춘다** — 영상이 한
+        #   장면에서 안 바뀐다.
+        global _side_xop
+        if _side_xop is None:
+            prim = omni.usd.get_context().get_stage().GetPrimAtPath(CAMERA_SIDE)
+            if not prim or not prim.IsValid():
+                raise RuntimeError(f"카메라 prim 이 없다: {CAMERA_SIDE}")
+            xf = UsdGeom.Xformable(prim)
+            xf.ClearXformOpOrder()
+            _side_xop = xf.AddTransformOp()
+        _side_xop.Set(Gf.Matrix4d(
             r[0], r[1], r[2], 0, u[0], u[1], u[2], 0,
             -f[0], -f[1], -f[2], 0, eye[0], eye[1], eye[2], 1))
+        # 움직이는지 로그로 보이게 한다 — 안 움직이면 여기 좌표가 그대로다.
+        global _side_cam_n
+        if _side_cam_n < 3 or _side_cam_n % 100 == 0:
+            print(f"[hl]   [cam] #{_side_cam_n} 로봇 ({x:.2f}, {y:.2f}, "
+                  f"{_m.degrees(yaw):.0f}deg) -> 눈 ({eye[0]:.2f}, {eye[1]:.2f}, "
+                  f"{eye[2]:.2f})", flush=True)
+        _side_cam_n += 1
     except Exception as e:                               # noqa: BLE001
         if not _side_cam_warned:
             _side_cam_warned = True
