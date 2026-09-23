@@ -26,6 +26,11 @@ pipeline {
         WEB_DEPLOY   = "${env.WEB_DEPLOY ?: 'compose'}"
         REGISTRY      = '127.0.0.1:5000'        // EC2 가 push 하는 주소(루프백 평문 허용)
         REGISTRY_NODE = 'j15a106.p.ssafy.io'    // 노드가 pull 하는 주소 — nginx 443 /v2/ → 루프백 레지스트리 (3_FMS/infra/nginx/registry-v2.conf, -249). tailnet 미사용
+        // (-268) 백엔드 배포 전 DB 사본. 컨테이너·볼륨 이름은 4_Web/docker-compose.yml(name: santafactory, volumes.db-data) 에서 온다
+        DB_CONTAINER   = 'a106-db'
+        DB_VOLUME      = 'santafactory_db-data'
+        DB_BACKUP_DIR  = '/var/lib/jenkins/db-backup'
+        DB_BACKUP_KEEP = '10'
     }
 
     stages {
@@ -99,6 +104,37 @@ pipeline {
                         "FE ${env.BUILD_FE == 'true' ? '✅' : '⬜'}  " +
                         "FMS ${fmsShown ? '✅' : '⬜'}"
                 }
+            }
+        }
+
+        stage('DB 덤프') {
+            // (-268) 백엔드 배포는 db 를 건드린다 — compose 가 설정이 바뀐 db 컨테이너를 다시 만들고(-258 의 포트 바인딩이 그랬다),
+            // 새 백엔드가 Flyway 마이그레이션을 건다. 09-22 배포 실패 뒤 되살릴 사본이 없어 견적 데이터를 잃었다.
+            // 프론트는 compose 에서 db 에 의존하지 않아 백엔드 앞에서만 뜬다. 덤프가 실패하면 여기서 멈춘다 — 사본 없이 db 를 건드리지 않는다.
+            // 되살리기: docker exec -i a106-db sh -c 'pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB" --clean --if-exists' < <덤프 파일>
+            when { expression { env.SKIP_ALL != 'true' && env.BUILD_BE == 'true' } }
+            steps {
+                sh '''
+                    mkdir -p "$DB_BACKUP_DIR"
+                    rm -f "$DB_BACKUP_DIR"/*.part
+                    if [ "$(docker inspect -f '{{.State.Running}}' "$DB_CONTAINER" 2>/dev/null)" != "true" ]; then
+                        if docker volume inspect "$DB_VOLUME" > /dev/null 2>&1; then
+                            echo "$DB_VOLUME 에 데이터가 있는데 $DB_CONTAINER 가 떠 있지 않아 사본을 못 뜸 — db 를 확인한 뒤 다시 배포"
+                            exit 1
+                        fi
+                        echo "$DB_VOLUME 없음 — 첫 배포라 뜰 데이터가 없다"
+                        exit 0
+                    fi
+                    f="$DB_BACKUP_DIR/santafactory_$(date +%Y%m%d_%H%M%S)_b$BUILD_NUMBER.dump"
+                    # 계정·DB 이름은 컨테이너 안 환경변수로 푼다 — 작은따옴표라 여기서 펼쳐지지 않아 로그(-x)에 안 찍힌다.
+                    # 공식 postgres 이미지는 컨테이너 안 로컬 접속에 비밀번호를 묻지 않는다.
+                    docker exec "$DB_CONTAINER" sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc' > "$f.part"
+                    # 끝까지 읽어 본다 — 목차(-l)만 보면 데이터가 잘린 파일도 통과한다
+                    docker exec -i "$DB_CONTAINER" pg_restore -f /dev/null < "$f.part"
+                    mv "$f.part" "$f"
+                    echo "DB 덤프: $f ($(du -h "$f" | cut -f1))"
+                    ls -1t "$DB_BACKUP_DIR"/santafactory_*.dump | tail -n +$((DB_BACKUP_KEEP + 1)) | xargs -r rm -f
+                '''
             }
         }
 
