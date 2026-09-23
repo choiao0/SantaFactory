@@ -122,6 +122,7 @@ MP4="$OUT/demo_$TAG.mp4"
 #   점이라 못 썼고, 3인칭은 창고를 넓게 담아 렌더가 무거웠다.
 #
 #   되돌리려면:  PIBT_SIDE_VIEW=chase              3인칭 추종
+#               PIBT_SIDE_FOLLOW=5                 특정 로봇을 따라간다
 #               PIBT_SIDE_FOLLOW=-1 SIDE_CAM=/World/Cameras/Cam_Overview   조망
 SIDE_CAM="${SIDE_CAM:-/World/Cameras/Cam_Spot}"
 SHOTS_SIDE="$OUT/shots_${TAG}_side"
@@ -341,7 +342,11 @@ else
     # 근접 화면이라 조망만큼 클 필요가 없다. **복사량이 곧 비용**이다 —
     # 1280x720 두 시점이 28 ms/step(배속 0.60)이었다 (2026-09-23 실측).
     export PIBT_SIDE_RES="${PIBT_SIDE_RES:-960x540}"
-    export PIBT_SIDE_FOLLOW="${PIBT_SIDE_FOLLOW:-0}"
+    # ★ `auto` — 초반에 가장 많이 움직인 로봇을 고른다 (2026-09-23).
+    #   여기가 `0` 으로 박혀 있어서 `headless_pibt` 의 auto 기본값이 못 닿았다.
+    #   0번은 충전존에서 시작해 한참 서 있어 영상이 33초 동안 안 바뀌었다
+    #   (`cam1` 실측: #0 도 #100 도 (103.50, 48.50) 그대로).
+    export PIBT_SIDE_FOLLOW="${PIBT_SIDE_FOLLOW:-auto}"
     # ★ 기본 **1인칭**(대시캠). 3인칭 추종은 창고를 넓게 담아 렌더가 무겁다.
     #   되돌리려면:  PIBT_SIDE_VIEW=chase PIBT_SIDE_DIST=6
     export PIBT_SIDE_VIEW="${PIBT_SIDE_VIEW:-fpv}"
