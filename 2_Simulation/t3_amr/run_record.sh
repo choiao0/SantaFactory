@@ -328,7 +328,7 @@ if [ "$CAPTURE" = "0" ] || [ -z "$SIDE_CAM" ] || [ "${HEADLESS:-0}" != "1" ]; th
     export PIBT_SHOTS_SIDE=""
     export PIBT_CAMERA_SIDE=""
     [ -n "$SIDE_CAM" ] && [ "${HEADLESS:-0}" != "1" ] && \
-        echo "[rec] 측면은 HEADLESS=1 에서만 찍습니다 — 이번 판은 상단만."
+        echo "[rec] 2번영상은 HEADLESS=1 에서만 찍습니다 — 이번 판은 1번만."
 else
     export PIBT_SHOTS_SIDE="$SHOTS_SIDE"
     export PIBT_CAMERA_SIDE="$SIDE_CAM"
@@ -593,7 +593,7 @@ cleanup() {
     assemble "$SHOTS" "$MP4" "상단 "
     # ★ 측면이 켜져 있으면 이어서 만든다. 프레임이 0장이면 조용히 지나간다.
     #   업로드가 상단 -> 측면 순서로 기다리므로 여기서도 상단을 먼저 만든다.
-    [ -n "${PIBT_SHOTS_SIDE:-}" ] && assemble "$SHOTS_SIDE" "$MP4_SIDE" "측면 "
+    [ -n "${PIBT_SHOTS_SIDE:-}" ] && assemble "$SHOTS_SIDE" "$MP4_SIDE" "2번영상(1인칭) "
 }
 trap cleanup EXIT
 trap 'exit 130' INT TERM
