@@ -84,9 +84,9 @@ class FakeRecorder:
     def video_path(self):
         return self.video
 
-    def side_video_path(self):
+    def fpv_video_path(self):
         """두 번째 시점 (-264). 기본은 None — 안 주면 종전 동작과 같다."""
-        return getattr(self, "side_video", None)
+        return getattr(self, "fpv_video", None)
 
     def pids(self):
         return [4242] if self._alive else []

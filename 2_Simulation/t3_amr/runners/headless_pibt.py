@@ -107,15 +107,15 @@ SHOTS = (os.environ.get("PIBT_SHOTS", "") or "").strip()
 
 # ★★ **두 번째 시점** (2026-09-22, -264). 비면 종전과 완전히 같다.
 #
-#   백엔드가 상단 키에서 `_side` 를 계산해 MinIO 에 있는지 확인하고 버튼을
+#   백엔드가 상단 키에서 `_fpv` 를 계산해 MinIO 에 있는지 확인하고 버튼을
 #   띄운다. 그래서 **파일 이름만** 지키면 되고 결과 페이로드는 안 바뀐다.
 #
 #   ☹ 부하 — 리플리케이터 경로는 **저장할 스텝에만** 렌더한다(1/STRIDE).
 #     시점이 둘이면 그 스텝에서 render product 가 둘이라 렌더가 대략 2배,
 #     디스크·조립·업로드도 2배다. 다만 물리는 그대로다 — 매 스텝 도는 물리에
 #     비하면 3 Hz 렌더의 2배는 작다. **실측 전이다.**
-SHOTS_SIDE = (os.environ.get("PIBT_SHOTS_SIDE", "") or "").strip()
-CAMERA_SIDE = (os.environ.get("PIBT_CAMERA_SIDE", "") or "").strip()
+SHOTS_FPV = (os.environ.get("PIBT_SHOTS_FPV", "") or "").strip()
+CAMERA_FPV = (os.environ.get("PIBT_CAMERA_FPV", "") or "").strip()
 SHOT_STRIDE = max(1, int(os.environ.get("PIBT_SHOT_STRIDE", "20")))
 SHOT_EXT = os.environ.get("PIBT_SHOT_EXT", "png")
 SHOT_RES = (os.environ.get("PIBT_HL_SHOT_RES", "") or "1280x720").lower()
@@ -231,12 +231,12 @@ _cap = None                 # None | "viewport" | "replicator"
 _rep_annot = None
 _rep_annot2 = None          # 측면. None 이면 상단만 찍는다
 _shot_n, _shot_fail = 0, 0
-_side_n = 0                 # 측면 장수 — 상단과 따로 센다 (경로가 다르다)
-_side_fail = 0              # 측면 저장 실패 누적 (상단처럼 몇 번은 참는다)
-_side_n_try = 0             # 측면 캡처 시도 횟수 — PIBT_SIDE_EVERY 주기 계산용
+_fpv_n = 0                 # 측면 장수 — 상단과 따로 센다 (경로가 다르다)
+_fpv_fail = 0              # 측면 저장 실패 누적 (상단처럼 몇 번은 참는다)
+_fpv_n_try = 0             # 측면 캡처 시도 횟수 — PIBT_FPV_EVERY 주기 계산용
 
 
-def _attach_side():
+def _attach_fpv():
     """측면 카메라를 **리플리케이터로** 붙인다. 실패하면 None.
 
     ★ 상단 경로와 **무관하게** 돈다 (2026-09-23).
@@ -247,36 +247,36 @@ def _attach_side():
 
     ☹ 2026-09-22 에 이 함수가 **리플리케이터 분기 안에만** 있었다. 그런데 이
       서버는 뷰포트 분기로 돌아서 측면이 한 장도 안 나왔다 (`hl264c`: 상단
-      6,861장 · 측면 0장). 오류도 경고도 없었다 — 백엔드가 `_side` 키를
+      6,861장 · 측면 0장). 오류도 경고도 없었다 — 백엔드가 `_fpv` 키를
       못 찾아 버튼만 안 생긴다.
 
     부하 — 실측 1.0 ms/step 이하 (촬영 ON 16.58 vs OFF 15.60, STRIDE 20).
     """
-    if not (SHOTS_SIDE and CAMERA_SIDE):
+    if not (SHOTS_FPV and CAMERA_FPV):
         return None
     try:
         import omni.kit.app as _ka
         _ka.get_app().get_extension_manager() \
            .set_extension_enabled_immediate("omni.replicator.core", True)
         import omni.replicator.core as rep                # noqa: E402
-        os.makedirs(SHOTS_SIDE, exist_ok=True)
-        _w, _h = (int(x) for x in SIDE_RES.split("x"))
+        os.makedirs(SHOTS_FPV, exist_ok=True)
+        _w, _h = (int(x) for x in FPV_RES.split("x"))
         annot = rep.AnnotatorRegistry.get_annotator("rgb")
-        annot.attach([rep.create.render_product(CAMERA_SIDE, (_w, _h))])
-        print(f"[hl] 촬영 ON (2번영상) {SHOTS_SIDE} · 카메라 {CAMERA_SIDE} · {_w}x{_h}"
-              + (" · 고정" if SIDE_FOLLOW < 0 else
-                 f" · 로봇 {'auto' if SIDE_AUTO else SIDE_FOLLOW} "
-                 + (f"3인칭 {SIDE_DIST:g}m" if SIDE_VIEW == "chase"
-                    else f"**1인칭** 앞 {SIDE_FWD:g}m · 높이 {SIDE_EYE_Z:g}m"
-                       f" · 초점 {SIDE_FOCAL:g}mm"))
-              + (f" · {SIDE_EVERY}번에 한 번" if SIDE_EVERY > 1 else ""))
+        annot.attach([rep.create.render_product(CAMERA_FPV, (_w, _h))])
+        print(f"[hl] 촬영 ON (2번영상) {SHOTS_FPV} · 카메라 {CAMERA_FPV} · {_w}x{_h}"
+              + (" · 고정" if FPV_FOLLOW < 0 else
+                 f" · 로봇 {'auto' if FPV_AUTO else FPV_FOLLOW} "
+                 + (f"3인칭 {FPV_DIST:g}m" if FPV_VIEW == "chase"
+                    else f"**1인칭** 앞 {FPV_FWD:g}m · 높이 {FPV_EYE_Z:g}m"
+                       f" · 초점 {FPV_FOCAL:g}mm"))
+              + (f" · {FPV_EVERY}번에 한 번" if FPV_EVERY > 1 else ""))
         return annot
     except Exception as e:                                # noqa: BLE001
         print(f"[hl] ☹ 2번영상을 못 켠다 — 1번만 찍는다: {e!r}")
         return None
 
 
-SIDE_FAIL_MAX = int(os.environ.get("PIBT_SIDE_FAIL_MAX", "") or 20)
+FPV_FAIL_MAX = int(os.environ.get("PIBT_FPV_FAIL_MAX", "") or 20)
 
 # ★★ 측면은 **AMR 한 대를 대각선 뒤에서** 잡는다 (2026-09-23).
 #
@@ -287,91 +287,91 @@ SIDE_FAIL_MAX = int(os.environ.get("PIBT_SIDE_FAIL_MAX", "") or 20)
 #   통로가 찍힌 영상이 백엔드로 올라갈 수 있다. 그래서 매 캡처마다 카메라를
 #   대상 로봇 뒤로 옮긴다.
 #
-#       PIBT_SIDE_FOLLOW   auto(기본) | 로봇 번호 | -1(카메라 고정)
-#       PIBT_SIDE_VIEW     fpv(기본) | chase
-#       PIBT_SIDE_DIST     chase 일 때 거리 [m]
-#       PIBT_SIDE_SIDE     chase 일 때 좌/우  (-1 왼쪽 · +1 오른쪽)
+#       PIBT_FPV_FOLLOW   auto(기본) | 로봇 번호 | -1(카메라 고정)
+#       PIBT_FPV_VIEW     fpv(기본) | chase
+#       PIBT_FPV_DIST     chase 일 때 거리 [m]
+#       PIBT_FPV_LR       chase 일 때 좌/우  (-1 왼쪽 · +1 오른쪽)
 #
 #   ★ 기본은 **1인칭**이다 (2026-09-23). 3인칭 추종(chase)은 카메라가 창고를
 #     넓게 담아 렌더가 무겁다. 1인칭은 통로 앞만 보므로 화면에 드는 기하가
 #     훨씬 적다. 주행 방향이 그대로 보여 시연에도 읽기 쉽다.
 #
 #     ☹ 복사 비용은 **안 줄어든다** — 텍스처를 호스트로 옮기는 몫은 픽셀 수에만
-#       달렸다. 줄이려면 `PIBT_SIDE_RES` 를 내리거나 `PIBT_SIDE_EVERY` 를 올린다.
+#       달렸다. 줄이려면 `PIBT_FPV_RES` 를 내리거나 `PIBT_FPV_EVERY` 를 올린다.
 # ★ 기본은 **auto** — 초반에 가장 많이 움직인 로봇을 고른다 (2026-09-23).
 #   0번은 충전존에서 시작해 한참 서 있는 일이 잦아 영상이 심심했다. 어느 번호가
 #   바쁜지는 시드·궤적마다 달라서 손으로 고르면 매번 빗나간다.
-#       PIBT_SIDE_FOLLOW=auto  (기본)  ·  =5 특정 로봇  ·  =-1 카메라 고정
-_sf = (os.environ.get("PIBT_SIDE_FOLLOW", "") or "auto").strip().lower()
-SIDE_AUTO = (_sf == "auto")
-SIDE_FOLLOW = 0 if SIDE_AUTO else (int(_sf) if _sf.lstrip("-").isdigit() else 0)
+#       PIBT_FPV_FOLLOW=auto  (기본)  ·  =5 특정 로봇  ·  =-1 카메라 고정
+_sf = (os.environ.get("PIBT_FPV_FOLLOW", "") or "auto").strip().lower()
+FPV_AUTO = (_sf == "auto")
+FPV_FOLLOW = 0 if FPV_AUTO else (int(_sf) if _sf.lstrip("-").isdigit() else 0)
 # 이만큼 캡처한 뒤 고른다. STRIDE 40 이면 15회 = 물리 600스텝 = 시뮬 10초.
-SIDE_AUTO_AFTER = max(1, int(os.environ.get("PIBT_SIDE_AUTO_AFTER", "") or 15))
+FPV_AUTO_AFTER = max(1, int(os.environ.get("PIBT_FPV_AUTO_AFTER", "") or 15))
 # 고르기 전 구간을 영상에서 버릴지 (기본 켬). 끄면 정지 화면으로 시작한다.
-WARMSTART = (os.environ.get("PIBT_SIDE_WARMSTART", "") or "1") not in ("0", "", "no", "off")
-SIDE_VIEW = (os.environ.get("PIBT_SIDE_VIEW", "") or "fpv").strip().lower()
-SIDE_DIST = float(os.environ.get("PIBT_SIDE_DIST", "") or 6.0)
-SIDE_LR = 1.0 if (os.environ.get("PIBT_SIDE_SIDE", "") or "-1").strip() != "-1" else -1.0
+WARMSTART = (os.environ.get("PIBT_FPV_WARMSTART", "") or "1") not in ("0", "", "no", "off")
+FPV_VIEW = (os.environ.get("PIBT_FPV_VIEW", "") or "fpv").strip().lower()
+FPV_DIST = float(os.environ.get("PIBT_FPV_DIST", "") or 6.0)
+FPV_LR = 1.0 if (os.environ.get("PIBT_FPV_LR", "") or "-1").strip() != "-1" else -1.0
 # ★ 1인칭 눈 위치 — **차 앞면보다 앞**이어야 한다.
 #   구동축이 앞이라(heading_offset=0) 차체는 뒤로 뻗지만, 선반은 축 앞으로도
 #   0.39 m 나오고 z 0.22~1.65 를 채운다. 축 바로 위에 두면 카메라가 **선반
 #   구조물 안**에 들어가 포스트와 데크만 보인다.
 #   축에서 앞으로 0.55 m · 높이 1.20 m 가 기본 — 차 앞머리에 단 대시캠 자리다.
-SIDE_FWD = float(os.environ.get("PIBT_SIDE_FWD", "") or 0.55)
-SIDE_EYE_Z = float(os.environ.get("PIBT_SIDE_EYE_Z", "") or 1.20)
+FPV_FWD = float(os.environ.get("PIBT_FPV_FWD", "") or 0.55)
+FPV_EYE_Z = float(os.environ.get("PIBT_FPV_EYE_Z", "") or 1.20)
 # 겨냥점을 앞으로 이만큼, 바닥 쪽으로 내려 본다 — 통로와 앞차가 같이 들어온다.
-SIDE_LOOK = float(os.environ.get("PIBT_SIDE_LOOK", "") or 12.0)
-SIDE_LOOK_Z = float(os.environ.get("PIBT_SIDE_LOOK_Z", "") or 0.60)
+FPV_LOOK = float(os.environ.get("PIBT_FPV_LOOK", "") or 12.0)
+FPV_LOOK_Z = float(os.environ.get("PIBT_FPV_LOOK_Z", "") or 0.60)
 # 측면을 **몇 번에 한 번** 찍나. 1 이면 상단과 같은 주기.
 #   렉이 심하면 이것을 올린다 — 비용이 그만큼 나뉜다. 대신 측면 영상이 그 배수만큼
 #   빨라진다 (상단 10배속 · EVERY=3 이면 측면 30배속).
-SIDE_EVERY = max(1, int(os.environ.get("PIBT_SIDE_EVERY", "") or 1))
+FPV_EVERY = max(1, int(os.environ.get("PIBT_FPV_EVERY", "") or 1))
 # 근접 화면이라 조망만큼 클 필요가 없다. **복사량이 곧 비용**이다 —
 # 리플리케이터는 텍스처를 호스트로 직접 복사하고(Kit 이 그렇게 경고한다),
 # 1280x720 두 시점이 28 ms/step(배속 0.60)이었다.
-SIDE_RES = (os.environ.get("PIBT_SIDE_RES", "") or "960x540").lower()
-_side_cam_warned = False
-_side_xop = None            # 카메라 transform op — 한 번만 만들고 값만 갱신한다
+FPV_RES = (os.environ.get("PIBT_FPV_RES", "") or "960x540").lower()
+_fpv_cam_warned = False
+_fpv_xop = None            # 카메라 transform op — 한 번만 만들고 값만 갱신한다
 # ★ 초점거리 [mm]. 씬의 `Cam_Spot` 은 **24 mm 광각**으로 만들어져 있다
 #   (`build_amr_scene_v2.py:308`). 눈높이 1.2 m 에서 화각 47도면 아래쪽이 4 m 앞
 #   바닥을 잡아 **하단 절반이 바닥**이 된다. 주행 화면으로는 35 mm 쯤이 낫다.
 #     24 mm -> 화각 47.0도    35 mm -> 33.5도    50 mm -> 23.7도
-SIDE_FOCAL = float(os.environ.get("PIBT_SIDE_FOCAL", "") or 35.0)
-_side_cam_n = 0             # 카메라를 옮긴 횟수 (로그용)
-_side_pick = None           # auto 로 고른 로봇 (한 번 고르면 안 바꾼다)
-_side_home = None           # 각 로봇의 시작 자리 — 움직인 거리를 재는 기준
+FPV_FOCAL = float(os.environ.get("PIBT_FPV_FOCAL", "") or 35.0)
+_fpv_cam_n = 0             # 카메라를 옮긴 횟수 (로그용)
+_fpv_pick = None           # auto 로 고른 로봇 (한 번 고르면 안 바꾼다)
+_fpv_home = None           # 각 로봇의 시작 자리 — 움직인 거리를 재는 기준
 
 
-def _side_track(fleet_):
+def _fpv_track(fleet_):
     """측면 카메라를 대상 로봇에 붙인다 — 기본은 **1인칭 주행 시점**.
 
     실패해도 주행을 죽이지 않는다 — 한 번만 알리고 그 뒤로 조용히 넘어간다.
     카메라가 안 움직이면 마지막 자리에 머물 뿐이다.
     """
-    global _side_cam_warned, _side_pick, _side_home, _side_xop, _side_cam_n
-    if (not SIDE_AUTO and SIDE_FOLLOW < 0) or _rep_annot2 is None or not CAMERA_SIDE:
+    global _fpv_cam_warned, _fpv_pick, _fpv_home, _fpv_xop, _fpv_cam_n
+    if (not FPV_AUTO and FPV_FOLLOW < 0) or _rep_annot2 is None or not CAMERA_FPV:
         return
     try:
         import math as _m
         # ★ auto — 초반에 **가장 많이 움직인** 로봇을 골라 그 뒤로 고정한다.
-        #   고르는 동안은 SIDE_FOLLOW(기본 0)를 따라간다. 한 번만 갈아탄다 —
+        #   고르는 동안은 FPV_FOLLOW(기본 0)를 따라간다. 한 번만 갈아탄다 —
         #   매 프레임 갈아타면 화면이 튄다.
-        who = SIDE_FOLLOW
-        if SIDE_AUTO:
-            if _side_pick is not None:
-                who = _side_pick
+        who = FPV_FOLLOW
+        if FPV_AUTO:
+            if _fpv_pick is not None:
+                who = _fpv_pick
             else:
                 n_rb = len(fleet_.drivers)
                 poses = [fleet_.drivers[i].axle_pose() for i in range(n_rb)]
-                if _side_home is None:
-                    _side_home = [(p[0], p[1]) for p in poses]
-                if _side_cam_n >= SIDE_AUTO_AFTER:
+                if _fpv_home is None:
+                    _fpv_home = [(p[0], p[1]) for p in poses]
+                if _fpv_cam_n >= FPV_AUTO_AFTER:
                     moved = [_m.hypot(p[0] - h[0], p[1] - h[1])
-                             for p, h in zip(poses, _side_home)]
-                    _side_pick = max(range(n_rb), key=lambda i: moved[i])
-                    who = _side_pick
-                    print(f"[hl]   [cam] ★ 로봇 {_side_pick} 를 따라간다 "
-                          f"(시뮬 초반에 {moved[_side_pick]:.1f} m 이동 · "
+                             for p, h in zip(poses, _fpv_home)]
+                    _fpv_pick = max(range(n_rb), key=lambda i: moved[i])
+                    who = _fpv_pick
+                    print(f"[hl]   [cam] ★ 로봇 {_fpv_pick} 를 따라간다 "
+                          f"(시뮬 초반에 {moved[_fpv_pick]:.1f} m 이동 · "
                           f"가만히 있던 대수 {sum(1 for d in moved if d < 0.2)})"
                           + ("  — 여기서부터 녹화한다" if WARMSTART else ""),
                           flush=True)
@@ -380,17 +380,17 @@ def _side_track(fleet_):
         from pxr import Gf, UsdGeom                      # noqa: E402
         import omni.usd                                  # noqa: E402
         fx, fy = _m.cos(yaw), _m.sin(yaw)
-        if SIDE_VIEW == "chase":
+        if FPV_VIEW == "chase":
             # 3인칭 — 뒤로 0.75d, 옆으로 0.5d, 높이 0.55d
-            d = SIDE_DIST
-            eye = Gf.Vec3d(x - 0.75*d*fx - 0.5*d*(-fy)*SIDE_LR,
-                           y - 0.75*d*fy - 0.5*d*(fx)*SIDE_LR, 0.55*d)
+            d = FPV_DIST
+            eye = Gf.Vec3d(x - 0.75*d*fx - 0.5*d*(-fy)*FPV_LR,
+                           y - 0.75*d*fy - 0.5*d*(fx)*FPV_LR, 0.55*d)
             tgt = Gf.Vec3d(x, y, 0.75)
         else:
             # ★ 1인칭 — 차 앞머리에서 주행 방향을 본다 (대시캠).
-            eye = Gf.Vec3d(x + SIDE_FWD*fx, y + SIDE_FWD*fy, SIDE_EYE_Z)
-            tgt = Gf.Vec3d(x + (SIDE_FWD + SIDE_LOOK)*fx,
-                           y + (SIDE_FWD + SIDE_LOOK)*fy, SIDE_LOOK_Z)
+            eye = Gf.Vec3d(x + FPV_FWD*fx, y + FPV_FWD*fy, FPV_EYE_Z)
+            tgt = Gf.Vec3d(x + (FPV_FWD + FPV_LOOK)*fx,
+                           y + (FPV_FWD + FPV_LOOK)*fy, FPV_LOOK_Z)
         f = (tgt - eye).GetNormalized()
         r = Gf.Cross(f, Gf.Vec3d(0, 0, 1)).GetNormalized()
         u = Gf.Cross(r, f)
@@ -399,35 +399,35 @@ def _side_track(fleet_):
         #   있는 `xformOp:transform` 을 다시 만들려다 두 번째부터 조용히 실패할
         #   수 있다. 그러면 카메라가 **첫 자리에 그대로 멈춘다** — 영상이 한
         #   장면에서 안 바뀐다.
-        if _side_xop is None:
-            prim = omni.usd.get_context().get_stage().GetPrimAtPath(CAMERA_SIDE)
+        if _fpv_xop is None:
+            prim = omni.usd.get_context().get_stage().GetPrimAtPath(CAMERA_FPV)
             if not prim or not prim.IsValid():
-                raise RuntimeError(f"카메라 prim 이 없다: {CAMERA_SIDE}")
+                raise RuntimeError(f"카메라 prim 이 없다: {CAMERA_FPV}")
             # 초점거리도 여기서 한 번 잡는다 — 씬 기본(24 mm)은 주행 화면에 너무 넓다.
             try:
-                UsdGeom.Camera(prim).GetFocalLengthAttr().Set(SIDE_FOCAL)
+                UsdGeom.Camera(prim).GetFocalLengthAttr().Set(FPV_FOCAL)
             except Exception as _fe:                     # noqa: BLE001
                 print(f"[hl]   [cam] 초점거리를 못 바꿨다 (씬 기본 그대로): {_fe!r}")
             xf = UsdGeom.Xformable(prim)
             xf.ClearXformOpOrder()
-            _side_xop = xf.AddTransformOp()
-        _side_xop.Set(Gf.Matrix4d(
+            _fpv_xop = xf.AddTransformOp()
+        _fpv_xop.Set(Gf.Matrix4d(
             r[0], r[1], r[2], 0, u[0], u[1], u[2], 0,
             -f[0], -f[1], -f[2], 0, eye[0], eye[1], eye[2], 1))
         # 움직이는지 로그로 보이게 한다 — 안 움직이면 여기 좌표가 그대로다.
-        if _side_cam_n < 3 or _side_cam_n % 100 == 0:
-            print(f"[hl]   [cam] #{_side_cam_n} 로봇{who} ({x:.2f}, {y:.2f}, "
+        if _fpv_cam_n < 3 or _fpv_cam_n % 100 == 0:
+            print(f"[hl]   [cam] #{_fpv_cam_n} 로봇{who} ({x:.2f}, {y:.2f}, "
                   f"{_m.degrees(yaw):.0f}deg) -> 눈 ({eye[0]:.2f}, {eye[1]:.2f}, "
                   f"{eye[2]:.2f})", flush=True)
-        _side_cam_n += 1
+        _fpv_cam_n += 1
     except Exception as e:                               # noqa: BLE001
-        if not _side_cam_warned:
-            _side_cam_warned = True
+        if not _fpv_cam_warned:
+            _fpv_cam_warned = True
             print(f"[hl] ☹ 1인칭 카메라 추종 실패 — 고정 화각으로 간다: {e!r}")
 
 
-def _save_side(sim_t):
-    """측면 한 장. 실패가 `SIDE_FAIL_MAX` 회 쌓이면 **측면만** 끈다.
+def _save_fpv(sim_t):
+    """측면 한 장. 실패가 `FPV_FAIL_MAX` 회 쌓이면 **측면만** 끈다.
 
     ☹ 2026-09-23: 처음엔 **첫 실패에 바로 껐다.** 그런데 리플리케이터
       annotator 는 render product 를 붙인 직후 몇 프레임 동안 버퍼가 비어 있고
@@ -441,30 +441,30 @@ def _save_side(sim_t):
       (뷰포트가 있는 판에서 리플리케이터가 데이터를 못 받는 것). 그때는 마지막
       줄이 그렇게 말하므로 다음 판을 안 태우고 바로 안다.
     """
-    global _rep_annot2, _side_n, _side_fail
+    global _rep_annot2, _fpv_n, _fpv_fail
     if _rep_annot2 is None:
         return
     # ★ auto 로 로봇을 **고르기 전까지는 저장하지 않는다** (2026-09-23).
     #
-    #   고르려면 시뮬 초반을 지켜봐야 하는데, 그동안은 `SIDE_FOLLOW`(기본 0)를
+    #   고르려면 시뮬 초반을 지켜봐야 하는데, 그동안은 `FPV_FOLLOW`(기본 0)를
     #   따라간다. 0번은 충전존에서 시작해 서 있으므로 **영상이 정지 화면으로
     #   시작**했다. 그 구간을 통째로 버리면 첫 프레임부터 움직인다.
     #
-    #   버리는 길이는 `PIBT_SIDE_AUTO_AFTER x SHOT_STRIDE` 물리스텝이다
-    #   (STRIDE 40 · 15회면 시뮬 10초). `PIBT_SIDE_WARMSTART=0` 으로 끌 수 있다.
-    if SIDE_AUTO and WARMSTART and _side_pick is None:
+    #   버리는 길이는 `PIBT_FPV_AUTO_AFTER x SHOT_STRIDE` 물리스텝이다
+    #   (STRIDE 40 · 15회면 시뮬 10초). `PIBT_FPV_WARMSTART=0` 으로 끌 수 있다.
+    if FPV_AUTO and WARMSTART and _fpv_pick is None:
         return
     try:
-        _save_one(_rep_annot2, SHOTS_SIDE, sim_t)
-        _side_n += 1
+        _save_one(_rep_annot2, SHOTS_FPV, sim_t)
+        _fpv_n += 1
     except Exception as e:                                # noqa: BLE001
-        _side_fail += 1
-        if _side_fail <= 3:
-            print(f"[hl] 2번영상 저장 실패 {_side_fail}회 (계속 시도): {e!r}")
-        if _side_fail >= SIDE_FAIL_MAX:
-            print(f"[hl] ☹ 2번영상 저장이 {SIDE_FAIL_MAX}회 실패 — 2번영상을 끈다. "
+        _fpv_fail += 1
+        if _fpv_fail <= 3:
+            print(f"[hl] 2번영상 저장 실패 {_fpv_fail}회 (계속 시도): {e!r}")
+        if _fpv_fail >= FPV_FAIL_MAX:
+            print(f"[hl] ☹ 2번영상 저장이 {FPV_FAIL_MAX}회 실패 — 2번영상을 끈다. "
                   f"마지막: {e!r}")
-            if _side_n == 0:
+            if _fpv_n == 0:
                 print("[hl]   ★ 한 장도 못 받았다 = 지연이 아니라 구조 문제다. "
                       "뷰포트가 있는 판에서는 리플리케이터 대신 **두 번째 "
                       "뷰포트**(create_viewport_window + capture_viewport_to_file, "
@@ -500,12 +500,12 @@ if SHOTS:
             _cap = None
 
 # ★ 2번영상은 **1번과 독립이다** (2026-09-23). 1번을 끄고 2번만 찍는 판
-#   (`CAPTURE=side`)이 있어서, `if SHOTS:` 블록 **밖**에서 붙인다.
+#   (`CAPTURE=fpv`)이 있어서, `if SHOTS:` 블록 **밖**에서 붙인다.
 #   1번 프레임이 13대 10분 판에 14 GB 라 시연 영상만 뽑을 때는 그게 아깝다.
-if SHOTS_SIDE and CAMERA_SIDE:
-    _rep_annot2 = _attach_side()
+if SHOTS_FPV and CAMERA_FPV:
+    _rep_annot2 = _attach_fpv()
     # ★ 붙인 직후 몇 프레임을 **버린다.** annotator 는 첫 렌더에 버퍼가
-    #   안 차는 일이 흔하다 (`_save_side` 머리말). 주행 전이라 공짜다.
+    #   안 차는 일이 흔하다 (`_save_fpv` 머리말). 주행 전이라 공짜다.
     for _ in range(3 if _rep_annot2 is not None else 1):
         _render_once()
 
@@ -551,7 +551,7 @@ def _save_one(annot, out_dir, sim_t):
 
 
 def _save_replicator(sim_t):
-    """상단 한 장 (리플리케이터 경로). 측면은 `_save_side` 가 따로 한다."""
+    """상단 한 장 (리플리케이터 경로). 측면은 `_save_fpv` 가 따로 한다."""
     global _shot_n, _shot_fail
     try:
         _save_one(_rep_annot, SHOTS, sim_t)
@@ -621,17 +621,17 @@ try:
         #     프레임이다. 이 호출이 없으면 예약만 쌓이고 파일은 안 생긴다.
         if (_cap or _rep_annot2 is not None) and state["n"] % SHOT_STRIDE == 0:
             # ★ 카메라를 **렌더 전에** 옮긴다 — 그래야 이 프레임에 반영된다.
-            if _side_n_try % SIDE_EVERY == 0:
-                _side_track(fleet)
+            if _fpv_n_try % FPV_EVERY == 0:
+                _fpv_track(fleet)
             _render_once()
             # 상단 — 뷰포트면 live_pibt 가 자기 틱에서 찍는다 (여기서는 안 한다).
             if _cap == "replicator":
                 _save_replicator(state["t"])
             # 측면 — **상단 경로와 무관하게** 같은 렌더 프레임에서 받는다.
-            #   `PIBT_SIDE_EVERY` 로 주기를 늘리면 그만큼 복사가 준다.
-            if _side_n_try % SIDE_EVERY == 0:
-                _save_side(state["t"])
-            _side_n_try += 1
+            #   `PIBT_FPV_EVERY` 로 주기를 늘리면 그만큼 복사가 준다.
+            if _fpv_n_try % FPV_EVERY == 0:
+                _save_fpv(state["t"])
+            _fpv_n_try += 1
 
         _step(DT, t_sim)
         t_sim += DT
@@ -690,16 +690,16 @@ if _cap:
     else:
         print("[hl]   ★ 한 장도 안 나왔다 — 카메라 경로와 PIBT_SHOT_STRIDE 를 보라")
 
-# ★ 2번영상 보고는 **`if _cap` 밖**이다 — 1번을 끈 판(`CAPTURE=side`)에서도
-#   장수가 나와야 한다. 켠 적이 있으면 0 장이어도 찍는다: 백엔드는 `_side` 키가
+# ★ 2번영상 보고는 **`if _cap` 밖**이다 — 1번을 끈 판(`CAPTURE=fpv`)에서도
+#   장수가 나와야 한다. 켠 적이 있으면 0 장이어도 찍는다: 백엔드는 `_fpv` 키가
 #   없으면 **오류 없이** 버튼만 안 띄우므로, 조용한 0 장이 제일 나쁘다.
-if SHOTS_SIDE and CAMERA_SIDE:
+if SHOTS_FPV and CAMERA_FPV:
     _fps2 = int(os.environ.get("PIBT_SHOT_FPS", "30"))
-    print(f"[hl] 촬영(2번영상) {_side_n:,}장 · 실패 {_side_fail}회 -> {SHOTS_SIDE}"
-          + ("" if _side_n else f"   ★ 한 장도 안 나왔다 (카메라 {CAMERA_SIDE})"))
-    if _side_n:
-        print(f"[hl]   영상 {_side_n / _fps2:.0f}초 @{_fps2}fps = "
-              f"{SHOT_STRIDE * SIDE_EVERY * _fps2 / 60.0:.1f}배속")
+    print(f"[hl] 촬영(2번영상) {_fpv_n:,}장 · 실패 {_fpv_fail}회 -> {SHOTS_FPV}"
+          + ("" if _fpv_n else f"   ★ 한 장도 안 나왔다 (카메라 {CAMERA_FPV})"))
+    if _fpv_n:
+        print(f"[hl]   영상 {_fpv_n / _fps2:.0f}초 @{_fps2}fps = "
+              f"{SHOT_STRIDE * FPV_EVERY * _fps2 / 60.0:.1f}배속")
 try:
     quit_fn(0)                             # 자세 기록 저장 (PIBT_RECORD 가 경로일 때)
 except Exception as e:

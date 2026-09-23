@@ -96,7 +96,7 @@ class TestSideVideo:
         h.connect()
         h.run_until_running()
         h.rec.video = "/data/out/demo_verify_77_n3.mp4"
-        h.rec.side_video = "/data/out/demo_verify_77_n3_side.mp4"
+        h.rec.fpv_video = "/data/out/demo_verify_77_n3_fpv.mp4"
         h.stop(100.0)
         h.runner.tick(101.0)
 
@@ -104,13 +104,13 @@ class TestSideVideo:
         self._stop(h)
         assert h.uploader.calls == [
             ("/data/out/demo_verify_77_n3.mp4", "verify_77_n3"),
-            ("/data/out/demo_verify_77_n3_side.mp4", "verify_77_n3")]
+            ("/data/out/demo_verify_77_n3_fpv.mp4", "verify_77_n3")]
         assert h.runner.state == R.IDLE
-        # 보고는 **상단 키** 하나다 — 백엔드가 여기서 `_side` 를 계산한다
+        # 보고는 **상단 키** 하나다 — 백엔드가 여기서 `_fpv` 를 계산한다
         named = h.pub.named_with("NDATA", R.VIDEO_URL)
         assert named[R.VIDEO_URL] == "verify_77_n3/demo_verify_77_n3.mp4"
 
-    def test_no_side_is_bit_identical(self, h):
+    def test_no_fpv_is_bit_identical(self, h):
         h.connect()
         h.run_until_running()
         h.rec.video = "/data/out/demo_verify_77_n3.mp4"

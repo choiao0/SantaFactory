@@ -244,16 +244,16 @@ class Runner:
             self._set_state(IDLE, {**extra, VIDEO_URL: f"file://{path}"})
             return
         # ★ 측면이 있으면 **같이** 넘긴다 (-264). 없으면 None 이라 종전과 같다.
-        side = self.rec.side_video_path()
+        fpv = self.rec.fpv_video_path()
         log.info("run %s: uploading %s%s", self.spec.run_id, path,
-                 " (+ 측면)" if side else "")
+                 " (+ 1인칭)" if fpv else "")
         self._upload = self.executor.submit(
-            self._upload_then_tidy, path, self.spec.run_id, self.rec, side)
+            self._upload_then_tidy, path, self.spec.run_id, self.rec, fpv)
         if self._upload.done():            # 동기 executor(테스트)면 같은 틱에 끝난다
             self._finish_upload()
 
     def _upload_then_tidy(self, path: str, run_id: str, rec: Recorder,
-                          side: str | None = None) -> str:
+                          fpv: str | None = None) -> str:
         """워커 스레드: 업로드가 되면 프레임 PNG 를 지운다(런당 1.6~2.6 GB, -241). 실패 런의 것은 진단용으로 남는다.
 
         ★ 측면이 있으면 **상단 다음에** 올리고, **둘 다 끝난 뒤** 돌아온다
@@ -265,12 +265,12 @@ class Runner:
           상단이고, 측면이 없으면 버튼만 안 생긴다. 경고만 남긴다.
         """
         url = self.uploader.upload(path, run_id)
-        if side:
+        if fpv:
             try:
-                skey = self.uploader.upload(side, run_id)
-                log.info("run %s: side uploaded → %s", run_id, skey)
+                skey = self.uploader.upload(fpv, run_id)
+                log.info("run %s: fpv uploaded → %s", run_id, skey)
             except Exception as e:  # noqa: BLE001
-                log.warning("run %s: side upload failed (버튼만 안 생긴다): %s", run_id, e)
+                log.warning("run %s: fpv upload failed (버튼만 안 생긴다): %s", run_id, e)
         n = rec.remove_frames()
         log.info("run %s: uploaded → %s · removed %d frame file(s)", run_id, url, n)
         return url
