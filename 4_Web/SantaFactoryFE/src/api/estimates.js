@@ -10,6 +10,7 @@ export function createWarehouse(form) {
     inbound_avg: form.inboundAvg,
     outbound_avg: form.outboundAvg,
     target_throughput: form.targetThroughput,
+    target_utilization: form.targetUtilization,
     budget_limit: form.budgetLimit,
   })
 }

@@ -93,7 +93,6 @@ class QuoteDocumentFactoryTest {
         assertThat(counts).hasSize(12).contains(1, 14, 15, 19, 20, 28).isSorted();
         QuoteDocument.FleetRow rec = q.fleet().stream().filter(QuoteDocument.FleetRow::recommended).findFirst().orElseThrow();
         assertThat(rec.count()).isEqualTo(14);
-        assertThat(rec.leadMin()).isEqualTo("6.4분");
         assertThat(rec.cost()).isEqualTo("2억 1,700만 원");
         assertThat(rec.efficiency()).isEqualTo("67.1");
         assertThat(q.fleet().stream().filter(QuoteDocument.FleetRow::knee).map(QuoteDocument.FleetRow::count)).containsExactly(15);
@@ -104,7 +103,7 @@ class QuoteDocumentFactoryTest {
     @Test
     void small_sweeps_keep_every_run() {
         List<Integer> all = IntStream.rangeClosed(3, 9).boxed().toList();
-        assertThat(QuoteDocumentFactory.pickRows(all, 6, 7, null)).isEqualTo(all);
+        assertThat(QuoteDocumentFactory.pickRows(all, 6, 5, 7, null)).isEqualTo(all);
     }
 
     @Test
@@ -127,15 +126,32 @@ class QuoteDocumentFactoryTest {
         QuoteDocument q = factory.build(new QuoteSource(QuoteFixtures.detail(142L, 14, 15, null), QuoteFixtures.warehouse()));
 
         assertThat(q.ops().leadMeanMin()).isEqualTo("3.5분");
-        assertThat(q.ops().queueSec()).isEqualTo("48초");
+        assertThat(q.ops().queueMin()).isEqualTo("0.8분");
         assertThat(q.ops().conflictPct()).isEqualTo("6.8");
         assertThat(q.ops().distanceKm()).isEqualTo("171");
     }
 
     @Test
+    void keeps_the_recommendation_label_inside_the_chart() {
+        // 효율이 100 에 가까우면 표식이 그림 꼭대기에 붙는다. 글자를 그대로 점 위에 두면 잘렸다.
+        double topRecY = QuoteDocumentFactory.PAD_T + 2;
+
+        assertThat(QuoteDocumentFactory.recLabelY(topRecY)).isGreaterThan(topRecY);
+        assertThat(QuoteDocumentFactory.recLabelY(100)).isEqualTo(86);   // 여유가 있으면 지금처럼 점 위
+    }
+
+    @Test
+    void flips_the_recommendation_label_when_it_would_run_off_the_left_edge() {
+        // 권장이 가장 적은 대수면 표식이 왼쪽 끝이라, 왼쪽으로 쓴 글자가 그림 밖으로 나간다
+        assertThat(QuoteDocumentFactory.recLabelAnchor(QuoteDocumentFactory.PAD_L)).isEqualTo("start");
+        assertThat(QuoteDocumentFactory.recLabelX(QuoteDocumentFactory.PAD_L)).isGreaterThan(QuoteDocumentFactory.PAD_L);
+        assertThat(QuoteDocumentFactory.recLabelAnchor(400)).isEqualTo("end");
+    }
+
+    @Test
     void no_recommendation_gives_a_reason_and_no_cost_or_targets() {
         EstimateDetailResponse d = new EstimateDetailResponse(7L, EstimateStatus.DONE, "iw.hub", 95.0, 60.0, 50_000_000L,
-                null, null, ReasonCode.BUDGET_EXCEEDED, LocalDateTime.of(2026, 9, 17, 10, 0), LocalDateTime.of(2026, 9, 17, 10, 5),
+                null, null, null, ReasonCode.BUDGET_EXCEEDED, LocalDateTime.of(2026, 9, 17, 10, 0), LocalDateTime.of(2026, 9, 17, 10, 5),
                 300L, null, null, QuoteFixtures.runs(7L, 5), null);
 
         QuoteDocument q = factory.build(new QuoteSource(d, QuoteFixtures.warehouse()));

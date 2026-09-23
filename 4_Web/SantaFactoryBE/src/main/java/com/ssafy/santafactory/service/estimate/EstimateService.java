@@ -722,17 +722,18 @@ public class EstimateService {
 
         EstimateVerdict verdict = evaluator.evaluate(results, goal);
         boolean anyFailed = results.size() != runs.size();
-        estimate.complete(verdict.recommendedCount(), verdict.kneeCount(), verdict.reasonCode(), anyFailed);
+        estimate.complete(verdict.recommendedCount(), verdict.minimalCount(), verdict.kneeCount(),
+                verdict.reasonCode(), anyFailed);
 
-        log.info("견적 판정 확정: estimateId={}, 권장={}대, 무릎={}대, 사유={}, 상태={}",
-                estimate.getId(), verdict.recommendedCount(), verdict.kneeCount(),
+        log.info("견적 판정 확정: estimateId={}, 권장={}대, 최소={}대, 무릎={}대, 사유={}, 상태={}",
+                estimate.getId(), verdict.recommendedCount(), verdict.minimalCount(), verdict.kneeCount(),
                 verdict.reasonCode(), estimate.getStatus());
         eventPublisher.publishEvent(finishedEvent(estimate));
     }
 
     private EstimateFinished finishedEvent(Estimate estimate) {
-        return new EstimateFinished(estimate.getId(), estimate.getStatus(),
-                estimate.getRecommendedCount(), estimate.getKneeCount(), estimate.getReasonCode());
+        return new EstimateFinished(estimate.getId(), estimate.getStatus(), estimate.getRecommendedCount(),
+                estimate.getMinimalCount(), estimate.getKneeCount(), estimate.getReasonCode());
     }
 
     private RunResult toRunResult(SimScenario run) {

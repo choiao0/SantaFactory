@@ -39,6 +39,7 @@ public final class EstimateEvents {
             Long estimateId,
             EstimateStatus status,
             Integer recommendedCount,
+            Integer minimalCount,
             Integer kneeCount,
             ReasonCode reasonCode
     ) {

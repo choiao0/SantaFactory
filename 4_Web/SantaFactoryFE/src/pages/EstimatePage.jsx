@@ -16,6 +16,7 @@ const REQUIRED_FIELDS = [
   ['inboundAvg', '일 평균 입고'],
   ['outboundAvg', '일 평균 출고 주문'],
   ['targetThroughput', '목표 출고 처리율'],
+  ['targetUtilization', '목표 가동률'],
   ['budgetMan', '최대 구축 예산'],
 ]
 
@@ -34,6 +35,7 @@ const DEFAULT_FORM = {
   inboundAvg: 0,
   outboundAvg: 0,
   targetThroughput: 0,
+  targetUtilization: 0,
   budgetMan: 0,
 }
 

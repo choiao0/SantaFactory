@@ -63,7 +63,7 @@ public class EstimateEventStream {
         if (snapshot.status() != EstimateStatus.RUNNING) {
             send(estimateId, emitter, EVENT_DONE, new EstimateFinished(
                     estimateId, snapshot.status(), snapshot.recommendedCount(),
-                    snapshot.kneeCount(), snapshot.reasonCode()));
+                    snapshot.minimalCount(), snapshot.kneeCount(), snapshot.reasonCode()));
             // 등록을 먼저 했으니 여기서 직접 뗀다 — onCompletion 은 응답이 붙은 뒤에야 도는 콜백이라
             // 그것만 믿으면 이미 끝난 견적의 emitter 가 목록에 남는다
             drop(estimateId, emitter);

@@ -68,7 +68,7 @@ class EstimateControllerTest {
 
     private static final EstimateDetailResponse DETAIL = new EstimateDetailResponse(
             77L, EstimateStatus.RUNNING, "iw.hub", 95.0, 80.0, 300_000_000L,
-            null, null, null, LocalDateTime.of(2026, 9, 8, 10, 0), null, null, null, null, List.of(), null);
+            null, null, null, null, LocalDateTime.of(2026, 9, 8, 10, 0), null, null, null, null, List.of(), null);
 
     // ── 견적서 PDF (S15P21A106-236) ──────────────────────────────────────────
 

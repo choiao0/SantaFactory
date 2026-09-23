@@ -64,6 +64,7 @@ td.num,th.num{text-align:right}
 td .ok{color:var(--ok);font-weight:600}
 td .over{color:var(--red-dark);font-weight:600}
 td .miss{color:var(--muted2)}
+th.goal,td.goal{text-align:center}
 tr.hl td{background:var(--hl);font-weight:700}
 tr.total td{border-top:1.5px solid var(--ink);border-bottom:0;font-weight:800;font-size:13px;padding-top:9px}
 .chip{display:inline-block;font-size:8.5px;font-weight:600;color:var(--red-dark);border:1px solid var(--red-dark);padding:1px 5px;border-radius:2px;margin-left:6px;vertical-align:1px}
@@ -247,19 +248,20 @@ tr.total td{border-top:1.5px solid var(--ink);border-bottom:0;font-weight:800;fo
     <div class="eyebrow"><span th:text="${#numbers.formatInteger(base + 1, 2)}"></span> <span class="t">로봇 대수별 비교</span></div>
     <table>
       <thead><tr>
-        <th>로봇 대수</th><th class="num">주문 처리율</th><th>목표</th><th class="num">로봇 가동률</th><th class="num">하루 처리 주문</th>
-        <th class="num">주문 처리 시간 (90 %)*</th><th class="num">예상 구축 비용</th><th class="num">효율 점수</th>
+        <th>로봇 대수</th><th class="num">주문 처리율</th><th class="num">로봇 가동률</th><th class="goal">목표</th>
+        <th class="num">효율 점수</th><th class="num">하루 처리 주문</th>
+        <th class="num">예상 구축 비용</th><th class="goal">예산</th>
       </tr></thead>
       <tbody>
         <tr th:each="f : ${q.fleet}" th:classappend="${f.recommended} ? 'hl'">
-          <td><span th:text="${f.count} + '대'"></span><span th:if="${f.recommended}" class="chip">권장</span><span th:if="${f.knee}" class="chip g">효과 정체 시작</span></td>
+          <td><span th:text="${f.count} + '대'"></span><span th:if="${f.recommended}" class="chip">권장</span><span th:if="${f.minimal}" class="chip g">최소 구성</span><span th:if="${f.knee}" class="chip g">효과 정체 시작</span></td>
           <td class="num" th:text="${f.throughput}"></td>
-          <td><span th:classappend="${f.targetOk} ? 'ok' : 'miss'" th:text="${f.targetOk} ? '달성' : '미달'"></span></td>
           <td class="num" th:text="${f.utilization}"></td>
-          <td class="num" th:text="${f.dailyOrders}"></td>
-          <td class="num" th:text="${f.leadMin}"></td>
-          <td class="num"><span th:classappend="${f.overBudget} ? 'over'" th:text="${f.cost}"></span></td>
+          <td class="goal"><span th:classappend="${f.targetOk} ? 'ok' : 'miss'" th:text="${f.targetText}"></span></td>
           <td class="num" th:text="${f.efficiency}"></td>
+          <td class="num" th:text="${f.dailyOrders}"></td>
+          <td class="num"><span th:classappend="${f.overBudget} ? 'over'" th:text="${f.cost}"></span></td>
+          <td class="goal" th:text="${f.overBudget} ? '초과' : '이내'"></td>
         </tr>
       </tbody>
     </table>
@@ -289,7 +291,7 @@ tr.total td{border-top:1.5px solid var(--ink);border-bottom:0;font-weight:800;fo
           <line th:x1="${q.curve.recX}" th:x2="${q.curve.recX}" th:y1="${q.curve.recY + 12}" y2="153" stroke="#e72d2d" stroke-dasharray="3 3"/>
           <circle th:cx="${q.curve.recX}" th:cy="${q.curve.recY}" r="9" fill="none" stroke="#e72d2d" stroke-width="1.5"/>
           <circle th:cx="${q.curve.recX}" th:cy="${q.curve.recY}" r="3" fill="#e72d2d"/>
-          <text th:x="${q.curve.recX - 14}" th:y="${q.curve.recY - 14}" font-size="8.5" fill="#b51616" text-anchor="end" font-weight="700" th:text="${q.curve.recLabel}"></text>
+          <text th:x="${q.curve.recLabelX}" th:y="${q.curve.recLabelY}" font-size="8.5" fill="#b51616" th:attr="text-anchor=${q.curve.recLabelAnchor}" font-weight="700" th:text="${q.curve.recLabel}"></text>
         </g>
         <text x="36" y="10" font-size="8" fill="#77776f">효율 점수</text>
         <text x="624" y="10" font-size="8" fill="#77776f" text-anchor="end">구축 비용</text>
@@ -307,7 +309,7 @@ tr.total td{border-top:1.5px solid var(--ink);border-bottom:0;font-weight:800;fo
     <div class="eyebrow"><span th:text="${#numbers.formatInteger(base + 3, 2)}"></span> <span class="t" th:text="'권장 구성(' + ${q.verdict.count} + '대)의 운영 예상'"></span></div>
     <div class="grid4">
       <div><div class="l">평균 주문 처리 시간</div><strong class="num" th:text="${q.ops.leadMeanMin}"></strong><em>주문 접수 → 처리 완료, 전체 평균</em></div>
-      <div><div class="l">로봇 배정 대기</div><strong class="num" th:text="${q.ops.queueSec}"></strong><em>주문이 로봇을 기다린 평균 시간</em></div>
+      <div><div class="l">로봇 배정 대기</div><strong class="num" th:text="${q.ops.queueMin}"></strong><em>주문이 로봇을 기다린 평균 시간</em></div>
       <div><div class="l">통로 혼잡으로 멈춘 시간</div><strong class="num"><span th:remove="tag" th:text="${q.ops.conflictPct}"></span><span>%</span></strong><em>로봇 운행 시간 중 비율</em></div>
       <div><div class="l">로봇 총 이동 거리</div><strong class="num"><span th:remove="tag" th:text="${q.ops.distanceKm}"></span><span>km</span></strong><em th:text="${q.ops.robotsLine}"></em></div>
     </div>

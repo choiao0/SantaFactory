@@ -46,8 +46,11 @@ public class EstimateEvaluator {
                 .max(Comparator.comparingDouble(EstimateEvaluator::efficiencyScore)
                         .thenComparing(Comparator.comparingInt(RunResult::amrCount).reversed()));
 
+        // 같은 필터를 통과한 것 중 가장 적은 대수 = 가장 싼 구성 (구축비는 대수에 단조 증가한다)
+        Optional<RunResult> minimal = sorted.stream().filter(run -> satisfies(run, goal)).findFirst();
+
         return recommended
-                .map(run -> EstimateVerdict.of(run.amrCount(), knee))
+                .map(run -> EstimateVerdict.of(run.amrCount(), minimal.map(RunResult::amrCount).orElse(null), knee))
                 .orElseGet(() -> EstimateVerdict.none(reasonFor(sorted, goal), knee));
     }
 

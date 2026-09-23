@@ -58,21 +58,22 @@ public record QuoteDocument(
     }
 
     /** 06 로봇 대수별 비교의 한 행. */
-    public record FleetRow(int count, boolean recommended, boolean knee, String throughput, boolean targetOk,
-                           String utilization, String dailyOrders, String leadMin, String cost, boolean overBudget,
-                           String efficiency) {
+    public record FleetRow(int count, boolean recommended, boolean minimal, boolean knee,
+                           String throughput, String utilization, boolean targetOk, String targetText,
+                           String efficiency, String dailyOrders, String cost, boolean overBudget) {
     }
 
     /** 07 효율·구축 비용 그래프 — SVG 좌표는 템플릿 viewBox(672 × 175) 기준. */
     public record Curve(String effPath, String costPath, List<AxisLabel> xLabels, List<AxisLabel> yLeft,
                         List<AxisLabel> yRight, double budgetY, String budgetLabel,
-                        Double kneeX, String kneeLabel, double recX, double recY, String recLabel) {
+                        Double kneeX, String kneeLabel, double recX, double recY,
+                        double recLabelX, double recLabelY, String recLabelAnchor, String recLabel) {
     }
 
     public record AxisLabel(double pos, String text, boolean highlight) {
     }
 
     /** 08 권장 구성의 운영 예상. */
-    public record Ops(String leadMeanMin, String queueSec, String conflictPct, String distanceKm, String robotsLine) {
+    public record Ops(String leadMeanMin, String queueMin, String conflictPct, String distanceKm, String robotsLine) {
     }
 }
