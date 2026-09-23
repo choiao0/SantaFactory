@@ -30,8 +30,14 @@
 장면
 ----
     footprint   한 대. 발자국이 칸을 넘는다
-    side        옆 칸 두 대. 간격 200 mm — **안 닿는다**
-    turn        가운데가 제자리 회전. 스윕 원이 옆 차체를 파고든다
+    side        옆으로 나란히 두 대. 간격 200 mm — **안 닿는다** (이것도 결과다)
+    follow      앞뒤로 한 칸 간격. 칸은 안 겹치는데 **차체가 500 mm 겹친다**
+    rack        옆 칸이 랙. 정중앙에서 돌려도 앞 모서리가 **59 mm** 들어간다
+    turn        옆 칸에 남이 있는데 회전. 뒤 모서리가 **580 mm** 파고든다
+
+☹ 「회전 첫 스텝의 바퀴 미끄러짐」은 여기 없다. 그것은 기하가 아니라 **제어**다 —
+  계단 입력과 바닥 마찰의 문제라 그려서 보여줄 수 없다. `tools/turn_error.py` ·
+  `tools/cross_track.py` 가 녹화 NPZ 에서 재는 쪽이 맞다.
 
 색
 --
@@ -52,7 +58,8 @@ OUT = os.environ.get("OUT") or os.path.join(W_DIR, "out")
 FRONT, REAR, WIDTH = 0.390, 1.110, 0.800
 
 ap = argparse.ArgumentParser()
-ap.add_argument("--case", default="all", choices=["all", "footprint", "side", "turn"])
+ap.add_argument("--case", default="all",
+                choices=["all", "footprint", "side", "follow", "rack", "turn"])
 ap.add_argument("--pitch", type=float, default=1.0)
 ap.add_argument("--cells", type=int, default=7, help="격자 칸 수 (한 변)")
 ap.add_argument("--shoot", action="store_true", help="만들고 PNG 까지 찍는다")
@@ -191,6 +198,25 @@ def build(case):
         footprint(stage, "/World/A", 0, 0, 0.0, mats)
         footprint(stage, "/World/B", 0, P, 0.0, mats)
         note.append("옆 칸 두 대 — 간격 %.0f mm. **안 닿는다**" % (SIDE_GAP * 1000))
+    elif case == "follow":
+        # ★ 가장 단순한 「칸은 안 겹쳤는데 몸이 닿는다」 — 회전도 오차도 필요 없다.
+        #   앞차 축 x=0, 뒤차 축 x=-P. 두 칸은 안 겹치는데 차체가 겹친다.
+        footprint(stage, "/World/A", 0, 0, 0.0, mats)
+        footprint(stage, "/World/B", -P, 0, 0.0, mats, key="hit", h=0.50)
+        ov = (FRONT + REAR) - P
+        note.append("앞뒤로 한 칸 간격 — **칸은 안 겹친다**")
+        note.append("그런데 차체가 %.0f mm 겹친다 (길이 %.3f > 칸 %.2f)"
+                    % (ov * 1000, FRONT + REAR, P))
+    elif case == "rack":
+        # ★ t3-38 이 실측으로 적은 58.7 mm 가 이것이다 — 칸 정중앙에서 돌려도
+        #   앞 모서리가 옆 칸(랙)으로 들어간다.
+        footprint(stage, "/World/A", 0, 0, 0.0, mats)
+        box(stage, "/World/Rack", -P/2, P/2, P/2, P*1.5, 0.0, 1.35, mats["hit"])
+        sweep_ring(stage, "/World/SweepFront", 0, 0, R_FRONT, mats, seg=72, t=0.025)
+        pen = R_FRONT - P/2
+        note.append("옆 칸이 랙(빨강). 칸 **정중앙**에서 제자리 회전")
+        note.append("앞 모서리 r=%.4f -> 랙 칸으로 %.1f mm 들어간다" % (R_FRONT, pen * 1000))
+        note.append("t3-38 실측 58.7 mm 와 같다 — 기하가 그렇게 돼 있다")
     elif case == "turn":
         footprint(stage, "/World/A", 0, 0, 0.0, mats)
         footprint(stage, "/World/B", 0, P, 0.0, mats, key="hit")
@@ -206,7 +232,8 @@ def build(case):
     return out
 
 
-cases = ["footprint", "side", "turn"] if A.case == "all" else [A.case]
+cases = (["footprint", "side", "follow", "rack", "turn"]
+         if A.case == "all" else [A.case])
 made = [build(c) for c in cases]
 
 if not A.shoot:
