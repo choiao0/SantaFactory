@@ -41,6 +41,16 @@ class VerifyEventStreamTest {
     }
 
     @Test
+    void shutting_down_closes_every_open_subscription() {
+        when(estimateRepository.findById(77L)).thenReturn(Optional.of(Estimate.open(null, "iw.hub", 95.0, 80.0, 300_000_000L)));
+        stream.subscribe(77L);
+
+        stream.closeAll();
+
+        assertThat(stream.subscriberCount(77L)).isZero();
+    }
+
+    @Test
     void an_estimate_that_already_has_a_video_is_closed_right_after_the_snapshot() {
         Estimate estimate = Estimate.open(null, "iw.hub", 95.0, 80.0, 300_000_000L);
         estimate.applyVerifyVideo("verify_78/demo.mp4", null);

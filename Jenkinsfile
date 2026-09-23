@@ -21,6 +21,9 @@ pipeline {
         // FMS 워커 배포 방식 (S15P21A106-248). Jenkins 전역 환경변수로 바꾼다 — compose: EC2 에서 compose 워커(지금까지),
         // k3s: 사설 레지스트리에 push 하고 k3s 가 GCP 노드에 배치(3_FMS/infra/k8s/README.md). 되돌리기는 값만 compose 로.
         FMS_DEPLOY   = "${env.FMS_DEPLOY ?: 'compose'}"
+        // 웹 계층(backend·pdf·frontend) 배포 방식 (S15P21A106-258). 같은 패턴 — compose: EC2 compose(지금까지),
+        // k3s: 레지스트리 push 뒤 4_Web/k8s 매니페스트를 apply 해 롤링 배포(4_Web/k8s/README.md). 값이 없으면 compose.
+        WEB_DEPLOY   = "${env.WEB_DEPLOY ?: 'compose'}"
         REGISTRY      = '127.0.0.1:5000'        // EC2 가 push 하는 주소(루프백 평문 허용)
         REGISTRY_NODE = 'j15a106.p.ssafy.io'    // 노드가 pull 하는 주소 — nginx 443 /v2/ → 루프백 레지스트리 (3_FMS/infra/nginx/registry-v2.conf, -249). tailnet 미사용
     }
@@ -67,11 +70,14 @@ pipeline {
                     // FMS/EMQX 는 같은 3_FMS/ 트리 밑에서도 서로 다른 스택이라 줄 단위로 갈라 본다.
                     def changedList = changedFiles.trim() ? changedFiles.trim().tokenize('\n') : []
 
+                    // 4_Web/k8s/ 는 매니페스트만 바뀌어도(자원·probe) 다시 배포해야 반영된다 (-258)
                     env.BUILD_BE = (fullBuild || common ||
                         paths.contains('\n4_Web/SantaFactoryBE/') ||
-                        paths.contains('\n4_Web/pdf/')) ? 'true' : 'false'
+                        paths.contains('\n4_Web/pdf/') ||
+                        paths.contains('\n4_Web/k8s/')) ? 'true' : 'false'
                     env.BUILD_FE = (fullBuild || common ||
-                        paths.contains('\n4_Web/SantaFactoryFE/')) ? 'true' : 'false'
+                        paths.contains('\n4_Web/SantaFactoryFE/') ||
+                        paths.contains('\n4_Web/k8s/')) ? 'true' : 'false'
                     env.BUILD_FMS = (fullBuild || common ||
                         changedList.any { it.startsWith('3_FMS/') &&
                             !it.startsWith('3_FMS/infra/emqx/') &&
@@ -104,22 +110,60 @@ pipeline {
                         cp -f "$APP_ENV_FILE" 4_Web/.env
                         $COMPOSE build backend pdf
                         docker tag santafactory-be:latest santafactory-be:$BUILD_NUMBER
-                        $COMPOSE up -d backend
+                        docker tag santafactory-pdf:latest santafactory-pdf:$BUILD_NUMBER
                     '''
                 }
-                sh '''
-                    for i in $(seq 1 75); do
-                        code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8080/ || true)
-                        if [ "$code" != "000" ]; then
-                            echo "backend 기동 확인 (HTTP $code)"
-                            exit 0
-                        fi
-                        sleep 2
-                    done
-                    echo "backend 가 150초 안에 응답하지 않음"
-                    docker logs --tail 100 a106-backend || true
-                    exit 1
-                '''
+                script {
+                    if (env.WEB_DEPLOY == 'k3s') {
+                        // k3s (-258): 새 파드가 readiness 를 통과한 뒤에야 옛 파드가 내려간다(4_Web/k8s/backend.yaml). compose 쪽은 롤아웃이 끝난 뒤 stop.
+                        withCredentials([file(credentialsId: 'k3s-kubeconfig', variable: 'KUBECONFIG')]) {
+                            sh '''
+                                for img in santafactory-be santafactory-pdf; do
+                                    docker tag $img:$BUILD_NUMBER $REGISTRY/$img:$BUILD_NUMBER
+                                    docker push $REGISTRY/$img:$BUILD_NUMBER
+                                done
+                                # compose 에 남는 넷은 여기서 최신 설정으로 맞춘다(사설 IP 포트 바인딩 등). EC2 에는 저장소가 없어 이 경로가 유일한 compose 실행 지점이다
+                                $COMPOSE up -d db rabbitmq redis minio
+                                # env 는 compose 파일이 조립한 그대로 Secret 으로 — db·rabbitmq·redis·pdf 이름은 4_Web/k8s 의 Service 가 풀어 준다
+                                $COMPOSE config --format json \\
+                                    | python3 -c 'import sys,json; [print(f"{k}={v}") for k,v in json.load(sys.stdin)["services"]["backend"]["environment"].items()]' \\
+                                    > 4_Web/.backend.env
+                                kubectl apply -f 4_Web/k8s/namespace.yaml -f 4_Web/k8s/compose-services.yaml
+                                kubectl -n web create secret generic backend-env --from-env-file=4_Web/.backend.env --dry-run=client -o yaml | kubectl apply -f -
+                                sed -E "s#^( *image: ).*santafactory-pdf:.*#\\1$REGISTRY_NODE/santafactory-pdf:$BUILD_NUMBER#" 4_Web/k8s/pdf.yaml | kubectl apply -f -
+                                sed -E "s#^( *image: ).*santafactory-be:.*#\\1$REGISTRY_NODE/santafactory-be:$BUILD_NUMBER#" 4_Web/k8s/backend.yaml | kubectl apply -f -
+                                for d in pdf backend; do
+                                    if ! kubectl -n web rollout status deployment/$d --timeout=300s; then
+                                        echo "k3s $d 롤아웃이 300초 안에 끝나지 않음"
+                                        kubectl -n web get pods -o wide || true
+                                        kubectl -n web describe deployment/$d | tail -20 || true
+                                        exit 1
+                                    fi
+                                done
+                                kubectl -n web get pods -o wide
+                                $COMPOSE stop backend pdf
+                                for img in santafactory-be santafactory-pdf; do
+                                    REGISTRY=$REGISTRY bash 3_FMS/infra/k8s/registry-prune.sh $img "$KEEP_COUNT" || true
+                                done
+                            '''
+                        }
+                    } else {
+                        sh '''
+                            $COMPOSE up -d backend
+                            for i in $(seq 1 75); do
+                                code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8080/ || true)
+                                if [ "$code" != "000" ]; then
+                                    echo "backend 기동 확인 (HTTP $code)"
+                                    exit 0
+                                fi
+                                sleep 2
+                            done
+                            echo "backend 가 150초 안에 응답하지 않음"
+                            docker logs --tail 100 a106-backend || true
+                            exit 1
+                        '''
+                    }
+                }
             }
         }
 
@@ -131,22 +175,42 @@ pipeline {
                         cp -f "$APP_ENV_FILE" 4_Web/.env
                         $COMPOSE build frontend
                         docker tag santafactory-fe:latest santafactory-fe:$BUILD_NUMBER
-                        $COMPOSE up -d frontend
                     '''
                 }
-                sh '''
-                    for i in $(seq 1 15); do
-                        code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3000/ || true)
-                        if [ "$code" = "200" ]; then
-                            echo "frontend 기동 확인 (HTTP $code)"
-                            exit 0
-                        fi
-                        sleep 2
-                    done
-                    echo "frontend 가 30초 안에 응답하지 않음"
-                    docker logs --tail 50 a106-frontend || true
-                    exit 1
-                '''
+                script {
+                    if (env.WEB_DEPLOY == 'k3s') {
+                        withCredentials([file(credentialsId: 'k3s-kubeconfig', variable: 'KUBECONFIG')]) {
+                            sh '''
+                                docker tag santafactory-fe:$BUILD_NUMBER $REGISTRY/santafactory-fe:$BUILD_NUMBER
+                                docker push $REGISTRY/santafactory-fe:$BUILD_NUMBER
+                                kubectl apply -f 4_Web/k8s/namespace.yaml
+                                sed -E "s#^( *image: ).*santafactory-fe:.*#\\1$REGISTRY_NODE/santafactory-fe:$BUILD_NUMBER#" 4_Web/k8s/frontend.yaml | kubectl apply -f -
+                                if ! kubectl -n web rollout status deployment/frontend --timeout=120s; then
+                                    echo "k3s frontend 롤아웃이 120초 안에 끝나지 않음"
+                                    kubectl -n web describe deployment/frontend | tail -20 || true
+                                    exit 1
+                                fi
+                                $COMPOSE stop frontend
+                                REGISTRY=$REGISTRY bash 3_FMS/infra/k8s/registry-prune.sh santafactory-fe "$KEEP_COUNT" || true
+                            '''
+                        }
+                    } else {
+                        sh '''
+                            $COMPOSE up -d frontend
+                            for i in $(seq 1 15); do
+                                code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3000/ || true)
+                                if [ "$code" = "200" ]; then
+                                    echo "frontend 기동 확인 (HTTP $code)"
+                                    exit 0
+                                fi
+                                sleep 2
+                            done
+                            echo "frontend 가 30초 안에 응답하지 않음"
+                            docker logs --tail 50 a106-frontend || true
+                            exit 1
+                        '''
+                    }
+                }
             }
         }
 
@@ -337,7 +401,7 @@ pipeline {
             when { expression { env.SKIP_ALL != 'true' } }
             steps {
                 sh '''
-                    for img in santafactory-be santafactory-fe fms-estimate-worker fms-core fms-host-orch; do
+                    for img in santafactory-be santafactory-fe santafactory-pdf fms-estimate-worker fms-core fms-host-orch; do
                         docker images "$img" --format '{{.Tag}}' \
                             | grep -E '^[0-9]+$' | sort -n | head -n -"$KEEP_COUNT" \
                             | xargs -r -I{} docker rmi "$img:{}"
@@ -357,7 +421,7 @@ pipeline {
             }
         }
         always {
-            sh 'rm -f 4_Web/.env 3_FMS/infra/.env.estimate 3_FMS/infra/.env 3_FMS/infra/emqx/.env'
+            sh 'rm -f 4_Web/.env 4_Web/.backend.env 3_FMS/infra/.env.estimate 3_FMS/infra/.env 3_FMS/infra/emqx/.env'
         }
     }
 }

@@ -5,6 +5,7 @@ import com.ssafy.santafactory.global.exception.ErrorCode;
 import com.ssafy.santafactory.global.exception.GlobalException;
 import com.ssafy.santafactory.repository.EstimateRepository;
 import com.ssafy.santafactory.service.estimate.EstimateEvents.EstimateVerified;
+import jakarta.annotation.PreDestroy;
 import java.io.IOException;
 import java.time.Duration;
 import java.time.LocalDateTime;
@@ -103,6 +104,13 @@ public class VerifyEventStream {
 
     int subscriberCount(Long estimateId) {
         return emitters.getOrDefault(estimateId, List.of()).size();
+    }
+
+    /** 종료 시 열린 구독을 전부 닫는다 — 이유는 {@link EstimateEventStream#closeAll()} 과 같다. */
+    @PreDestroy
+    public void closeAll() {
+        emitters.values().forEach(targets -> targets.forEach(SseEmitter::complete));
+        emitters.clear();
     }
 
     private void register(Long estimateId, SseEmitter emitter) {
