@@ -78,6 +78,11 @@ ap.add_argument("--rt-subframes", type=int, default=12, dest="rt_subframes",
 ap.add_argument("--res", default="1600x1000")
 A = ap.parse_args()
 P = A.pitch
+# ★ `--video` 는 `--shoot` 을 겸한다. **여기서** 접어야 한다 — 아래 SimulationApp
+#   블록이 `A.shoot` 을 보고 Isaac 을 띄울지 정하기 때문이다. 뒤에서 켜면 앱이
+#   안 뜬 채로 `import omni` 에 닿아 죽는다 (2026-09-23 실측).
+if A.video:
+    A.shoot = True
 
 # ── 기하 계산 — 그리기 전에 숫자부터 낸다 ────────────────────────────
 R_FRONT = math.hypot(FRONT, WIDTH / 2)
@@ -314,9 +319,6 @@ def animate(stage, case, u):
 cases = (["footprint", "side", "follow", "rack", "turn"]
          if A.case == "all" else [A.case])
 made = [build(c) for c in cases]
-
-if A.video:
-    A.shoot = True
 
 if not A.shoot:
     print("\n열어 보려면:  usdview <파일>")
