@@ -60,6 +60,16 @@ N = os.environ.get("N", "13")
 DRY = os.environ.get("DRY", "") not in ("", "0", "no")
 PITCH = os.environ.get("PIBT_PITCH", "1.0")
 
+# ★ 시뮬 상한을 **기본으로 건다** (`PIBT_HL_MAX_SIM`). 안 걸면 완주까지 가는데
+#   13대 판이 시뮬 2,287 초라 RTF 1.0 에서 값당 38분, 세 값이면 2시간이다.
+#   우리가 원하는 것은 완주가 아니라 **회전의 분포**다.
+#
+#   회전 밀도는 기존 녹화에서 나온다 — 463.8 시뮬초 x 12대에 회전 89건,
+#   즉 초당 0.19건이다. 300 초면 약 57건이라 중앙값·p95 를 내기에 족하다.
+#   더 촘촘한 꼬리(p99)가 필요하면 MAX_SIM 을 올린다.
+MAX_SIM = float(os.environ.get("MAX_SIM", "300"))
+TURNS_PER_SIM_S = 89.0 / 463.8          # 실측 밀도 (12대 기준)
+
 
 def tag_of(w):
     return "wsw%s" % ("%.2f" % w).replace(".", "p")
@@ -73,6 +83,8 @@ def run_one(w):
     env["PIBT_W_EXEC"] = "%.4f" % w
     env["PIBT_RECORD"] = npz
     env["TAG"] = tag
+    if MAX_SIM > 0:
+        env["PIBT_HL_MAX_SIM"] = "%.0f" % MAX_SIM
     cmd = ["bash", os.path.join(W, "run_headless.sh"), N]
     print("\n" + "=" * 70)
     print("w_exec %.2f rad/s   ->  %s" % (w, npz))
@@ -119,6 +131,16 @@ def main():
     print("회전 속도 쓸기 — 대수 %s · pitch %s · w = %s"
           % (N, PITCH, ", ".join("%.2f" % w for w in WS)))
     print("계획값은 geom.w_max = 1.8 이다. 그보다 낮은 판은 완주 시간을 안 본다.")
+    if MAX_SIM > 0:
+        # 준비 40 초(스테이지 1,923 박스 로딩·probe·시작 재정렬) + Isaac 부팅·계획.
+        # RTF 는 jupyter04 실측 약 1.0 이고 촬영이 없으니 그보다 조금 낫다.
+        per = MAX_SIM / 1.0 / 60.0 + 3.0
+        print("시뮬 상한 %.0f 초 (회전 약 %.0f건 예상) · 값당 대략 %.0f분 · "
+              "전체 대략 %.0f분"
+              % (MAX_SIM, MAX_SIM * TURNS_PER_SIM_S, per, per * len(WS)))
+        print("  ☹ 어림이다. RTF 1.0 과 준비 3분을 가정했다 — 첫 값이 끝나면 맞춰 볼 것.")
+    else:
+        print("☹ MAX_SIM=0 — 완주까지 간다. 13대 판은 값당 40분 가까이 걸린다.")
     rows = []
     for w in WS:
         npz, _ = run_one(w)
