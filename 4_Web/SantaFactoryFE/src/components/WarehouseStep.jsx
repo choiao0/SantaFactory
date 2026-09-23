@@ -20,14 +20,8 @@ export default function WarehouseStep({ form, onChange, models, modelsError, mod
       <div className="duo">
         <form onSubmit={(e) => e.preventDefault()}>
           <div className="formgrid">
-            {/* 입고·출고를 물량 → 시간대 → 목표·예산 순으로, 줄마다 좌우 한 쌍씩 놓는다 */}
-            <div className="span2">
-              <label htmlFor="inbound-avg">일 평균 입고</label>
-              <div className="field">
-                <input id="inbound-avg" type="text" inputMode="numeric" value={form.inboundAvg} onChange={digits('inboundAvg')} />
-                <span className="suffix">건/일</span>
-              </div>
-            </div>
+            {/* 입고는 받지 않는다 — 시뮬레이션이 출고 구간만 돌아(estimate.shifts=out) 입력해도
+                견적이 달라지지 않는다. 입고를 붙일 때 물량·시간대 두 칸을 되살린다 */}
             <div className="span2">
               <label htmlFor="outbound-avg">일 평균 출고 주문</label>
               <div className="field">
@@ -37,14 +31,6 @@ export default function WarehouseStep({ form, onChange, models, modelsError, mod
             </div>
 
             <div className="span2">
-              <label htmlFor="inbound-start">입고 시간대</label>
-              <div className="timerange">
-                <TimeField id="inbound-start" label="입고 시작 시각" value={form.inboundStart} onChange={(v) => onChange({ inboundStart: v })} />
-                <span>–</span>
-                <TimeField id="inbound-end" label="입고 종료 시각" value={form.inboundEnd} onChange={(v) => onChange({ inboundEnd: v })} />
-              </div>
-            </div>
-            <div className="span2">
               <label htmlFor="outbound-start">출고 시간대</label>
               <div className="timerange">
                 <TimeField id="outbound-start" label="출고 시작 시각" value={form.outboundStart} onChange={(v) => onChange({ outboundStart: v })} />
@@ -53,21 +39,18 @@ export default function WarehouseStep({ form, onChange, models, modelsError, mod
               </div>
             </div>
 
-            {/* 한 칸을 둘로 쪼갠다 — 칸 크기는 시간대 줄과 같고, 이름만 각자 위에 붙는다 */}
-            <div className="span2 targetpair">
-              <div>
-                <label htmlFor="target">목표 출고 처리율</label>
-                <div className="field">
-                  <input id="target" type="number" value={form.targetThroughput} min={1} max={100} onChange={number('targetThroughput')} />
-                  <span className="suffix">%</span>
-                </div>
+            <div className="span2">
+              <label htmlFor="target">목표 출고 처리율</label>
+              <div className="field">
+                <input id="target" type="number" value={form.targetThroughput} min={1} max={100} onChange={number('targetThroughput')} />
+                <span className="suffix">%</span>
               </div>
-              <div>
-                <label htmlFor="target-util">목표 가동률</label>
-                <div className="field">
-                  <input id="target-util" type="number" value={form.targetUtilization} min={1} max={100} onChange={number('targetUtilization')} />
-                  <span className="suffix">%</span>
-                </div>
+            </div>
+            <div className="span2">
+              <label htmlFor="target-util">목표 가동률</label>
+              <div className="field">
+                <input id="target-util" type="number" value={form.targetUtilization} min={1} max={100} onChange={number('targetUtilization')} />
+                <span className="suffix">%</span>
               </div>
             </div>
             <div className="span2">

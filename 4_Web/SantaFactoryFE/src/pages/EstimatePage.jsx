@@ -13,7 +13,6 @@ import { createEstimate, createWarehouse, getRobots } from '../api/estimates.js'
 
 /** 견적을 내려면 사용자가 채워야 하는 값. 기본값이 0 이라 빈 채로 요청하면 서버 검증에서 막힌다. */
 const REQUIRED_FIELDS = [
-  ['inboundAvg', '일 평균 입고'],
   ['outboundAvg', '일 평균 출고 주문'],
   ['targetThroughput', '목표 출고 처리율'],
   ['targetUtilization', '목표 가동률'],
@@ -26,13 +25,10 @@ const DEFAULT_FORM = {
   // 다만 창고 생성 API 가 여전히 필수(@NotNull)라 보내긴 해야 해서 기본값으로 남긴다.
   // 엔진이 실제로 반영하기 시작하면 입력 항목을 되살려야 한다.
   workerCount: 4,
-  inboundStart: '01:00',
-  inboundEnd: '09:00',
   outboundStart: '13:00',
   outboundEnd: '18:00',
   // 실제 창고 조건은 사용자가 넣어야 하는 값이다 — 그럴듯한 기본값이 박혀 있으면 그대로 두고
   // 요청해 버려서, 나온 견적이 자기 창고 이야기가 아니게 된다
-  inboundAvg: 0,
   outboundAvg: 0,
   targetThroughput: 0,
   targetUtilization: 0,
