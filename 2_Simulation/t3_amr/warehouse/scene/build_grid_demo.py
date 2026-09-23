@@ -6,7 +6,12 @@
     python warehouse/scene/build_grid_demo.py --case turn     한 장면만
     python warehouse/scene/build_grid_demo.py --pitch 1.2     격자를 바꿔 비교
 
-산출: `$STAGE/grid_demo_<case>.usd`  (`--shoot` 를 주면 PNG 까지)
+산출: `$STAGE/grid_demo_<case>.usd`
+      `--shoot` 를 주면 `$OUT/grid_demo/<case>.png`
+      `--video` 를 주면 `$OUT/grid_demo/<case>.mp4` (움직인다)
+
+    python warehouse/scene/build_grid_demo.py --video          다섯 장면 mp4
+    python warehouse/scene/build_grid_demo.py --case rack --video
 
 왜 이 파일이 있나
 -----------------
@@ -45,6 +50,7 @@
     스윕 원  주황       침투 구간 빨강
 """
 import argparse
+import glob
 import math
 import os
 import sys
@@ -63,6 +69,12 @@ ap.add_argument("--case", default="all",
 ap.add_argument("--pitch", type=float, default=1.0)
 ap.add_argument("--cells", type=int, default=7, help="격자 칸 수 (한 변)")
 ap.add_argument("--shoot", action="store_true", help="만들고 PNG 까지 찍는다")
+ap.add_argument("--video", action="store_true",
+                help="움직이는 mp4 까지 만든다 (회전·접근). --shoot 을 겸한다")
+ap.add_argument("--frames", type=int, default=120, help="--video 프레임 수 (30fps)")
+ap.add_argument("--exposure", type=float, default=1.0, help="조명 밝기 배수")
+ap.add_argument("--rt-subframes", type=int, default=12, dest="rt_subframes",
+                help="레이트레이서 수렴 프레임. 노이즈가 남으면 올린다")
 ap.add_argument("--res", default="1600x1000")
 A = ap.parse_args()
 P = A.pitch
@@ -105,7 +117,7 @@ if A.shoot:
           % (" · GPU " + _g if _g.isdigit() else ""))
     simulation_app = SimulationApp(_cfg)
 
-from pxr import Gf, Sdf, Usd, UsdGeom, UsdShade        # noqa: E402
+from pxr import Gf, Sdf, Usd, UsdGeom, UsdLux, UsdShade   # noqa: E402
 
 MAT = {                                    # (색, rough, metal, 불투명도)
     "line":  ((0.16, 0.17, 0.20), 0.8, 0.0, 1.0),
@@ -149,6 +161,25 @@ def box(stage, path, x0, x1, y0, y1, z0, z1, mat=None, yaw=0.0, cx=0.0, cy=0.0):
     return c
 
 
+def lights(stage):
+    """★ 조명을 **씬에 넣는다** (2026-09-23).
+
+    안 넣으면 렌더가 거의 새까맣게 나온다 — 첫 판에서 그랬다. 창고 씬
+    (`build_amr_scene_v2.py`)은 자기 조명이 있지만 이 데모는 처음부터 짓는
+    씬이라 아무것도 없다.
+
+    돔(하늘빛) + 해(방향광) 둘. `--exposure` 로 밝기를 조절한다.
+    """
+    d = UsdLux.DomeLight.Define(stage, "/World/Lights/Dome")
+    d.CreateIntensityAttr(900.0 * A.exposure)
+    d.CreateColorAttr(Gf.Vec3f(0.86, 0.90, 0.96))
+    s = UsdLux.DistantLight.Define(stage, "/World/Lights/Sun")
+    s.CreateIntensityAttr(2600.0 * A.exposure)
+    s.CreateAngleAttr(1.2)
+    s.CreateColorAttr(Gf.Vec3f(1.0, 0.97, 0.92))
+    UsdGeom.Xformable(s.GetPrim()).AddRotateXYZOp().Set(Gf.Vec3f(-48.0, 0.0, 38.0))
+
+
 def grid(stage, mats, n):
     """1.0 m 격자 — **진한 선**. 칸 경계가 보여야 이 설명이 성립한다."""
     half, t, z = n * P / 2, 0.022, 0.004
@@ -160,9 +191,24 @@ def grid(stage, mats, n):
 
 
 def footprint(stage, path, cx, cy, yaw, mats, key="body", h=0.62):
-    """계획이 쓰는 **발자국** — 축 기준 (-REAR..+FRONT) x (±WIDTH/2)."""
-    return box(stage, path, cx - REAR, cx + FRONT, cy - WIDTH/2, cy + WIDTH/2,
-               0.02, h, mats[key], yaw=yaw, cx=cx, cy=cy)
+    """계획이 쓰는 **발자국** — 축 기준 (-REAR..+FRONT) x (±WIDTH/2).
+
+    ★ 움직일 수 있게 만든다 — 회전·이동 op 을 **값이 0 이어도** 달아 둔다.
+      `--video` 가 프레임마다 그 값만 바꾼다 (`animate` 참조).
+      op 을 나중에 추가하면 매번 만들어야 하고, 그러다 카메라가 한 자리에
+      멈춘 사고를 이미 한 번 겪었다 (`headless_pibt._fpv_track`).
+    """
+    c = UsdGeom.Cube.Define(stage, path)
+    c.GetSizeAttr().Set(2.0)
+    xf = UsdGeom.Xformable(c)
+    t = xf.AddTranslateOp()
+    r = xf.AddRotateZOp()
+    s = xf.AddScaleOp()
+    t.Set(Gf.Vec3d(cx + (FRONT - REAR) / 2, cy, (0.02 + h) / 2))
+    r.Set(math.degrees(yaw))
+    s.Set(Gf.Vec3f((FRONT + REAR) / 2, WIDTH / 2, (h - 0.02) / 2))
+    UsdShade.MaterialBindingAPI(c.GetPrim()).Bind(mats[key])
+    return c
 
 
 def sweep_ring(stage, path, cx, cy, r, mats, key="sweep", seg=96, t=0.03):
@@ -187,6 +233,7 @@ def build(case):
     UsdGeom.Xform.Define(stage, "/World")
     stage.SetDefaultPrim(stage.GetPrimAtPath("/World"))
     mats = {k: material(stage, "/World/Looks/%s" % k, k) for k in MAT}
+    lights(stage)
     grid(stage, mats, A.cells)
 
     note = []
@@ -232,9 +279,44 @@ def build(case):
     return out
 
 
+# ── 장면마다 무엇이 움직이나 (`--video`) ─────────────────────────────
+#   기하만으로 부딪힌다는 것이 요점이라 **물리를 안 돌린다.** 발자국의 xform 을
+#   프레임마다 직접 옮긴다 — 그래서 결정적이고 1분이면 끝난다.
+#
+#       prim        움직일 대상        kind  rot=제자리 회전 · app=뒤에서 접근
+#       (없으면)    카메라가 궤도를 돈다 (정적 장면)
+MOTION = {
+    "rack":   ("/World/A", "rot"),
+    "turn":   ("/World/A", "rot"),
+    "follow": ("/World/B", "app"),
+}
+
+
+def animate(stage, case, u):
+    """0..1 의 u 를 받아 그 순간의 자세로 놓는다. 카메라 궤도면 각도를 돌려준다."""
+    mo = MOTION.get(case)
+    if mo is None:
+        return u * 2 * math.pi * 0.5          # 정적 장면 — 반 바퀴 궤도
+    path, kind = mo
+    ops = UsdGeom.Xformable(stage.GetPrimAtPath(path)).GetOrderedXformOps()
+    if kind == "rot":
+        # 0 -> 90도. 앞 모서리가 옆 칸으로 들어가는 그 구간이 한가운데 온다.
+        ops[1].Set(u * 90.0)
+    else:
+        # 뒤에서 한 칸 간격까지 다가온다. 마지막 30 % 는 멈춰 겹침을 보여준다.
+        v = min(1.0, u / 0.7)
+        x0, x1 = -2.8 * P, -P
+        cx = x0 + (x1 - x0) * v
+        ops[0].Set(Gf.Vec3d(cx + (FRONT - REAR) / 2, 0.0, ops[0].Get()[2]))
+    return 0.0
+
+
 cases = (["footprint", "side", "follow", "rack", "turn"]
          if A.case == "all" else [A.case])
 made = [build(c) for c in cases]
+
+if A.video:
+    A.shoot = True
 
 if not A.shoot:
     print("\n열어 보려면:  usdview <파일>")
@@ -257,8 +339,31 @@ w, h = (int(v) for v in A.res.split("x"))
 shot_dir = os.path.join(OUT, "grid_demo")
 os.makedirs(shot_dir, exist_ok=True)
 
+def look_at(xop, eye, tgt):
+    f = (tgt - eye).GetNormalized()
+    r = Gf.Cross(f, Gf.Vec3d(0, 0, 1)).GetNormalized()
+    u = Gf.Cross(r, f)
+    xop.Set(Gf.Matrix4d(r[0], r[1], r[2], 0, u[0], u[1], u[2], 0,
+                        -f[0], -f[1], -f[2], 0, eye[0], eye[1], eye[2], 1))
+
+
+def grab(annot, tries=24):
+    """★ 리플리케이터 **그래프를 밟아야** 버퍼가 찬다 (`shoot_amr.py` 와 같다)."""
+    for _ in range(tries):
+        try:
+            rep.orchestrator.step(delta_time=0.0, rt_subframes=A.rt_subframes)
+        except TypeError:
+            rep.orchestrator.step()
+        got = annot.get_data()
+        got = got.get("data") if isinstance(got, dict) else got
+        if got is not None and getattr(got, "size", 0):
+            return got
+    return None
+
+
 for usd in made:
     name = os.path.splitext(os.path.basename(usd))[0]
+    case = name.replace("grid_demo_", "")
     ctx = omni.usd.get_context()
     ctx.open_stage(usd)
     for _ in range(60):
@@ -267,33 +372,56 @@ for usd in made:
     d = A.cells * P * 0.62
     cam = UsdGeom.Camera.Define(st, "/World/Cam")
     cam.GetFocalLengthAttr().Set(35.0)
-    eye, tgt = Gf.Vec3d(-d, -d, d * 1.15), Gf.Vec3d(0, 0, 0)
-    f = (tgt - eye).GetNormalized()
-    r = Gf.Cross(f, Gf.Vec3d(0, 0, 1)).GetNormalized()
-    u = Gf.Cross(r, f)
-    xf = UsdGeom.Xformable(cam.GetPrim())
-    xf.ClearXformOpOrder()
-    xf.AddTransformOp().Set(Gf.Matrix4d(r[0], r[1], r[2], 0, u[0], u[1], u[2], 0,
-                                        -f[0], -f[1], -f[2], 0, eye[0], eye[1], eye[2], 1))
+    cxf = UsdGeom.Xformable(cam.GetPrim())
+    cxf.ClearXformOpOrder()
+    cop = cxf.AddTransformOp()
     annot = rep.AnnotatorRegistry.get_annotator("rgb")
     annot.attach([rep.create.render_product("/World/Cam", (w, h))])
-    data = None
-    for _ in range(20):                                # ★ 그래프를 밟아야 버퍼가 찬다
-        try:
-            rep.orchestrator.step(delta_time=0.0, rt_subframes=16)
-        except TypeError:
-            rep.orchestrator.step()
-        got = annot.get_data()
-        got = got.get("data") if isinstance(got, dict) else got
-        if got is not None and getattr(got, "size", 0):
-            data = got
-            break
-    if data is None:
-        print("[grid] ☹ %s — rgb 버퍼가 비었다" % name)
-    else:
-        p = os.path.join(shot_dir, "%s.png" % name)
-        Image.fromarray(data[:, :, :3]).save(p, format="PNG")   # ★ 포맷 명시
-        print("[grid] %s -> %s" % (name, p))
+
+    if not A.video:
+        look_at(cop, Gf.Vec3d(-d, -d, d * 1.15), Gf.Vec3d(0, 0, 0))
+        data = grab(annot)
+        if data is None:
+            print("[grid] ☹ %s — rgb 버퍼가 비었다" % name)
+        else:
+            p = os.path.join(shot_dir, "%s.png" % name)
+            Image.fromarray(data[:, :, :3]).save(p, format="PNG")
+            print("[grid] %s -> %s" % (name, p))
+        annot.detach()
+        continue
+
+    # ── 영상 — 움직이는 것이 요점이다 ────────────────────────────────
+    #   물리를 안 돌린다. 발자국 xform 을 프레임마다 직접 옮긴다 (`animate`).
+    #   그래서 결정적이고, 프레임 수만큼만 걸린다.
+    fdir = os.path.join(shot_dir, name)
+    os.makedirs(fdir, exist_ok=True)
+    for old in glob.glob(os.path.join(fdir, "f_*.png")):
+        os.remove(old)
+    n_ok = 0
+    for i in range(A.frames):
+        u = i / max(1, A.frames - 1)
+        orbit = animate(st, case, u)
+        ang = math.radians(215.0) + orbit
+        look_at(cop, Gf.Vec3d(d * math.cos(ang), d * math.sin(ang), d * 1.05),
+                Gf.Vec3d(0, 0, 0.3))
+        data = grab(annot)
+        if data is None:
+            continue
+        Image.fromarray(data[:, :, :3]).save(
+            os.path.join(fdir, "f_%04d.png" % i), format="PNG")
+        n_ok += 1
+        if i % 30 == 0:
+            print("[grid]   %s  %d/%d" % (name, i, A.frames), flush=True)
     annot.detach()
+    if not n_ok:
+        print("[grid] ☹ %s — 한 장도 못 받았다" % name)
+        continue
+    mp4 = os.path.join(shot_dir, "%s.mp4" % name)
+    rc = os.system('ffmpeg -y -loglevel warning -framerate 30 -i "%s/f_%%04d.png" '
+                   '-c:v libx264 -pix_fmt yuv420p -crf 20 "%s"' % (fdir, mp4))
+    if rc == 0:
+        print("[grid] %s -> %s  (%d프레임 · %.1f초)" % (name, mp4, n_ok, n_ok / 30.0))
+    else:
+        print("[grid] ☹ %s — ffmpeg 실패. 프레임은 %s 에 있다" % (name, fdir))
 
 app.close()
