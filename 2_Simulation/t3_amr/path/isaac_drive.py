@@ -2265,7 +2265,8 @@ class MotionController:
     """
 
     def __init__(self, geom: RobotGeom, tol: Tolerance | None = None,
-                 v_exec: float | None = None, a_exec: float | None = None):
+                 v_exec: float | None = None, a_exec: float | None = None,
+                 w_exec: float | None = None):
         self.g = geom
         self.tol = tol or Tolerance()
         self.action: Action | None = None
@@ -2292,6 +2293,24 @@ class MotionController:
         #     v 0.9 -> 1.2  -18.7%    v 0.9 -> 1.6  -30.7%   (8.4 m 기준)
         self.v_exec = float(v_exec) if v_exec else geom.v_max
         self.a_exec = float(a_exec) if a_exec else geom.a_lin
+        # [patch_wexec] **회전 속도**의 실행값 (2026-09-23, -267).
+        #
+        #   왜 이 손잡이가 없었나 — 회전 밀림의 원인을 찾을 때 `W_ACCEL` 로
+        #   계단 입력을 완화해 A/B 했고(363.4 -> 375.5, 안 변했다) 거기서
+        #   멈췄다. 그런데 `W_ACCEL` 은 w 가 **얼마나 빨리 오르는지**를 막을
+        #   뿐 **얼마나 큰지**는 안 바꾼다. 회전 속도 자체는 한 번도 안 쓸어
+        #   봤다 — `w_max` 가 `GEOM_KW` 에 박혀 있었기 때문이다.
+        #
+        #   ★ `v_exec` 와 **방향이 반대**인 손잡이다. 직진은 올리는 쪽이
+        #     안전했다 (ADG 는 순서로 도니 일찍 도착하면 기다린다). 회전도
+        #     올리는 쪽은 같은 이유로 안전하지만, **내리는 쪽은 TURN_TICKS=5
+        #     를 깨뜨린다** — 그 틱은 FMS 와 공유한다. 내려서 쓸 때는 계획
+        #     시간표가 아니라 **이탈량**만 보라는 뜻이다.
+        #
+        #   ★ **제자리 회전에만** 건다. 직진 중 조향(K_CROSS/K_HEAD)과 복구
+        #     기동은 `g.w_max` 그대로다. 둘을 같이 움직이면 "회전이 빨라서
+        #     밀렸나"와 "조향이 세서 밀렸나"가 섞여 실험이 못 쓰게 된다.
+        self.w_exec = float(w_exec) if w_exec else geom.w_max
         # [patch_carry] 이어달리기 종단속도. 0 이면 목표에서 완전히 선다.
         #   FleetController 가 매 스텝 정해 준다 — 다음 액션이 같은 방향
         #   직진이고 곧바로 시작 가능할 때만 0 보다 크다.
@@ -2397,9 +2416,12 @@ class MotionController:
 
         if a.kind == TURN:
             err = wrap(self.tyaw - yaw)
-            w = clamp(3.0 * err, -g.w_max, g.w_max)
+            # ★ 여기만 `w_exec` 다 — 아래 조향·복구는 `g.w_max` 를 쓴다.
+            #   근거는 `w_exec` 주석 ([patch_wexec]).
+            wx = self.w_exec
+            w = clamp(3.0 * err, -wx, wx)
             if abs(err) < 3.0 * self.tol.yaw:            # 마지막엔 부드럽게
-                w = clamp(w, -0.4 * g.w_max, 0.4 * g.w_max)
+                w = clamp(w, -0.4 * wx, 0.4 * wx)
             # ★★ 각가속 제한 (-240). 근거는 `W_ACCEL` 주석. 직진 가지의
             #   `a_exec` 와 **같은 꼴**이다 — 회전만 계단이었다.
             if W_ACCEL > 0.0:
@@ -2759,7 +2781,8 @@ class FleetController:
                  stall_timeout: float = 20.0,
                  starts: dict[int, State] | None = None,
                  release: bool = False, carry: bool = True,
-                 v_exec: float | None = None, a_exec: float | None = None):
+                 v_exec: float | None = None, a_exec: float | None = None,
+                 w_exec: float | None = None):
         self.g = geom
         # release=True 면 계획의 출발 시각을 지킨다 (lifelong 에서 필수).
         # one-shot 은 도착 시각이라는 개념이 없으니 기본값 False 로 둔다.
@@ -2789,6 +2812,18 @@ class FleetController:
         #   `geom.v_max` 는 계획이 쓰는 값이라 건드리지 않는다 (tick_s, 릴리스).
         self.v_exec = float(os.environ.get("PIBT_V_EXEC", "") or v_exec or geom.v_max)
         self.a_exec = float(os.environ.get("PIBT_A_EXEC", "") or a_exec or geom.a_lin)
+        # [patch_wexec] 회전 속도. 근거는 MotionController 쪽 같은 이름의 주석.
+        self.w_exec = float(os.environ.get("PIBT_W_EXEC", "") or w_exec or geom.w_max)
+        if self.w_exec < geom.w_max:
+            #   TURN_TICKS 는 계획기(FMS 와 공유) 쪽 상수라 여기 없다. 5 틱이고
+            #   한 틱은 `pitch / v_max` 다 (`isaac_drive` 머리 주석 106 줄).
+            _t_plan = 5.0 * (geom.pitch / geom.v_max)
+            _t_real = (math.pi / 2.0) / self.w_exec + self.w_exec / geom.a_ang
+            print(f"★ 회전 속도 {self.w_exec:.2f} rad/s 가 계획값 "
+                  f"{geom.w_max:.2f} 보다 **낮습니다**. 90도 소요 "
+                  f"{_t_real:.2f} s 대 계획 {_t_plan:.2f} s"
+                  + (" — 틱을 넘깁니다. 완주 시간을 결론으로 쓰지 마세요."
+                     if _t_real > _t_plan else "."))
         # ★ 도착 판정이 속도를 못 따라가면 안 된다. 한 스텝에 움직이는 거리가
         #   허용오차 지름(2 * tol.pos)보다 크면 `at_target` 창을 건너뛰어
         #   완료가 영영 안 뜬다 — 오버슈트하고 되돌아오기를 반복한다.
@@ -2800,7 +2835,8 @@ class FleetController:
                   f"{_lim:.2f} m/s 의 절반을 넘습니다 (tol.pos="
                   f"{(tol or Tolerance()).pos} m @ {_hz:.0f} Hz). "
                   f"완료를 놓칠 수 있으니 tol.pos 를 키우세요.")
-        self.ctrl = {a: MotionController(geom, tol, self.v_exec, self.a_exec)
+        self.ctrl = {a: MotionController(geom, tol, self.v_exec, self.a_exec,
+                                         self.w_exec)
                      for a in self.agents}
         self.running: dict[int, Action | None] = {a: None for a in self.agents}
         self.elapsed: dict[int, float] = {a: 0.0 for a in self.agents}
@@ -3162,7 +3198,9 @@ class FleetController:
         say(f"[회전분포] 기준선 {self._gate_ref:.0f} mm · 관문 "
             + (f"{gate:.0f} mm" if gate > 0 else "꺼짐 (PIBT_TOL_TURN_POS=0)")
             + (f" · 각가속 {W_ACCEL:.1f} rad/s^2" if W_ACCEL > 0.0
-               else " · 각가속 제한 없음"))
+               else " · 각가속 제한 없음")
+            + f" · 회전속도 {self.w_exec:.2f} rad/s"
+            + ("" if abs(self.w_exec - self.g.w_max) < 1e-9 else " ☹ 계획과 다름"))
         say(self.stats.turn_hist(self._gate_ref))
 
     def step(self, dt: float) -> None:

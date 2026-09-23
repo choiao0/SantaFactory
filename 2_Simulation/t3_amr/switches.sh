@@ -64,6 +64,20 @@ export PIBT_TURN_YIELD="${PIBT_TURN_YIELD:-1}"
 #   ☹ 구현은 2026-09-17 인데 기본이 0(꺼짐)이라 **아직 판으로 확인 못 했다.**
 export PIBT_W_ACCEL="${PIBT_W_ACCEL:-20}"
 
+# --- 회전 **속도** (-267, 2026-09-23) -----------------------
+#   위 `W_ACCEL` 은 w 가 얼마나 **빨리 오르는지**만 막는다. 얼마나 **큰지**는
+#   `GEOM_KW` 의 w_max=1.8 에 박혀 있어 한 번도 안 쓸어 봤다. 밀림의 원인으로
+#   「회전이 빠르다」를 물으려면 이 손잡이가 있어야 한다.
+#
+#   ☹ 기본은 **안 준다** — 안 주면 계획값(1.8) 그대로다. 실험할 때만 준다.
+#   ☹ 내리면 90도 소요가 늘어 TURN_TICKS=5 를 넘길 수 있다 (FMS 와 공유).
+#     그 판에서는 **완주 시간을 결론으로 쓰지 말 것.** 이탈량만 본다.
+#     넘기면 FleetController 가 ★ 경고를 찍는다.
+#   ★ 제자리 회전에만 걸린다. 직진 중 조향은 그대로다 (path/test_w_exec.py).
+#
+#       W_LIST=1.2,1.8,2.4 python tools/turn_speed_sweep.py
+[ -n "${PIBT_W_EXEC:-}" ] && export PIBT_W_EXEC
+
 # --- 회전 완료 관문 · 복구 기동 -----------------------------
 #   회전은 isaac_drive.py:2145 에서 일찍 반환한다 — `return (0.0, w)` 라
 #   **v 가 항상 0 이다.** 즉 회전은 병진을 못 한다. 그런데 완료 판정에는
@@ -152,6 +166,7 @@ echo "  코드        $(git -C "$_sw_dir" rev-parse --short HEAD 2>/dev/null || 
 echo "  공차        pos $PIBT_TOL_POS · cross $PIBT_TOL_CROSS"
 echo "  회전 관문   대기 ${PIBT_TURN_BODY_MAX}s (켬 $PIBT_TURN_BODY_GATE · 양보 $PIBT_TURN_YIELD) · 완료 ${PIBT_TOL_TURN_POS} m"
 echo "  회전 가속   ${PIBT_W_ACCEL} rad/s^2$([ "$PIBT_W_ACCEL" = "0" ] && echo '   ☹ 꺼짐 — 계단 그대로')"
+echo "  회전 속도   ${PIBT_W_EXEC:-계획값(1.8)}$([ -n "${PIBT_W_EXEC:-}" ] && echo ' rad/s   ☹ 계획과 다름 — 완주 시간을 결론으로 쓰지 말 것')"
 echo "  복구 기동   $PIBT_RECOVER   (회전에는 안 듣는다)"
 echo "  정지 판정   ${PIBT_TOL_STOP_V} m/s$([ "$PIBT_TOL_STOP_V" = "0" ] && echo "   (꺼짐 — 원 가장자리에 선다)")"
 echo "  ADG         몸 $PIBT_ADG_BODY · 순위 $PIBT_ADG_RANK"
