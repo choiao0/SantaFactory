@@ -2,16 +2,23 @@
 """**칸과 차체를 같이 그려서** 왜 부딪히는지 보여주는 씬 (S15P21A106-267).
 
     cd <t3_amr> && source paths.sh
-    python warehouse/scene/build_grid_demo.py                 세 장면 전부
+    python warehouse/scene/build_grid_demo.py                 일곱 장면 전부
     python warehouse/scene/build_grid_demo.py --case turn     한 장면만
     python warehouse/scene/build_grid_demo.py --pitch 1.2     격자를 바꿔 비교
+
+★ **Isaac 런처가 따로 없다.** `paths.sh` 를 source 한 셸의 `python` 이 곧
+  Isaac 의 venv 다 (`./isaac_python.sh` 같은 파일은 없다 — 찾지 말 것).
+  씬만 만들 때(`--shoot` 없이)는 venv 의 pxr 만으로 되고 GPU 도 안 문다.
 
 산출: `$STAGE/grid_demo_<case>.usd`
       `--shoot` 를 주면 `$OUT/grid_demo/<case>.png`
       `--video` 를 주면 `$OUT/grid_demo/<case>.mp4` (움직인다)
 
-    python warehouse/scene/build_grid_demo.py --video          다섯 장면 mp4
+    python warehouse/scene/build_grid_demo.py --video          일곱 장면 mp4
     python warehouse/scene/build_grid_demo.py --case rack --video
+
+☹ `$STAGE` 는 `paths.sh` 에서 **주행 씬이 사는 폴더**다. 데모 USD 를 거기
+  섞지 않으려면 앞에 붙여 한 판만 딴 데로 돌린다: `STAGE=/tmp/grid python …`
 
 왜 이 파일이 있나
 -----------------
@@ -39,10 +46,16 @@
     follow      앞뒤로 한 칸 간격. 칸은 안 겹치는데 **차체가 500 mm 겹친다**
     rack        옆 칸이 랙. 정중앙에서 돌려도 앞 모서리가 **59 mm** 들어간다
     turn        옆 칸에 남이 있는데 회전. 뒤 모서리가 **580 mm** 파고든다
+    accel       계획(등속)과 실제(칸마다 정지)를 나란히. 3칸에 3.33 s 대 8.35 s
+    decel       v_max 에서 제동. 표시한 자리를 **675 mm** 지나쳐 선다
+
+    ★ accel·decel 은 기하가 아니라 **운동**이라 `--video` 라야 뜻이 있다.
+      정지컷은 「두 대가 서 있다」로만 보인다.
 
 ☹ 「회전 첫 스텝의 바퀴 미끄러짐」은 여기 없다. 그것은 기하가 아니라 **제어**다 —
   계단 입력과 바닥 마찰의 문제라 그려서 보여줄 수 없다. `tools/turn_error.py` ·
   `tools/cross_track.py` 가 녹화 NPZ 에서 재는 쪽이 맞다.
+  (가속·감속은 달랐다 — 저건 상수에서 식이 나와 그릴 수 있다. 그래서 넣었다.)
 
 색
 --
