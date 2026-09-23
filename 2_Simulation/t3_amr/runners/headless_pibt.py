@@ -233,6 +233,7 @@ _rep_annot2 = None          # 측면. None 이면 상단만 찍는다
 _shot_n, _shot_fail = 0, 0
 _side_n = 0                 # 측면 장수 — 상단과 따로 센다 (경로가 다르다)
 _side_fail = 0              # 측면 저장 실패 누적 (상단처럼 몇 번은 참는다)
+_side_n_try = 0             # 측면 캡처 시도 횟수 — PIBT_SIDE_EVERY 주기 계산용
 
 
 def _attach_side():
@@ -263,8 +264,11 @@ def _attach_side():
         annot = rep.AnnotatorRegistry.get_annotator("rgb")
         annot.attach([rep.create.render_product(CAMERA_SIDE, (_w, _h))])
         print(f"[hl] 촬영 ON (측면) {SHOTS_SIDE} · 카메라 {CAMERA_SIDE} · {_w}x{_h}"
-              + (f" · 로봇 {SIDE_FOLLOW} 추종 {SIDE_DIST:g}m" if SIDE_FOLLOW >= 0
-                 else " · 고정"))
+              + (" · 고정" if SIDE_FOLLOW < 0 else
+                 f" · 로봇 {SIDE_FOLLOW} "
+                 + (f"3인칭 {SIDE_DIST:g}m" if SIDE_VIEW == "chase"
+                    else f"**1인칭** 앞 {SIDE_FWD:g}m · 높이 {SIDE_EYE_Z:g}m"))
+              + (f" · {SIDE_EVERY}번에 한 번" if SIDE_EVERY > 1 else ""))
         return annot
     except Exception as e:                                # noqa: BLE001
         print(f"[hl] ☹ 측면 촬영을 못 켠다 — 상단만 찍는다: {e!r}")
@@ -283,12 +287,35 @@ SIDE_FAIL_MAX = int(os.environ.get("PIBT_SIDE_FAIL_MAX", "") or 20)
 #   대상 로봇 뒤로 옮긴다.
 #
 #       PIBT_SIDE_FOLLOW   따라갈 로봇 번호. 비우거나 -1 이면 안 옮긴다(고정)
-#       PIBT_SIDE_DIST     거리 [m]
-#       PIBT_SIDE_SIDE     좌/우  (-1 왼쪽 · +1 오른쪽)
+#       PIBT_SIDE_VIEW     fpv(기본) | chase
+#       PIBT_SIDE_DIST     chase 일 때 거리 [m]
+#       PIBT_SIDE_SIDE     chase 일 때 좌/우  (-1 왼쪽 · +1 오른쪽)
+#
+#   ★ 기본은 **1인칭**이다 (2026-09-23). 3인칭 추종(chase)은 카메라가 창고를
+#     넓게 담아 렌더가 무겁다. 1인칭은 통로 앞만 보므로 화면에 드는 기하가
+#     훨씬 적다. 주행 방향이 그대로 보여 시연에도 읽기 쉽다.
+#
+#     ☹ 복사 비용은 **안 줄어든다** — 텍스처를 호스트로 옮기는 몫은 픽셀 수에만
+#       달렸다. 줄이려면 `PIBT_SIDE_RES` 를 내리거나 `PIBT_SIDE_EVERY` 를 올린다.
 _sf = (os.environ.get("PIBT_SIDE_FOLLOW", "") or "0").strip()
 SIDE_FOLLOW = int(_sf) if _sf.lstrip("-").isdigit() else 0
+SIDE_VIEW = (os.environ.get("PIBT_SIDE_VIEW", "") or "fpv").strip().lower()
 SIDE_DIST = float(os.environ.get("PIBT_SIDE_DIST", "") or 6.0)
 SIDE_LR = 1.0 if (os.environ.get("PIBT_SIDE_SIDE", "") or "-1").strip() != "-1" else -1.0
+# ★ 1인칭 눈 위치 — **차 앞면보다 앞**이어야 한다.
+#   구동축이 앞이라(heading_offset=0) 차체는 뒤로 뻗지만, 선반은 축 앞으로도
+#   0.39 m 나오고 z 0.22~1.65 를 채운다. 축 바로 위에 두면 카메라가 **선반
+#   구조물 안**에 들어가 포스트와 데크만 보인다.
+#   축에서 앞으로 0.55 m · 높이 1.20 m 가 기본 — 차 앞머리에 단 대시캠 자리다.
+SIDE_FWD = float(os.environ.get("PIBT_SIDE_FWD", "") or 0.55)
+SIDE_EYE_Z = float(os.environ.get("PIBT_SIDE_EYE_Z", "") or 1.20)
+# 겨냥점을 앞으로 이만큼, 바닥 쪽으로 내려 본다 — 통로와 앞차가 같이 들어온다.
+SIDE_LOOK = float(os.environ.get("PIBT_SIDE_LOOK", "") or 12.0)
+SIDE_LOOK_Z = float(os.environ.get("PIBT_SIDE_LOOK_Z", "") or 0.60)
+# 측면을 **몇 번에 한 번** 찍나. 1 이면 상단과 같은 주기.
+#   렉이 심하면 이것을 올린다 — 비용이 그만큼 나뉜다. 대신 측면 영상이 그 배수만큼
+#   빨라진다 (상단 10배속 · EVERY=3 이면 측면 30배속).
+SIDE_EVERY = max(1, int(os.environ.get("PIBT_SIDE_EVERY", "") or 1))
 # 근접 화면이라 조망만큼 클 필요가 없다. **복사량이 곧 비용**이다 —
 # 리플리케이터는 텍스처를 호스트로 직접 복사하고(Kit 이 그렇게 경고한다),
 # 1280x720 두 시점이 28 ms/step(배속 0.60)이었다.
@@ -297,7 +324,7 @@ _side_cam_warned = False
 
 
 def _side_track(fleet_):
-    """측면 카메라를 대상 로봇의 **대각선 뒤 위**로 옮긴다.
+    """측면 카메라를 대상 로봇에 붙인다 — 기본은 **1인칭 주행 시점**.
 
     실패해도 주행을 죽이지 않는다 — 한 번만 알리고 그 뒤로 조용히 넘어간다.
     카메라가 안 움직이면 마지막 자리에 머물 뿐이다.
@@ -311,14 +338,18 @@ def _side_track(fleet_):
         import math as _m
         from pxr import Gf, UsdGeom                      # noqa: E402
         import omni.usd                                  # noqa: E402
-        d = SIDE_DIST
         fx, fy = _m.cos(yaw), _m.sin(yaw)
-        # 뒤로 0.75d, 옆으로 0.5d, 높이 0.55d — build_amr_scene_v2.look_at 과 같은 비율
-        ex = x - 0.75 * d * fx - 0.5 * d * (-fy) * SIDE_LR
-        ey = y - 0.75 * d * fy - 0.5 * d * (fx) * SIDE_LR
-        ez = 0.55 * d
-        tgt = Gf.Vec3d(x, y, 0.75)                       # 선반 중간 높이 — 상자가 화면에
-        eye = Gf.Vec3d(ex, ey, ez)
+        if SIDE_VIEW == "chase":
+            # 3인칭 — 뒤로 0.75d, 옆으로 0.5d, 높이 0.55d
+            d = SIDE_DIST
+            eye = Gf.Vec3d(x - 0.75*d*fx - 0.5*d*(-fy)*SIDE_LR,
+                           y - 0.75*d*fy - 0.5*d*(fx)*SIDE_LR, 0.55*d)
+            tgt = Gf.Vec3d(x, y, 0.75)
+        else:
+            # ★ 1인칭 — 차 앞머리에서 주행 방향을 본다 (대시캠).
+            eye = Gf.Vec3d(x + SIDE_FWD*fx, y + SIDE_FWD*fy, SIDE_EYE_Z)
+            tgt = Gf.Vec3d(x + (SIDE_FWD + SIDE_LOOK)*fx,
+                           y + (SIDE_FWD + SIDE_LOOK)*fy, SIDE_LOOK_Z)
         f = (tgt - eye).GetNormalized()
         r = Gf.Cross(f, Gf.Vec3d(0, 0, 1)).GetNormalized()
         u = Gf.Cross(r, f)
@@ -517,13 +548,17 @@ try:
         #     프레임이다. 이 호출이 없으면 예약만 쌓이고 파일은 안 생긴다.
         if _cap and state["n"] % SHOT_STRIDE == 0:
             # ★ 카메라를 **렌더 전에** 옮긴다 — 그래야 이 프레임에 반영된다.
-            _side_track(fleet)
+            if _side_n_try % SIDE_EVERY == 0:
+                _side_track(fleet)
             _render_once()
             # 상단 — 뷰포트면 live_pibt 가 자기 틱에서 찍는다 (여기서는 안 한다).
             if _cap == "replicator":
                 _save_replicator(state["t"])
             # 측면 — **상단 경로와 무관하게** 같은 렌더 프레임에서 받는다.
-            _save_side(state["t"])
+            #   `PIBT_SIDE_EVERY` 로 주기를 늘리면 그만큼 복사가 준다.
+            if _side_n_try % SIDE_EVERY == 0:
+                _save_side(state["t"])
+            _side_n_try += 1
 
         _step(DT, t_sim)
         t_sim += DT
