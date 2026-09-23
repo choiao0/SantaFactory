@@ -14,6 +14,7 @@
 | `sim-worker-secret.example.yaml` | 브로커 주소 Secret 의 예시. 실제 값은 EC2 에서 명령으로 만든다 |
 | `sim-worker-deployment.yaml` | 워커 12개, `role=sim-worker` 노드에 4개씩, CPU 1·메모리 3Gi, `dnsPolicy: Default` |
 | `registry-prune.sh` | 사설 레지스트리(`../compose.registry.yml`)의 오래된 빌드 태그 정리. Jenkins 가 배포 뒤 호출 |
+| `portainer-agent.yaml` | Portainer 에이전트 — k3s 를 EC2 Portainer 의 두 번째 환경으로(-269). 고정 ClusterIP `10.43.0.90:9001`, EC2 노드. 손으로 한 번 적용(Jenkins 대상 아님) |
 | `../nginx/registry-v2.conf` | 노드가 이미지를 받는 공인 경로 — 443 `/v2/` → 127.0.0.1:5000, 출발지 NAT IP, GET/HEAD 만 |
 | `../gcp/start.sh` | GCP 템플릿 시작 스크립트 — 에이전트 합류 |
 
@@ -76,6 +77,27 @@ curl -sI https://j15a106.p.ssafy.io/v2/ | head -1          # 허용 IP 밖(이 P
   매니페스트가 기준이라 자원·개수·정책 변경도 release 로 나간다. Secret 은 값이 레포에 없어 apply 대상이 아니다.
 전환은 값을 `k3s` 로, 되돌리기는 `compose` 로 바꾸고 release 를 다시 돌리면 된다. k3s 경로는 FMS 변경이 감지될 때만 도니 전환 첫 release 는 전체 빌드(기준 SHA 삭제)로.
 노드가 합류하기 전에 `k3s` 로 켜면 rollout 대기 600 s 가 실패하고 뒤의 EMQX·fms-core 단계까지 건너뛴다 — 노드 Ready 를 본 뒤 켠다.
+
+## Portainer 에이전트 (-269)
+
+Portainer(`../compose.portainer.yml`)는 도커 소켓만 봐서 k3s 파드가 안 보인다 — k3s 는 도커가 아니라 자체 containerd 로 돈다.
+에이전트를 k3s 에 두고 Portainer 에 Kubernetes 환경으로 붙이면 홈 화면에 환경 둘(도커·k3s)이 나란히 뜬다. GCP 노드의 워커 파드도
+API 로 보이므로 로그·상태를 볼 수 있다.
+
+```
+# PC 에서 (EC2 에는 저장소가 없다)
+ssh -i <키> ubuntu@j15a106.p.ssafy.io 'sudo kubectl apply -f -' < 3_FMS/infra/k8s/portainer-agent.yaml
+# EC2 에서
+sudo kubectl -n portainer rollout status deployment/portainer-agent
+docker run --rm --network a106-portainer_default --entrypoint nc redis:7-alpine -zv -w 3 10.43.0.90 9001   # open
+```
+그다음 Portainer 화면: Environments → Add environment → Kubernetes → Agent → 이름 `k3s`, 주소 `10.43.0.90:9001` → Connect.
+
+- NodePort(원본 30778)를 쓰지 않는다. 보안그룹이 전 포트 개방이고 NodePort 는 kube-proxy 가 ufw 보다 먼저 DNAT 해 밖에서 닿는다.
+  고정 ClusterIP 는 EC2 안에서만 닿으므로 ufw 를 건드릴 일이 없다(`4_Web/k8s/backend.yaml` 과 같은 방식).
+- 파드는 EC2 노드에 둔다. Portainer 는 EC2 에 있고 EC2 → GCP 파드 IP 길은 없다.
+- 권한은 원본대로 `cluster-admin`. 에이전트는 처음 붙은 Portainer 서버의 키만 믿으므로 환경 추가는 적용 직후에 한다.
+- 걷어내기: Portainer 에서 환경 삭제 → `sudo kubectl delete -f -` 로 같은 파일.
 
 ## 워커 개수·자원
 
