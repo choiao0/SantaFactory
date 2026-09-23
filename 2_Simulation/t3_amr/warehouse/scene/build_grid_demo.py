@@ -73,6 +73,13 @@ ap.add_argument("--video", action="store_true",
                 help="움직이는 mp4 까지 만든다 (회전·접근). --shoot 을 겸한다")
 ap.add_argument("--frames", type=int, default=120, help="--video 프레임 수 (30fps)")
 ap.add_argument("--exposure", type=float, default=1.0, help="조명 밝기 배수")
+ap.add_argument("--robot", default=os.environ.get("ROBOT") or
+                os.path.join(W_DIR, "robots", "iwhub", "iw_hub.usd"),
+                help="AMR 에셋 (기본 $ROBOT)")
+ap.add_argument("--shelf", default=os.path.join(W_DIR, "robots", "shelf", "amr_shelf.usd"),
+                help="적재 선반 에셋")
+ap.add_argument("--boxes", action="store_true",
+                help="실제 에셋 대신 **발자국 상자**로 그린다 (에셋이 없을 때)")
 ap.add_argument("--rt-subframes", type=int, default=12, dest="rt_subframes",
                 help="레이트레이서 수렴 프레임. 노이즈가 남으면 올린다")
 ap.add_argument("--res", default="1600x1000")
@@ -195,14 +202,57 @@ def grid(stage, mats, n):
     box(stage, "/World/Floor", -half, half, -half, half, -0.01, 0.0, mats["floor"])
 
 
+WHEEL_R = 0.081          # `build_amr_scene_v2.py` 와 같은 값 — 로봇 prim 의 z
+
+_asset_warned = False
+
+
+def have_assets():
+    """실제 에셋이 있나. git 제외라 없는 기계가 있다 — 그러면 상자로 떨어진다."""
+    global _asset_warned
+    if A.boxes:
+        return False
+    ok = os.path.isfile(A.robot)
+    if not ok and not _asset_warned:
+        _asset_warned = True
+        print("[grid] ☹ AMR 에셋이 없어 **발자국 상자**로 그린다: %s" % A.robot)
+        print("[grid]   받으려면:  python tools/fetch_iwhub.py")
+    return ok
+
+
 def footprint(stage, path, cx, cy, yaw, mats, key="body", h=0.62):
-    """계획이 쓰는 **발자국** — 축 기준 (-REAR..+FRONT) x (±WIDTH/2).
+    """그 자리에 **AMR 을 놓는다.** 에셋이 없으면 발자국 상자로 떨어진다.
+
+    ★ 격자를 넘는 것을 보여주는 것이 목적이라 **실제 에셋**이라야 한다. 상자는
+      「계획이 쓰는 발자국」이지 눈에 보이는 로봇이 아니다.
 
     ★ 움직일 수 있게 만든다 — 회전·이동 op 을 **값이 0 이어도** 달아 둔다.
-      `--video` 가 프레임마다 그 값만 바꾼다 (`animate` 참조).
-      op 을 나중에 추가하면 매번 만들어야 하고, 그러다 카메라가 한 자리에
-      멈춘 사고를 이미 한 번 겪었다 (`headless_pibt._fpv_track`).
+      `--video` 가 프레임마다 그 값만 바꾼다 (`animate` 참조). op 을 나중에
+      추가하면 매번 만들게 되고, 그러다 카메라가 한 자리에 멈춘 사고를 이미
+      한 번 겪었다 (`headless_pibt._fpv_track`, 5257b1f).
+
+    ★ 로봇 에셋은 **구동축 원점 · +X 전진**으로 저작돼 있다. 그래서 축 자리에
+      그대로 놓으면 되고, 선반도 추가 변환 없이 얹힌다
+      (`build_amr_scene_v2.py:239` 의 주석이 그 규약을 적어 뒀다).
     """
+    if have_assets():
+        prim = stage.DefinePrim(path, "Xform")
+        prim.GetReferences().AddReference(A.robot)
+        xf = UsdGeom.Xformable(prim)
+        xf.AddTranslateOp().Set(Gf.Vec3d(cx, cy, WHEEL_R))
+        xf.AddRotateZOp().Set(math.degrees(yaw))
+        xf.AddScaleOp().Set(Gf.Vec3f(1.0, 1.0, 1.0))
+        if os.path.isfile(A.shelf):
+            # 물리를 안 돌리므로 링크에 매달 필요가 없다 — 루트 밑이면 된다.
+            stage.DefinePrim(path + "/shelf", "Xform") \
+                 .GetReferences().AddReference(A.shelf)
+        # 바닥에 **발자국 자국**을 같이 깐다 — 칸을 얼마나 넘는지 눈금이 된다.
+        #   ★ 로봇 prim 의 **자식**으로 넣는다. 형제로 두면 로봇만 돌고 자국은
+        #     제자리에 남아, 회전 장면에서 무엇이 발자국인지 알 수 없게 된다.
+        #     자식이면 부모의 translate·rotateZ 를 그대로 물려받는다.
+        box(stage, path + "/pad", -REAR, FRONT, -WIDTH/2, WIDTH/2,
+            0.005 - WHEEL_R, 0.010 - WHEEL_R, mats[key])
+        return prim
     c = UsdGeom.Cube.Define(stage, path)
     c.GetSizeAttr().Set(2.0)
     xf = UsdGeom.Xformable(c)
