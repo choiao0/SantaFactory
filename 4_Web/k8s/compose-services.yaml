@@ -1,7 +1,8 @@
 # compose 에 남는 DB·RabbitMQ·Redis 를 클러스터 안 이름으로 풀어 주는 안내판 (S15P21A106-258).
-# 셀렉터 없는 headless Service + EndpointSlice: CoreDNS 가 `db` 를 EC2 사설 IP 로 바로 답한다.
+# 셀렉터 없는 headless Service + EndpointSlice: CoreDNS 가 `db` 를 도커 게이트웨이 172.18.0.1 로 바로 답한다.
 # ClusterIP 를 주면 kube-proxy 의 DNAT 가 먼저 걸려 도커가 publish 한 포트로 가지 못한다 — 그래서 clusterIP: None.
-# EC2 쪽은 4_Web/docker-compose.yml 이 같은 포트를 172.26.3.57 에도 바인딩하고, 공인 NIC 는 3_FMS/infra/firewall 이 막는다.
+# EC2 쪽은 4_Web/docker-compose.yml 이 같은 포트를 172.18.0.1 에도 바인딩한다. 서버 안 가상 주소라 인터넷에서는 닿지 않는다
+# (EC2 사설 IP 172.26.3.57 은 공인 IP 와 1:1 NAT 라 밖에서 닿아 기각).
 apiVersion: v1
 kind: Service
 metadata:
@@ -27,7 +28,7 @@ ports:
     protocol: TCP
     port: 5432
 endpoints:
-  - addresses: ["172.26.3.57"]
+  - addresses: ["172.18.0.1"]
     conditions:
       ready: true
 ---
@@ -56,7 +57,7 @@ ports:
     protocol: TCP
     port: 5672
 endpoints:
-  - addresses: ["172.26.3.57"]
+  - addresses: ["172.18.0.1"]
     conditions:
       ready: true
 ---
@@ -85,6 +86,6 @@ ports:
     protocol: TCP
     port: 6379
 endpoints:
-  - addresses: ["172.26.3.57"]
+  - addresses: ["172.18.0.1"]
     conditions:
       ready: true

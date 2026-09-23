@@ -32,7 +32,6 @@ sudo bash ~/firewall/apply.sh --remove      # 되돌리기
 |---|---|---|---|
 | 1883 EMQX | GPU 박스 엣지, host-orch, fms-core | tailnet(100.100.149.68) · docker 네트워크 | 없음 |
 | 9002 MinIO | GPU 박스 엣지 업로드 | tailnet | 없음 |
-| 5432·5672·6379 Postgres·RabbitMQ·Redis | k3s 백엔드 파드(EC2 안, 4_Web/k8s) | 파드 → 172.26.3.57 (cni0, DOCKER-USER 대상 아님) | 없음 — 허용 목록 비움 (-258) |
 | 9002 MinIO | 브라우저 영상 재생 | 443 → nginx `/media` → 127.0.0.1:9002 | 없음 |
 | 1883·9002 | 인터넷 스캐너 | ens5 | **차단** |
 
