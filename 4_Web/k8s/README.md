@@ -1,7 +1,7 @@
 # 웹 계층 k3s 배포 — backend · pdf · frontend (S15P21A106-258)
 
 EC2 compose 에서 상태가 없는 세 컨테이너를 k3s Deployment 로 옮긴다. 목적은 **무중단 배포**(새 파드가 준비된 뒤 옛 파드 교체)와 준비·생존 확인, 자원 상한의 명시.
-DB·RabbitMQ·Redis·MinIO·EMQX·레지스트리는 compose 에 남는다. 배경과 판단은 `5_Docs/소프트웨어 아키텍처/쿠버네티스_도입_검토.md`.
+DB·RabbitMQ·Redis·MinIO·EMQX·레지스트리는 compose 에 남는다. 배경과 판단은 `5_Docs/소프트웨어 아키텍처/쿠버네티스_도입.md`.
 
 | 파일 | 역할 |
 |---|---|
