@@ -263,7 +263,7 @@ def _attach_side():
         _w, _h = (int(x) for x in SIDE_RES.split("x"))
         annot = rep.AnnotatorRegistry.get_annotator("rgb")
         annot.attach([rep.create.render_product(CAMERA_SIDE, (_w, _h))])
-        print(f"[hl] 촬영 ON (측면) {SHOTS_SIDE} · 카메라 {CAMERA_SIDE} · {_w}x{_h}"
+        print(f"[hl] 촬영 ON (2번영상) {SHOTS_SIDE} · 카메라 {CAMERA_SIDE} · {_w}x{_h}"
               + (" · 고정" if SIDE_FOLLOW < 0 else
                  f" · 로봇 {SIDE_FOLLOW} "
                  + (f"3인칭 {SIDE_DIST:g}m" if SIDE_VIEW == "chase"
@@ -271,7 +271,7 @@ def _attach_side():
               + (f" · {SIDE_EVERY}번에 한 번" if SIDE_EVERY > 1 else ""))
         return annot
     except Exception as e:                                # noqa: BLE001
-        print(f"[hl] ☹ 측면 촬영을 못 켠다 — 상단만 찍는다: {e!r}")
+        print(f"[hl] ☹ 2번영상을 못 켠다 — 1번만 찍는다: {e!r}")
         return None
 
 
@@ -364,7 +364,7 @@ def _side_track(fleet_):
     except Exception as e:                               # noqa: BLE001
         if not _side_cam_warned:
             _side_cam_warned = True
-            print(f"[hl] ☹ 측면 카메라 추종 실패 — 고정 화각으로 간다: {e!r}")
+            print(f"[hl] ☹ 1인칭 카메라 추종 실패 — 고정 화각으로 간다: {e!r}")
 
 
 def _save_side(sim_t):
@@ -391,9 +391,9 @@ def _save_side(sim_t):
     except Exception as e:                                # noqa: BLE001
         _side_fail += 1
         if _side_fail <= 3:
-            print(f"[hl] 측면 저장 실패 {_side_fail}회 (계속 시도): {e!r}")
+            print(f"[hl] 2번영상 저장 실패 {_side_fail}회 (계속 시도): {e!r}")
         if _side_fail >= SIDE_FAIL_MAX:
-            print(f"[hl] ☹ 측면 저장이 {SIDE_FAIL_MAX}회 실패 — 측면을 끈다. "
+            print(f"[hl] ☹ 2번영상 저장이 {SIDE_FAIL_MAX}회 실패 — 2번영상을 끈다. "
                   f"마지막: {e!r}")
             if _side_n == 0:
                 print("[hl]   ★ 한 장도 못 받았다 = 지연이 아니라 구조 문제다. "
@@ -619,7 +619,7 @@ if _cap:
     # 측면 — 켠 적이 있으면 반드시 장수를 낸다. 0 장이면 그 자리에서 보이게 한다
     # (백엔드는 `_side` 키가 없으면 **오류 없이** 버튼만 안 띄운다).
     if SHOTS_SIDE and CAMERA_SIDE:
-        print(f"[hl] 촬영(측면) {_side_n:,}장 · 실패 {_side_fail}회 -> {SHOTS_SIDE}"
+        print(f"[hl] 촬영(2번영상) {_side_n:,}장 · 실패 {_side_fail}회 -> {SHOTS_SIDE}"
               + ("" if _side_n else
                  f"   ★ 한 장도 안 나왔다 (카메라 {CAMERA_SIDE})"))
 try:
