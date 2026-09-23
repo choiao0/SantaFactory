@@ -27,7 +27,7 @@ body{font-family:var(--sans);color:var(--ink);font-size:12.5px;line-height:1.5;-
 .head .meta b{color:var(--ink);font-weight:600;letter-spacing:.02em}
 
 .block{margin-top:12px}
-#p2 .block{margin-top:18px}
+#p2 .block{margin-top:14px}
 .eyebrow{display:flex;align-items:center;gap:8px;font-size:9.5px;font-weight:700;letter-spacing:.1em;color:var(--red-dark)}
 .eyebrow::after{content:"";flex:1;height:1px;background:var(--rule)}
 .eyebrow .t{color:var(--ink);font-weight:700;font-size:13.5px;letter-spacing:-.02em}
@@ -93,7 +93,7 @@ tr.total td{border-top:1.5px solid var(--ink);border-bottom:0;font-weight:800;fo
 .foot{position:absolute;left:60px;right:60px;bottom:22px;display:flex;justify-content:space-between;font-size:9px;color:var(--muted2)}
 .foot b{font-weight:600;letter-spacing:.02em}
 
-.chart{margin-top:8px;background:var(--card);border:1px solid var(--line);padding:8px 14px 6px}
+.chart{margin-top:6px;background:var(--card);border:1px solid var(--line);padding:6px 14px 4px}
 .chart svg{display:block;width:100%;height:auto}
 .legend{display:flex;gap:16px;font-size:9.5px;color:var(--muted);margin-top:3px}
 .legend i{display:inline-block;width:14px;height:2px;vertical-align:middle;margin-right:5px}
@@ -213,7 +213,7 @@ tr.total td{border-top:1.5px solid var(--ink);border-bottom:0;font-weight:800;fo
             <dt>검증 방법</dt><dd th:text="${q.verification.methodLine}"></dd>
             <dt>검증 구간</dt><dd th:text="${q.verification.windowLine}"></dd>
             <dt>결과</dt><dd><span class="dot" th:classappend="${q.verification.resultOk} ? '' : 'bad'"></span><span th:text="${q.verification.resultLine}"></span></dd>
-            <dt>영상</dt><dd>웹에서 견적을 열어 재생 (<span th:text="${#numbers.formatInteger(base + 4, 2)}"></span> 유의 사항의 주소)</dd>
+            <dt>영상</dt><dd>웹에서 견적을 열어 재생 (<span th:text="${#numbers.formatInteger(base + 5, 2)}"></span> 유의 사항의 주소)</dd>
           </dl>
         </div>
         <table th:if="${q.verification.hasComparison}">
@@ -254,7 +254,7 @@ tr.total td{border-top:1.5px solid var(--ink);border-bottom:0;font-weight:800;fo
       </tr></thead>
       <tbody>
         <tr th:each="f : ${q.fleet}" th:classappend="${f.recommended} ? 'hl'">
-          <td><span th:text="${f.count} + '대'"></span><span th:if="${f.recommended}" class="chip">권장</span><span th:if="${f.minimal}" class="chip g">최소 구성</span><span th:if="${f.knee}" class="chip g">효과 정체 시작</span></td>
+          <td><span th:text="${f.count} + '대'"></span><span th:if="${f.recommended}" class="chip">권장</span><span th:if="${f.minimal}" class="chip g">최소 구성</span><span th:if="${f.full}" class="chip g">전량 처리</span><span th:if="${f.knee}" class="chip g">효과 정체 시작</span></td>
           <td class="num" th:text="${f.throughput}"></td>
           <td class="num" th:text="${f.utilization}"></td>
           <td class="goal"><span th:classappend="${f.targetOk} ? 'ok' : 'miss'" th:text="${f.targetText}"></span></td>
@@ -271,24 +271,34 @@ tr.total td{border-top:1.5px solid var(--ink);border-bottom:0;font-weight:800;fo
   <div class="block" th:if="${q.curve != null}">
     <div class="eyebrow"><span th:text="${#numbers.formatInteger(base + 2, 2)}"></span> <span class="t">효율과 구축 비용 그래프</span></div>
     <div class="chart">
-      <svg viewBox="0 0 672 175" xmlns="http://www.w3.org/2000/svg">
+      <svg th:attr="viewBox='0 0 672 ' + ${q.curve.svgH}" xmlns="http://www.w3.org/2000/svg">
         <g th:each="y : ${q.curve.yLeft}">
           <line x1="36" x2="624" th:y1="${y.pos}" th:y2="${y.pos}" stroke="#e0ded9"/>
           <text x="30" th:y="${y.pos + 3}" font-size="8" fill="#77776f" text-anchor="end" th:text="${y.text}"></text>
         </g>
         <text th:each="y : ${q.curve.yRight}" x="630" th:y="${y.pos + 3}" font-size="8" fill="#77776f" th:text="${y.text}"></text>
-        <text th:each="x : ${q.curve.xLabels}" th:x="${x.pos}" y="167" font-size="8" text-anchor="middle"
+        <text th:each="x : ${q.curve.xLabels}" th:x="${x.pos}" th:y="${q.curve.xLabelY}" font-size="8" text-anchor="middle"
               th:fill="${x.highlight} ? '#b51616' : '#77776f'" th:attr="font-weight=${x.highlight} ? '700' : '400'" th:text="${x.text}"></text>
         <line x1="36" x2="624" th:y1="${q.curve.budgetY}" th:y2="${q.curve.budgetY}" stroke="#3f3f3d" stroke-dasharray="4 3"/>
         <text x="620" th:y="${q.curve.budgetY - 4}" font-size="8" fill="#3f3f3d" text-anchor="end" th:text="${q.curve.budgetLabel}"></text>
         <g th:if="${q.curve.kneeX != null}">
-          <line th:x1="${q.curve.kneeX}" th:x2="${q.curve.kneeX}" y1="14" y2="153" stroke="#8a8983" stroke-dasharray="3 3"/>
+          <line th:x1="${q.curve.kneeX}" th:x2="${q.curve.kneeX}" y1="14" th:y2="${q.curve.axisY}" stroke="#8a8983" stroke-dasharray="3 3"/>
           <text th:x="${q.curve.kneeX + 5}" y="24" font-size="8" fill="#8a8983" th:text="${q.curve.kneeLabel}"></text>
         </g>
         <path th:attr="d=${q.curve.costPath}" fill="none" stroke="#8a8983" stroke-width="1.6"/>
         <path th:attr="d=${q.curve.effPath}" fill="none" stroke="#e72d2d" stroke-width="2.2"/>
+        <circle th:each="p : ${q.curve.points}" th:cx="${p.x}" th:cy="${p.effY}" r="2.6" fill="#fbfaf8"
+                th:attr="stroke=${p.met} ? '#e72d2d' : '#b7b5b0'" stroke-width="1.5"/>
+        <g th:if="${q.curve.minimal != null}">
+          <line th:x1="${q.curve.minimal.x}" th:x2="${q.curve.minimal.x}" th:y1="${q.curve.minimal.y + 12}"
+                th:y2="${q.curve.axisY}" stroke="#d99a00" stroke-dasharray="3 3"/>
+          <circle th:cx="${q.curve.minimal.x}" th:cy="${q.curve.minimal.y}" r="9" fill="none" stroke="#d99a00" stroke-width="1.5"/>
+          <circle th:cx="${q.curve.minimal.x}" th:cy="${q.curve.minimal.y}" r="3" fill="#d99a00"/>
+          <text th:x="${q.curve.minimal.labelX}" th:y="${q.curve.minimal.labelY}" font-size="8.5" fill="#8f6503"
+                th:attr="text-anchor=${q.curve.minimal.labelAnchor}" font-weight="700" th:text="${q.curve.minimal.label}"></text>
+        </g>
         <g th:if="${q.curve.recX >= 0}">
-          <line th:x1="${q.curve.recX}" th:x2="${q.curve.recX}" th:y1="${q.curve.recY + 12}" y2="153" stroke="#e72d2d" stroke-dasharray="3 3"/>
+          <line th:x1="${q.curve.recX}" th:x2="${q.curve.recX}" th:y1="${q.curve.recY + 12}" th:y2="${q.curve.axisY}" stroke="#e72d2d" stroke-dasharray="3 3"/>
           <circle th:cx="${q.curve.recX}" th:cy="${q.curve.recY}" r="9" fill="none" stroke="#e72d2d" stroke-width="1.5"/>
           <circle th:cx="${q.curve.recX}" th:cy="${q.curve.recY}" r="3" fill="#e72d2d"/>
           <text th:x="${q.curve.recLabelX}" th:y="${q.curve.recLabelY}" font-size="8.5" fill="#b51616" th:attr="text-anchor=${q.curve.recLabelAnchor}" font-weight="700" th:text="${q.curve.recLabel}"></text>
@@ -299,14 +309,63 @@ tr.total td{border-top:1.5px solid var(--ink);border-bottom:0;font-weight:800;fo
       <div class="legend">
         <span><i style="background:#e72d2d"></i>효율 점수</span>
         <span><i style="background:#8a8983"></i>구축 비용</span>
+        <span><i style="background:#b7b5b0"></i>목표 미달</span>
+        <span th:if="${q.curve.minimal != null}"><i style="background:#d99a00"></i>최소 구성</span>
         <span><i style="background:#3f3f3d;height:0;border-top:2px dashed #3f3f3d"></i><span th:text="${q.curve.budgetLabel}"></span></span>
         <span th:if="${q.curve.kneeLabel != null}"><i style="background:#8a8983;height:0;border-top:2px dashed #8a8983"></i><span th:text="${q.curve.kneeLabel}"></span></span>
       </div>
     </div>
   </div>
 
+  <div class="block" th:if="${q.curve != null}">
+    <div class="eyebrow"><span th:text="${#numbers.formatInteger(base + 3, 2)}"></span> <span class="t">주문 처리율과 구축 비용 그래프</span></div>
+    <div class="chart">
+      <svg th:attr="viewBox='0 0 672 ' + ${q.curve.svgH}" xmlns="http://www.w3.org/2000/svg">
+        <g th:each="y : ${q.curve.yLeft}">
+          <line x1="36" x2="624" th:y1="${y.pos}" th:y2="${y.pos}" stroke="#e0ded9"/>
+          <text x="30" th:y="${y.pos + 3}" font-size="8" fill="#77776f" text-anchor="end" th:text="${y.text}"></text>
+        </g>
+        <text th:each="y : ${q.curve.yRight}" x="630" th:y="${y.pos + 3}" font-size="8" fill="#77776f" th:text="${y.text}"></text>
+        <text th:each="x : ${q.curve.xLabelsThr}" th:x="${x.pos}" th:y="${q.curve.xLabelY}" font-size="8" text-anchor="middle"
+              th:fill="${x.highlight} ? '#b51616' : '#77776f'" th:attr="font-weight=${x.highlight} ? '700' : '400'" th:text="${x.text}"></text>
+        <line x1="36" x2="624" th:y1="${q.curve.budgetY}" th:y2="${q.curve.budgetY}" stroke="#3f3f3d" stroke-dasharray="4 3"/>
+        <text x="620" th:y="${q.curve.budgetY - 4}" font-size="8" fill="#3f3f3d" text-anchor="end" th:text="${q.curve.budgetLabel}"></text>
+        <path th:attr="d=${q.curve.costPath}" fill="none" stroke="#8a8983" stroke-width="1.6"/>
+        <path th:attr="d=${q.curve.thrPath}" fill="none" stroke="#e72d2d" stroke-width="2.2"/>
+        <circle th:each="p : ${q.curve.points}" th:cx="${p.x}" th:cy="${p.thrY}" r="2.6" fill="#fbfaf8"
+                th:attr="stroke=${p.met} ? '#e72d2d' : '#b7b5b0'" stroke-width="1.5"/>
+        <g th:if="${q.curve.minimalThr != null}">
+          <line th:x1="${q.curve.minimalThr.x}" th:x2="${q.curve.minimalThr.x}" th:y1="${q.curve.minimalThr.y + 12}"
+                th:y2="${q.curve.axisY}" stroke="#d99a00" stroke-dasharray="3 3"/>
+          <circle th:cx="${q.curve.minimalThr.x}" th:cy="${q.curve.minimalThr.y}" r="9" fill="none" stroke="#d99a00" stroke-width="1.5"/>
+          <circle th:cx="${q.curve.minimalThr.x}" th:cy="${q.curve.minimalThr.y}" r="3" fill="#d99a00"/>
+          <text th:x="${q.curve.minimalThr.labelX}" th:y="${q.curve.minimalThr.labelY}" font-size="8.5" fill="#8f6503"
+                th:attr="text-anchor=${q.curve.minimalThr.labelAnchor}" font-weight="700" th:text="${q.curve.minimalThr.label}"></text>
+        </g>
+        <g th:if="${q.curve.thrPeak != null}">
+          <line th:x1="${q.curve.thrPeak.x}" th:x2="${q.curve.thrPeak.x}" th:y1="${q.curve.thrPeak.y + 12}"
+                th:y2="${q.curve.axisY}" stroke="#e72d2d" stroke-dasharray="3 3"/>
+          <circle th:cx="${q.curve.thrPeak.x}" th:cy="${q.curve.thrPeak.y}" r="9" fill="none" stroke="#e72d2d" stroke-width="1.5"/>
+          <circle th:cx="${q.curve.thrPeak.x}" th:cy="${q.curve.thrPeak.y}" r="3" fill="#e72d2d"/>
+          <text th:x="${q.curve.thrPeak.labelX}" th:y="${q.curve.thrPeak.labelY}" font-size="8.5" fill="#b51616"
+                th:attr="text-anchor=${q.curve.thrPeak.labelAnchor}" font-weight="700" th:text="${q.curve.thrPeak.label}"></text>
+        </g>
+        <text x="36" y="10" font-size="8" fill="#77776f">주문 처리율</text>
+        <text x="624" y="10" font-size="8" fill="#77776f" text-anchor="end">구축 비용</text>
+      </svg>
+      <div class="legend">
+        <span><i style="background:#e72d2d"></i>주문 처리율</span>
+        <span><i style="background:#8a8983"></i>구축 비용</span>
+        <span><i style="background:#b7b5b0"></i>목표 미달</span>
+        <span th:if="${q.curve.minimalThr != null}"><i style="background:#d99a00"></i>최소 구성</span>
+        <span th:if="${q.curve.thrPeak != null}"><i style="background:#e72d2d"></i><span th:text="${q.curve.thrPeak.label}"></span></span>
+        <span><i style="background:#3f3f3d;height:0;border-top:2px dashed #3f3f3d"></i><span th:text="${q.curve.budgetLabel}"></span></span>
+      </div>
+    </div>
+  </div>
+
   <div class="block" th:if="${q.ops != null}">
-    <div class="eyebrow"><span th:text="${#numbers.formatInteger(base + 3, 2)}"></span> <span class="t" th:text="'권장 구성(' + ${q.verdict.count} + '대)의 운영 예상'"></span></div>
+    <div class="eyebrow"><span th:text="${#numbers.formatInteger(base + 4, 2)}"></span> <span class="t" th:text="'권장 구성(' + ${q.verdict.count} + '대)의 운영 예상'"></span></div>
     <div class="grid4">
       <div><div class="l">평균 주문 처리 시간</div><strong class="num" th:text="${q.ops.leadMeanMin}"></strong><em>주문 접수 → 처리 완료, 전체 평균</em></div>
       <div><div class="l">로봇 배정 대기</div><strong class="num" th:text="${q.ops.queueMin}"></strong><em>주문이 로봇을 기다린 평균 시간</em></div>
@@ -316,7 +375,7 @@ tr.total td{border-top:1.5px solid var(--ink);border-bottom:0;font-weight:800;fo
   </div>
 
   <div class="block">
-    <div class="eyebrow"><span th:text="${#numbers.formatInteger(base + 4, 2)}"></span> <span class="t">유의 사항</span></div>
+    <div class="eyebrow"><span th:text="${#numbers.formatInteger(base + 5, 2)}"></span> <span class="t">유의 사항</span></div>
     <div class="disc">
       이 견적서는 시뮬레이션 결과를 바탕으로 한 도입 검토용 참고 자료이며 법적 구속력이 있는 확정 견적이 아닙니다.
       실제 처리 성능은 창고 배치, 상품 위치, 작업자 운영 방식, 주문 패턴에 따라 달라질 수 있습니다.

@@ -86,11 +86,11 @@ class QuoteDocumentFactoryTest {
     }
 
     @Test
-    void fleet_table_keeps_twelve_rows_including_recommended_knee_ends_and_budget_edge() {
+    void fleet_table_keeps_ten_rows_including_recommended_knee_ends_and_budget_edge() {
         QuoteDocument q = factory.build(new QuoteSource(QuoteFixtures.detail(142L, 14, 15, null), QuoteFixtures.warehouse()));
 
         List<Integer> counts = q.fleet().stream().map(QuoteDocument.FleetRow::count).toList();
-        assertThat(counts).hasSize(12).contains(1, 14, 15, 19, 20, 28).isSorted();
+        assertThat(counts).hasSize(10).contains(1, 14, 15, 19, 20, 28).isSorted();
         QuoteDocument.FleetRow rec = q.fleet().stream().filter(QuoteDocument.FleetRow::recommended).findFirst().orElseThrow();
         assertThat(rec.count()).isEqualTo(14);
         assertThat(rec.cost()).isEqualTo("2억 1,700만 원");

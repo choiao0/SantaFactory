@@ -70,8 +70,8 @@ export default function VerifyStep({ estimateId, ready, recommendedCount }) {
 
   const views = useMemo(() => [
     { key: 'top', label: '상단 시점', url: verify.videoUrl },
-    { key: 'side', label: '측면 시점', url: verify.videoSideUrl },
-  ].filter((v) => v.url), [verify.videoUrl, verify.videoSideUrl])
+    { key: 'fpv', label: '1인칭 시점', url: verify.videoFpvUrl },
+  ].filter((v) => v.url), [verify.videoUrl, verify.videoFpvUrl])
   const current = views.find((v) => v.key === view) ?? views[0]
 
   // 재발급본은 그것을 대신하는 스트림 URL 에 묶어 둔다 — 스트림이 다른 영상을 주면 자연히 버려진다
@@ -88,7 +88,7 @@ export default function VerifyStep({ estimateId, ready, recommendedCount }) {
     resumeAt.current = { time: video?.currentTime ?? 0, playing: Boolean(video && !video.paused) }
     try {
       const detail = await getEstimate(estimateId)
-      const fresh = view === 'side' ? detail?.verify_video_side_url : detail?.verify_video_url
+      const fresh = view === 'fpv' ? detail?.verify_video_fpv_url : detail?.verify_video_url
       if (fresh) setRefreshed({ replaces: current?.url, url: fresh })
     } catch (e) {
       console.error(`[verify] estimateId=${estimateId} 영상 URL 재발급 실패`, e)

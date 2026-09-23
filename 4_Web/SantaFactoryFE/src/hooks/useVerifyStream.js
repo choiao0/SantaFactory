@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { openVerifyStream } from '../api/estimates.js'
 
-const IDLE = { id: null, status: null, videoUrl: null, videoSideUrl: null, error: null }
+const IDLE = { id: null, status: null, videoUrl: null, videoFpvUrl: null, error: null }
 
 export function useVerifyStream(estimateId) {
   const [state, setState] = useState(IDLE)
@@ -14,8 +14,8 @@ export function useVerifyStream(estimateId) {
         id: estimateId,
         status: payload.status,
         videoUrl: payload.video_url,
-        // 측면 시점은 찍지 않은 회차가 있어 없을 수 있다 — 그때는 화면이 상단만 보여준다
-        videoSideUrl: payload.video_side_url ?? null,
+        // 1인칭 시점은 찍지 않은 회차가 있어 없을 수 있다 — 그때는 화면이 상단만 보여준다
+        videoFpvUrl: payload.video_fpv_url ?? null,
         error: payload.error,
       })
 
