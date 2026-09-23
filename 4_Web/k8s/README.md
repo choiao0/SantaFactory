@@ -96,6 +96,23 @@ docker stop a106-backend a106-pdf a106-frontend
 
 host nginx 세 곳을 `127.0.0.1:3000`·`127.0.0.1:8080` 으로 되돌리고 `docker start a106-backend a106-pdf a106-frontend`(stop 만 했으므로 컨테이너가 남아 있다). 파드는 `sudo kubectl -n web scale deployment --all --replicas=0`. Jenkins 는 `WEB_DEPLOY` 를 지우면 compose 경로로 돌아간다.
 
+## 전환 때 겪은 문제 (2026-09-23)
+
+| 증상 | 원인 | 조치 |
+|---|---|---|
+| backend 파드 `UnknownHostException: db` 로 재시작 반복 | CoreDNS 가 API 서버(`52.79.145.233:6443`, 공인 주소)에 못 닿아 새 Service 를 몰랐다. 파드 → 공인 주소는 AWS 를 돌아 EC2 자신의 공인 IP 로 들어오는데 ufw 가 6443 을 GCP 주소에만 열어 두었다 | `sudo ufw allow from 52.79.145.233 to any port 6443 proto tcp` |
+| 견적이 "대기" 에서 멈춤, `sim.request` consumers 0 | release 에서 rabbitmq 컨테이너가 다시 만들어지며 노드 이름이 바뀌어 빈 저장소로 시작, 손으로 만든 `sim-worker` 계정이 사라졌다 | 계정 재생성(아래). compose 에 `hostname: rabbitmq` 고정 — 이 변경이 나가는 release 직후 한 번 더 재생성 |
+| 화면에 "실행 중"·결과가 안 뜸 | compose·k3s 백엔드가 동시에 떠 결과 큐를 나눠 받았다. 화면은 한쪽 SSE 만 본다 | nginx 전환과 compose 정지를 이어서 한다. 둘이 겹치지 않게 |
+
+워커 계정 재생성:
+
+```bash
+. ~/rabbitmq-keys/sim-worker.env
+docker exec a106-rabbitmq rabbitmqctl add_user "$RABBITMQ_USER" "$RABBITMQ_PASSWORD"
+docker exec a106-rabbitmq rabbitmqctl set_permissions -p / "$RABBITMQ_USER" "^$" "^amq\.default$" "^sim\.request$"
+docker exec a106-rabbitmq rabbitmqctl list_queues name consumers     # sim.request 12
+```
+
 ## 주의
 
 - 파괴적 마이그레이션(컬럼 삭제·타입 변경)을 내는 release 는 두 버전이 같은 스키마를 못 쓴다. 그때만 `backend.yaml` 의 `maxSurge` 를 0 으로.
