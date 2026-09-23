@@ -28,6 +28,11 @@ STATE, RUN_ID, HEARTBEAT, RTF = "Runner/State", "Runner/RunId", "Runner/Heartbea
 ISAAC, RAM, VRAM, LAST_ERROR = "Runner/IsaacInstances", "Runner/RamMB", "Runner/VramMB", "Runner/LastError"
 CMD_START, CMD_STOP = "Run Control/Start", "Run Control/Stop"
 SCENARIO_SHA = "Runner/ScenarioSha"
+# ★ 지금까지 돈 **시뮬 시각**(초). host-orch 가 창을 벽시계가 아니라 이 값으로
+#   끊는다 (`orchestrator._step_running`). 벽시계로 끊으면 배속(0.33~1.64배)에
+#   따라 같은 `window_s` 가 판마다 다른 분량을 담는다 — KPI 를 DES 와 비교할 때
+#   분모가 달라진다. 못 읽으면 발행하지 않는다(= host-orch 는 벽시계로 후퇴).
+SIM_TIME = "Runner/SimTime"
 # (-215) 런이 끝나며 올린 mp4 를 가리킨다. 값은 URL 이 아니라 버킷 없는 객체 키 `<run_id>/<파일>` 이다(-233).
 # host-orch 가 sim.verify.result.artifacts.video 로 그대로 옮긴다.
 VIDEO_URL = "Runner/VideoUrl"
@@ -39,7 +44,7 @@ NODE_METRICS = {d.name: d for d in (
     MetricDef(ISAAC, spb.INT32, 6, 0), MetricDef(RAM, spb.INT32, 7, 0), MetricDef(VRAM, spb.INT32, 8, 0),
     MetricDef(LAST_ERROR, spb.STRING, 9, ""), MetricDef(CMD_START, spb.TEXT, 10, ""),
     MetricDef(CMD_STOP, spb.BOOLEAN, 11, False), MetricDef(SCENARIO_SHA, spb.STRING, 12, ""),
-    MetricDef(VIDEO_URL, spb.STRING, 13, ""))}
+    MetricDef(VIDEO_URL, spb.STRING, 13, ""), MetricDef(SIM_TIME, spb.DOUBLE, 14, 0.0))}
 
 
 @dataclass(frozen=True)
@@ -238,14 +243,34 @@ class Runner:
             log.warning("no uploader configured — video left at %s", path)
             self._set_state(IDLE, {**extra, VIDEO_URL: f"file://{path}"})
             return
-        log.info("run %s: uploading %s", self.spec.run_id, path)
-        self._upload = self.executor.submit(self._upload_then_tidy, path, self.spec.run_id, self.rec)
+        # ★ 측면이 있으면 **같이** 넘긴다 (-264). 없으면 None 이라 종전과 같다.
+        side = self.rec.side_video_path()
+        log.info("run %s: uploading %s%s", self.spec.run_id, path,
+                 " (+ 측면)" if side else "")
+        self._upload = self.executor.submit(
+            self._upload_then_tidy, path, self.spec.run_id, self.rec, side)
         if self._upload.done():            # 동기 executor(테스트)면 같은 틱에 끝난다
             self._finish_upload()
 
-    def _upload_then_tidy(self, path: str, run_id: str, rec: Recorder) -> str:
-        """워커 스레드: 업로드가 되면 프레임 PNG 를 지운다(런당 1.6~2.6 GB, -241). 실패 런의 것은 진단용으로 남는다."""
+    def _upload_then_tidy(self, path: str, run_id: str, rec: Recorder,
+                          side: str | None = None) -> str:
+        """워커 스레드: 업로드가 되면 프레임 PNG 를 지운다(런당 1.6~2.6 GB, -241). 실패 런의 것은 진단용으로 남는다.
+
+        ★ 측면이 있으면 **상단 다음에** 올리고, **둘 다 끝난 뒤** 돌아온다
+          (-264). 러너가 이 future 를 기다렸다가 상태를 넘기므로, 여기서
+          기다리면 백엔드가 두 파일이 다 올라간 뒤에 결과를 본다.
+          먼저 보고해도 동작은 하지만 화면을 한 번 더 열어야 버튼이 뜬다.
+
+        ☹ 측면 실패가 런을 실패로 만들면 안 된다 — 백엔드가 기다리는 것은
+          상단이고, 측면이 없으면 버튼만 안 생긴다. 경고만 남긴다.
+        """
         url = self.uploader.upload(path, run_id)
+        if side:
+            try:
+                skey = self.uploader.upload(side, run_id)
+                log.info("run %s: side uploaded → %s", run_id, skey)
+            except Exception as e:  # noqa: BLE001
+                log.warning("run %s: side upload failed (버튼만 안 생긴다): %s", run_id, e)
         n = rec.remove_frames()
         log.info("run %s: uploaded → %s · removed %d frame file(s)", run_id, url, n)
         return url
@@ -267,6 +292,11 @@ class Runner:
         vram = self.vram_mb()
         sample = {ISAAC: self.rec.isaac_count() if self.rec else 0,
                   RAM: self.ram_mb(pids) if pids else 0, VRAM: vram if vram is not None else self.values[VRAM]}
+        # 시뮬 시각 — 읽히는 판(헤드리스)에서만 싣는다. Kit 경로는 None 이라
+        # 아예 안 보내고, host-orch 는 그 경우 벽시계로 창을 끊는다.
+        sim_t = self.rec.sim_time() if self.rec else None
+        if sim_t is not None:
+            sample[SIM_TIME] = float(sim_t)
         return {k: v for k, v in sample.items() if v != self.values[k]}
 
     def snapshot(self) -> dict:

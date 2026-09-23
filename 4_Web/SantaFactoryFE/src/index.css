@@ -146,6 +146,11 @@ section.step > p.desc { font-size: 18px; line-height: 1.7; max-width: 760px; mar
 }
 .button:hover { background: #c92222; }
 .button:disabled { opacity: .45; cursor: not-allowed; }
+/* aria-disabled 는 잠긴 것처럼 보이되 클릭은 받는다 — 왜 못 누르는지 알려주려면 클릭이 와야 한다.
+   커서는 기본 화살표로 둔다. 손 모양은 "지금 누르면 된다"는 뜻이라 잠긴 버튼에는 안 맞고,
+   금지 표시는 눌러도 소용없다고 읽혀 안내를 보러 누를 생각을 막는다 */
+.button[aria-disabled='true'] { opacity: .45; cursor: default; }
+.button[aria-disabled='true']:hover { background: var(--red); }
 .ghost {
   background: none; border: 1px solid #3a3a3a; color: #ccc;
   font: 600 15px var(--font-head);
@@ -179,7 +184,15 @@ section.step > p.desc { font-size: 18px; line-height: 1.7; max-width: 760px; mar
 .field input { padding-right: 64px; }
 .field .suffix { position: absolute; right: 14px; top: 50%; transform: translateY(-50%); font: 500 14px var(--font-mono); color: #77776f; letter-spacing: .02em; pointer-events: none; }
 .formgrid .span2 { grid-column: span 2; }
+/* 퍼센트 칸은 화살표로 한 칸씩 올릴 일이 없다 — 스피너를 숨긴다. 대수·예산은 그대로 둔다 */
+#target::-webkit-inner-spin-button, #target::-webkit-outer-spin-button,
+#target-util::-webkit-inner-spin-button, #target-util::-webkit-outer-spin-button {
+  appearance: none; margin: 0;
+}
+#target, #target-util { appearance: textfield; }   /* 파이어폭스 */
+
 .timerange { display: flex; align-items: center; gap: 8px; }
+/* 한 칸 안에 입력 둘 — 시간대 줄과 같은 폭이 되도록 반반으로 나눈다 */
 .timerange > span { color: #8a8983; font-size: 16px; }
 
 /* 시각 입력 (TimeField). 값 버튼은 옆 숫자 칸과 같은 테두리·바탕을 쓰되, 한 줄에 둘이 들어가고
@@ -279,7 +292,11 @@ section.step > p.desc { font-size: 18px; line-height: 1.7; max-width: 760px; mar
 .fleetnote { font: 500 15px var(--font-mono); letter-spacing: .02em; line-height: 1.8; color: #9a9a96; margin: 20px 0 0; }
 .fleetnote b { color: #eee; }
 .runcta { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; margin-top: 24px; }
+/* 버튼 옆이 아니라 아래 줄에 오게 한다 — 한 줄을 통째로 차지하면 다음 행으로 밀린다 */
+.runcta .form-hint { flex-basis: 100%; margin-top: -4px; }
 .form-error { font: 500 14px var(--font-mono); color: #ff6b6b; letter-spacing: .02em; margin: 0; }
+/* 아직 못 누르는 이유를 알려주는 안내 — 실패가 아니라 남은 할 일이라 빨강을 쓰지 않는다 */
+.form-hint { font: 500 14px var(--font-mono); color: #8f8f8b; letter-spacing: .02em; margin: 0; }
 .section-light .form-error { color: var(--red-dark); }
 
 .runs-empty {
@@ -463,6 +480,10 @@ section.step > p.desc { font-size: 18px; line-height: 1.7; max-width: 760px; mar
 
 .verify-video { display: block; width: 100%; max-height: 520px; background: #000; }
 /* 영상이 아직 없을 때 보드 안을 채운다 — 높이를 영상과 비슷하게 잡아 영상이 붙어도 화면이 덜 흔들린다 */
+/* 카메라 시점 고르기. 영상 바로 위에 붙여 무엇을 바꾸는 버튼인지 드러낸다 */
+.verify-views { display: flex; gap: 8px; margin: 0 0 12px; }
+.verify-views .ghost.on { border-color: var(--red); color: #fff; background: rgba(231, 45, 45, .16); }
+
 /* 검증을 기다리는 자리. 움직이는 AMR(03 단계 카드와 같은 표식) 아래로 한 줄 요약과 부연을
    세로로 쌓는다. 문구는 한글 문장이라 본문 서체를 쓴다 — 모노는 자간이 벌어져 읽기 나쁘다 */
 .verify-placeholder {
@@ -471,6 +492,8 @@ section.step > p.desc { font-size: 18px; line-height: 1.7; max-width: 760px; mar
   background: #0d0d0d; border: 1px dashed #3a3a3a;
 }
 .verify-placeholder .amr-run { color: #6f6f6b; margin-bottom: 4px; }
+/* 시작 버튼은 문구 아래에 둔다 — 무엇을 하는 버튼인지 읽고 누르는 순서가 된다 */
+.verify-placeholder .button { margin-top: 6px; }
 .verify-placeholder .amr-run svg { width: 86px; height: auto; }
 /* 마지막 줄만 짧게 남지 않도록 균형 잡아 끊는다 */
 .vp-text {
@@ -513,6 +536,15 @@ section.step > p.desc { font-size: 18px; line-height: 1.7; max-width: 760px; mar
 .charts > div { border: 1px solid var(--paper-line); background: var(--paper); padding: 16px; }
 .charts h5 { font: 500 14px var(--font-mono); letter-spacing: .08em; color: #77776f; margin: 0 0 10px; }
 .charts svg { width: 100%; height: auto; display: block; }
+/* 곡선 기준 토글 — 제목 줄 오른쪽 끝에 붙는 작은 두 칸 */
+.chart-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.chart-toggle { display: inline-flex; border: 1px solid #d5d3ce; border-radius: 2px; overflow: hidden; }
+.chart-toggle button {
+  border: 0; background: transparent; cursor: pointer; padding: 4px 10px;
+  font: 500 11.5px var(--font-mono); letter-spacing: .04em; color: #77776f;
+}
+.chart-toggle button + button { border-left: 1px solid #d5d3ce; }
+.chart-toggle button.on { background: var(--ink); color: #fbfaf8; }
 .chart-cap { font: 500 14px var(--font-mono); color: #77776f; letter-spacing: .03em; margin-top: 10px; line-height: 1.6; }
 /* 범례 색칠. box-sizing 을 박아 둬야 테두리 있는 칸(결과 없는 run)만 커지지 않는다 */
 .chart-cap i { box-sizing: border-box; display: inline-block; width: 11px; height: 11px; vertical-align: -1px; margin: 0 6px 0 18px; border-radius: 2px; }
@@ -522,6 +554,13 @@ section.step > p.desc { font-size: 18px; line-height: 1.7; max-width: 760px; mar
 .q-table th { font: 500 13.5px var(--font-mono); letter-spacing: .06em; color: #77776f; text-align: left; border-bottom: 2px solid var(--ink); padding: 10px 12px; }
 .q-table td { border-bottom: 1px solid #d5d3ce; padding: 11px 12px; white-space: nowrap; }
 .q-table td span { color: #8a8983; font-size: 14.5px; }
+/* 머리글 밑줄 — 단위나 식처럼 칸 이름을 보충하는 말 */
+.q-table th span { display: block; margin-top: 2px; font-size: 11.5px; letter-spacing: .02em; color: #a3a29c; }
+/* 목표 칸만 가운데 정렬이라, 왼쪽 정렬인 이웃 칸들 사이에서 오른쪽(효율)에 붙어 보인다.
+   오른쪽 여백을 더 줘서 글자를 가동률 쪽으로 당긴다 — 양옆 글자와의 간격이 비슷해진다 */
+.q-table th.goal, .q-table td.goal { text-align: center; padding-right: 60px; }
+/* 달성은 견적서 PDF 와 같은 초록(--ok) — 같은 표를 두 곳에서 보는 것이라 색도 같아야 한다 */
+.q-table td.goal.met { color: var(--ok); font-weight: 600; }
 .q-table tr.hl td { background: #f3e3e0; font-weight: 600; }
 .rec-chip {
   display: inline-block; margin-left: 8px; vertical-align: middle;
@@ -529,6 +568,12 @@ section.step > p.desc { font-size: 18px; line-height: 1.7; max-width: 760px; mar
   color: var(--red-dark); border: 1px solid var(--red-dark);
   padding: 3px 8px; border-radius: 2px;
 }
+/* 최소 구성은 권장과 다른 축이라 색도 다르게 — 순위가 아니라 다른 관점이라는 뜻이다 */
+.rec-chip.min { color: #6d6b65; border-color: #c9c7c2; }
+.table-note {
+  margin: 12px 2px 22px; font-size: 13px; line-height: 1.7; color: #55534e; max-width: 68ch;
+}
+.table-note b { color: var(--ink); }
 .q-table tr.fail td { color: #8a8983; }
 .tablewrap { overflow-x: auto; }
 .cong { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; }

@@ -18,7 +18,7 @@ from collections import defaultdict
 import numpy as np
 
 V_STOP, W_TURN = 0.05, 0.10
-PITCH = float(os.environ.get("PIBT_PITCH", "1.2"))
+PITCH = float(os.environ.get("PIBT_PITCH", "1.0"))
 TOP = int(os.environ.get("TOP", "15"))
 
 

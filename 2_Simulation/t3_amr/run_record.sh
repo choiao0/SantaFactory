@@ -106,6 +106,20 @@ fi
 
 SHOTS="$OUT/shots_$TAG"
 MP4="$OUT/demo_$TAG.mp4"
+
+# ★★ 두 번째 시점 (2026-09-22, -264). `SIDE_CAM` 이 비면 종전과 같다.
+#   백엔드가 상단 키에서 `_side` 를 계산해 MinIO 에 있는지 보고 버튼을
+#   띄운다. 그래서 **이름만** 지키면 되고 결과 페이로드는 안 바뀐다.
+#   Cam_Overview 는 남쪽 62 m 에서 비스듬히 본다 — 위치와 높이가 한
+#   화면에 들어와 시연용으로 맞다 (build_amr_scene_v2.py:288).
+# ★ 기본은 **한 대를 대각선 뒤에서** 잡는 근접 화면이다 (2026-09-23).
+#   `Cam_Overview`(창고 전체 조망)로 시작했는데, 1.5 m 짜리 AMR 이 점이라
+#   선반의 상자가 안 보였다. `Cam_Spot` 을 `PIBT_SIDE_FOLLOW` 로봇 뒤에 붙여
+#   따라다니게 한다 (`headless_pibt._side_track`).
+#   조망으로 되돌리려면:  SIDE_CAM=/World/Cameras/Cam_Overview PIBT_SIDE_FOLLOW=-1
+SIDE_CAM="${SIDE_CAM:-/World/Cameras/Cam_Spot}"
+SHOTS_SIDE="$OUT/shots_${TAG}_side"
+MP4_SIDE="$OUT/demo_${TAG}_side.mp4"
 MYLOG="$LOGS/record_$TAG.log"
 # [patch_record_seed] `--seed N` 을 **인자 목록에서 빼낸다** (2026-09-20).
 #   남은 인자는 그대로 run.sh 로 가므로, 여기서 안 빼면 run.sh 가 모르는
@@ -172,6 +186,13 @@ export PIBT_SEED
 #   자세한 값·근거는 아래 원래 주석에 그대로 둔다.
 export PIBT_FRONT_RULE="${PIBT_FRONT_RULE:-4}"
 export PIBT_PITCH="${PIBT_PITCH:-1.0}"
+
+# ★ 주행 스위치 한 벌 (2026-09-22). **백엔드가 띄우는 것이 이 파일이다**
+#   (edge/recorder.py:104). 여기 안 걸면 백엔드 주행만 코드 기본값으로
+#   도는데, 공차 0.05 는 isaac_drive.py:1633 이 「5판 중 2판이 차체
+#   접촉으로 중단됐다」고 적어 둔 값이다.
+#   ★ pitch·앞 칸 규칙을 **정한 뒤**에 읽는다 — 배너가 그 둘도 찍는다.
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/switches.sh"
 
 # [patch_record_n] 계획과 대수가 일치해야 한다 — 계획 디렉터리 이름에 대수가 박혀 있다.
 #   안 맞으면 35초 부팅하고 계획 로드까지 간 뒤에야 죽는다. 0초에 막는다.
@@ -296,6 +317,22 @@ if [ "$CAPTURE" = "0" ]; then
     export PIBT_SHOTS=""
 else
     export PIBT_SHOTS="$SHOTS"
+fi
+# ★ 측면 — 헤드리스(리플리케이터) 경로에서만 찍는다. 뷰포트 경로는
+#   활성 뷰포트 하나뿐이라 두 시점을 못 받는다.
+if [ "$CAPTURE" = "0" ] || [ -z "$SIDE_CAM" ] || [ "${HEADLESS:-0}" != "1" ]; then
+    export PIBT_SHOTS_SIDE=""
+    export PIBT_CAMERA_SIDE=""
+    [ -n "$SIDE_CAM" ] && [ "${HEADLESS:-0}" != "1" ] && \
+        echo "[rec] 측면은 HEADLESS=1 에서만 찍습니다 — 이번 판은 상단만."
+else
+    export PIBT_SHOTS_SIDE="$SHOTS_SIDE"
+    export PIBT_CAMERA_SIDE="$SIDE_CAM"
+    # 근접 화면이라 조망만큼 클 필요가 없다. **복사량이 곧 비용**이다 —
+    # 1280x720 두 시점이 28 ms/step(배속 0.60)이었다 (2026-09-23 실측).
+    export PIBT_SIDE_RES="${PIBT_SIDE_RES:-960x540}"
+    export PIBT_SIDE_FOLLOW="${PIBT_SIDE_FOLLOW:-0}"
+    export PIBT_SIDE_DIST="${PIBT_SIDE_DIST:-6}"
 fi
 export PIBT_SHOT_STRIDE="$SHOT_STRIDE"
 export PIBT_SHOT_FPS="$SHOT_FPS"
@@ -474,7 +511,9 @@ mkdir -p "$SHOTS" || { echo "★ $SHOTS 를 만들 수 없습니다"; exit 1; }
 echo
 
 # ── 조립 — EXIT 에 걸어 Ctrl-C 로 끊어도 만든다 ─────────────
+# ★ 시점이 둘이 될 수 있어 인자로 받는다 (-264). 안 주면 종전과 같다.
 assemble() {
+    local SHOTS="${1:-$SHOTS}" MP4="${2:-$MP4}" WHAT="${3:-}"
     local n
     # 촬영을 **일부러** 껐으면 「프레임이 0장입니다」가 오해를 부른다 —
     # 촬영이 실패한 것처럼 읽히고, 실제로 그 아래 줄이 verify_start 를
@@ -488,7 +527,7 @@ assemble() {
     fi
     n=$(find "$SHOTS" -maxdepth 1 -name "f_*.$SHOT_EXT" 2>/dev/null | wc -l)
     echo
-    echo "──────────── 조립 ────────────"
+    echo "──────────── 조립 ${WHAT}────────────"
     if [ "$n" -eq 0 ]; then
         echo "프레임이 0장입니다."
         echo "  로그에서 확인:  grep -a '캡처' \"$MYLOG\""
@@ -542,7 +581,10 @@ cleanup() {
         for _ in $(seq 25); do sleep 1; kill -0 "$SCRIPT_PID" 2>/dev/null || break; done
         kill -0 "$SCRIPT_PID" 2>/dev/null && { _kill_mine KILL; kill -KILL "$SCRIPT_PID" 2>/dev/null; }
     fi
-    assemble
+    assemble "$SHOTS" "$MP4" "상단 "
+    # ★ 측면이 켜져 있으면 이어서 만든다. 프레임이 0장이면 조용히 지나간다.
+    #   업로드가 상단 -> 측면 순서로 기다리므로 여기서도 상단을 먼저 만든다.
+    [ -n "${PIBT_SHOTS_SIDE:-}" ] && assemble "$SHOTS_SIDE" "$MP4_SIDE" "측면 "
 }
 trap cleanup EXIT
 trap 'exit 130' INT TERM
@@ -596,8 +638,10 @@ SCRIPT_PID=$!
   _parent_gone && exit 0                                   # 부모가 죽었으면 나도 끝
   n=$(find "$SHOTS" -maxdepth 1 -name "f_*.$SHOT_EXT" 2>/dev/null | wc -l)
   if [ "$n" -gt 0 ]; then exit 0; fi                       # 촬영 중
-  if grep -aq "캡처 ON" "$MYLOG" 2>/dev/null; then exit 0; fi
-  if grep -aq "전원 완주\|시작 pose 불일치\|계획 정체\|겹침" \
+  # ★ 「촬영 ON」은 헤드리스 경로(`headless_pibt.py:226,242`)의 말이다.
+  #   안 보면 HEADLESS=1 판이 ${WATCH_SEC}초에 무조건 끊긴다 (2026-09-22).
+  if grep -aq "캡처 ON\|촬영 ON" "$MYLOG" 2>/dev/null; then exit 0; fi
+  if grep -aq "전원 완주\|주행 종료\|시작 pose 불일치\|계획 정체\|겹침" \
        "$MYLOG" 2>/dev/null; then exit 0; fi               # 다른 이유로 끝났다
   echo
   echo "★★★ ${WATCH_SEC}초가 지났는데 프레임이 0장입니다 — 촬영이 꺼진 상태입니다."
@@ -642,7 +686,8 @@ SLOW_EVERY=7                           # 무거운 확인(Carb 로그 grep · �
       # ── 매 회(2초): 완주 표시 — 이것만 빠르면 된다 ──────────
       seen=0
       if [ "$marker_at" = 0 ]; then
-          grep -aq "post_quit\|전원 완주" "$MYLOG" 2>/dev/null && seen=1
+          # 「주행 종료」는 헤드리스 경로의 완주 표시 (`headless_pibt.py:369`).
+          grep -aq "post_quit\|전원 완주\|주행 종료" "$MYLOG" 2>/dev/null && seen=1
       fi
 
       # ── 7회마다(약 14초): 무거운 확인 ───────────────────────

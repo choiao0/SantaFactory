@@ -45,7 +45,7 @@ import sys
 
 import numpy as np
 
-PITCH = float(os.environ.get("PITCH", os.environ.get("PIBT_PITCH", "1.2")))
+PITCH = float(os.environ.get("PITCH", os.environ.get("PIBT_PITCH", "1.0")))
 WIDTH = float(os.environ.get("WIDTH", "0.800"))
 REAR = float(os.environ.get("REAR_LEN", "1.110"))    # 축 -> 차체 뒷면
 FRONT = float(os.environ.get("FRONT_LEN", "0.390"))  # 축 -> 차체 앞면

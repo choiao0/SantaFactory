@@ -73,6 +73,13 @@ public class Estimate {
     @Column(name = "knee_count")
     private Integer kneeCount;
 
+    /**
+     * 목표를 모두 만족하는 대수 중 가장 적은 대수 — 권장과 같은 조건을 통과하되 효율이 아니라 비용을 본다.
+     * 권장과 같은 값일 수도 있고, 그때는 화면이 두 표시를 하나로 합친다. 판정 불가면 null.
+     */
+    @Column(name = "minimal_count")
+    private Integer minimalCount;
+
     @Enumerated(EnumType.STRING)
     @Column(name = "reason_code", length = 30)
     private ReasonCode reasonCode;
@@ -90,6 +97,17 @@ public class Estimate {
     /** 물리 검증(Isaac) 리플레이 영상 URL. 검증 전이거나 실패해 영상이 없으면 null. */
     @Column(name = "verify_video_url", length = 500)
     private String verifyVideoUrl;
+
+    /**
+     * 물리 검증을 큐에 발행한 시각. 결과가 오기 전까지 "요청했다" 를 알 수 있는 유일한 흔적이라,
+     * 중복 발행을 막는 데 쓴다. 검증한 적이 없으면 null.
+     */
+    @Column(name = "verify_requested_at")
+    private LocalDateTime verifyRequestedAt;
+
+    /** 같은 검증의 1인칭 시점 영상. 1인칭을 찍지 않은 회차는 null 이고 화면은 상단만 보여준다. */
+    @Column(name = "verify_video_fpv_url", length = 500)
+    private String verifyVideoFpvUrl;
 
     /**
      * 이 견적의 대수 스윕 전체가 공유하는 출고 주문 목록(JSON 직렬화, {@code SimulationRequest.Outbound[]}).
@@ -141,11 +159,13 @@ public class Estimate {
      *
      * @param anyFailed 실패·타임아웃 run 이 하나라도 있었나 (있으면 PARTIAL)
      */
-    public void complete(Integer recommendedCount, Integer kneeCount, ReasonCode reasonCode, boolean anyFailed) {
+    public void complete(Integer recommendedCount, Integer minimalCount, Integer kneeCount,
+                         ReasonCode reasonCode, boolean anyFailed) {
         if (status == EstimateStatus.CANCELLED) {
             return;
         }
         this.recommendedCount = recommendedCount;
+        this.minimalCount = minimalCount;
         this.kneeCount = kneeCount;
         this.reasonCode = reasonCode;
         this.status = anyFailed ? EstimateStatus.PARTIAL : EstimateStatus.DONE;
@@ -163,9 +183,15 @@ public class Estimate {
         return status == EstimateStatus.CANCELLED;
     }
 
-    /** 물리 검증 결과로 받은 리플레이 영상 URL을 반영한다. */
-    public void applyVerifyVideo(String url) {
+    /** 물리 검증을 큐에 발행했다고 표시한다. 재요청이면 시각을 새로 덮는다. */
+    public void markVerifyRequested(LocalDateTime at) {
+        this.verifyRequestedAt = at;
+    }
+
+    /** 물리 검증 결과로 받은 시점별 영상 URL을 반영한다. 1인칭은 없을 수 있다. */
+    public void applyVerifyVideo(String url, String fpvUrl) {
         this.verifyVideoUrl = url;
+        this.verifyVideoFpvUrl = fpvUrl;
     }
 
     /** 물리 검증 결과를 반영한다. 영상과 같이 성패를 가리지 않고 마지막 결과를 남긴다. */

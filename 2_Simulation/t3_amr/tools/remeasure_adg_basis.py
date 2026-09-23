@@ -22,7 +22,7 @@ from pibt_scene import setup             # noqa: E402
 
 MAP = os.environ["MAP"]
 N = int(os.environ.get("N", "12"))
-PITCH = float(os.environ.get("PIBT_PITCH", "1.2"))
+PITCH = float(os.environ.get("PIBT_PITCH", "1.0"))
 SEEDS = int(os.environ.get("SEEDS", "2"))
 RUNS = int(os.environ.get("RUNS", "2"))
 DT = 1.0 / 60.0

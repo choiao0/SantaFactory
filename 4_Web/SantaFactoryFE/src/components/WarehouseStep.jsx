@@ -20,14 +20,8 @@ export default function WarehouseStep({ form, onChange, models, modelsError, mod
       <div className="duo">
         <form onSubmit={(e) => e.preventDefault()}>
           <div className="formgrid">
-            {/* 입고·출고를 물량 → 시간대 → 목표·예산 순으로, 줄마다 좌우 한 쌍씩 놓는다 */}
-            <div className="span2">
-              <label htmlFor="inbound-avg">일 평균 입고</label>
-              <div className="field">
-                <input id="inbound-avg" type="text" inputMode="numeric" value={form.inboundAvg} onChange={digits('inboundAvg')} />
-                <span className="suffix">건/일</span>
-              </div>
-            </div>
+            {/* 입고는 받지 않는다 — 시뮬레이션이 출고 구간만 돌아(estimate.shifts=out) 입력해도
+                견적이 달라지지 않는다. 입고를 붙일 때 물량·시간대 두 칸을 되살린다 */}
             <div className="span2">
               <label htmlFor="outbound-avg">일 평균 출고 주문</label>
               <div className="field">
@@ -36,14 +30,6 @@ export default function WarehouseStep({ form, onChange, models, modelsError, mod
               </div>
             </div>
 
-            <div className="span2">
-              <label htmlFor="inbound-start">입고 시간대</label>
-              <div className="timerange">
-                <TimeField id="inbound-start" label="입고 시작 시각" value={form.inboundStart} onChange={(v) => onChange({ inboundStart: v })} />
-                <span>–</span>
-                <TimeField id="inbound-end" label="입고 종료 시각" value={form.inboundEnd} onChange={(v) => onChange({ inboundEnd: v })} />
-              </div>
-            </div>
             <div className="span2">
               <label htmlFor="outbound-start">출고 시간대</label>
               <div className="timerange">
@@ -61,16 +47,19 @@ export default function WarehouseStep({ form, onChange, models, modelsError, mod
               </div>
             </div>
             <div className="span2">
+              <label htmlFor="target-util">목표 가동률</label>
+              <div className="field">
+                <input id="target-util" type="number" value={form.targetUtilization} min={1} max={100} onChange={number('targetUtilization')} />
+                <span className="suffix">%</span>
+              </div>
+            </div>
+            <div className="span2">
               <label htmlFor="budget">최대 구축 예산</label>
               <div className="field">
                 <input id="budget" type="number" value={form.budgetMan} step={1000} min={0} onChange={number('budgetMan')} />
                 <span className="suffix">만원</span>
               </div>
             </div>
-          </div>
-
-          <div className="runcta">
-            <button type="button" className="ghost">주문 로그 CSV 업로드 (선택)</button>
           </div>
         </form>
 

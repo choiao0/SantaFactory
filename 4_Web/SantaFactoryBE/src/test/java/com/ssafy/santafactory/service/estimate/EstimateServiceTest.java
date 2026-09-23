@@ -37,6 +37,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.Duration;
+import com.ssafy.santafactory.entity.estimate.VerifySnapshot;
 import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
@@ -63,7 +64,7 @@ import static org.mockito.Mockito.when;
 class EstimateServiceTest {
 
     private static final EstimateProperties PROPS =
-            new EstimateProperties(15_000_000L, 5_000_000L, 500_000L, 28, 6, 4, 1, Duration.ofMinutes(30), Duration.ofHours(6), "out", false, Duration.ofMinutes(10), 10, 10, 6, null);
+            new EstimateProperties(15_000_000L, 5_000_000L, 500_000L, 28, 6, 4, 1, Duration.ofMinutes(30), Duration.ofHours(6), "out", false, Duration.ofMinutes(10), Duration.ofMinutes(25), 10, 10, 6, null);
 
     @Mock
     EstimateRepository estimateRepository;
@@ -644,7 +645,7 @@ class EstimateServiceTest {
         four.markDone(96.0, 80.0, 96L, 384.0);
         four.applyKpiDetail(new RunKpiDetail(100, 96, 212.0, 48.0, 159.0, 0.068, 171_400L));
         ReflectionTestUtils.setField(estimate, "createdAt", LocalDateTime.now());   // @PrePersist 가 없어 직접
-        estimate.complete(4, null, null, false);
+        estimate.complete(4, 4, null, null, false);
         when(estimateRepository.findById(77L)).thenReturn(Optional.of(estimate));
         when(scenarioRepository.findByEstimateIdOrderByAmrCountAsc(77L)).thenReturn(List.of(two, four));
 
@@ -668,7 +669,7 @@ class EstimateServiceTest {
     @Test
     void verify_result_never_changes_the_verdict() {
         Estimate estimate = withId(estimate(85.0, 90.0, 1_000_000_000L), 77L);
-        estimate.complete(4, 6, null, false);
+        estimate.complete(4, 4, 6, null, false);
         when(estimateRepository.findById(77L)).thenReturn(Optional.of(estimate));
 
         service().applyVerifyResult(new VerifyResultResponse("verify_77", "failed", "runner NDEATH", 77L,
@@ -705,9 +706,51 @@ class EstimateServiceTest {
     }
 
     @Test
+    void rejects_a_second_verification_while_the_first_is_still_running() {
+        Estimate estimate = withId(estimate(85.0, 90.0, 1_000_000_000L), 77L);
+        estimate.complete(4, 4, 6, null, false);
+        estimate.markVerifyRequested(LocalDateTime.now().minusMinutes(3));   // 아직 창(10분) 안
+        when(estimateRepository.findById(77L)).thenReturn(Optional.of(estimate));
+
+        assertThatThrownBy(() -> service().requestVerification(77L, ADMIN))
+                .isInstanceOf(GlobalException.class)
+                .hasFieldOrPropertyWithValue("errorCode", ErrorCode.VERIFY_IN_PROGRESS);
+        verify(simulationService, never()).publishVerify(any());
+    }
+
+    @Test
+    void rejects_verification_that_already_finished_normally() {
+        Estimate estimate = withId(estimate(85.0, 90.0, 1_000_000_000L), 77L);
+        estimate.complete(4, 4, 6, null, false);
+        estimate.applyVerifyResult(new VerifySnapshot(
+                "verify_77", "done", "window elapsed", null, 4, 4, 600, null,
+                null, null, null, LocalDateTime.now()));
+        when(estimateRepository.findById(77L)).thenReturn(Optional.of(estimate));
+
+        assertThatThrownBy(() -> service().requestVerification(77L, ADMIN))
+                .isInstanceOf(GlobalException.class)
+                .hasFieldOrPropertyWithValue("errorCode", ErrorCode.VERIFY_ALREADY_DONE);
+        verify(simulationService, never()).publishVerify(any());
+    }
+
+    /** 워커가 죽어 결과가 영영 안 오는 견적이 검증 불가로 굳으면 안 된다. */
+    @Test
+    void allows_verification_again_when_the_earlier_request_went_stale() {
+        Estimate estimate = withId(estimate(85.0, 90.0, 1_000_000_000L), 77L);
+        estimate.complete(4, 4, 6, null, false);
+        estimate.markVerifyRequested(LocalDateTime.now().minusHours(1));
+        when(estimateRepository.findById(77L)).thenReturn(Optional.of(estimate));
+        when(scenarioRepository.findByEstimateIdAndAmrCount(77L, 4)).thenReturn(Optional.of(run(estimate, 4)));
+
+        service().requestVerification(77L, ADMIN);
+
+        verify(simulationService).publishVerify(any());
+    }
+
+    @Test
     void publishes_a_fixed_run_id_for_the_recommended_run() {
         Estimate estimate = withId(estimate(85.0, 90.0, 1_000_000_000L), 77L);
-        estimate.complete(4, 6, null, false);
+        estimate.complete(4, 4, 6, null, false);
         SimScenario recommendedRun = run(estimate, 4);
         when(estimateRepository.findById(77L)).thenReturn(Optional.of(estimate));
         when(scenarioRepository.findByEstimateIdAndAmrCount(77L, 4)).thenReturn(Optional.of(recommendedRun));
@@ -728,7 +771,7 @@ class EstimateServiceTest {
     @Test
     void ships_the_full_outbound_order_list_as_the_verify_scenario() throws Exception {
         Estimate estimate = withId(estimate(85.0, 90.0, 1_000_000_000L), 77L);
-        estimate.complete(4, 6, null, false);
+        estimate.complete(4, 4, 6, null, false);
         List<SimulationRequest.Outbound> orders = List.of(
                 new SimulationRequest.Outbound(1L, 120L, List.of(new SimulationRequest.Line(5L, "A1", 2))));
         estimate.applyOutboundOrders(objectMapper.writeValueAsString(orders));
@@ -964,7 +1007,7 @@ class EstimateServiceTest {
 
     private VerifyResultResponse verifyDone(String runId, Long estimateId, String videoUrl) {
         return new VerifyResultResponse(runId, "done", null, estimateId, null,
-                new VerifyResultResponse.Artifacts(videoUrl), null, null);
+                new VerifyResultResponse.Artifacts(videoUrl, null), null, null);
     }
 
     /** 검증 런의 모양 — 종료 사유, 로봇 수, 가동 수, fms 경고. */
@@ -979,7 +1022,7 @@ class EstimateServiceTest {
                                             SimulationResponse.Kpi kpi) {
         return new VerifyResultResponse(runId, "done", null, estimateId,
                 "est_%d_n%d".formatted(estimateId, shape.nRobots()),
-                videoUrl == null ? null : new VerifyResultResponse.Artifacts(videoUrl),
+                videoUrl == null ? null : new VerifyResultResponse.Artifacts(videoUrl, null),
                 new VerifyResultResponse.Verify(shape.nRobots(), shape.robotsOnline(), 600, shape.reason(),
                         new VerifyResultResponse.Fms("done", null, shape.warnings())),
                 kpi);

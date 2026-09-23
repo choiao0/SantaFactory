@@ -11,6 +11,8 @@ services:
       POSTGRES_PASSWORD: ${DB_PASSWORD}
     ports:
       - "127.0.0.1:5432:5432"
+      # k3s 파드(4_Web/k8s)가 `db` 이름으로 붙는 주소 (S15P21A106-258). 도커 게이트웨이라 서버 안에서만 닿는다(게이트웨이가 다르면 기동 실패로 드러난다)
+      - "172.18.0.1:5432:5432"
     volumes:
       - db-data:/var/lib/postgresql/data
     healthcheck:
@@ -83,6 +85,7 @@ services:
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
     ports:
       - "127.0.0.1:5672:5672"
+      - "172.18.0.1:5672:5672"     # k3s 파드용 도커 게이트웨이 (S15P21A106-258)
       - "127.0.0.1:15672:15672"
     volumes:
       - rabbitmq-data:/var/lib/rabbitmq
@@ -128,6 +131,7 @@ services:
       - noeviction
     ports:
       - "127.0.0.1:6379:6379"
+      - "172.18.0.1:6379:6379"     # k3s 파드용 도커 게이트웨이 (S15P21A106-258)
     volumes:
       - redis-data:/data
     healthcheck:

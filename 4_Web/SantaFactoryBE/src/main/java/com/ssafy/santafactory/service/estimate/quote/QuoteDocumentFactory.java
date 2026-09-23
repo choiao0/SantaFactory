@@ -54,9 +54,15 @@ import static com.ssafy.santafactory.service.estimate.quote.QuoteFormat.won;
 public class QuoteDocumentFactory {
 
     /** 2면 비교표 행 수 — A4 한 면에 그래프·운영 예상·유의 사항까지 들어가는 최대치. */
-    static final int FLEET_ROWS = 12;
+    static final int FLEET_ROWS = 10;
 
-    static final double SVG_W = 672, SVG_H = 175, PAD_L = 36, PAD_R = 48, PAD_T = 14, PAD_B = 22;
+    static final double SVG_W = 672, SVG_H = 112, PAD_L = 36, PAD_R = 48, PAD_T = 14, PAD_B = 22;
+
+    /** 이 처리율부터는 하루 주문을 다 뺀 것으로 본다. */
+    private static final double FULL_THROUGHPUT = 99.95;
+
+    /** 글자 밑선이 이보다 위면 viewBox 위쪽으로 잘린다 (font-size 8.5). */
+    private static final double MIN_LABEL_Y = 9;
 
     private static final Map<ReasonCode, String> REASON_TEXT = new EnumMap<>(Map.of(
             ReasonCode.BUDGET_EXCEEDED, "예산 안에 드는 로봇 대수가 없습니다. 예산을 올리거나 목표를 낮춰 다시 요청해 주세요.",
@@ -266,15 +272,16 @@ public class QuoteDocumentFactory {
 
     // ── 06 ─────────────────────────────────────────────────────────────────
 
-    /** 권장 · 효과 정체 · 양끝 · 예산 경계 앞뒤는 항상, 나머지는 간격을 고르게 채워 최대 12행. */
-    static List<Integer> pickRows(List<Integer> counts, Integer recommended, Integer knee, Integer firstOverBudget) {
+    /** 권장 · 최소 구성 · 효과 정체 · 양끝 · 예산 경계 앞뒤는 항상, 나머지는 간격을 고르게 채워 최대 12행. */
+    static List<Integer> pickRows(List<Integer> counts, Integer recommended, Integer minimal, Integer knee,
+                                  Integer firstOverBudget) {
         if (counts.size() <= FLEET_ROWS) {
             return counts;
         }
         TreeSet<Integer> picked = new TreeSet<>();
         picked.add(counts.get(0));
         picked.add(counts.get(counts.size() - 1));
-        for (Integer must : Arrays.asList(recommended, knee, firstOverBudget)) {
+        for (Integer must : Arrays.asList(recommended, minimal, knee, firstOverBudget)) {
             if (must != null && counts.contains(must)) {
                 picked.add(must);
             }
@@ -303,25 +310,69 @@ public class QuoteDocumentFactory {
         List<Integer> counts = done.stream().map(Run::amrCount).toList();
         Integer firstOver = done.stream().filter(r -> r.totalCost() != null && r.totalCost() > d.budgetLimit())
                 .map(Run::amrCount).findFirst().orElse(null);
-        List<Integer> picked = pickRows(counts, d.recommendedCount(), d.kneeCount(), firstOver);
+        List<Integer> picked = pickRows(counts, d.recommendedCount(), d.minimalCount(), d.kneeCount(), firstOver);
+        Integer fullCount = done.stream().filter(r -> r.throughput() >= FULL_THROUGHPUT)
+                .map(Run::amrCount).findFirst().orElse(null);
+        // 표식이 겹치면 권장만 남긴다 — 한 행에 이름이 둘 이상 붙으면 어느 기준으로 고른 대수인지가 흐려진다
         return done.stream().filter(r -> picked.contains(r.amrCount())).map(r -> new FleetRow(
                 r.amrCount(),
                 r.amrCount().equals(d.recommendedCount()),
+                r.amrCount().equals(d.minimalCount()) && !r.amrCount().equals(d.recommendedCount()),
+                r.amrCount().equals(fullCount) && !r.amrCount().equals(d.recommendedCount()),
                 r.amrCount().equals(d.kneeCount()) && !r.amrCount().equals(d.recommendedCount()),
                 pct(r.throughput()) + " %",
-                r.throughput() >= d.targetThroughput(),
                 pct(r.utilization()) + " %",
+                targetMet(r, d),
+                targetText(r, d),
+                r.utilization() == null ? "—" : oneDecimal(efficiency(r)),
                 r.outbound() == null ? "—" : comma(r.outbound()) + "건",
-                minutes(r.leadTimeP90()),
                 r.totalCost() == null ? "—" : won(r.totalCost()),
-                r.totalCost() != null && r.totalCost() > d.budgetLimit(),
-                r.utilization() == null ? "—" : oneDecimal(efficiency(r)))).toList();
+                r.totalCost() != null && r.totalCost() > d.budgetLimit())).toList();
+    }
+
+    /** 목표는 처리율과 가동률을 <b>둘 다</b> 넘어야 달성이다 — 처리율만 보면 로봇이 노는 구성도 달성으로 읽힌다. */
+    private static boolean targetMet(Run r, EstimateDetailResponse d) {
+        return r.throughput() >= d.targetThroughput() && r.utilization() >= d.targetUtilization();
+    }
+
+    /** 못 넘은 쪽을 이름으로 적는다 — 웹 리포트의 표와 같은 말을 쓴다. */
+    private static String targetText(Run r, EstimateDetailResponse d) {
+        if (targetMet(r, d)) {
+            return "달성";
+        }
+        List<String> missed = new ArrayList<>();
+        if (r.throughput() < d.targetThroughput()) {
+            missed.add("처리율");
+        }
+        if (r.utilization() < d.targetUtilization()) {
+            missed.add("가동률");
+        }
+        return String.join("·", missed) + " 미달";
+    }
+
+    /**
+     * 최소 구성 한 줄 — 얼마를 아끼는 대신 효율을 얼마나 내주는지. 두 대수가 같으면 더 줄일 여지가 없다는
+     * 뜻이라 금액·효율 차이가 없고, 그 사실만 적는다.
+     */
+    private String minimalNote(EstimateDetailResponse d, Run rec, List<Run> done) {
+        if (d.minimalCount() == null) {
+            return "";
+        }
+        if (d.minimalCount().equals(d.recommendedCount())) {
+            return "권장이 곧 목표를 만족하는 가장 적은 대수입니다. ";
+        }
+        Run min = done.stream().filter(r -> d.minimalCount().equals(r.amrCount())).findFirst().orElse(null);
+        if (min == null || min.totalCost() == null || rec.totalCost() == null || min.utilization() == null) {
+            return "";
+        }
+        return "최소 구성은 목표를 만족하는 가장 적은 대수로, " + min.amrCount() + "대(" + won(min.totalCost()) + ")는 "
+                + "권장보다 " + won(rec.totalCost() - min.totalCost()) + " 적지만 효율 " + oneDecimal(efficiency(min))
+                + " %로 권장보다 " + oneDecimal(efficiency(rec) - efficiency(min)) + " %p 안 좋습니다. ";
     }
 
     private String fleetNote(EstimateDetailResponse d, Run rec, List<Run> done) {
         StringBuilder note = new StringBuilder(
-                "* 주문 접수부터 처리 완료까지 걸린 시간으로, 평균이 아니라 주문의 90 %가 이 시간 안에 끝나는 기준입니다(느린 주문까지 감안한 값). "
-                        + "효율 점수 = 주문 처리율 × 로봇 가동률 ÷ 100, 주문을 많이 처리하면서 로봇이 놀지 않을수록 높습니다. ");
+                "효율 점수 = 주문 처리율 × 로봇 가동률 ÷ 100, 주문을 많이 처리하면서 로봇이 놀지 않을수록 높습니다. ");
         if (rec != null) {
             note.append("권장은 목표와 예산을 만족하는 대수 중 효율 점수가 가장 높은 대수입니다");
             List<String> excluded = done.stream()
@@ -331,6 +382,7 @@ public class QuoteDocumentFactory {
                 note.append("(").append(String.join(" · ", excluded)).append("는 처리율 미달로 제외)");
             }
             note.append(". ");
+            note.append(minimalNote(d, rec, done));
         }
         note.append("빨간 비용은 예산 초과.");
         if (done.size() > FLEET_ROWS) {
@@ -353,13 +405,17 @@ public class QuoteDocumentFactory {
         long costMax = niceCostMax(rawMax);
 
         StringBuilder eff = new StringBuilder();
+        StringBuilder thr = new StringBuilder();
         StringBuilder costPath = new StringBuilder();
-        for (int i = 0; i < done.size(); i++) {
-            Run r = done.get(i);
+        List<QuoteDocument.Point> points = new ArrayList<>();
+        for (Run r : done) {
             double x = x(r.amrCount(), min, max, iw);
-            String cmd = i == 0 ? "M" : "L";
             if (r.utilization() != null) {
-                eff.append(eff.isEmpty() ? "M" : "L").append(f(x)).append(' ').append(f(PAD_T + ih - efficiency(r) / 100.0 * ih)).append(' ');
+                double effY = PAD_T + ih - efficiency(r) / 100.0 * ih;
+                double thrY = PAD_T + ih - r.throughput() / 100.0 * ih;
+                eff.append(eff.isEmpty() ? "M" : "L").append(f(x)).append(' ').append(f(effY)).append(' ');
+                thr.append(thr.isEmpty() ? "M" : "L").append(f(x)).append(' ').append(f(thrY)).append(' ');
+                points.add(new QuoteDocument.Point(x, effY, thrY, targetMet(r, d)));
             }
             if (r.totalCost() != null) {
                 costPath.append(costPath.isEmpty() ? "M" : "L").append(f(x)).append(' ').append(f(PAD_T + ih - r.totalCost() / (double) costMax * ih)).append(' ');
@@ -372,18 +428,27 @@ public class QuoteDocumentFactory {
             yLeft.add(new AxisLabel(y, String.valueOf(g), false));
             yRight.add(new AxisLabel(y, eok(Math.round(costMax * g / 100.0)) + "억", false));
         }
-        List<AxisLabel> xLabels = new ArrayList<>();
+        Run fullRun = done.stream().filter(r -> r.utilization() != null && r.throughput() >= FULL_THROUGHPUT)
+                .findFirst().orElse(null);
+        Integer fullCount = fullRun == null ? null : fullRun.amrCount();
         int step = Math.max(1, (int) Math.ceil((max - min) / 6.0));
         TreeSet<Integer> ticks = new TreeSet<>();
         for (int n = min; n <= max; n += step) {
             ticks.add(n);
         }
         ticks.add(max);
-        if (d.recommendedCount() != null) {
-            ticks.add(d.recommendedCount());
+        for (Integer keep : Arrays.asList(d.recommendedCount(), d.minimalCount(), fullCount)) {
+            if (keep != null) {
+                ticks.add(keep);
+            }
         }
+        List<AxisLabel> xLabels = new ArrayList<>();
+        List<AxisLabel> xLabelsThr = new ArrayList<>();
         for (int n : ticks) {
-            xLabels.add(new AxisLabel(x(n, min, max, iw), n + "대", Integer.valueOf(n).equals(d.recommendedCount())));
+            double xs = x(n, min, max, iw);
+            xLabels.add(new AxisLabel(xs, n + "대", Integer.valueOf(n).equals(d.recommendedCount())));
+            xLabelsThr.add(new AxisLabel(xs, n + "대",
+                    Integer.valueOf(n).equals(fullCount != null ? fullCount : d.recommendedCount())));
         }
         Run rec = d.recommendedCount() == null ? null
                 : done.stream().filter(r -> d.recommendedCount().equals(r.amrCount())).findFirst().orElse(null);
@@ -391,10 +456,67 @@ public class QuoteDocumentFactory {
         double recY = rec == null || rec.utilization() == null ? -1 : PAD_T + ih - efficiency(rec) / 100.0 * ih;
         Double kneeX = d.kneeCount() == null || d.kneeCount().equals(d.recommendedCount()) || d.kneeCount() < min || d.kneeCount() > max
                 ? null : x(d.kneeCount(), min, max, iw);
-        return new Curve(eff.toString().trim(), costPath.toString().trim(), xLabels, yLeft, yRight,
+        Run minRun = d.minimalCount() == null || d.minimalCount().equals(d.recommendedCount()) ? null
+                : done.stream().filter(r -> d.minimalCount().equals(r.amrCount()) && r.utilization() != null)
+                        .findFirst().orElse(null);
+        String minLabel = minRun == null ? null : "최소 구성 " + minRun.amrCount() + "대";
+        QuoteDocument.Mark minimal = minRun == null ? null : mark(
+                x(minRun.amrCount(), min, max, iw), PAD_T + ih - efficiency(minRun) / 100.0 * ih, minLabel);
+        // 같은 대수라도 두 그림에서 점 높이가 다르다 — 처리율 그림용 자리를 따로 잡는다
+        QuoteDocument.Mark minimalThr = minRun == null ? null : mark(
+                x(minRun.amrCount(), min, max, iw), PAD_T + ih - minRun.throughput() / 100.0 * ih, minLabel);
+        /*
+         * 처리율 그림의 빨간 표식 — 하루 주문을 다 빼는 첫 대수(전량 처리). 어느 대수도 100 %에 닿지
+         * 않는 견적에는 그 점이 없으므로 대신 권장을 찍는다. 표식이 최소 구성 하나뿐이면 그 대수가 왜
+         * 최소인지 견줄 데가 없다.
+         */
+        Run peakRun = fullRun != null ? fullRun : rec;
+        QuoteDocument.Mark thrPeak = peakRun == null || peakRun.utilization() == null
+                || (minRun != null && peakRun.amrCount().equals(minRun.amrCount()))
+                ? null
+                : mark(x(peakRun.amrCount(), min, max, iw), PAD_T + ih - peakRun.throughput() / 100.0 * ih,
+                        (fullRun != null ? "전량 처리 " : "권장 ") + peakRun.amrCount() + "대");
+
+        return new Curve(eff.toString().trim(), thr.toString().trim(), costPath.toString().trim(), points,
+                SVG_H, PAD_T + ih, SVG_H - PAD_B + 14,
+                xLabels, xLabelsThr, yLeft, yRight,
                 PAD_T + ih - d.budgetLimit() / (double) costMax * ih, "예산 " + won(d.budgetLimit()),
                 kneeX, kneeX == null ? null : d.kneeCount() + "대부터 효과 정체",
-                recX, recY, rec == null ? null : "권장 " + rec.amrCount() + "대 · 효율 " + oneDecimal(efficiency(rec)));
+                recX, recY, recLabelX(recX), recLabelY(recY), recLabelAnchor(recX),
+                rec == null ? null : "권장 " + rec.amrCount() + "대 · 효율 " + oneDecimal(efficiency(rec)),
+                minimal, minimalThr, thrPeak);
+    }
+
+    /** 표식 하나 — 글자는 권장과 같은 규칙으로 점 왼쪽·위에 두되, 자리가 없으면 반대로 넘긴다. */
+    private static QuoteDocument.Mark mark(double x, double y, String label) {
+        return new QuoteDocument.Mark(x, y, recLabelX(x), recLabelY(y), recLabelAnchor(x), label);
+    }
+
+    /**
+     * 권장 표식의 설명 글자 높이. 기본은 점 위지만, 효율이 100 에 가까우면 점이 그림 꼭대기에 붙어
+     * 글자가 viewBox 밖으로 나가 잘린다 — 그때는 점 아래로 내린다. 권장 대수의 효율이 가장 높으므로
+     * 잘리는 쪽이 오히려 흔한 경우다.
+     */
+    static double recLabelY(double recY) {
+        double above = recY - 14;
+        return above < MIN_LABEL_Y ? recY + 21 : above;
+    }
+
+    /**
+     * 설명 글자는 점 왼쪽에 붙이지만, 권장이 가장 적은 대수면 점이 왼쪽 끝이라 글자가 그림 밖으로
+     * 나간다 — 그때는 오른쪽으로 넘겨 단다. {@link #recLabelAnchor} 가 그에 맞춰 정렬을 바꾼다.
+     */
+    static double recLabelX(double recX) {
+        return fitsLeft(recX) ? recX - 14 : recX + 14;
+    }
+
+    static String recLabelAnchor(double recX) {
+        return fitsLeft(recX) ? "end" : "start";
+    }
+
+    /** 글자 폭 어림값(약 20자 × 4.6px)만큼 왼쪽에 자리가 있나. */
+    private static boolean fitsLeft(double recX) {
+        return recX - 14 - 92 >= 2;
     }
 
     private static double x(int n, int min, int max, double iw) {
@@ -421,7 +543,8 @@ public class QuoteDocumentFactory {
 
     private static Ops ops(Run rec) {
         var k = rec.kpi();
-        return new Ops(minutes(k.leadTimeMeanS()), QuoteFormat.seconds(k.queueTimeMeanS()), ratioPct(k.conflictWaitRatio()),
+        // 옆칸(평균 주문 처리 시간)이 분이라, 초로 적으면 2935초처럼 한눈에 비교가 안 된다
+        return new Ops(minutes(k.leadTimeMeanS()), minutes(k.queueTimeMeanS()), ratioPct(k.conflictWaitRatio()),
                 QuoteFormat.km(k.distanceTotalM()), rec.amrCount() + "대 합산");
     }
 

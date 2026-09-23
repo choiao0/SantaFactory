@@ -4,6 +4,7 @@ import com.ssafy.santafactory.dto.estimate.EstimateDetailResponse;
 import com.ssafy.santafactory.entity.estimate.EstimateStatus;
 import com.ssafy.santafactory.service.estimate.EstimateEvents.EstimateFinished;
 import com.ssafy.santafactory.service.estimate.EstimateEvents.RunUpdated;
+import jakarta.annotation.PreDestroy;
 import java.io.IOException;
 import java.time.Duration;
 import java.util.List;
@@ -63,7 +64,7 @@ public class EstimateEventStream {
         if (snapshot.status() != EstimateStatus.RUNNING) {
             send(estimateId, emitter, EVENT_DONE, new EstimateFinished(
                     estimateId, snapshot.status(), snapshot.recommendedCount(),
-                    snapshot.kneeCount(), snapshot.reasonCode()));
+                    snapshot.minimalCount(), snapshot.kneeCount(), snapshot.reasonCode()));
             // 등록을 먼저 했으니 여기서 직접 뗀다 — onCompletion 은 응답이 붙은 뒤에야 도는 콜백이라
             // 그것만 믿으면 이미 끝난 견적의 emitter 가 목록에 남는다
             drop(estimateId, emitter);
@@ -100,6 +101,17 @@ public class EstimateEventStream {
 
     int subscriberCount(Long estimateId) {
         return emitters.getOrDefault(estimateId, List.of()).size();
+    }
+
+    /**
+     * 종료 시 열린 구독을 전부 닫는다. graceful shutdown 은 열린 요청이 끝나길 기다리는데, SSE 는 35분 타임아웃까지
+     * 열려 있어 그대로 두면 롤링 배포마다 대기 시간을 꽉 채운다 (S15P21A106-258). 브라우저의 EventSource 는
+     * 끊기면 스스로 다시 붙고 새 파드가 snapshot 을 보내므로 화면은 잃는 것이 없다.
+     */
+    @PreDestroy
+    public void closeAll() {
+        emitters.values().forEach(targets -> targets.forEach(SseEmitter::complete));
+        emitters.clear();
     }
 
     private void register(Long estimateId, SseEmitter emitter) {

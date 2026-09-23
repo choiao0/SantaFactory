@@ -17,11 +17,11 @@ import java.time.LocalTime;
  * @param width             가로(m). 없으면 고정 맵 값
  * @param length            세로(m). 없으면 고정 맵 값
  * @param workerCount       작업자 수
- * @param inboundStart      입고 시작 "HH:mm"
- * @param inboundEnd        입고 종료 "HH:mm"
+ * @param inboundStart      입고 시작 "HH:mm". 없으면 시드 창고 값
+ * @param inboundEnd        입고 종료 "HH:mm". 비워도 된다
  * @param outboundStart     출고 시작 "HH:mm"
  * @param outboundEnd       출고 종료 "HH:mm"
- * @param inboundAvg        일 평균 입고 건수
+ * @param inboundAvg        일 평균 입고 건수. 없으면 시드 창고 값
  * @param outboundAvg       일 평균 출고 주문 건수
  * @param outboundRate      현재 출고 처리율 %. 없으면 0
  * @param targetThroughput  목표 출고 처리율 %. 없으면 기본값
@@ -34,11 +34,11 @@ public record WarehouseCreateRequest(
         @Positive Double width,
         @Positive Double length,
         @NotNull @Positive Integer workerCount,
-        @NotNull LocalTime inboundStart,
+        LocalTime inboundStart,
         LocalTime inboundEnd,
         @NotNull LocalTime outboundStart,
         LocalTime outboundEnd,
-        @NotNull @PositiveOrZero Long inboundAvg,
+        @PositiveOrZero Long inboundAvg,
         @NotNull @PositiveOrZero Long outboundAvg,
         @PositiveOrZero Double outboundRate,
         @Positive Double targetThroughput,
@@ -49,9 +49,24 @@ public record WarehouseCreateRequest(
     public static final String DEFAULT_NAME = "품고";
     public static final double DEFAULT_WIDTH = 110.0;
     public static final double DEFAULT_LENGTH = 90.0;
+    /**
+     * 입고 기본값 — 화면이 입고를 받지 않는다 (S15P21A106-266). 시뮬레이션이 출고 구간만 돌아
+     * (estimate.shifts=out) 어떤 값을 넣어도 견적이 달라지지 않지만, 창고 행의 NOT NULL 은 채워야 한다.
+     * 시드 창고와 같은 값을 쓴다 — 입고를 붙일 때 화면에서 다시 받게 되면 이 기본값은 없어진다.
+     */
+    public static final LocalTime DEFAULT_INBOUND_START = LocalTime.of(0, 0);
+    public static final long DEFAULT_INBOUND_AVG = 600L;
     /** 시드 창고의 목표값과 같다. */
     public static final double DEFAULT_TARGET_THROUGHPUT = 95.0;
     public static final double DEFAULT_TARGET_UTILIZATION = 80.0;
+
+    public LocalTime inboundStartOrDefault() {
+        return inboundStart == null ? DEFAULT_INBOUND_START : inboundStart;
+    }
+
+    public long inboundAvgOrDefault() {
+        return inboundAvg == null ? DEFAULT_INBOUND_AVG : inboundAvg;
+    }
 
     public String nameOrDefault() {
         return (name == null || name.isBlank()) ? DEFAULT_NAME : name;

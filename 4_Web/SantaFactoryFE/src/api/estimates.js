@@ -3,13 +3,12 @@ import { api, streamUrl } from './client.js'
 export function createWarehouse(form) {
   return api.post('/warehouses', {
     worker_count: form.workerCount,
-    inbound_start: form.inboundStart,
-    inbound_end: form.inboundEnd,
+    // 입고는 화면에서 받지 않는다 — 서버가 창고 기본값을 쓴다 (S15P21A106-266)
     outbound_start: form.outboundStart,
     outbound_end: form.outboundEnd,
-    inbound_avg: form.inboundAvg,
     outbound_avg: form.outboundAvg,
     target_throughput: form.targetThroughput,
+    target_utilization: form.targetUtilization,
     budget_limit: form.budgetLimit,
   })
 }

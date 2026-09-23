@@ -6,6 +6,13 @@ const MONO = 'DM Mono, Pretendard Variable, Pretendard, monospace'
 const GRID_LINE = '#e0ded9'
 const MUTED = '#8a8983'
 const RED = '#e72d2d'
+/** 최소 구성 표식 — 권장(빨강)과 다른 축이라 색도 다르게 둔다. 종이 바탕에서 읽히는 노랑이다 */
+const AMBER = '#d99a00'
+const AMBER_DARK = '#8f6503'
+/** 표식 글자 폭 어림값 — 어느 쪽에 쓸지, 두 글자가 겹치는지 판단할 때만 쓴다 */
+const MIN_LABEL_W = 92
+const REC_LABEL_W = 62
+const FULL_LABEL_W = 78
 /** 가동률 막대 기본색 — 권장 구성만 RED 로 덮어 칠한다 */
 const BAR = '#3f3f3d'
 /** 차트 배경(종이) — 점 안쪽을 채워 선 위에 띄울 때 쓴다 */
@@ -26,6 +33,21 @@ const REASON_TEXT = {
 
 function isDone(run) {
   return run.status === 'DONE' && run.throughput != null
+}
+
+/**
+ * 이 대수가 목표를 통과했나 — 처리율·가동률·예산을 모두 본다. 표의 목표 칸과 같은 판정이라
+ * 그래프에서 색이 찬 점 = 표에서 달성인 행이 된다.
+ *
+ * <p>리드타임 상한은 화면이 모른다(서버 설정). 지금은 미설정이라 판정에 쓰이지 않지만, 켜지면
+ * 최소 구성이 여기서 고른 것보다 오른쪽일 수 있다 — 표식은 서버가 준 값을 그대로 쓴다.
+ */
+function meetsGoal(run, estimate) {
+  return isDone(run)
+    && run.utilization != null
+    && run.throughput >= estimate.target_throughput
+    && run.utilization >= estimate.target_utilization
+    && run.total_cost != null && run.total_cost <= estimate.budget_limit
 }
 
 
@@ -59,7 +81,7 @@ function tickIndexes(runs, keepIndex) {
   return runs.map((_, i) => i).filter((i) => i % every === 0 || i === keepIndex)
 }
 
-function CurveChart({ runs, budget, recommended, knee }) {
+function CurveChart({ runs, estimate, budget, recommended, minimal, knee }) {
   const W = 560
   const H = 300
   const pad = { l: 42, r: 66, t: 20, b: 34 }   // r 은 구축비 눈금 + (BUDGET) 라벨 자리
@@ -79,6 +101,17 @@ function CurveChart({ runs, budget, recommended, knee }) {
   const recMark = scored.find((r) => r.amr_count === recommended) != null
     ? efficiencyScore(scored.find((r) => r.amr_count === recommended))
     : null
+  const minRun = scored.find((r) => r.amr_count === minimal) ?? null
+  // 최소 구성은 목표를 만족하는 가장 적은 대수라 언제나 권장보다 왼쪽이거나 같다
+  const showMin = minimal != null && minimal !== recommended && minRun != null
+  const recRight = recommended != null && x(recommended) > pad.l + iw * 0.7
+  const minLeft = showMin && x(minimal) - 6 - MIN_LABEL_W >= pad.l
+  /**
+   * 두 표식 글자는 같은 줄에 앉혀 높이를 맞춘다. 다만 둘 다 제 점선 왼쪽에 쓰는데 대수가 붙어
+   * 있으면 권장 글자가 최소 구성 글자를 덮는다 — 그때만 최소 구성을 한 줄 올린다.
+   */
+  const minRow = minLeft && recRight && x(recommended) - x(minimal) < REC_LABEL_W + 8 ? 1 : 0
+  const labelY = (row) => pad.t + ih - 8 - row * 18
   const ep = scored.map((r) => `${x(r.amr_count)},${y(efficiencyScore(r))}`).join(' ')
   const cp = runs.filter((r) => r.total_cost != null).map((r) => `${x(r.amr_count)},${yc(r.total_cost)}`).join(' ')
   const recIndex = runs.findIndex((r) => r.amr_count === recommended)
@@ -123,10 +156,21 @@ function CurveChart({ runs, budget, recommended, knee }) {
       {/* 효율 점수 = 처리율 × 가동률. 처리율만 그리면 포화 뒤 평평해서 "어디까지 사면 되는가"가
           그림에 안 나타난다 — 점수는 봉우리를 만들고 그 꼭대기가 곧 권장 대수다 */}
       <polyline points={ep} fill="none" stroke={RED} strokeWidth="2.5" />
-      {scored.filter((r) => r.amr_count !== recommended).map((r) => (
+      {/* 목표를 못 넘은 대수는 회색 빈 점 — 처리율 곡선과 같은 판정, 같은 표시다. 효율 점수가
+          높아도 목표에 걸려 후보에서 빠진 대수가 있어, 색이 없으면 봉우리 왼쪽이 다 후보처럼 보인다 */}
+      {scored.filter((r) => r.amr_count !== recommended && !(showMin && r.amr_count === minimal)).map((r) => (
         <circle key={r.run_id} cx={x(r.amr_count)} cy={y(efficiencyScore(r))} r="4"
-                fill={PAPER} stroke={RED} strokeWidth="2" />
+                fill={PAPER} stroke={meetsGoal(r, estimate) ? RED : '#b7b5b0'} strokeWidth="2" />
       ))}
+      {/* 최소 구성 표식 — 권장과 같은 모양, 색만 다르다. 모양까지 다르면 둘이 같은 종류의
+          표식이라는 게 안 보이고, 색이 같으면 어느 쪽이 권장인지 헷갈린다 */}
+      {showMin && (
+        <g>
+          <circle cx={x(minimal)} cy={y(efficiencyScore(minRun))} r={MARK_R} fill={PAPER} />
+          <circle cx={x(minimal)} cy={y(efficiencyScore(minRun))} r={MARK_R} fill="none" stroke={AMBER} strokeWidth="2.5" />
+          <circle cx={x(minimal)} cy={y(efficiencyScore(minRun))} r="6" fill={PAPER} stroke={AMBER} strokeWidth="2" />
+        </g>
+      )}
       {/* 권장 대수 표식 — 흰 원반으로 곡선을 끊어 점을 띄우고, 그 위에 링과 가운데 점을 겹친다.
           같은 색 점을 키우기만 하면 선에 묻혀서 어느 대수인지 눈에 안 들어온다 */}
       {scored.filter((r) => r.amr_count === recommended).map((r) => {
@@ -148,16 +192,159 @@ function CurveChart({ runs, budget, recommended, knee }) {
           <text x={x(knee) + 6} y={pad.t + ih - 20} fontSize="7.5" fill={MUTED} fontFamily={MONO}>변곡 {knee}대</text>
         </>
       )}
+      {showMin && (
+        <>
+          <line x1={x(minimal)} x2={x(minimal)} y1={y(efficiencyScore(minRun)) + MARK_R} y2={pad.t + ih}
+                stroke={AMBER} strokeDasharray="3 3" />
+          {/* 제 점선의 왼쪽에 붙인다 — 최소 구성은 언제나 권장보다 왼쪽이라, 오른쪽에 쓰면 글자가
+              두 점선 사이로 들어가 권장 쪽으로 밀려 보인다. 왼쪽에 자리가 없을 때만 넘긴다 */}
+          <text x={x(minimal) + (minLeft ? -6 : 6)} y={labelY(minRow)}
+                textAnchor={minLeft ? 'end' : 'start'}
+                fontSize="11" fontWeight="700" fill={AMBER_DARK} fontFamily={MONO}>
+            최소 구성 {minimal}대
+          </text>
+        </>
+      )}
       {recommended != null && (
         <>
           {/* 표식을 관통하지 않도록 바깥 링 아래에서 시작한다 — 점이 어느 대수인지 끌어 주기만 하면 된다 */}
           <line x1={x(recommended)} x2={x(recommended)}
                 y1={recMark != null ? y(recMark) + MARK_R : pad.t} y2={pad.t + ih}
                 stroke={RED} strokeDasharray="3 3" />
-          <text x={x(recommended) + (x(recommended) > pad.l + iw * 0.7 ? -6 : 6)} y={pad.t + ih - 8}
-                textAnchor={x(recommended) > pad.l + iw * 0.7 ? 'end' : 'start'}
+          <text x={x(recommended) + (recRight ? -6 : 6)} y={labelY(0)}
+                textAnchor={recRight ? 'end' : 'start'}
                 fontSize="11" fontWeight="700" fill="#b51616" fontFamily={MONO}>
             권장 {recommended}대
+          </text>
+        </>
+      )}
+    </svg>
+  )
+}
+
+/**
+ * 처리율 곡선 — 최소 구성이 왜 그 대수인지 보여 주는 그림. 효율 곡선은 봉우리로 권장을 설명하지만
+ * 최소 구성은 설명하지 못한다. 여기서는 목표선을 처음 넘는(그리고 색이 찬) 점이 곧 최소 구성이다.
+ *
+ * <p>점이 목표선 위에 있어도 가동률이나 예산에서 떨어질 수 있다 — 그런 대수는 회색 빈 점으로
+ * 둔다. 처리율만 보고 "목표선 넘은 첫 점 = 최소 구성"으로 읽으면 가동률이 발목을 잡는 견적에서
+ * 틀린다 (전 대수 처리율 100 % 인데 가동률 미달로 권장이 없던 견적이 있었다).
+ */
+function ThroughputChart({ runs, estimate, budget, minimal, recommended }) {
+  const W = 560
+  const H = 300
+  const pad = { l: 42, r: 66, t: 20, b: 34 }
+  const iw = W - pad.l - pad.r
+  const ih = H - pad.t - pad.b
+  const counts = runs.map((r) => r.amr_count)
+  const xMin = Math.min(...counts)
+  const xMax = Math.max(...counts)
+  const span = Math.max(1, xMax - xMin)
+  const done = runs.filter(isDone)
+  const costMax = niceCostMax(Math.max(budget, ...runs.map((r) => r.total_cost ?? 0)) * 1.15)
+  const x = (n) => pad.l + ((n - xMin) / span) * iw
+  const y = (v) => pad.t + ih - (v / 100) * ih
+  const yc = (v) => pad.t + ih - (v / costMax) * ih
+
+  const tp = done.map((r) => `${x(r.amr_count)},${y(r.throughput)}`).join(' ')
+  const cp = runs.filter((r) => r.total_cost != null).map((r) => `${x(r.amr_count)},${yc(r.total_cost)}`).join(' ')
+  const minRun = done.find((r) => r.amr_count === minimal) ?? null
+  /**
+   * 빨간 표식 하나 — 하루 주문을 다 빼는 첫 대수(전량 처리). 어느 대수도 100 %에 닿지 않는 견적에는
+   * 그 점이 없으므로 대신 권장을 찍는다. 처리율 그림에 표식이 최소 구성 하나뿐이면 그 대수가 왜
+   * 최소인지(오른쪽이 무엇인지)를 견줄 데가 없다.
+   */
+  const fullRun = done.find((r) => r.throughput >= 99.95) ?? null
+  const peak = fullRun ?? done.find((r) => r.amr_count === recommended) ?? null
+  const peakLabel = fullRun != null ? '전량 처리' : '권장'
+  const showFull = peak != null && peak.amr_count !== minimal
+  const full = peak
+  const minLeft = minRun != null && x(minimal) - 6 - MIN_LABEL_W >= pad.l
+  const fullLeft = showFull && x(full.amr_count) - 6 - FULL_LABEL_W >= pad.l
+  const labelY = (row) => pad.t + ih - 8 - row * 18
+  // 둘 다 제 점선 왼쪽에 쓰므로, 대수가 붙어 있으면 전량 처리 글자가 최소 구성 글자를 덮는다
+  const fullRow = showFull && minLeft && fullLeft
+    && x(full.amr_count) - x(minimal) < FULL_LABEL_W + 8 ? 1 : 0
+  const visible = new Set(tickIndexes(runs, runs.findIndex((r) => r.amr_count === minimal)))
+
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label="AMR 대수별 주문 처리율 곡선">
+      {[0, 25, 50, 75, 100].map((v) => (
+        <g key={v}>
+          <line x1={pad.l} x2={W - pad.r} y1={y(v)} y2={y(v)} stroke={GRID_LINE} />
+          <text x={pad.l - 8} y={y(v) + 3} textAnchor="end" fontSize="8" fill={MUTED} fontFamily={MONO}>{v}</text>
+        </g>
+      ))}
+      {runs.filter((_, i) => visible.has(i)).map((r) => (
+        <text key={r.run_id} x={x(r.amr_count)} y={H - pad.b + 16} textAnchor="middle" fontSize="8"
+              fill={isDone(r) ? '#4a4a46' : '#b7b5b0'} fontFamily={MONO}>
+          {r.amr_count}
+        </text>
+      ))}
+      <text x={pad.l} y={H - 4} fontSize="7.5" fill={MUTED} fontFamily={MONO}>AMR 대수 →</text>
+      <text x={pad.l - 40} y={pad.t - 6} fontSize="7.5" fill={MUTED} fontFamily={MONO}>처리율</text>
+      <text x={W - pad.r + 8} y={pad.t - 6} fontSize="7.5" fill={MUTED} fontFamily={MONO}>구축비</text>
+
+      {/* 효율 곡선과 같은 비용 축·예산선을 쓴다 — 두 화면을 오가며 같은 금액을 읽게 된다 */}
+      {[0, 0.25, 0.5, 0.75, 1].map((f) => (
+        <text key={f} x={W - pad.r + 8} y={yc(costMax * f) + 3} fontSize="8" fill={MUTED} fontFamily={MONO}>
+          {formatEok(costMax * f)}
+        </text>
+      ))}
+      {budget <= costMax && (
+        <>
+          <line x1={pad.l} x2={W - pad.r} y1={yc(budget)} y2={yc(budget)} stroke={MUTED} strokeDasharray="2 4" />
+          <text x={W - pad.r + 24} y={yc(budget) + 3} fontSize="7" fill={MUTED} fontFamily={MONO}>(예산)</text>
+        </>
+      )}
+
+      <polyline points={cp} fill="none" stroke={MUTED} strokeWidth="1.5" />
+      {runs.filter((r) => r.total_cost != null).map((r) => (
+        <circle key={r.run_id} cx={x(r.amr_count)} cy={yc(r.total_cost)} r="3" fill={PAPER} stroke={MUTED} strokeWidth="1.5" />
+      ))}
+
+      <polyline points={tp} fill="none" stroke={RED} strokeWidth="2.5" />
+      {done.filter((r) => r.amr_count !== minimal && !(showFull && r.amr_count === full.amr_count)).map((r) => {
+        const ok = meetsGoal(r, estimate)
+        return (
+          <circle key={r.run_id} cx={x(r.amr_count)} cy={y(r.throughput)} r="4"
+                  fill={PAPER} stroke={ok ? RED : '#b7b5b0'} strokeWidth="2" />
+        )
+      })}
+
+      {showFull && (
+        <g>
+          <circle cx={x(full.amr_count)} cy={y(full.throughput)} r={MARK_R} fill={PAPER} />
+          <circle cx={x(full.amr_count)} cy={y(full.throughput)} r={MARK_R} fill="none" stroke={RED} strokeWidth="2.5" />
+          <circle cx={x(full.amr_count)} cy={y(full.throughput)} r="6" fill={PAPER} stroke={RED} strokeWidth="2" />
+        </g>
+      )}
+      {minRun != null && (
+        <g>
+          <circle cx={x(minimal)} cy={y(minRun.throughput)} r={MARK_R} fill={PAPER} />
+          <circle cx={x(minimal)} cy={y(minRun.throughput)} r={MARK_R} fill="none" stroke={AMBER} strokeWidth="2.5" />
+          <circle cx={x(minimal)} cy={y(minRun.throughput)} r="6" fill={PAPER} stroke={AMBER} strokeWidth="2" />
+        </g>
+      )}
+
+      {showFull && (
+        <>
+          <line x1={x(full.amr_count)} x2={x(full.amr_count)} y1={y(full.throughput) + MARK_R} y2={pad.t + ih}
+                stroke={RED} strokeDasharray="3 3" />
+          <text x={x(full.amr_count) + (fullLeft ? -6 : 6)} y={labelY(fullRow)}
+                textAnchor={fullLeft ? 'end' : 'start'}
+                fontSize="11" fontWeight="700" fill="#b51616" fontFamily={MONO}>
+            {peakLabel} {full.amr_count}대
+          </text>
+        </>
+      )}
+      {minRun != null && (
+        <>
+          <line x1={x(minimal)} x2={x(minimal)} y1={y(minRun.throughput) + MARK_R} y2={pad.t + ih}
+                stroke={AMBER} strokeDasharray="3 3" />
+          <text x={x(minimal) + (minLeft ? -6 : 6)} y={labelY(0)} textAnchor={minLeft ? 'end' : 'start'}
+                fontSize="11" fontWeight="700" fill={AMBER_DARK} fontFamily={MONO}>
+            최소 구성 {minimal}대
           </text>
         </>
       )}
@@ -282,11 +469,39 @@ function QuoteActions({ estimateId, finished }) {
   )
 }
 
+/** 권장을 고르는 점수와 같은 식 — 표에도 같은 값을 보여야 그래프의 봉우리를 표에서 확인할 수 있다. */
+function efficiency(r) {
+  return (r.throughput * r.utilization) / 100
+}
+
+/**
+ * 목표 칸 — 처리율과 가동률을 <b>둘 다</b> 넘어야 달성이다. 예전에는 처리율만 보고 찍었는데, 칸 이름이
+ * 그냥 '목표' 라 가동률이 한참 모자란 구성도 달성으로 읽혔다. 못 넘은 쪽을 이름으로 적어 어디가 모자란지
+ * 바로 보이게 한다. 칸은 머리글까지 통째로 가운데 정렬이라, 길이가 다른 '달성' 도 같은 축에 선다.
+ */
+function GoalCell({ run, estimate }) {
+  const slow = run.throughput < estimate.target_throughput
+  const idle = run.utilization < estimate.target_utilization
+  if (!slow && !idle) {
+    return <td className="goal met">달성</td>
+  }
+  const short = [slow && '처리율', idle && '가동률'].filter(Boolean).join('·')
+  return <td className="goal"><span>{short} 미달</span></td>
+}
+
 export default function QuoteStep({ estimateId, estimate, verdict }) {
+  const [curveView, setCurveView] = useState('eff')
   const ready = Boolean(estimate && verdict)
   const runs = estimate?.runs ?? []
   const recommended = verdict?.recommended_count ?? null
   const rec = runs.find((r) => r.amr_count === recommended) ?? null
+  // 최소 구성 — 권장과 같은 조건을 통과한 것 중 가장 적은 대수. 권장과 같으면 표식을 하나로 합친다
+  const minimal = verdict?.minimal_count ?? null
+  const min = runs.find((r) => r.amr_count === minimal) ?? null
+  // 하루 주문을 다 빼는 첫 대수 — 권장과 같은 대수면 표식을 따로 달지 않는다
+  const fullCount = runs.find((r) => isDone(r) && r.throughput >= 99.95)?.amr_count ?? null
+  const saving = rec && min && minimal !== recommended ? rec.total_cost - min.total_cost : null
+  const effLoss = saving == null ? null : efficiency(rec) - efficiency(min)
   const cancelled = verdict?.status === 'CANCELLED'
 
   return (
@@ -324,7 +539,7 @@ export default function QuoteStep({ estimateId, estimate, verdict }) {
                 <div>
                   <span className="k-label">권장 대수</span>
                   <strong>{rec.amr_count}<span>대</span></strong>
-                  <em className="ok">목표 충족 · 예산 이내 · 효율 최고</em>
+                  <em className="ok">목표 달성 · 예산 이내 · 효율 최고</em>
                 </div>
                 <div>
                   <span className="k-label">처리율</span>
@@ -357,19 +572,53 @@ export default function QuoteStep({ estimateId, estimate, verdict }) {
             <>
               <div className="charts">
                 <div>
-                  <h5>효율–비용 곡선</h5>
-                  <CurveChart
-                    runs={runs}
-                    budget={estimate.budget_limit}
-                    recommended={recommended}
-                    knee={verdict.knee_count}
-                  />
+                  {/* 두 그림이 각자 다른 표식을 설명한다 — 효율 곡선의 봉우리가 권장, 처리율
+                      곡선에서 목표선을 처음 넘는(색이 찬) 점이 최소 구성이다 */}
+                  <div className="chart-head">
+                    <h5>{curveView === 'eff' ? '효율–비용 곡선' : '처리율 곡선'}</h5>
+                    <div className="chart-toggle" role="group" aria-label="곡선 기준">
+                      {[['eff', '효율'], ['thr', '처리율']].map(([key, text]) => (
+                        <button key={key} type="button" className={curveView === key ? 'on' : ''}
+                                aria-pressed={curveView === key} onClick={() => setCurveView(key)}>
+                          {text}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  {curveView === 'eff' ? (
+                    <CurveChart
+                      runs={runs}
+                      estimate={estimate}
+                      budget={estimate.budget_limit}
+                      recommended={recommended}
+                      minimal={minimal}
+                      knee={verdict.knee_count}
+                    />
+                  ) : (
+                    <ThroughputChart runs={runs} estimate={estimate} budget={estimate.budget_limit}
+                                     minimal={minimal} recommended={recommended} />
+                  )}
                   <p className="chart-cap">
                     {/* 선 색을 말로 적으면 어느 선인지 짚기 어렵다 — 실제 칠하는 색을 그대로 보여준다 */}
-                    <i style={{ background: RED }} />효율 (처리율 × 가동률)
-                    <i style={{ background: MUTED }} />구축비용
-                    <br />
-                    효율이 가장 높은 대수를 권장 구성으로 표시합니다
+                    {curveView === 'eff' ? (
+                      <>
+                        <i style={{ background: RED }} />효율 (처리율 × 가동률)
+                        <i style={{ background: MUTED }} />구축비용
+                        <i style={{ background: '#b7b5b0' }} />목표 미달
+                        <br />
+                        효율이 가장 높은 대수를 권장 구성으로{minimal != null && minimal !== recommended
+                          ? ', 목표를 만족하는 가장 적은 대수를 최소 구성으로' : ''} 표시합니다
+                      </>
+                    ) : (
+                      <>
+                        <i style={{ background: RED }} />주문 처리율
+                        <i style={{ background: MUTED }} />구축비용
+                        <i style={{ background: '#b7b5b0' }} />목표 미달
+                        <br />
+                        목표를 만족하는 가장 적은 대수를 최소 구성으로 표시합니다. 회색 점은 처리율·가동률·예산 중
+                        하나라도 못 넘은 대수입니다
+                      </>
+                    )}
                   </p>
                 </div>
                 <div>
@@ -391,10 +640,10 @@ export default function QuoteStep({ estimateId, estimate, verdict }) {
                   <thead>
                     <tr>
                       <th>구성</th>
-                      <th>상태</th>
                       <th>처리율</th>
-                      <th>목표</th>
                       <th>가동률</th>
+                      <th className="goal">목표</th>
+                      <th>효율 <span>처리율 × 가동률</span></th>
                       <th>처리 완료 <span>건/일</span></th>
                       <th>구축비용</th>
                       <th>예산</th>
@@ -407,8 +656,7 @@ export default function QuoteStep({ estimateId, estimate, verdict }) {
                         return (
                           <tr key={r.run_id} className="fail">
                             <td>{r.amr_count}대</td>
-                            <td>{r.status}</td>
-                            <td colSpan={4}>결과 없음{r.error ? ` · ${r.error}` : ''}</td>
+                            <td colSpan={5}>{r.status} · 결과 없음{r.error ? ` · ${r.error}` : ''}</td>
                             <td>{formatWon(r.total_cost)}</td>
                             <td>{inBudget ? '이내' : '초과'}</td>
                           </tr>
@@ -416,11 +664,22 @@ export default function QuoteStep({ estimateId, estimate, verdict }) {
                       }
                       return (
                         <tr key={r.run_id} className={r.amr_count === recommended ? 'hl' : ''}>
-                          <td>{r.amr_count}대{r.amr_count === recommended && <span className="rec-chip">권장</span>}</td>
-                          <td>완료</td>
+                          {/* 표식이 겹치면 권장만 남긴다 — 한 행에 이름이 둘 이상 붙으면 어느 기준으로
+                              고른 대수인지가 흐려진다 */}
+                          <td>
+                            {r.amr_count}대
+                            {r.amr_count === recommended && <span className="rec-chip">권장</span>}
+                            {r.amr_count !== recommended && r.amr_count === minimal && (
+                              <span className="rec-chip min">최소 구성</span>
+                            )}
+                            {r.amr_count !== recommended && r.amr_count === fullCount && (
+                              <span className="rec-chip min">전량 처리</span>
+                            )}
+                          </td>
                           <td>{formatPercent(r.throughput)}%</td>
-                          <td>{r.throughput >= estimate.target_throughput ? '충족' : <span>미달</span>}</td>
                           <td>{formatPercent(r.utilization)}%</td>
+                          <GoalCell run={r} estimate={estimate} />
+                          <td>{formatPercent(efficiency(r))}</td>
                           <td>{r.outbound != null ? r.outbound.toLocaleString() : '—'}</td>
                           <td>{formatWon(r.total_cost)}</td>
                           <td>{inBudget ? '이내' : <span>초과</span>}</td>
@@ -430,6 +689,20 @@ export default function QuoteStep({ estimateId, estimate, verdict }) {
                   </tbody>
                 </table>
               </div>
+
+              {/* 표에 대수를 두 개 표시했으면, 그 둘을 왜 나눠 놓았는지 한 줄로 말한다 */}
+              {saving != null && (
+                <p className="table-note">
+                  <b>최소 구성</b>은 목표를 만족하는 가장 적은 대수로, {minimal}대({formatWon(min.total_cost)})는
+                  권장보다 {formatWon(saving)} 적지만 효율 {formatPercent(efficiency(min))}%로
+                  권장보다 {formatPercent(effLoss)}%p 안 좋습니다.
+                </p>
+              )}
+              {saving == null && minimal != null && (
+                <p className="table-note">
+                  목표를 만족하는 가장 적은 대수가 권장 구성과 같습니다 — 더 줄일 여지가 없습니다.
+                </p>
+              )}
             </>
           )}
 

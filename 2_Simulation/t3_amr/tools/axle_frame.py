@@ -48,7 +48,7 @@ import sys
 
 import numpy as np
 
-PITCH = float(os.environ.get("PITCH", os.environ.get("PIBT_PITCH", "1.2")))
+PITCH = float(os.environ.get("PITCH", os.environ.get("PIBT_PITCH", "1.0")))
 W_MIN = float(os.environ.get("W_MIN", "0.15"))     # rad/s
 MIN_DEG = float(os.environ.get("MIN_DEG", "45"))
 MIN_N = int(os.environ.get("MIN_N", "12"))          # 구간 최소 프레임

@@ -1,0 +1,69 @@
+# 견적서 PDF 변환기 (Gotenberg) — 4_Web/docker-compose.yml 의 pdf 서비스를 k3s 로 (S15P21A106-258).
+# 백엔드와 같은 EC2 노드에 둔다. 이미지 태그는 Jenkins 가 빌드 번호로 바꿔 넣는다(latest 는 첫 적용용).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pdf
+  namespace: web
+  labels:
+    app: pdf
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app: pdf
+  template:
+    metadata:
+      labels:
+        app: pdf
+    spec:
+      automountServiceAccountToken: false
+      nodeSelector:
+        kubernetes.io/hostname: ip-172-26-3-57
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: pdf
+          image: j15a106.p.ssafy.io/santafactory-pdf:latest
+          # compose 의 command 와 같다. 템플릿은 서버가 채워 보내므로 스크립트는 끈다
+          args:
+            - gotenberg
+            - --api-timeout=60s
+            - --chromium-max-queue-size=2
+            - --chromium-disable-javascript=true
+          ports:
+            - name: http
+              containerPort: 3000
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 30
+          resources:
+            # 변환 중 크로미움이 300 MB 안팎. compose 의 mem_limit 512m 과 같은 상한
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pdf
+  namespace: web
+spec:
+  selector:
+    app: pdf
+  ports:
+    - name: http
+      port: 3000
+      targetPort: http

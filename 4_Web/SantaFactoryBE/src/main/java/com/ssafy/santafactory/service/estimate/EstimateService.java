@@ -281,9 +281,23 @@ public class EstimateService {
         return new QuoteSource(toDetail(estimate), WarehouseResponse.from(estimate.getWarehouse()));
     }
 
+    /**
+     * 화면에 내보낼 1인칭 시점 키.
+     *
+     * <p>결과 도착 시점에 저장해 둔 값이 있으면 그것을 쓴다. 없으면 상단 키에서 다시 찾아 본다 —
+     * 엣지가 mp4 를 하나씩 올리느라 상단만 올린 채 결과를 보고하면 그때 확인이 빈손이기 때문이다.
+     * 여기서 저장하지 않는 이유는 조회가 읽기 전용 트랜잭션이라 써도 남지 않아서다.
+     */
+    private String fpvVideoKey(Estimate estimate) {
+        String saved = estimate.getVerifyVideoFpvUrl();
+        return saved != null ? saved : videoPresigner.deriveFpvKey(estimate.getVerifyVideoUrl());
+    }
+
     private EstimateDetailResponse toDetail(Estimate estimate) {
         List<SimScenario> runs = scenarioRepository.findByEstimateIdOrderByAmrCountAsc(estimate.getId());
-        return EstimateDetailResponse.of(estimate, runs, videoPresigner.sign(estimate.getVerifyVideoUrl()),
+        return EstimateDetailResponse.of(estimate, runs,
+                videoPresigner.sign(estimate.getVerifyVideoUrl()),
+                videoPresigner.sign(fpvVideoKey(estimate)),
                 verifyComparator.compare(estimate.getVerify(), recommendedRun(estimate, runs)));
     }
 
@@ -376,7 +390,7 @@ public class EstimateService {
      * {@code source_run_id}는 반대로 host-orch 로직에 안 쓰이고 결과에 그대로 돌아오기만 하는
      * 추적용이라, 권장 대수의 DES run_id({@code est_{id}_n{count}})를 그대로 싣는다.
      */
-    @Transactional(readOnly = true)
+    @Transactional
     public void requestVerification(Long estimateId, AuthenticatedMember me) {
         Estimate estimate = estimateRepository.findById(estimateId)
                 .orElseThrow(() -> new GlobalException(ErrorCode.ESTIMATE_NOT_FOUND));
@@ -385,12 +399,37 @@ public class EstimateService {
         if (recommendedCount == null) {
             throw new GlobalException(ErrorCode.ESTIMATE_NOT_VERIFIABLE);
         }
+        guardDuplicateVerify(estimate);
         SimScenario run = scenarioRepository.findByEstimateIdAndAmrCount(estimateId, recommendedCount)
                 .orElseThrow(() -> new GlobalException(ErrorCode.ESTIMATE_NOT_VERIFIABLE));
 
+        estimate.markVerifyRequested(LocalDateTime.now());
         simulationService.publishVerify(new VerifyRequest(
                 "verify_" + estimateId, recommendedCount, properties.verifyWindow().toSeconds(),
                 run.getRunId(), estimateId, FIXED_SEED, verifyScenario(estimate)));
+    }
+
+    /**
+     * 같은 견적을 두 번 검증하지 않는다.
+     *
+     * <p>Isaac 은 한 번에 한 건씩 약 10분을 문다. 화면에서 버튼을 잠가도 새로고침하면 상태가 풀려
+     * 다시 누를 수 있어서, 같은 검증이 큐에 두 번 쌓이고 뒤 요청이 그만큼 밀렸다.
+     *
+     * <p>정상 종료한 검증은 다시 돌리지 않는다. 실패했거나, 요청해 놓고 {@code verify-stale-after}
+     * 가 지나도록 결과가 안 온 건은 재요청을 연다 — 워커가 죽어 영영 결과가 없는 견적이 검증
+     * 불가로 굳는 것을 막는다.
+     */
+    private void guardDuplicateVerify(Estimate estimate) {
+        VerifySnapshot verify = estimate.getVerify();
+        if (verify != null && verify.finishedNormally()) {
+            throw new GlobalException(ErrorCode.VERIFY_ALREADY_DONE);
+        }
+        LocalDateTime requestedAt = estimate.getVerifyRequestedAt();
+        boolean waitingForResult = requestedAt != null && verify == null
+                && requestedAt.isAfter(LocalDateTime.now().minus(properties.verifyStaleAfter()));
+        if (waitingForResult) {
+            throw new GlobalException(ErrorCode.VERIFY_IN_PROGRESS);
+        }
     }
 
     /**
@@ -490,14 +529,22 @@ public class EstimateService {
             return;
         }
         estimate.applyVerifyResult(toVerifySnapshot(response));
-        String video = response.artifacts() != null ? response.artifacts().video() : null;
-        if (video != null) {
-            estimate.applyVerifyVideo(video);
+        VerifyResultResponse.Artifacts artifacts = response.artifacts();
+        String video = artifacts != null ? artifacts.video() : null;
+        String videoFpv = artifacts != null ? artifacts.videoFpv() : null;
+        // 러너가 1인칭 키를 안 싣는 동안에는 상단 키에서 이름 규칙으로 찾아 본다 (S15P21A106-265)
+        if (videoFpv == null) {
+            videoFpv = videoPresigner.deriveFpvKey(video);
         }
-        log.info("물리 검증 결과 반영: estimateId={}, status={}, video={}",
-                estimate.getId(), response.status(), video);
+        // 상단이 없으면 1인칭만 남기지 않는다 — 화면이 기본으로 보여줄 것이 없어진다
+        if (video != null) {
+            estimate.applyVerifyVideo(video, videoFpv);
+        }
+        log.info("물리 검증 결과 반영: estimateId={}, status={}, video={}, videoFpv={}",
+                estimate.getId(), response.status(), video, videoFpv);
         eventPublisher.publishEvent(new EstimateVerified(
-                estimate.getId(), response.status(), videoPresigner.sign(video), response.error()));
+                estimate.getId(), response.status(), videoPresigner.sign(video),
+                videoPresigner.sign(videoFpv), response.error()));
     }
 
     /** 계약 §3 페이로드에서 견적에 남길 것만 뽑는다. verify·kpi 가 없는 옛 페이로드는 성패만 남는다. */
@@ -675,17 +722,18 @@ public class EstimateService {
 
         EstimateVerdict verdict = evaluator.evaluate(results, goal);
         boolean anyFailed = results.size() != runs.size();
-        estimate.complete(verdict.recommendedCount(), verdict.kneeCount(), verdict.reasonCode(), anyFailed);
+        estimate.complete(verdict.recommendedCount(), verdict.minimalCount(), verdict.kneeCount(),
+                verdict.reasonCode(), anyFailed);
 
-        log.info("견적 판정 확정: estimateId={}, 권장={}대, 무릎={}대, 사유={}, 상태={}",
-                estimate.getId(), verdict.recommendedCount(), verdict.kneeCount(),
+        log.info("견적 판정 확정: estimateId={}, 권장={}대, 최소={}대, 무릎={}대, 사유={}, 상태={}",
+                estimate.getId(), verdict.recommendedCount(), verdict.minimalCount(), verdict.kneeCount(),
                 verdict.reasonCode(), estimate.getStatus());
         eventPublisher.publishEvent(finishedEvent(estimate));
     }
 
     private EstimateFinished finishedEvent(Estimate estimate) {
-        return new EstimateFinished(estimate.getId(), estimate.getStatus(),
-                estimate.getRecommendedCount(), estimate.getKneeCount(), estimate.getReasonCode());
+        return new EstimateFinished(estimate.getId(), estimate.getStatus(), estimate.getRecommendedCount(),
+                estimate.getMinimalCount(), estimate.getKneeCount(), estimate.getReasonCode());
     }
 
     private RunResult toRunResult(SimScenario run) {

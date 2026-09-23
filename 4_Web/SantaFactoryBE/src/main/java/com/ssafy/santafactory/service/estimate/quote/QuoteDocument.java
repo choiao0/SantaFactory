@@ -58,21 +58,36 @@ public record QuoteDocument(
     }
 
     /** 06 로봇 대수별 비교의 한 행. */
-    public record FleetRow(int count, boolean recommended, boolean knee, String throughput, boolean targetOk,
-                           String utilization, String dailyOrders, String leadMin, String cost, boolean overBudget,
-                           String efficiency) {
+    public record FleetRow(int count, boolean recommended, boolean minimal, boolean full, boolean knee,
+                           String throughput, String utilization, boolean targetOk, String targetText,
+                           String efficiency, String dailyOrders, String cost, boolean overBudget) {
     }
 
     /** 07 효율·구축 비용 그래프 — SVG 좌표는 템플릿 viewBox(672 × 175) 기준. */
-    public record Curve(String effPath, String costPath, List<AxisLabel> xLabels, List<AxisLabel> yLeft,
+    public record Curve(String effPath, String thrPath, String costPath, List<Point> points,
+                        double svgH, double axisY, double xLabelY,
+                        List<AxisLabel> xLabels, List<AxisLabel> xLabelsThr, List<AxisLabel> yLeft,
                         List<AxisLabel> yRight, double budgetY, String budgetLabel,
-                        Double kneeX, String kneeLabel, double recX, double recY, String recLabel) {
+                        Double kneeX, String kneeLabel, double recX, double recY,
+                        double recLabelX, double recLabelY, String recLabelAnchor, String recLabel,
+                        Mark minimal, Mark minimalThr, Mark thrPeak) {
+    }
+
+    /**
+     * 대수 하나의 점. {@code met} 은 목표(처리율·가동률·예산)를 다 넘었나 — 못 넘은 대수는 회색 빈 점으로
+     * 그려 06 표의 미달 행과 같은 말을 하게 한다.
+     */
+    public record Point(double x, double effY, double thrY, boolean met) {
+    }
+
+    /** 곡선 위의 표식 하나 — 표식 자리와 그 설명 글자 자리. 없으면 null. */
+    public record Mark(double x, double y, double labelX, double labelY, String labelAnchor, String label) {
     }
 
     public record AxisLabel(double pos, String text, boolean highlight) {
     }
 
     /** 08 권장 구성의 운영 예상. */
-    public record Ops(String leadMeanMin, String queueSec, String conflictPct, String distanceKm, String robotsLine) {
+    public record Ops(String leadMeanMin, String queueMin, String conflictPct, String distanceKm, String robotsLine) {
     }
 }

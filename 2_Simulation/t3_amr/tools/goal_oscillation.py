@@ -60,7 +60,7 @@ import pibt.heading as HD                # noqa: E402
 import pibt_scene                        # noqa: E402
 
 MAP = os.environ["MAP"]
-PITCH = float(os.environ.get("PITCH", "1.2"))
+PITCH = float(os.environ.get("PITCH", "1.0"))
 N = int(os.environ.get("N", "12"))
 SEEDS = [int(x) for x in os.environ.get("SEEDS", "1,2,3,4,5,6").split(",")]
 STEPS = int(os.environ.get("STEPS", "8000"))   # -211: 전진이 MOVE_TICKS 틱이 되어 x4

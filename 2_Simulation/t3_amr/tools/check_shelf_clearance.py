@@ -122,7 +122,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--map", default=os.path.join(ROOT, "warehouse", "map"))
     ap.add_argument("--n", type=int, default=12)
-    ap.add_argument("--pitch", type=float, default=1.2)
+    ap.add_argument("--pitch", type=float, default=1.0)
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--horizon", type=int, default=315)
     ap.add_argument("--dispatch", default="fms")

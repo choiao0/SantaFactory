@@ -244,7 +244,7 @@ class RobotGeom:
     구동축과 같으면 (0, 0).  usd_probe.py 로 확인할 값이다.
     """
 
-    pitch: float = 1.20            # 격자 간격 m — 실제 값으로 교체
+    pitch: float = 1.00            # 격자 간격 m. run_record.sh:174 의 기본값과 같다
     rear_len: float = 0.37         # 피벗 -> 차체 뒷면
     front_len: float = 1.03        # 피벗 -> 차체 앞면 (Isaac 실측 1.03 m)
     width: float = 0.80
@@ -2120,6 +2120,38 @@ RECOV_MAX = int(os.environ.get("PIBT_RECOVER_MAX", "3"))
 #   되살려도 `cross` 가 안 준다 (실측: 12초에 1 mm 도 안 움직였다).
 RECOV_WCMD = _tol_env("PIBT_RECOVER_WCMD", 0.30)
 
+# ★★ 도착 판정에 **「서 있는가」**를 더한다 (2026-09-22). 기본 **0 = 꺼짐**이라
+#   주면 비트 동일이다.
+#
+#   [무엇이 문제인가] 도착 판정이 `hypot(dx,dy) <= tol.pos` 하나라, 로봇은
+#   **원에 들어오는 순간** 도착으로 친다. 그래서 목표가 아니라 **원의
+#   가장자리**에 선다 — 실측 중앙 -45.7 mm (허용 50, 다섯 시드 일치).
+#   즉 오차가 물리 한계가 아니라 **공차를 따라다닌다.**
+#
+#       회전 위치오차 분포 중앙 32.32 mm ~= tol.pos(30) + 회전 밀림(~2)
+#       평상 분포는 중앙 5.32 mm 다 (`turn_hist` 주석) — 6배다
+#
+#   [왜 공차를 줄이면 안 되나] 원이 작아질 뿐 로봇은 여전히 가장자리에 선다.
+#   `PIBT_TOL_POS=0.02` 는 실제로 회전 교착을 냈고, `isaac_drive.py:2520` 은
+#   오히려 **키우라**고 권한다. 방향 자체가 틀렸다.
+#
+#   [그래서] 감속 램프가 원 가장자리에서 잘리지 않고 **목표까지 끝나게** 한다.
+#   그러면 오차가 공차가 아니라 **램프 해상도**에 묶인다 — 멈추기 직전 속도가
+#   최대 0.175 m/s 이므로 60 Hz 한 스텝이 2.9 mm 다.
+#
+#   ☹ **이어달리기에는 걸면 안 된다.** `exit_v > 0` 은 「이 목표를 그 속도로
+#     통과하라」는 뜻이라(`update()` 의 `목표 근처에서 0 으로 안 죽게`), 거기에
+#     정지를 요구하면 영원히 안 끝난다. 그래서 `exit_v <= 0` 일 때만 본다.
+#
+#   ☹ 회전은 `v == 0` 으로 시작하고(`begin(keep_speed=False)`) 회전 가지가
+#     `_v` 를 안 건드리므로 이 조건이 **자동으로 참**이다. 회전은 애초에 병진을
+#     못 해서 위치를 못 고치니, 이 대책의 대상이 아니다.
+#
+#   ☹ 대가 — 마지막 몇 cm 를 저속으로 간다. 액션마다 조금 느려진다.
+#     그리고 `|v|` 가 이 값 아래로 안 내려가면 워치독이 끊는다. 0.02 는
+#     한 스텝 0.33 mm 라 램프가 충분히 닿는다 (want = 1.6*along -> 0).
+TOL_STOP_V = _tol_env("PIBT_TOL_STOP_V", 0.0)      # m/s · 0 이면 끔
+
 
 @dataclass
 class Tolerance:
@@ -2456,6 +2488,13 @@ class MotionController:
         x, y, yaw = pose
         if abs(wrap(self.tyaw - yaw)) > self.tol.yaw:
             return False
+        # ★★ **서 있는가** (2026-09-22). 원에 들어온 것만으로 도착이라 하지
+        #   않는다 — 그러면 로봇이 목표가 아니라 원의 **가장자리**에 선다.
+        #   근거·대가는 `TOL_STOP_V` 주석. 기본 0 이면 이 줄은 없는 것과 같다.
+        #   `exit_v > 0`(이어달리기)은 통과가 정상이므로 **빼야 한다.**
+        if (TOL_STOP_V > 0.0 and self.exit_v <= 0.0
+                and abs(self._v) > TOL_STOP_V):
+            return False
         # ★ 회전도 위치를 본다 (-240). 예전에는 여기서 `return True` 였다 —
         #   전진·후진만 걸리고 회전은 임의로 밀린 채 통과했다. 근거와 값은
         #   `Tolerance.turn_pos` 주석. `turn_pos <= 0` 이면 옛 동작이다.
@@ -2497,6 +2536,12 @@ class MotionController:
         lim = self.tol.turn_pos if a.kind == TURN else self.tol.pos
         if lim > 0.0:
             r = max(r, math.hypot(self.tx - x, self.ty - y) / lim)
+        # ★★ 정지 조건도 **같이** 본다 (2026-09-22). `at_target` 이 「서 있는가」를
+        #   보게 됐는데 여기서 안 보면 `residual <= 1` 과 `complete()` 가 갈려
+        #   워치독이 「잔차 0.4 인데 안 끝난다」를 찍는다 — 바로 위 -240 주석이
+        #   경고한 그 상황이다. 기본 0 이면 이 줄도 없는 것과 같다.
+        if TOL_STOP_V > 0.0 and self.exit_v <= 0.0:
+            r = max(r, abs(self._v) / TOL_STOP_V)
         if a.released:
             if body is None:
                 body = self.g.footprint_cells(x, y, yaw)
@@ -4075,7 +4120,7 @@ from isaac_drive import (RobotGeom, DifferentialDriver, FleetController,
                          plan_and_build)
 
 geom = RobotGeom(
-    pitch=1.20,                    # ★ 실제 격자 간격
+    pitch=1.00,                    # ★ 실제 격자 간격
     rear_len=1.03,                 # 구동축 -> 뒷면 (Isaac 실측)
     front_len=0.37,                # ★ 전장 - rear_len
     width=0.80,                    # ★
@@ -4177,7 +4222,7 @@ def plan_and_build_lifelong(free: np.ndarray, starts: dict[int, State],
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="pibt_core 플랜의 Isaac Sim 주행 계층")
-    ap.add_argument("--pitch", type=float, default=1.20, help="격자 간격 m")
+    ap.add_argument("--pitch", type=float, default=1.00, help="격자 간격 m")
     ap.add_argument("--pivot", choices=("rear_axle", "front_axle"), default="rear_axle",
                     help="회전 중심. rear_axle이면 차체가 앞으로 뻗고 "
                          "heading_offset=2 (pibt_core와 맞추는 라벨링)")

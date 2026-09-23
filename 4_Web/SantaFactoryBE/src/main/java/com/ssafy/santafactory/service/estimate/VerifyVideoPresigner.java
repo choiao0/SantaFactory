@@ -3,6 +3,8 @@ package com.ssafy.santafactory.service.estimate;
 import com.ssafy.santafactory.global.config.MinioProperties;
 import io.minio.GetPresignedObjectUrlArgs;
 import io.minio.MinioClient;
+import io.minio.StatObjectArgs;
+import io.minio.errors.ErrorResponseException;
 import io.minio.http.Method;
 import java.net.URI;
 import java.util.concurrent.TimeUnit;
@@ -30,6 +32,10 @@ import org.springframework.stereotype.Component;
 @EnableConfigurationProperties(MinioProperties.class)
 public class VerifyVideoPresigner {
 
+    /** 시점별 파일 이름 규칙 — 상단 <code>demo_x.mp4</code>, 1인칭 <code>demo_x_fpv.mp4</code>. */
+    private static final String FPV_SUFFIX = "_fpv";
+    private static final String VIDEO_EXT = ".mp4";
+
     private final MinioProperties properties;
     private final MinioClient client;
     private final String pathPrefix;
@@ -46,6 +52,40 @@ public class VerifyVideoPresigner {
         this.properties = properties;
         this.client = client;
         this.pathPrefix = client == null ? "" : stripTrailingSlash(URI.create(properties.publicUrl()).getRawPath());
+    }
+
+    /**
+     * 상단 시점 키에서 1인칭 시점 키를 만들어, 그 객체가 실제로 버킷에 있으면 돌려준다.
+     *
+     * <p>러너는 결과에 상단 키 하나만 싣는다. 1인칭을 받으려면 host-orch 페이로드까지 고쳐야 하는데,
+     * 파일 이름 규칙(<code>…_fpv.mp4</code>)만 지키면 키는 계산으로 얻을 수 있다 (S15P21A106-265).
+     *
+     * <p><b>있는지는 반드시 확인한다.</b> 이름만 만들어 서명해 내보내면 1인칭을 안 찍은 회차에도
+     * 시점 버튼이 생기고, 누르면 404 로 재생이 깨진다. 확인에 실패하면 없는 것으로 본다 —
+     * 버튼이 안 생길 뿐 화면은 지금과 같다.
+     */
+    public String deriveFpvKey(String topStored) {
+        if (topStored == null || client == null) {
+            return null;
+        }
+        String topKey = objectKey(topStored);
+        if (topKey == null || !topKey.endsWith(VIDEO_EXT)) {
+            return null;
+        }
+        String fpvKey = topKey.substring(0, topKey.length() - VIDEO_EXT.length()) + FPV_SUFFIX + VIDEO_EXT;
+        return exists(fpvKey) ? fpvKey : null;
+    }
+
+    private boolean exists(String key) {
+        try {
+            client.statObject(StatObjectArgs.builder().bucket(properties.bucket()).object(key).build());
+            return true;
+        } catch (ErrorResponseException e) {
+            return false;   // 없는 객체 — 정상적인 경우다
+        } catch (Exception e) {
+            log.warn("1인칭 시점 영상 존재 확인 실패 — 없는 것으로 본다: key={}", key, e);
+            return false;
+        }
     }
 
     public String sign(String stored) {

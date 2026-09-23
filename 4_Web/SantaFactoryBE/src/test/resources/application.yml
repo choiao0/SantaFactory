@@ -28,3 +28,18 @@ estimate:
 # 계정 주입은 비밀번호를 비워 끈다 — 테스트가 스스로 회원을 만든다.
 auth:
   secret: test-only-signing-key-do-not-use-in-any-real-environment
+
+# 이 파일이 main 의 application.yml 을 통째로 가리므로 k3s probe 설정을 같이 둔다 (HealthProbeIT, S15P21A106-258)
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: never
+      probes:
+        enabled: true
+  health:
+    mail:
+      enabled: false

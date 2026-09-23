@@ -104,6 +104,18 @@ os.environ["PIBT_HEADLESS"] = "1"
 os.environ.setdefault("AMR_BASE", _BASE)
 
 SHOTS = (os.environ.get("PIBT_SHOTS", "") or "").strip()
+
+# ★★ **두 번째 시점** (2026-09-22, -264). 비면 종전과 완전히 같다.
+#
+#   백엔드가 상단 키에서 `_side` 를 계산해 MinIO 에 있는지 확인하고 버튼을
+#   띄운다. 그래서 **파일 이름만** 지키면 되고 결과 페이로드는 안 바뀐다.
+#
+#   ☹ 부하 — 리플리케이터 경로는 **저장할 스텝에만** 렌더한다(1/STRIDE).
+#     시점이 둘이면 그 스텝에서 render product 가 둘이라 렌더가 대략 2배,
+#     디스크·조립·업로드도 2배다. 다만 물리는 그대로다 — 매 스텝 도는 물리에
+#     비하면 3 Hz 렌더의 2배는 작다. **실측 전이다.**
+SHOTS_SIDE = (os.environ.get("PIBT_SHOTS_SIDE", "") or "").strip()
+CAMERA_SIDE = (os.environ.get("PIBT_CAMERA_SIDE", "") or "").strip()
 SHOT_STRIDE = max(1, int(os.environ.get("PIBT_SHOT_STRIDE", "20")))
 SHOT_EXT = os.environ.get("PIBT_SHOT_EXT", "png")
 SHOT_RES = (os.environ.get("PIBT_HL_SHOT_RES", "") or "1280x720").lower()
@@ -217,7 +229,147 @@ def _render_once():
 # 공식이 거기 묶여 있다), 없으면 리플리케이터로 같은 이름을 쓴다.
 _cap = None                 # None | "viewport" | "replicator"
 _rep_annot = None
+_rep_annot2 = None          # 측면. None 이면 상단만 찍는다
 _shot_n, _shot_fail = 0, 0
+_side_n = 0                 # 측면 장수 — 상단과 따로 센다 (경로가 다르다)
+_side_fail = 0              # 측면 저장 실패 누적 (상단처럼 몇 번은 참는다)
+
+
+def _attach_side():
+    """측면 카메라를 **리플리케이터로** 붙인다. 실패하면 None.
+
+    ★ 상단 경로와 **무관하게** 돈다 (2026-09-23).
+      상단이 뷰포트면 `live_pibt` 의 `capture_viewport_to_file` 이 찍고, 상단이
+      리플리케이터면 `_rep_annot` 이 찍는다. 측면은 어느 쪽이든 자기 render
+      product 를 갖는다 — 뷰포트는 하나뿐이라 카메라를 바꿔 끼울 수 없고,
+      바꿔 끼우면 캡처가 비동기라(`live_pibt.py:497`) 엉뚱한 프레임이 찍힌다.
+
+    ☹ 2026-09-22 에 이 함수가 **리플리케이터 분기 안에만** 있었다. 그런데 이
+      서버는 뷰포트 분기로 돌아서 측면이 한 장도 안 나왔다 (`hl264c`: 상단
+      6,861장 · 측면 0장). 오류도 경고도 없었다 — 백엔드가 `_side` 키를
+      못 찾아 버튼만 안 생긴다.
+
+    부하 — 실측 1.0 ms/step 이하 (촬영 ON 16.58 vs OFF 15.60, STRIDE 20).
+    """
+    if not (SHOTS_SIDE and CAMERA_SIDE):
+        return None
+    try:
+        import omni.kit.app as _ka
+        _ka.get_app().get_extension_manager() \
+           .set_extension_enabled_immediate("omni.replicator.core", True)
+        import omni.replicator.core as rep                # noqa: E402
+        os.makedirs(SHOTS_SIDE, exist_ok=True)
+        _w, _h = (int(x) for x in SIDE_RES.split("x"))
+        annot = rep.AnnotatorRegistry.get_annotator("rgb")
+        annot.attach([rep.create.render_product(CAMERA_SIDE, (_w, _h))])
+        print(f"[hl] 촬영 ON (측면) {SHOTS_SIDE} · 카메라 {CAMERA_SIDE} · {_w}x{_h}"
+              + (f" · 로봇 {SIDE_FOLLOW} 추종 {SIDE_DIST:g}m" if SIDE_FOLLOW >= 0
+                 else " · 고정"))
+        return annot
+    except Exception as e:                                # noqa: BLE001
+        print(f"[hl] ☹ 측면 촬영을 못 켠다 — 상단만 찍는다: {e!r}")
+        return None
+
+
+SIDE_FAIL_MAX = int(os.environ.get("PIBT_SIDE_FAIL_MAX", "") or 20)
+
+# ★★ 측면은 **AMR 한 대를 대각선 뒤에서** 잡는다 (2026-09-23).
+#
+#   처음엔 `Cam_Overview`(창고 전체 조망)를 썼는데 요청은 「한 대의 대각 측면」
+#   이었다. 조망으로는 1.5 m 짜리 AMR 이 점이라 선반의 상자가 안 보인다.
+#
+#   고정 카메라(`Cam_Spot`)로는 **로봇이 그 자리를 지날 때만** 잡힌다 — 빈
+#   통로가 찍힌 영상이 백엔드로 올라갈 수 있다. 그래서 매 캡처마다 카메라를
+#   대상 로봇 뒤로 옮긴다.
+#
+#       PIBT_SIDE_FOLLOW   따라갈 로봇 번호. 비우거나 -1 이면 안 옮긴다(고정)
+#       PIBT_SIDE_DIST     거리 [m]
+#       PIBT_SIDE_SIDE     좌/우  (-1 왼쪽 · +1 오른쪽)
+_sf = (os.environ.get("PIBT_SIDE_FOLLOW", "") or "0").strip()
+SIDE_FOLLOW = int(_sf) if _sf.lstrip("-").isdigit() else 0
+SIDE_DIST = float(os.environ.get("PIBT_SIDE_DIST", "") or 6.0)
+SIDE_LR = 1.0 if (os.environ.get("PIBT_SIDE_SIDE", "") or "-1").strip() != "-1" else -1.0
+# 근접 화면이라 조망만큼 클 필요가 없다. **복사량이 곧 비용**이다 —
+# 리플리케이터는 텍스처를 호스트로 직접 복사하고(Kit 이 그렇게 경고한다),
+# 1280x720 두 시점이 28 ms/step(배속 0.60)이었다.
+SIDE_RES = (os.environ.get("PIBT_SIDE_RES", "") or "960x540").lower()
+_side_cam_warned = False
+
+
+def _side_track(fleet_):
+    """측면 카메라를 대상 로봇의 **대각선 뒤 위**로 옮긴다.
+
+    실패해도 주행을 죽이지 않는다 — 한 번만 알리고 그 뒤로 조용히 넘어간다.
+    카메라가 안 움직이면 마지막 자리에 머물 뿐이다.
+    """
+    global _side_cam_warned
+    if SIDE_FOLLOW < 0 or _rep_annot2 is None or not CAMERA_SIDE:
+        return
+    try:
+        drv = fleet_.drivers[SIDE_FOLLOW]
+        x, y, yaw = drv.axle_pose()
+        import math as _m
+        from pxr import Gf, UsdGeom                      # noqa: E402
+        import omni.usd                                  # noqa: E402
+        d = SIDE_DIST
+        fx, fy = _m.cos(yaw), _m.sin(yaw)
+        # 뒤로 0.75d, 옆으로 0.5d, 높이 0.55d — build_amr_scene_v2.look_at 과 같은 비율
+        ex = x - 0.75 * d * fx - 0.5 * d * (-fy) * SIDE_LR
+        ey = y - 0.75 * d * fy - 0.5 * d * (fx) * SIDE_LR
+        ez = 0.55 * d
+        tgt = Gf.Vec3d(x, y, 0.75)                       # 선반 중간 높이 — 상자가 화면에
+        eye = Gf.Vec3d(ex, ey, ez)
+        f = (tgt - eye).GetNormalized()
+        r = Gf.Cross(f, Gf.Vec3d(0, 0, 1)).GetNormalized()
+        u = Gf.Cross(r, f)
+        prim = omni.usd.get_context().get_stage().GetPrimAtPath(CAMERA_SIDE)
+        if not prim or not prim.IsValid():
+            raise RuntimeError(f"카메라 prim 이 없다: {CAMERA_SIDE}")
+        xf = UsdGeom.Xformable(prim)
+        xf.ClearXformOpOrder()
+        xf.AddTransformOp().Set(Gf.Matrix4d(
+            r[0], r[1], r[2], 0, u[0], u[1], u[2], 0,
+            -f[0], -f[1], -f[2], 0, eye[0], eye[1], eye[2], 1))
+    except Exception as e:                               # noqa: BLE001
+        if not _side_cam_warned:
+            _side_cam_warned = True
+            print(f"[hl] ☹ 측면 카메라 추종 실패 — 고정 화각으로 간다: {e!r}")
+
+
+def _save_side(sim_t):
+    """측면 한 장. 실패가 `SIDE_FAIL_MAX` 회 쌓이면 **측면만** 끈다.
+
+    ☹ 2026-09-23: 처음엔 **첫 실패에 바로 껐다.** 그런데 리플리케이터
+      annotator 는 render product 를 붙인 직후 몇 프레임 동안 버퍼가 비어 있고
+      (`rgb 버퍼가 비었다`), 그 한 번에 측면이 영영 꺼졌다 — `side1` 실측에서
+      「촬영 ON (측면)」이 찍혔는데도 0 장이 나온 이유다.
+
+      상단 경로는 같은 상황을 이미 관용한다 — `live_pibt._shot` 이 20회까지
+      참고 그제서야 끈다. **같은 관용으로 맞춘다.**
+
+    ★ 여기서 20회를 다 쓰고도 안 되면 그건 지연이 아니라 **구조 문제**다
+      (뷰포트가 있는 판에서 리플리케이터가 데이터를 못 받는 것). 그때는 마지막
+      줄이 그렇게 말하므로 다음 판을 안 태우고 바로 안다.
+    """
+    global _rep_annot2, _side_n, _side_fail
+    if _rep_annot2 is None:
+        return
+    try:
+        _save_one(_rep_annot2, SHOTS_SIDE, sim_t)
+        _side_n += 1
+    except Exception as e:                                # noqa: BLE001
+        _side_fail += 1
+        if _side_fail <= 3:
+            print(f"[hl] 측면 저장 실패 {_side_fail}회 (계속 시도): {e!r}")
+        if _side_fail >= SIDE_FAIL_MAX:
+            print(f"[hl] ☹ 측면 저장이 {SIDE_FAIL_MAX}회 실패 — 측면을 끈다. "
+                  f"마지막: {e!r}")
+            if _side_n == 0:
+                print("[hl]   ★ 한 장도 못 받았다 = 지연이 아니라 구조 문제다. "
+                      "뷰포트가 있는 판에서는 리플리케이터 대신 **두 번째 "
+                      "뷰포트**(create_viewport_window + capture_viewport_to_file, "
+                      "상단이 쓰는 그 API)로 가야 한다.")
+            _rep_annot2 = None
 
 if SHOTS:
     os.makedirs(SHOTS, exist_ok=True)
@@ -247,23 +399,60 @@ if SHOTS:
             print("[hl]   더 빠르고 배속도 사후에 고를 수 있다.")
             _cap = None
 
+    # ★ 측면은 **상단 경로가 정해진 뒤** 따로 붙인다 (2026-09-23). 상단이
+    #   뷰포트든 리플리케이터든 같은 자리다 — `_attach_side` 머리말 참조.
     if _cap:
+        _rep_annot2 = _attach_side()
+        # ★ 붙인 직후 몇 프레임을 **버린다.** annotator 는 첫 렌더에 버퍼가
+        #   안 차는 일이 흔하다 (`_save_side` 머리말). 주행 전이라 공짜다.
+        for _ in range(3 if _rep_annot2 is not None else 1):
+            _render_once()
         _sp = SHOT_STRIDE * int(os.environ.get("PIBT_SHOT_FPS", "30")) / 60.0
         print(f"[hl]   조립 시 {_sp:.1f}배속 · 렌더 호출이 1/{SHOT_STRIDE} 로 준다")
 
 
+# PIL 포맷 이름 — 확장자와 철자가 다르다 (jpg -> JPEG).
+_PIL_FORMAT = {"jpg": "JPEG", "jpeg": "JPEG", "png": "PNG"}.get(
+    SHOT_EXT.lower(), SHOT_EXT.upper())
+
+
+def _save_one(annot, out_dir, sim_t):
+    """rgb 한 장을 live_pibt 와 **같은 파일명**으로 저장한다.
+
+    ★ **원자적으로 쓴다** (2026-09-23). `.part` 로 쓰고 `os.replace` 로 옮긴다.
+
+      검증 런은 **항상 SIGINT 로 끝난다** (`recorder.request_stop`). 그게
+      `Image.save()` 한가운데를 끊으면 반쪽 PNG 가 남고, 조립이 그걸 만나
+
+          [png] chunk too big
+          Decoding error: Invalid data found when processing input
+          frame= 219        <- 220장 중 219장
+
+      으로 한 장을 버린다 (`side2` 실측). 영상은 나오지만 매 런 마지막
+      프레임이 이렇게 빈다.
+
+      `.part` 는 조립 glob(`f_*.png`)에 안 걸리므로, 끊겨서 남더라도
+      무해하다 — 프레임이 **온전하거나 없거나** 둘 중 하나가 된다.
+    """
+    data = annot.get_data()
+    if data is None or not len(data):
+        raise RuntimeError("rgb 버퍼가 비었다")
+    from PIL import Image
+    final = os.path.join(out_dir, f"f_{int(round(sim_t * 100)):09d}.{SHOT_EXT}")
+    tmp = final + ".part"
+    # ★ 포맷을 **명시**한다. PIL 은 확장자로 포맷을 정하는데 `.part` 를 모른다
+    #   — `ValueError: unknown file extension: .part` (r13peak 실측, 2026-09-23).
+    Image.fromarray(data[:, :, :3]).save(tmp, format=_PIL_FORMAT)
+    os.replace(tmp, final)
+
+
 def _save_replicator(sim_t):
-    """리플리케이터 rgb 를 live_pibt 와 **같은 파일명**으로 저장한다."""
+    """상단 한 장 (리플리케이터 경로). 측면은 `_save_side` 가 따로 한다."""
     global _shot_n, _shot_fail
     try:
-        data = _rep_annot.get_data()
-        if data is None or not len(data):
-            raise RuntimeError("rgb 버퍼가 비었다")
-        path = os.path.join(SHOTS, f"f_{int(round(sim_t * 100)):09d}.{SHOT_EXT}")
-        from PIL import Image
-        Image.fromarray(data[:, :, :3]).save(path)
+        _save_one(_rep_annot, SHOTS, sim_t)
         _shot_n += 1
-    except Exception as e:
+    except Exception as e:                                # noqa: BLE001
         _shot_fail += 1
         if _shot_fail <= 3:
             print(f"[hl] 캡처 실패 {_shot_fail}회: {e!r}")
@@ -327,9 +516,14 @@ try:
         #     그것은 비동기라 **다음 렌더 프레임에 기록된다** — 여기 렌더가 그
         #     프레임이다. 이 호출이 없으면 예약만 쌓이고 파일은 안 생긴다.
         if _cap and state["n"] % SHOT_STRIDE == 0:
+            # ★ 카메라를 **렌더 전에** 옮긴다 — 그래야 이 프레임에 반영된다.
+            _side_track(fleet)
             _render_once()
+            # 상단 — 뷰포트면 live_pibt 가 자기 틱에서 찍는다 (여기서는 안 한다).
             if _cap == "replicator":
                 _save_replicator(state["t"])
+            # 측면 — **상단 경로와 무관하게** 같은 렌더 프레임에서 받는다.
+            _save_side(state["t"])
 
         _step(DT, t_sim)
         t_sim += DT
@@ -387,6 +581,12 @@ if _cap:
               f"-c:v libx264 -pix_fmt yuv420p -crf 20 ../demo.mp4")
     else:
         print("[hl]   ★ 한 장도 안 나왔다 — 카메라 경로와 PIBT_SHOT_STRIDE 를 보라")
+    # 측면 — 켠 적이 있으면 반드시 장수를 낸다. 0 장이면 그 자리에서 보이게 한다
+    # (백엔드는 `_side` 키가 없으면 **오류 없이** 버튼만 안 띄운다).
+    if SHOTS_SIDE and CAMERA_SIDE:
+        print(f"[hl] 촬영(측면) {_side_n:,}장 · 실패 {_side_fail}회 -> {SHOTS_SIDE}"
+              + ("" if _side_n else
+                 f"   ★ 한 장도 안 나왔다 (카메라 {CAMERA_SIDE})"))
 try:
     quit_fn(0)                             # 자세 기록 저장 (PIBT_RECORD 가 경로일 때)
 except Exception as e:

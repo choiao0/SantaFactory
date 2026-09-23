@@ -47,7 +47,7 @@ import sys
 
 import numpy as np
 
-PITCH = float(os.environ.get("PITCH", os.environ.get("PIBT_PITCH", "1.2")))
+PITCH = float(os.environ.get("PITCH", os.environ.get("PIBT_PITCH", "1.0")))
 WIDTH = 0.800
 FRONT_LEN = 0.390
 # 코 반경 — 축에서 앞쪽 모서리까지. 회전하면 이 반경으로 쓸고 간다.

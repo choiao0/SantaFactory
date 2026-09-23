@@ -162,7 +162,7 @@ new EstimateCreateRequest(warehouseId, null, null, null, null, null, null), ADMI
         estimateService.applyVerifyResult(new VerifyResultResponse(
                 "verify_" + created.estimateId(), "done", null, created.estimateId(),
                 "est_%d_n13".formatted(created.estimateId()),
-                new VerifyResultResponse.Artifacts("verify_%d/demo.mp4".formatted(created.estimateId())),
+                new VerifyResultResponse.Artifacts("verify_%d/demo.mp4".formatted(created.estimateId()), null),
                 new VerifyResultResponse.Verify(13, 13, 600, "window elapsed",
                         new VerifyResultResponse.Fms("done", null, null)),
                 new SimulationResponse.Kpi(30, 28, 0, 0, 600L, 500.0, 1035.0, 40.0,

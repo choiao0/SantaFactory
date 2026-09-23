@@ -46,7 +46,7 @@ class EstimateEvaluatorTest {
 
     /** 단가 1,500만 · 대당 구축·설치비 50만 (robots 시드) · 충전기 500만(미정이라 테스트 가정). */
     private static final EstimateProperties PROPS =
-            new EstimateProperties(15_000_000L, 5_000_000L, 500_000L, 28, 6, 4, 1, Duration.ofMinutes(30), Duration.ofHours(6), "in,in,out,out,out,out", false, Duration.ofMinutes(10), 10, 10, 6, null);
+            new EstimateProperties(15_000_000L, 5_000_000L, 500_000L, 28, 6, 4, 1, Duration.ofMinutes(30), Duration.ofHours(6), "in,in,out,out,out,out", false, Duration.ofMinutes(10), Duration.ofMinutes(25), 10, 10, 6, null);
 
     private final CostCalculator costCalculator = new CostCalculator(PROPS);
     private final EstimateEvaluator evaluator = new EstimateEvaluator();
@@ -62,6 +62,32 @@ class EstimateEvaluatorTest {
 
         assertThat(verdict.recommendedCount()).isEqualTo(6);
         assertThat(verdict.reasonCode()).isNull();
+    }
+
+    @Test
+    void marks_the_cheapest_satisfying_fleet_as_the_minimal_one() {
+        // 목표를 가동률 60 % 로 낮추면 6·8·10·12·16대가 모두 조건을 통과한다.
+        // 효율(처리율 × 가동률)이 가장 높은 8대가 권장, 그중 가장 적은(=가장 싼) 6대가 최소 구성이다.
+        EstimateGoal goal = new EstimateGoal(70.0, 60.0, 10_000_000_000L, null);
+
+        EstimateVerdict verdict = evaluator.evaluate(runs, goal);
+
+        assertThat(verdict.recommendedCount()).isEqualTo(8);
+        assertThat(verdict.minimalCount()).isEqualTo(6);
+    }
+
+    @Test
+    void minimal_equals_recommended_when_only_one_fleet_satisfies() {
+        EstimateVerdict verdict = evaluator.evaluate(runs, new EstimateGoal(70.0, 90.0, 1_000_000_000L, null));
+
+        assertThat(verdict.minimalCount()).isEqualTo(verdict.recommendedCount());
+    }
+
+    @Test
+    void has_no_minimal_fleet_when_nothing_satisfies() {
+        EstimateVerdict verdict = evaluator.evaluate(runs, new EstimateGoal(95.0, 80.0, 300_000_000L, null));
+
+        assertThat(verdict.minimalCount()).isNull();
     }
 
     @Test

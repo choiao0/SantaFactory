@@ -51,9 +51,12 @@ class Cmd:
         self.rebirths += 1
 
 
-def node(state="IDLE", run_id="", online=True, last_seen=0.0, last_error="", rtf=None, ram=None, devices=()):
+def node(state="IDLE", run_id="", online=True, last_seen=0.0, last_error="", rtf=None, ram=None, devices=(),
+         sim_s=None):
     n = Node("sim-runner-gpu01", online=online, bd_seq=1, seq=0, last_seen=last_seen)
     n.metrics = {O.STATE: state, O.RUN_ID: run_id, O.LAST_ERROR: last_error}
+    if sim_s is not None:
+        n.metrics[O.SIM_TIME] = sim_s
     if rtf is not None:
         n.metrics[O.RTF] = rtf
     if ram is not None:
@@ -635,3 +638,86 @@ class TestWindowSlice:
         w = r.scenario["orders"]["window"]
         assert w["total"] == 6000 and w["kept"] == 184 and r.scenario["window_start_s"] == 25200      # (600+60)/3.6 + 1
         assert r.scenario_sha256 == O.scenario_sha256(r.scenario) and len(O.canonical_json(r.scenario)) < O.MAX_SCENARIO_BYTES
+
+
+class TestSimTimeWindow:
+    """창을 **시뮬 시각**으로 끊는다 (2026-09-22).
+
+    왜 — 배속(RTF)이 판마다 0.33~1.64배라, 벽시계로 끊으면 같은 `window_s` 가
+    판마다 다른 분량을 담는다. 13대 실측에서 벽시계 600 s 창이 시뮬 219 s,
+    즉 창의 36 %만 담았다. 견적 KPI 는 시뮬 초로 계산하므로 그대로 비교하면
+    분모가 서로 다르다.
+
+    끊는 주체는 **여전히 host-orch 하나**다. 러너에게 시뮬 초 상한을 같이
+    걸면 두 시계가 경주한다 — 그래서 엣지는 `PIBT_HL_MAX_SIM` 을 주지 않는다
+    (`t3_amr/edge/recorder.py`, `test_the_runner_is_not_given_a_sim_second_cap`).
+    """
+
+    def running(self, job, cmd, t, sim_s=None, state="RUNNING"):
+        job.step(node(state, "verify-1", last_seen=t, sim_s=sim_s), t, cmd)
+
+    def test_window_closes_on_sim_time_not_wall_clock(self):
+        job, cmd = make_job()
+        job.step(node("IDLE"), 0.0, cmd)
+        self.running(job, cmd, 1.0, sim_s=1.0)
+        assert job.phase == O.RUNNING and job.started_at == 1.0
+
+        # 벽시계로는 창(60 s)을 한참 넘겼는데 시뮬은 아직 30 s — 계속 돈다.
+        self.running(job, cmd, 200.0, sim_s=30.0)
+        assert job.phase == O.RUNNING and cmd.stops == 0
+
+        # 시뮬이 창을 채운 그 순간 끊는다.
+        self.running(job, cmd, 260.0, sim_s=60.0)
+        assert job.phase == O.STOPPING and cmd.stops == 1 and job.reason == "window elapsed"
+
+    def test_a_fast_run_is_not_cut_short_by_the_wall_clock(self):
+        """배속 1.64배 판 — 벽시계 창 전에 시뮬이 창을 채운다. 예전에는 반대로
+        벽시계가 먼저 와서 창의 36 %만 담고 끝났다."""
+        job, cmd = make_job()
+        job.step(node("IDLE"), 0.0, cmd)
+        self.running(job, cmd, 1.0, sim_s=1.0)
+        self.running(job, cmd, 38.0, sim_s=60.0)          # 벽시계 37 s 에 시뮬 60 s
+        assert job.phase == O.STOPPING and job.reason == "window elapsed"
+
+    def test_wall_clock_still_closes_the_window_when_sim_time_is_absent(self):
+        """시뮬 시각을 안 보내는 러너(Kit `--exec` 경로) — 예전 동작 그대로."""
+        job, cmd = make_job()
+        job.step(node("IDLE"), 0.0, cmd)
+        self.running(job, cmd, 1.0)
+        self.running(job, cmd, 61.5)
+        assert job.phase == O.STOPPING and cmd.stops == 1 and job.reason == "window elapsed"
+
+    def test_runner_ending_the_run_itself_is_still_a_failure(self):
+        """창을 끊는 주체는 host-orch 하나다. 러너가 먼저 접으면 그건 사고다."""
+        job, cmd = make_job()
+        job.step(node("IDLE"), 0.0, cmd)
+        self.running(job, cmd, 1.0, sim_s=1.0)
+        self.running(job, cmd, 200.0, sim_s=60.0, state="IDLE")
+
+        assert job.phase == "FAILED" and job.result()["status"] == "failed"
+
+    def test_wall_backstop_fails_a_run_that_never_covers_the_window(self):
+        """시뮬이 창을 못 채운 채 벽시계가 다 갔다.
+
+        ★ 이걸 DONE 으로 적으면 **창을 덜 돈 판이 조용히 견적과 비교된다** —
+        그게 이 변경 이전의 동작이었다. 실패로 적고 얼마나 돌았는지 남긴다."""
+        job, cmd = make_job()
+        job.step(node("IDLE"), 0.0, cmd)
+        self.running(job, cmd, 1.0, sim_s=5.0)
+
+        backstop = job._wall_backstop()
+        assert backstop > job.req.window_s + O.START_MARGIN_S      # 러너 timeout 뒤
+        self.running(job, cmd, 1.0 + backstop - 1, sim_s=5.0)
+        assert job.phase == O.RUNNING and cmd.stops == 0
+
+        self.running(job, cmd, 1.0 + backstop + 1, sim_s=5.0)
+        assert job.phase == O.STOPPING and job.final == "FAILED"
+        assert "backstop" in job.reason and "5.0s of 60s" in job.error
+
+    def test_zero_sim_time_counts_as_not_reported(self):
+        """NBIRTH 기본값 0.0 을 「시뮬 0초를 돌았다」로 읽으면 벽시계 후퇴가 막힌다."""
+        job, _ = make_job()
+        assert job.sim_time(node("RUNNING", "verify-1", sim_s=0.0)) is None
+        assert job.sim_time(node("RUNNING", "verify-1", sim_s=12.5)) == 12.5
+        assert job.sim_time(node("RUNNING", "verify-1")) is None
+        assert job.sim_time(None) is None

@@ -173,7 +173,7 @@ WHEEL_BASE = 0.5796          # localPos0 = ±0.28963
 CHARGE_RECT = (102.6, 48.0, 108.6, 67.0)   # warehouse/map/charge_zone.json "east"
 # ★★ 격자·홈·헤딩·마스크를 FMS 것으로 (-240). 자세한 근거는 `_fms_setup` 머리말.
 FMS_GRID = os.environ.get("PIBT_FMS_GRID", "0") not in ("0", "", "no", "off")
-CHARGE_LAT = float(os.environ.get("PIBT_PITCH", "1.2"))     # 계획 격자 pitch
+CHARGE_LAT = float(os.environ.get("PIBT_PITCH", "1.0"))     # 계획 격자 pitch
 CHARGE_STEP_X = float(os.environ.get("CHARGE_STEP_X", "2.4"))
 CHARGE_STEP_Y = float(os.environ.get("CHARGE_STEP_Y", "2.4"))
 
@@ -734,6 +734,35 @@ def charge_zone_cells(free, geom, rect=None):
       로봇이 TO_HOME 으로 영구 정지한다 (`station_cells` 와 같은 이유).
     """
     H, W = free.shape
+
+    # ★★ FMS 격자에서는 **상류 함수가 만든다** (2026-09-22).
+    #
+    #   `charge_zone.json` 은 양쪽이 **같은 파일**이다 (102.6,48.0 -> 108.6,67.0).
+    #   그런데 칸으로 옮기는 규칙이 달라 서쪽 한 열이 갈렸다.
+    #
+    #       FMS  c0 = int((102.6+0.4)/1.0) = 103 · mask[r0:r1, c0:c1] 끝 **배타**
+    #       우리 _cell_of(102.6) = round((102.6-0.5)/1.0) = 102 · 끝 **포함**
+    #
+    #       -> 우리 존 125칸 · FMS 114칸. c=102 한 열(19칸)을 더 먹었다.
+    #
+    #   존이 넓으면 `zone_goal` 이 빈 칸을 쉽게 찾아 **덜 기다린다.** 실측으로
+    #   `zone_wait_steps` 815(FMS) 대 379(우리) · `zone_retargets` 1 대 0 이었다.
+    #
+    #   규칙을 베껴 고치면 또 갈린다. `pibt_core_v2` 가 상류를 직접 로드해서
+    #   갈릴 여지를 없앤 것과 **같은 이유**로, 여기서도 그쪽 함수를 부른다.
+    if FMS_GRID and rect is None:
+        import map_loader as ML
+        zm = ML.load_charge_zone(free, _fms_map_dir())
+        if zm is not None:
+            # 순서는 FMS `map_loader.zone_cells` 와 같게 열 -> 행 오름차순.
+            # ☹ `_first_valid_heading` 는 **우리 것**이다. 2칸 점유 모델이라
+            #   뒤 칸이 벽인 가장자리를 목표로 주면 거리장이 전부 -1 이 되어
+            #   TO_HOME 으로 영구 정지한다. FMS 는 그 모델이 없어 안 거른다.
+            return [(int(r), int(c))
+                    for c in range(W) for r in range(H)
+                    if zm[r, c] and free[r, c]
+                    and _first_valid_heading(free, (r, c)) is not None]
+
     x0, y0, x1, y1 = rect or CHARGE_RECT
     ra, ca = _cell_of(geom, x0, y0)
     rb, cb = _cell_of(geom, x1, y1)
@@ -996,7 +1025,7 @@ def main():
     ap.add_argument("--map", default=os.path.join(
         here, "..", "warehouse", "map"))
     ap.add_argument("--n", type=int, default=12)
-    ap.add_argument("--pitch", type=float, default=1.2)
+    ap.add_argument("--pitch", type=float, default=1.0)
     ap.add_argument("--seed", type=int, default=9)   # 12대에서 완주 확인 (4·9·11·15·17·19·22)
     ap.add_argument("--pool", choices=("strict", "cross", "center"), default="cross")
     # ★ `..` 하나다. `here` 는 `<t3_amr>/path` 이므로 `../..` 는 t3_amr 의 **부모**
