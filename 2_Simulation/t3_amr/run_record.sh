@@ -249,9 +249,19 @@ fi
 #   아래 검사가 계획 폴더를 요구해서, 「궤적으로 돌리는데 계획이 없다」는 이유로
 #   죽었다. 백엔드가 `scenario.trajectory` 를 보내는 경로(-261)가 정확히 그 모양이다.
 #   검사를 없애지는 않는다 — 궤적이 없는 판은 종전대로 계획을 요구한다.
+#   ★★ 건너뛰기만 하면 **씬을 못 짓는다** (-275, 2026-09-24 컨테이너 실측). `amr/main.py run` 이
+#     스폰 자리를 이 폴더의 `starts.json`·`trajectories.json` 에서 읽는다 — 로컬에는 손으로 둔
+#     `plan/` 이 있어 드러나지 않았다. 그래서 궤적 **첫 틱**으로 그 폴더를 만든다.
 if [ -n "${PIBT_TRAJ:-}" ] && [ ! -d "$PLAN_DIR" ]; then
-    echo "[preflight] 궤적을 쓰므로 계획 폴더 검사를 건너뜁니다 ($PLAN_DIR 없음)"
-    SKIP_PLAN_CHECK=1
+    case "$PIBT_TRAJ" in
+        /*) _TJ0="$PIBT_TRAJ" ;;
+        *)  _TJ0="$W/$PIBT_TRAJ" ;;
+    esac
+    echo "[preflight] 궤적 첫 틱으로 계획 폴더를 만듭니다 -> $PLAN_DIR"
+    if ! ( cd "$W" && python path/fms_traj.py --plan-folder "$_TJ0" "$PLAN_DIR" ); then
+        echo "★ 궤적에서 계획 폴더를 못 만들었습니다 — 위 오류를 보세요 ($_TJ0)" >&2
+        exit 1
+    fi
 fi
 if [ ! -d "$PLAN_DIR" ] && [ "${SKIP_PLAN_CHECK:-0}" != "1" ]; then
     echo "★ ${PIBT_N}대 계획이 없습니다: $PLAN_DIR" >&2
