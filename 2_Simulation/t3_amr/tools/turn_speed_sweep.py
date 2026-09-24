@@ -177,10 +177,18 @@ def pick_safety(text):
             n = nums(line, "가로 (옆)")
             if len(n) >= 3:
                 lat_max = n[2]
-        if "앞2" in line and "남는 여유" in line:
+        # ★★ 여유를 **직접 계산한다** (2026-09-24 수정).
+        #   예전에는 「남는 여유」 뒤의 숫자를 집었다. 그런데 규칙을 **넘으면**
+        #   turn_error 가 그 자리에 숫자 대신 `★ 초과` 를 찍는다. 그래서
+        #   w=3.0 에서 요약표가 `?` 로 나왔다 — 하필 **유일하게 위험한 줄**을
+        #   「모름」으로 보여준 것이다. 반대로 읽히는 실패다.
+        #
+        #   줄에 두 숫자가 다 있다:  가로 최대x2  /  여유  ->  (남는 여유)
+        #   빼면 넘든 안 넘든 같은 식으로 나온다. 음수가 곧 초과다.
+        if "앞2" in line and "가로" in line:
             n = nums(line)
-            if n:
-                margin = n[-1]
+            if len(n) >= 2:
+                margin = n[1] - n[0]
     return n_turn, lat_max, margin, dur
 
 
@@ -226,7 +234,8 @@ def main():
         print("%7.2f %6d %6s %9.1f %8.1f %9.1f %8.1f %9s %10s %9s%s"
               % (w, seed, "?" if n is None else n, a, b, c, d,
                  "?" if lat is None else "%.1f" % lat,
-                 "?" if mg is None else "%.1f" % mg,
+                 "?" if mg is None else ("%.1f ★초과" % mg if mg < 0
+                                         else "%.1f" % mg),
                  "?" if du is None else "%.2f s" % du, tick))
     print("   (지속중앙은 일정 쪽이다 — 계획 5틱 = 1.389 s 를 넘으면 ★)")
 
