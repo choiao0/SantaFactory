@@ -142,6 +142,36 @@ def main():
     print("   부호가 뒤집히면 차체에 **고정된 가로 치우침**이다 (기계적 비대칭)")
     print("   둘 다 음수면 방향과 무관하게 **뒤로 밀린다** — 다른 기전이다")
 
+    # ── 둘이 겹쳐 있으면 **갈라 낸다** ──────────────────────────────
+    #   좌/우가 부호는 같은데 크기가 다르면 성분이 둘이다. 하나는 방향을
+    #   안 타고(공통), 하나는 탄다(차동). 더하고 빼면 갈라진다.
+    #
+    #       좌 = 공통 - 차동      공통 = (좌 + 우) / 2
+    #       우 = 공통 + 차동      차동 = (우 - 좌) / 2
+    #
+    #   ★ 둘은 **고칠 자리가 다르다.**
+    #       공통  방향과 무관하게 뒤로 — 캐스터·접지처럼 회전 자체에 딸린 것
+    #       차동  좌우 어느 쪽으로 도느냐를 타는 것 — 바퀴 반지름 차,
+    #             휠베이스 비대칭 같은 **기계적 비대칭** (tools/wheel_calib.py)
+    print()
+    print("겹친 둘을 갈라 냄 — 공통(방향 무관) · 차동(방향 탐)")
+    print("%-26s %5s %10s %10s %10s"
+          % ("파일", "w", "공통 mm", "차동 mm", "공통 비중"))
+    for name, w, rows in rows_all:
+        L = [r[0] for r in rows if r[3] > 0]
+        R = [r[0] for r in rows if r[3] < 0]
+        if not L or not R:
+            print("%-26s %5.2f   한쪽 방향밖에 없다" % (name, w))
+            continue
+        ml, mr = float(np.median(L)), float(np.median(R))
+        com, dif = (ml + mr) / 2.0, (mr - ml) / 2.0
+        tot = abs(com) + abs(dif)
+        print("%-26s %5.2f %10.2f %10.2f %9.0f%%"
+              % (name, w, com, dif, 100.0 * abs(com) / tot if tot else 0.0))
+    print("   공통이 크면 회전 자체에 딸린 것 — 캐스터·접지를 본다")
+    print("     (tools/swivel_sweep.py 가 같은 NPZ 의 `joint` 로 캐스터 각을 잰다)")
+    print("   차동이 크면 기계적 비대칭 — tools/wheel_calib.py 로 상수를 역산한다")
+
     print()
     print("읽는 법")
     print("  세로가 크고 **양수 비율이 높다**   -> 관성(무게중심이 축 뒤)이 맞다.")
