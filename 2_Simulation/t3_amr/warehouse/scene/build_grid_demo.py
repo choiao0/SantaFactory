@@ -543,8 +543,11 @@ def slip_axle(deg):
 #   (바라보는 점, 카메라 자리)
 CAM_FIX = {
     # 거리는 **차체가 꽉 차게** 잡았다 — 35 mm · 가로 화각 54.4도 에서
-    #   가속 차체 x -2.11..2.39 (4.5 m) < 화면 5.9 m
+    #   가속 차체 x -2.11..2.39 (4.5 m) < 화면 6.4 m
     #   감속 차체 x -2.19..1.07 (3.3 m) < 화면 4.7 m
+    #   밀림  꼬리+끌림 지름 3.0 m      < 화면 4.8 m
+    # ★ 이 산수는 조리개가 36 mm 일 때만 맞는다. USD 기본(20.955)으로 두면
+    #   화면이 1.72배 좁아 전부 잘린다 — 그래서 아래 촬영부에서 못 박는다.
     "accel": ((X0 + N_CELL * P / 2, P / 2, 0.35),
               (X0 + N_CELL * P / 2, -5.2, 2.8)),
     "decel": ((D_STOP / 2 - 0.2, 0.0, 0.35),
@@ -674,6 +677,14 @@ for usd in made:
     d = A.cells * P * 0.62
     cam = UsdGeom.Camera.Define(st, "/World/Cam")
     cam.GetFocalLengthAttr().Set(35.0)
+    # ★★ 조리개를 **명시한다** (2026-09-24 수정). USD 기본은 20.955 mm
+    #   (0.825 inch) 인데, CAM_FIX 거리를 35 mm 필름의 36 mm 로 잡아 놨었다.
+    #   화각을 54.4도 로 믿고 거리를 정했는데 실제로는 33.3도 라 1.72배
+    #   좁았다 — 세 장면이 전부 잘려 나왔다 (slip 은 차체만 꽉 찼다).
+    #   여기서 36 으로 박으면 「35 mm 환산」이 성립해 CAM_FIX 산수가 맞는다.
+    #   세로는 화면비를 따라간다 — 안 맞추면 픽셀이 안 정사각이 된다.
+    cam.GetHorizontalApertureAttr().Set(36.0)
+    cam.GetVerticalApertureAttr().Set(36.0 * h / w)
     cxf = UsdGeom.Xformable(cam.GetPrim())
     cxf.ClearXformOpOrder()
     cop = cxf.AddTransformOp()
