@@ -59,6 +59,10 @@ WS = [float(x) for x in os.environ.get("W_LIST",
                                        os.environ.get("WSWEEP", "1.2,1.8,2.4")).split(",")]
 N = os.environ.get("N", "13")
 DRY = os.environ.get("DRY", "") not in ("", "0", "no")
+# ★ NPZ 가 이미 있으면 **안 돌리고 다시 재기만** 한다. 표에 열을 하나 더하려고
+#   72분을 또 태울 이유가 없다 — 측정은 `turn_error` 가 NPZ 에서 하는 것이라
+#   런과 분리돼 있다.
+REUSE = os.environ.get("REUSE", "") not in ("", "0", "no")
 PITCH = os.environ.get("PIBT_PITCH", "1.0")
 
 # ★ 시뮬 상한을 **기본으로 건다** (`PIBT_HL_MAX_SIM`). 안 걸면 완주까지 가는데
@@ -102,6 +106,9 @@ def run_one(w, seed):
     if DRY:
         return npz, None
     log = os.path.join(LOGS, "hl_%s.log" % tag)
+    if REUSE and os.path.isfile(npz):
+        print("  · 이미 있다 — 안 돌리고 다시 잰다 (REUSE=1)")
+        return npz, log
     rc = subprocess.call(cmd, env=env)
     if rc != 0:
         print("  ★ 런이 실패했다 (rc=%d). 로그: %s" % (rc, log))
@@ -153,11 +160,19 @@ def pick_safety(text):
     같이 집는 것 — 회전 **횟수**. w 마다 교통이 달라져 같은 회전 집합이
     아니다. 표본 수가 안 보이면 22.5 와 25.2 의 차이를 못 읽는다.
     """
-    n_turn = lat_max = margin = None
+    n_turn = lat_max = margin = dur = None
     for line in text.splitlines():
         m = re.search(r"회전\s+(\d+)회", line)
         if m and n_turn is None:
             n_turn = int(m.group(1))
+        # ★ 회전 **지속 시간**. 안전이 아니라 **일정** 쪽 숫자다 — TURN_TICKS=5
+        #   (=1.389 s) 를 넘기는지가 여기서 갈린다. 처음 요약에서 빠뜨렸다.
+        #   식으로 내던 값(w=2.4 에 1.45 s)과 실측(1.27 s)이 다르다. 제어가
+        #   `clamp(3*err, ±w)` 라 끝에서 저절로 줄고, 회전각도 87도지 90도가
+        #   아니다. 그러니 **실측을 싣는다.**
+        m = re.search(r"지속\s*중앙\s*([0-9.]+)\s*s", line)
+        if m and dur is None:
+            dur = float(m.group(1))
         if "가로 (옆)" in line:
             n = nums(line, "가로 (옆)")
             if len(n) >= 3:
@@ -166,7 +181,7 @@ def pick_safety(text):
             n = nums(line)
             if n:
                 margin = n[-1]
-    return n_turn, lat_max, margin
+    return n_turn, lat_max, margin, dur
 
 
 def main():
@@ -190,27 +205,30 @@ def main():
         for seed in SEEDS:
             npz, _ = run_one(w, seed)
             if DRY or npz is None:
-                rows.append((w, seed, None, None, None, None, None, None, None))
+                rows.append((w, seed, None, None, None, None, None, None, None, None))
                 continue
             text = measure(npz)
             e_med, e_p95 = pick(text, "종료 오차")
             m_med, m_p95 = pick(text, "구간 최대")
-            n_turn, lat_max, margin = pick_safety(text)
+            n_turn, lat_max, margin, dur = pick_safety(text)
             rows.append((w, seed, e_med, e_p95, m_med, m_p95,
-                         n_turn, lat_max, margin))
+                         n_turn, lat_max, margin, dur))
 
     print("\n" + "=" * 84)
-    print("%7s %6s %6s %9s %8s %9s %8s %9s %10s"
+    print("%7s %6s %6s %9s %8s %9s %8s %9s %10s %9s"
           % ("w_exec", "시드", "회전수", "종료중앙", "종료p95", "구간중앙",
-             "구간p95", "가로최대", "앞2 남은여유"))
-    for w, seed, a, b, c, d, n, lat, mg in rows:
+             "구간p95", "가로최대", "앞2 남은여유", "지속중앙"))
+    for w, seed, a, b, c, d, n, lat, mg, du in rows:
         if a is None:
             print("%7.2f %6d   (못 쟀다)" % (w, seed))
             continue
-        print("%7.2f %6d %6s %9.1f %8.1f %9.1f %8.1f %9s %10s"
+        tick = "" if du is None else ("  ★틱초과" if du > 1.389 else "")
+        print("%7.2f %6d %6s %9.1f %8.1f %9.1f %8.1f %9s %10s %9s%s"
               % (w, seed, "?" if n is None else n, a, b, c, d,
                  "?" if lat is None else "%.1f" % lat,
-                 "?" if mg is None else "%.1f" % mg))
+                 "?" if mg is None else "%.1f" % mg,
+                 "?" if du is None else "%.2f s" % du, tick))
+    print("   (지속중앙은 일정 쪽이다 — 계획 5틱 = 1.389 s 를 넘으면 ★)")
 
     if len(SEEDS) > 1:
         print("\n시드 평균 — w 마다")
