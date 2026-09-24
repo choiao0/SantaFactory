@@ -82,7 +82,8 @@ def drift(path):
             h = yw[i:j]                       # 각 증분 순간의 헤딩
             lon = float(np.sum(dx * np.cos(h) + dy * np.sin(h)))
             lat = float(np.sum(-dx * np.sin(h) + dy * np.cos(h)))
-            out.append((lon * 1000.0, lat * 1000.0, deg))
+            turn = float(yw[j] - yw[i])       # 부호 있는 회전각 (+ = 좌회전)
+            out.append((lon * 1000.0, lat * 1000.0, deg, turn))
     return out
 
 
@@ -100,6 +101,7 @@ def main():
     print()
     print("%-26s %5s %6s %9s %9s %9s %9s"
           % ("파일", "w", "회전", "세로중앙", "세로평균", "가로중앙", "앞쪽비율"))
+    rows_all = []
     for p in args:
         if not os.path.isfile(p):
             print("%-26s  없음" % os.path.basename(p))
@@ -114,6 +116,31 @@ def main():
               % (os.path.basename(p), w_of(p), len(rows),
                  np.median(lon), lon.mean(), np.median(lat),
                  100.0 * float(np.mean(lon > 0))))
+        rows_all.append((os.path.basename(p), w_of(p), rows))
+
+    # ── 갈림 — 회전 **방향**으로 나눠 본다 ────────────────────────────
+    #   차체 좌표 적분의 해석해는 이렇다 (제자리 회전 theta):
+    #       중심이 **세로**로 d 어긋남  ->  세로 0      · 가로 d*theta
+    #       중심이 **가로**로 e 어긋남  ->  세로 -e*theta · 가로 0
+    #   실측은 세로가 거의 전부이므로 어긋난 것은 **가로**다. 그러면 부호가
+    #   theta 를 따라가므로, 좌/우 회전에서 **뒤집혀야** 한다.
+    #
+    #       뒤집힌다      차체에 **고정된** 가로 치우침이다 (바퀴 반지름 차,
+    #                     휠베이스 비대칭, 한쪽 접지 — 기계적 비대칭)
+    #       안 뒤집힌다   방향과 무관하게 **뒤로 밀린다.** 그러면 위 해석해가
+    #                     아니라 다른 기전이다 (캐스터 끌림 같은)
+    print()
+    print("회전 방향으로 나눔 — **부호가 뒤집히나**")
+    print("%-26s %5s %8s %8s %8s %8s"
+          % ("파일", "w", "좌n", "좌 세로", "우n", "우 세로"))
+    for name, w, rows in rows_all:
+        L = np.array([r[0] for r in rows if r[3] > 0])
+        R = np.array([r[0] for r in rows if r[3] < 0])
+        print("%-26s %5.2f %8d %8s %8d %8s"
+              % (name, w, len(L), "—" if not len(L) else "%.2f" % np.median(L),
+                 len(R), "—" if not len(R) else "%.2f" % np.median(R)))
+    print("   부호가 뒤집히면 차체에 **고정된 가로 치우침**이다 (기계적 비대칭)")
+    print("   둘 다 음수면 방향과 무관하게 **뒤로 밀린다** — 다른 기전이다")
 
     print()
     print("읽는 법")
