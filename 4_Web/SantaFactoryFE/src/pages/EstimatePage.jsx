@@ -104,7 +104,11 @@ export default function EstimatePage() {
           model={selectedModel}
           requesting={requesting}
           error={requestError}
-          missing={REQUIRED_FIELDS.filter(([key]) => !(Number(form[key]) > 0)).map(([, label]) => label)}
+          // 모델도 입력값이다 — 안 고르면 견적을 낼 수 없으니 다른 미입력과 같이 막는다
+          missing={[
+            ...REQUIRED_FIELDS.filter(([key]) => !(Number(form[key]) > 0)).map(([, label]) => label),
+            ...(model == null ? ['AMR 모델'] : []),
+          ]}
           onRequest={requestEstimate}
         />
         <RunsStep estimateId={estimateId} estimate={stream.estimate} connected={stream.connected} error={stream.error} />

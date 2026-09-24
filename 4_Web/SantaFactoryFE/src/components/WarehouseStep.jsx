@@ -117,9 +117,11 @@ export default function WarehouseStep({ form, onChange, models, modelsError, mod
             <div className="picked" key={m.model}>
               <div className="picked-head">
                 <h4>{m.model}</h4>
-                {/* 카드 전체를 누르게 하지 않는다 — 사양을 읽다가 잘못 눌러 고르는 판이 열린다 */}
+                {/* 카드 전체를 누르게 하지 않는다 — 사양을 읽다가 잘못 눌러 고르는 판이 열린다.
+                    다시 고르기 시작하면 고른 것을 비운다 — 선택 완료를 누르기 전까지는 고르지
+                    않은 것이고, 그동안 견적 요청도 막혀야 한다 */}
                 <button type="button" className="again"
-                        onClick={() => { setDraft(m.model); setPicking(true) }}>
+                        onClick={() => { setDraft(m.model); onSelectModel(null); setPicking(true) }}>
                   <span aria-hidden="true">↻</span> 다시 선택하기
                 </button>
               </div>
