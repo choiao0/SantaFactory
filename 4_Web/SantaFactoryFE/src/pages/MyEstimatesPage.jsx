@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import Header from '../components/Header.jsx'
-import { ESTIMATE_PAGE_SIZE, getMyEstimates } from '../api/estimates.js'
+import { ESTIMATE_PAGE_SIZE, deleteEstimate, getMyEstimates } from '../api/estimates.js'
 import { ESTIMATE_STATUS_LABEL } from '../data/replay.js'
 import { formatDateTime } from '../utils/format.js'
 
@@ -29,6 +29,10 @@ export default function MyEstimatesPage() {
   const [result, setResult] = useState(null)
   const [loadedPage, setLoadedPage] = useState(null)
   const [error, setError] = useState(null)
+  /** 삭제하려는 견적. 되돌릴 수 없는 일이라 카드에서 바로 지우지 않고 한 번 더 묻는다 */
+  const [pendingDelete, setPendingDelete] = useState(null)
+  const [deleting, setDeleting] = useState(false)
+  const [reload, setReload] = useState(0)
 
   // 요청한 페이지와 받아둔 페이지가 다르면 아직 오는 중이다
   const loading = loadedPage !== page
@@ -41,12 +45,28 @@ export default function MyEstimatesPage() {
       .finally(() => { if (!cancelled) setLoadedPage(page) })
     // 빠르게 두 번 넘기면 먼저 보낸 응답이 나중에 올 수 있다
     return () => { cancelled = true }
-  }, [page])
+  }, [page, reload])
 
   /** 견적 화면은 번호를 sessionStorage 에서 읽는다 — 그 약속을 그대로 쓴다 (관리자 화면과 같은 방식). */
   const open = (estimateId) => {
     sessionStorage.setItem('estimateId', String(estimateId))
     navigate('/estimate')
+  }
+
+  const confirmDelete = async () => {
+    setDeleting(true)
+    try {
+      await deleteEstimate(pendingDelete.estimate_id)
+      // 마지막 한 건을 지워 페이지가 비면 앞 페이지로 물러난다
+      setPage((p) => (items.length === 1 && p > 0 ? p - 1 : p))
+      setReload((n) => n + 1)
+      setPendingDelete(null)
+    } catch (e) {
+      setError(`삭제하지 못했습니다. ${e.message}`)
+      setPendingDelete(null)
+    } finally {
+      setDeleting(false)
+    }
   }
 
   const items = result?.content ?? []
@@ -84,8 +104,9 @@ export default function MyEstimatesPage() {
               </h3>
               <div className="admin-grid">
                 {items.map((e) => (
+                  // 카드가 버튼이라 삭제 버튼을 안에 둘 수 없다 — 나란히 놓고 카드 위에 겹친다
+                  <div className="card-slot" key={e.estimate_id}>
                   <button
-                    key={e.estimate_id}
                     type="button"
                     className="spec selectable admin-card"
                     onClick={() => open(e.estimate_id)}
@@ -110,6 +131,16 @@ export default function MyEstimatesPage() {
                       </dd>
                     </dl>
                   </button>
+                  <button
+                    type="button"
+                    className="card-del"
+                    aria-label={`견적 #${e.estimate_id} 삭제`}
+                    title="삭제"
+                    onClick={() => setPendingDelete(e)}
+                  >
+                    ×
+                  </button>
+                  </div>
                 ))}
               </div>
 
@@ -125,6 +156,24 @@ export default function MyEstimatesPage() {
             </>
           )}
         </section>
+
+        {pendingDelete && (
+          <div className="modal-back" role="dialog" aria-modal="true" aria-labelledby="del-title">
+            <div className="modal">
+              <h4 id="del-title">견적 #{pendingDelete.estimate_id}을 삭제할까요?</h4>
+              <p>
+                대수별 결과와 주행 리플레이, 물리 검증 결과까지 함께 지워집니다.
+                <b> 삭제한 견적은 되돌릴 수 없습니다.</b>
+              </p>
+              <div className="modal-cta">
+                <button type="button" className="ghost sm" disabled={deleting}
+                        onClick={() => setPendingDelete(null)}>취소</button>
+                <button type="button" className="button danger sm" disabled={deleting}
+                        onClick={confirmDelete}>{deleting ? '삭제 중…' : '삭제'}</button>
+              </div>
+            </div>
+          </div>
+        )}
       </main>
     </>
   )

@@ -154,13 +154,14 @@ public class EstimateController {
         return ApiResponse.onSuccess();
     }
 
-    @Operation(summary = "견적 취소",
-            description = "이미 큐에 들어간 run 은 결과가 와도 판정에 반영되지 않는다")
+    @Operation(summary = "견적 삭제",
+            description = "견적과 대수별 run, 주행 리플레이를 지운다. 되돌릴 수 없다. 진행 중이면 먼저 취소되고, "
+                    + "이미 큐에 들어간 run 은 결과가 와도 버려진다.")
     @DeleteMapping("/{estimateId}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
-    public ApiResponse<Void> cancel(@PathVariable Long estimateId,
+    public ApiResponse<Void> delete(@PathVariable Long estimateId,
                                     @AuthenticationPrincipal AuthenticatedMember me) {
-        estimateService.cancel(estimateId, me);
+        estimateService.delete(estimateId, me);
         return ApiResponse.onSuccess();
     }
 }

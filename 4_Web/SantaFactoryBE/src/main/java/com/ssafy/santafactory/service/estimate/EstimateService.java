@@ -382,6 +382,31 @@ public class EstimateService {
     }
 
     /**
+     * 견적을 지운다 — 대수별 run 과 주행 리플레이까지 함께 사라지고 되돌릴 수 없다 (S15P21A106-271).
+     *
+     * <p>진행 중이면 먼저 취소한다. 이미 큐에 들어간 run 의 결과는 뒤늦게 와도
+     * {@link #applyResult} 가 "모르는 run" 으로 흘려보내므로 지워도 안전하다. 취소 이벤트를 함께
+     * 내보내 열려 있던 진행 스트림이 닫히게 한다 — 안 그러면 화면이 없는 견적을 계속 기다린다.
+     *
+     * <p>리플레이는 DB 의 ON DELETE CASCADE 로 run 을 따라 지워진다(V9).
+     */
+    @Transactional
+    public void delete(Long estimateId, AuthenticatedMember me) {
+        Estimate estimate = estimateRepository.findById(estimateId)
+                .orElseThrow(() -> new GlobalException(ErrorCode.ESTIMATE_NOT_FOUND));
+        ownershipGuard.checkEstimate(estimate, me);
+
+        estimate.cancel();
+        if (estimate.isCancelled()) {
+            eventPublisher.publishEvent(finishedEvent(estimate));
+        }
+        List<SimScenario> runs = scenarioRepository.findByEstimateIdOrderByAmrCountAsc(estimateId);
+        scenarioRepository.deleteAll(runs);
+        estimateRepository.delete(estimate);
+        log.info("견적 삭제: estimateId={}, run={}개", estimateId, runs.size());
+    }
+
+    /**
      * 물리 검증(Isaac) 요청을 발행한다. 권장 대수가 없으면(사유만 있는 판정) 검증할 대상이 없어 거부한다.
      *
      * <p>{@code run_id}는 견적당 고정({@code verify_<estimateId>})으로 보낸다 — host-orch 는 같은

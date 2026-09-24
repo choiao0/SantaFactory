@@ -727,6 +727,43 @@ footer a:hover { color: #fff; }
   display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
   gap: 16px; max-width: 1100px;
 }
+/* 카드 + 삭제 버튼 — 카드가 <button> 이라 안에 버튼을 넣을 수 없어 나란히 두고 겹친다 */
+.card-slot { position: relative; display: flex; }
+.card-slot > .admin-card { flex: 1; }
+.card-del {
+  position: absolute; top: 10px; right: 10px; z-index: 1;
+  width: 26px; height: 26px; line-height: 1; padding: 0;
+  border: 1px solid transparent; border-radius: 3px; background: transparent;
+  font: 400 19px/1 var(--font-mono); color: #a3a29c; cursor: pointer;
+}
+.card-del:hover { background: #f3e3e0; border-color: var(--red); color: var(--red-dark); }
+.card-del:focus-visible { outline: 2px solid var(--red); }
+/* 카드 제목과 상태 표식이 삭제 버튼 밑으로 들어가지 않게 — 상태는 float:right 라 여백으로 민다 */
+.card-slot .admin-card h4 { padding-right: 30px; }
+.card-slot .admin-card .status { margin-right: 28px; }
+/* 카드 제목도 어두운 구역에서 흰색을 상속받아 밝은 카드 위에서 안 보였다 */
+.admin-card h4 { color: var(--ink); }
+
+/* 되돌릴 수 없는 일을 묻는 창 */
+.modal-back {
+  position: fixed; inset: 0; z-index: 50; display: grid; place-items: center;
+  background: rgba(20, 19, 18, .55); padding: 20px;
+}
+.modal {
+  background: var(--paper, #fbfaf8); border: 1px solid #d5d3ce; border-radius: 3px;
+  padding: 24px 26px; max-width: 420px; width: 100%;
+}
+/* 이 화면은 어두운 구역 안이라 글자색이 흰색으로 상속된다 — 밝은 창 위에서는 다시 정해 준다 */
+.modal { color: var(--ink); }
+.modal h4 { margin: 0 0 10px; font-size: 18px; letter-spacing: -.01em; color: var(--ink); }
+.modal .ghost { color: var(--ink); border-color: #b7b5b0; background: transparent; }
+.modal .ghost:hover { border-color: var(--ink); }
+.modal p { margin: 0; font-size: 14px; line-height: 1.7; color: #55534e; }
+.modal-cta { display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px; }
+.button.danger { background: var(--red); color: #fff; border-color: var(--red); }
+.button.danger:hover { background: var(--red-dark); border-color: var(--red-dark); }
+.button.sm { padding: 8px 16px; font-size: 13.5px; }
+
 .admin-subhead {
   font: 600 15px var(--font-mono); letter-spacing: .06em; color: #5d5d58;
   margin: 32px 0 14px; text-transform: uppercase;
