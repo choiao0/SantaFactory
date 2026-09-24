@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import ConfirmDialog from '../components/ConfirmDialog.jsx'
 import Header from '../components/Header.jsx'
 import { ESTIMATE_PAGE_SIZE, deleteEstimate, getMyEstimates } from '../api/estimates.js'
+import { FIRST_STEP_PATH } from '../data/steps.js'
 import { ESTIMATE_STATUS_LABEL } from '../data/replay.js'
 import { formatDateTime } from '../utils/format.js'
 
@@ -48,10 +49,12 @@ export default function MyEstimatesPage() {
     return () => { cancelled = true }
   }, [page, reload])
 
-  /** 견적 화면은 번호를 sessionStorage 에서 읽는다 — 그 약속을 그대로 쓴다 (관리자 화면과 같은 방식). */
+  /**
+   * 지난 견적은 결론 한 장으로 연다 (S15P21A106-274). 주행 재생과 물리 검증 영상은 그 안에
+   * 접혀 있어 거기서 펴 보면 된다 — 조건을 되돌릴 수 없는 견적을 01 부터 다시 걷게 하지 않는다.
+   */
   const open = (estimateId) => {
-    sessionStorage.setItem('estimateId', String(estimateId))
-    navigate('/estimate')
+    navigate(`/estimate/${estimateId}/quote`)
   }
 
   const confirmDelete = async () => {
@@ -77,7 +80,7 @@ export default function MyEstimatesPage() {
 
   return (
     <>
-      <Header sections={false} />
+      <Header />
       <main>
         <section className="step section-dark">
           <div className="eyebrow red">
@@ -93,7 +96,7 @@ export default function MyEstimatesPage() {
           {!error && !loading && total === 0 && (
             <div className="runs-empty">
               아직 요청한 견적이 없습니다.{' '}
-              <button type="button" className="ghost sm" onClick={() => navigate('/estimate')}>견적 요청하러 가기</button>
+              <button type="button" className="ghost sm" onClick={() => navigate(FIRST_STEP_PATH)}>견적 요청하러 가기</button>
             </div>
           )}
 

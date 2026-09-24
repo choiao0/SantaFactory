@@ -70,10 +70,9 @@ export default function AdminPage() {
     return () => { cancelled = true }
   }, [page, reload, member, order])
 
-  // 기존 견적 화면(estimateId 기반 로딩)을 그대로 재사용 — App.jsx 와 같은 패턴.
+  // 견적 결론 화면을 그대로 재사용 — 내 견적 목록과 같은 길이다 (S15P21A106-274).
   const openEstimate = (estimateId) => {
-    sessionStorage.setItem('estimateId', String(estimateId))
-    navigate('/estimate')
+    navigate(`/estimate/${estimateId}/quote`)
   }
 
   const confirmDelete = async () => {

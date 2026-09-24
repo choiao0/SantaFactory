@@ -267,7 +267,7 @@ export default function RunsStep({ estimateId, estimate, connected, error }) {
       <p className="desc">대수마다 시뮬레이션 하나가 큐에 들어가 순서대로 계산됩니다. 결과가 도착하는 대로 카드가 갱신됩니다.</p>
 
       {estimateId == null && (
-        <div className="runs-empty">02 단계에서 견적을 요청하면 시뮬레이션 진행 상황이 여기에 표시됩니다.</div>
+        <div className="runs-empty">견적을 요청하면 시뮬레이션 진행 상황이 여기에 표시됩니다.</div>
       )}
 
       {estimateId != null && !estimate && !error && (

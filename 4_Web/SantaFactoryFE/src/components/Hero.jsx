@@ -1,10 +1,5 @@
-const STEPS = [
-  ['#s1', '01 — 운영 조건', '창고 조건과 예산'],
-  ['#s2', '02 — 대수 범위', '비교할 AMR 대수'],
-  ['#s3', '03 — 시뮬레이션', '대수별 실행 결과'],
-  ['#verify', '04 — 물리 검증', 'Isaac Sim 재현'],
-  ['#quote', '05 — 견적', '적정 대수와 비용'],
-]
+import { Link } from 'react-router-dom'
+import { FIRST_STEP_PATH, STEPS } from '../data/steps.js'
 
 export default function Hero() {
   return (
@@ -27,12 +22,17 @@ export default function Hero() {
       <div className="philos">
         <b>선택은 고객이, 근거는 시스템이</b>
       </div>
-      <nav className="stepper">
-        {STEPS.map(([href, code, label]) => (
-          <a key={href} href={href}>
-            {code}
-            <b>{label}</b>
-          </a>
+      <div className="herocta">
+        <Link className="button" to={FIRST_STEP_PATH}>견적 시작하기 ↗</Link>
+        <Link className="ghost" to="/estimates">지난 견적 보기</Link>
+      </div>
+      {/* 앞으로 지날 길의 안내다 — 아직 시작하지 않아 갈 수 있는 곳이 없으므로 링크로 두지 않는다 */}
+      <nav className="stepper" aria-label="진행 순서">
+        {STEPS.map((step) => (
+          <span key={step.key} className="stepitem">
+            {step.no} — {step.title}
+            <b>{step.desc}</b>
+          </span>
         ))}
       </nav>
     </section>
