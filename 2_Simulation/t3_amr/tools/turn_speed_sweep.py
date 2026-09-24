@@ -48,6 +48,7 @@
   `FleetController` 가 그 경우 ★ 경고를 찍는다.
 """
 import os
+import re
 import subprocess
 import sys
 
@@ -117,14 +118,47 @@ def measure(npz):
     return p.stdout
 
 
+def nums(line, label=""):
+    return [float(t) for t in line.replace(label, "").split()
+            if t.replace(".", "").replace("-", "").isdigit()]
+
+
 def pick(text, label):
     """`turn_error` 표에서 한 줄을 집어 (중앙, p95) 로 돌려준다."""
     for line in text.splitlines():
         if label in line:
-            nums = [t for t in line.replace(label, "").split() if t.replace(".", "").isdigit()]
-            if len(nums) >= 2:
-                return float(nums[0]), float(nums[1])
+            n = nums(line, label)
+            if len(n) >= 2:
+                return n[0], n[1]
     return None, None
+
+
+def pick_safety(text):
+    """★ **여유를 실제로 먹는 숫자**를 따로 집는다 (2026-09-24).
+
+    처음 낸 요약표는 「종료 오차」와 「구간 최대」만 실었다. 둘 다 **거리의
+    크기**라 옆 칸 판정에 그대로 안 들어간다 — 옆 칸 여유를 먹는 것은
+    **가로 성분**뿐이다. `turn_error` 는 그걸 이미 구별해 내고 있는데
+    (「규칙별 여유 — 가로 성분만」) 요약에서 떨어뜨렸다. 판단이 걸린 줄이
+    표에 없으면 표를 보고도 틀린 결론을 낸다.
+
+    같이 집는 것 — 회전 **횟수**. w 마다 교통이 달라져 같은 회전 집합이
+    아니다. 표본 수가 안 보이면 22.5 와 25.2 의 차이를 못 읽는다.
+    """
+    n_turn = lat_max = margin = None
+    for line in text.splitlines():
+        m = re.search(r"회전\s+(\d+)회", line)
+        if m and n_turn is None:
+            n_turn = int(m.group(1))
+        if "가로 (옆)" in line:
+            n = nums(line, "가로 (옆)")
+            if len(n) >= 3:
+                lat_max = n[2]
+        if "앞2" in line and "남는 여유" in line:
+            n = nums(line)
+            if n:
+                margin = n[-1]
+    return n_turn, lat_max, margin
 
 
 def main():
@@ -150,19 +184,31 @@ def main():
         text = measure(npz)
         e_med, e_p95 = pick(text, "종료 오차")
         m_med, m_p95 = pick(text, "구간 최대")
-        rows.append((w, e_med, e_p95, m_med, m_p95))
+        n_turn, lat_max, margin = pick_safety(text)
+        rows.append((w, e_med, e_p95, m_med, m_p95, n_turn, lat_max, margin))
 
-    print("\n" + "=" * 70)
-    print("%8s %10s %8s %10s %8s" % ("w_exec", "종료중앙", "종료p95", "구간중앙", "구간p95"))
-    for w, a, b, c, d in rows:
+    print("\n" + "=" * 78)
+    print("%7s %6s %9s %8s %9s %8s %9s %10s"
+          % ("w_exec", "회전수", "종료중앙", "종료p95", "구간중앙", "구간p95",
+             "가로최대", "앞2 남은여유"))
+    for w, a, b, c, d, n, lat, mg in rows:
         if a is None:
-            print("%8.2f   (못 쟀다)" % w)
-        else:
-            print("%8.2f %10.1f %8.1f %10.1f %8.1f" % (w, a, b, c, d))
-    print("\n읽는 법 — w 가 커질 때 이 숫자들이")
-    print("  커지면   속도가 원인이다. 밀림은 w 를 내려 줄일 수 있다")
+            print("%7.2f   (못 쟀다)" % w)
+            continue
+        print("%7.2f %6s %9.1f %8.1f %9.1f %8.1f %9s %10s"
+              % (w, "?" if n is None else n, a, b, c, d,
+                 "?" if lat is None else "%.1f" % lat,
+                 "?" if mg is None else "%.1f" % mg))
+    print("   (mm. 회전수가 값마다 다르면 같은 회전 집합이 아니다 — 교통이 달라진다)")
+    print("\n읽는 법 — w 가 커질 때")
+    print("  ★ 판단은 **가로최대**로 한다. 종료·구간은 거리의 크기라 옆 칸")
+    print("    여유에 그대로 안 들어간다. 옆 칸을 먹는 것은 가로 성분뿐이다.")
+    print("  커지면   속도가 원인이다. w 를 내려 줄일 수 있다")
     print("  평평하면 속도가 아니다. 남은 후보는 외력 — 꼬리가 스치는 랙")
-    print("  (기울기를 보려면 값이 최소 셋은 있어야 한다)")
+    print("  「앞2 남은여유」가 0 에 가까우면 그 w 는 쓰면 안 된다")
+    print("\n☹ 이 표는 **평상시 분포**다. A3#253 의 363 mm 같은 한 건은 여기")
+    print("  안 들어온다 (최대가 수십 mm 대다). 기울기가 보여도 그 사건이")
+    print("  설명된 것은 아니다 — 둘은 다른 물음이다.")
     return 0
 
 
