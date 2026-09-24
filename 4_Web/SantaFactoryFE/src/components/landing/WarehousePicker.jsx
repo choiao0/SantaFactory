@@ -30,9 +30,7 @@ export default function WarehousePicker({ warehouses, robots }) {
         저장된 조건으로 다시
         <span className="admin-count">{warehouses.items.length}개</span>
       </h3>
-      <p className="mono dim lhint">
-        조건을 고르면 그대로 견적을 냅니다. 고른 뒤 값을 바꾸면 새 조건으로 저장됩니다.
-      </p>
+      <p className="mono dim lhint">고르면 그 조건으로 바로 견적을 냅니다.</p>
 
       {robots.items.length > 0 && (
         <div className="mdlpick" role="group" aria-label="AMR 모델">

@@ -14,10 +14,9 @@ export default function ModelShowcase({ robots }) {
     <section className="step section-light" id="models">
       <div className="eyebrow red">
         <span className="live-dot" />
-        고를 수 있는 로봇
+        AMR
       </div>
-      <h2>Pick the robot.</h2>
-      <p className="desc">사양과 단가가 그대로 견적의 구축비용이 됩니다.</p>
+      <h2>고를 수 있는 로봇</h2>
 
       {robots.error && <p className="form-error">모델 목록을 불러오지 못했습니다. {robots.error}</p>}
       {robots.loading && <p className="mono dim">모델 목록을 불러오는 중…</p>}
