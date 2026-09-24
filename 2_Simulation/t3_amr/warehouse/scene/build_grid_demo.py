@@ -49,6 +49,7 @@
     accel       계획(등속)과 실제(칸마다 정지)를 나란히. 3칸에 3.33 s 대 6.71 s
     decel       v_max 에서 제동. 표시한 자리를 **506 mm** 지나쳐 선다
     slip        A3#253 의 그 밀림. 축이 제자리에 안 남고 **324 mm** 끌려간다
+    park        주차 로봇은 한 칸을 예약하는데 몸은 뒤 칸을 **610 mm** 먹는다
 
     ★ accel·decel 은 기하가 아니라 **운동**이라 `--video` 라야 뜻이 있다.
       정지컷은 「두 대가 서 있다」로만 보인다.
@@ -82,7 +83,7 @@ FRONT, REAR, WIDTH = 0.390, 1.110, 0.800
 ap = argparse.ArgumentParser()
 ap.add_argument("--case", default="all",
                 choices=["all", "footprint", "side", "follow", "rack", "turn",
-                         "accel", "decel", "slip"])
+                         "accel", "decel", "slip", "park"])
 ap.add_argument("--pitch", type=float, default=1.0)
 ap.add_argument("--cells", type=int, default=7, help="격자 칸 수 (한 변)")
 ap.add_argument("--shoot", action="store_true", help="만들고 PNG 까지 찍는다")
@@ -401,6 +402,27 @@ def build(case):
         note.append("빨강 = 멈추라고 한 자리 · 주황 = 실제로 서는 자리")
         note.append("v_max %.2f m/s 에서 정지거리 **%.3f m** = 칸 %.2f 의 %.0f %%"
                     % (V_MAX, d, P, 100 * d / P))
+    elif case == "park":
+        # ★ 여섯 번째 현상. `follow` 와 **다른 것**은 A 가 움직일 로봇이
+        #   아니라 **주차**라는 점이다. 움직이는 로봇이면 기다리면 풀린다 —
+        #   주차는 액션이 없어 영영 안 비킨다. 시뮬은 그것을 이미 세고 있다
+        #   (`isaac_drive.py:2692` turn_gaveup_park, 「막은 로봇이 주차다」).
+        footprint(stage, "/World/A", 0, 0, 0.0, mats)
+        footprint(stage, "/World/B", -2.8 * P, 0, 0.0, mats, key="hit", h=0.50)
+        # 계획이 잠그는 것 — **한 칸**뿐이다 (반투명 파랑)
+        box(stage, "/World/Resv", -P/2, P/2, -P/2, P/2, 0.006, 0.020, mats["body"])
+        # 계획에 안 잡히는 점유 — 꼬리가 뒤 칸으로 나간 만큼 (빨강)
+        over = REAR - P / 2
+        box(stage, "/World/Over", -REAR, -P/2, -WIDTH/2, WIDTH/2,
+            0.008, 0.026, mats["hit"])
+        ov = (FRONT + REAR) - P
+        note.append("주차 로봇이 **예약하는 것은 한 칸**이다 (파랑)")
+        note.append("그런데 꼬리가 뒤 칸을 %.0f mm 먹는다 (빨강) — "
+                    "축->뒤 %.3f 에서 칸 반쪽 %.2f 를 뺀 값" % (over * 1000, REAR, P / 2))
+        note.append("그 칸을 「비었다」고 보고 보낸 로봇과 차체가 %.0f mm 겹친다"
+                    % (ov * 1000))
+        note.append("★ `follow` 와 다른 점 — 움직이는 로봇은 기다리면 비키지만 "
+                    "**주차는 액션이 없어 안 비킨다**")
     elif case == "slip":
         # 주황 = 계획(축 중심 제자리 회전) · 본체 = 실제(실측 중심으로 회전)
         footprint(stage, "/World/Plan", 0, 0, 0.0, mats, key="sweep")
@@ -529,6 +551,8 @@ CAM_FIX = {
               (D_STOP / 2 - 0.2, -4.2, 2.2)),
     # 밀림은 **위에서** 본다 — 축이 얼마나 끌려갔나가 요점이라 옆에서는 안 보인다.
     "slip":  ((0.05, -0.16, 0.15), (0.05, -2.2, 4.3)),
+    # 주차는 **예약 칸과 차체**를 같이 봐야 한다 — 옆에서 낮게 본다.
+    "park":  ((-0.86, 0.0, 0.30), (-0.86, -4.6, 2.4)),
 }
 
 
@@ -539,6 +563,8 @@ MOTION = {
     "accel":  (None, "race"),
     "decel":  (None, "brake"),
     "slip":   (None, "slip"),
+    # 뒤차가 「비었다」는 칸으로 들어온다 — `follow` 와 같은 접근 동작이다.
+    "park":   ("/World/B", "app"),
 }
 
 
@@ -589,7 +615,8 @@ def animate(stage, case, u):
     return 0.0
 
 
-cases = (["footprint", "side", "follow", "rack", "turn", "accel", "decel", "slip"]
+cases = (["footprint", "side", "follow", "rack", "turn", "accel", "decel",
+          "slip", "park"]
          if A.case == "all" else [A.case])
 made = [build(c) for c in cases]
 
