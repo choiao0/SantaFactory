@@ -30,6 +30,11 @@ export function createEstimate({ warehouseId, amrModel, fleetMin, fleetMax }) {
   })
 }
 
+/** 견적을 지운다 — 대수별 결과와 주행 리플레이까지 함께 사라진다 (S15P21A106-271). */
+export function deleteEstimate(estimateId) {
+  return api.del(`/estimates/${estimateId}`)
+}
+
 export function getEstimate(estimateId) {
   return api.get(`/estimates/${estimateId}`)
 }

@@ -14,6 +14,7 @@ import org.springframework.data.domain.Sort;
 import org.springframework.data.web.PageableDefault;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
@@ -38,11 +39,13 @@ public class AdminController {
     }
 
     @Operation(summary = "전체 견적 목록",
-            description = "최근순. 고객 목록과 달리 회사·담당자·연락처를 함께 담는다 — "
-                    + "\"오늘 어떤 회사가 뭘 신청했나\"를 보는 화면이다.")
+            description = "기본 최근순(sort=createdAt,asc 로 오래된순). 고객 목록과 달리 회사·담당자·연락처를 "
+                    + "함께 담는다 — \"오늘 어떤 회사가 뭘 신청했나\"를 보는 화면이다. "
+                    + "memberId 를 주면 그 회원의 견적만 준다.")
     @GetMapping("/estimates")
     public ApiResponse<Page<AdminEstimateResponse>> estimates(
+            @RequestParam(required = false) Long memberId,
             @PageableDefault(size = 20, sort = "createdAt", direction = Sort.Direction.DESC) Pageable pageable) {
-        return ApiResponse.onSuccess(adminService.estimates(pageable));
+        return ApiResponse.onSuccess(adminService.estimates(memberId, pageable));
     }
 }

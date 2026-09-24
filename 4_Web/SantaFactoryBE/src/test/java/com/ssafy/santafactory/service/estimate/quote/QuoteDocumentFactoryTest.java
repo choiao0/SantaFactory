@@ -114,7 +114,6 @@ class QuoteDocumentFactoryTest {
         assertThat(c.effPath()).startsWith("M36.0 ").contains(" L");
         assertThat(c.costPath()).startsWith("M36.0 ");
         assertThat(c.recLabel()).isEqualTo("권장 14대 · 효율 67.1");
-        assertThat(c.kneeLabel()).isEqualTo("15대부터 효과 정체");
         assertThat(c.budgetLabel()).isEqualTo("예산 3억 원");
         assertThat(c.xLabels()).extracting(QuoteDocument.AxisLabel::text).contains("1대", "14대", "28대");
         assertThat(c.yRight()).extracting(QuoteDocument.AxisLabel::text).containsExactly("0억", "1.5억", "3억", "4.5억", "6억");   // 28대 4.34억이 예산 3억보다 커서 축은 6억까지
@@ -132,20 +131,21 @@ class QuoteDocumentFactoryTest {
     }
 
     @Test
-    void keeps_the_recommendation_label_inside_the_chart() {
-        // 효율이 100 에 가까우면 표식이 그림 꼭대기에 붙는다. 글자를 그대로 점 위에 두면 잘렸다.
-        double topRecY = QuoteDocumentFactory.PAD_T + 2;
+    void marks_the_minimal_and_peak_configurations_on_the_curves() {
+        // 이름은 그림이 아니라 범례에 적는다 — 표식은 자리만 잡는다 (S15P21A106-271)
+        var d = QuoteFixtures.detail(142L, 14, 15, null);
+        var adjacent = new EstimateDetailResponse(d.estimateId(), d.status(), d.amrModel(),
+                d.targetThroughput(), d.targetUtilization(), d.budgetLimit(), 14, 13, d.kneeCount(),
+                null, d.createdAt(), d.completedAt(), d.elapsedSeconds(), null, null, d.runs(), null);
 
-        assertThat(QuoteDocumentFactory.recLabelY(topRecY)).isGreaterThan(topRecY);
-        assertThat(QuoteDocumentFactory.recLabelY(100)).isEqualTo(86);   // 여유가 있으면 지금처럼 점 위
-    }
+        QuoteDocument.Curve c = factory.build(new QuoteSource(adjacent, QuoteFixtures.warehouse())).curve();
 
-    @Test
-    void flips_the_recommendation_label_when_it_would_run_off_the_left_edge() {
-        // 권장이 가장 적은 대수면 표식이 왼쪽 끝이라, 왼쪽으로 쓴 글자가 그림 밖으로 나간다
-        assertThat(QuoteDocumentFactory.recLabelAnchor(QuoteDocumentFactory.PAD_L)).isEqualTo("start");
-        assertThat(QuoteDocumentFactory.recLabelX(QuoteDocumentFactory.PAD_L)).isGreaterThan(QuoteDocumentFactory.PAD_L);
-        assertThat(QuoteDocumentFactory.recLabelAnchor(400)).isEqualTo("end");
+        assertThat(c.minimal().label()).isEqualTo("최소 구성 13대");
+        // 같은 대수라도 두 그림에서 점 높이가 다르다
+        assertThat(c.minimal().x()).isEqualTo(c.minimalThr().x());
+        assertThat(c.minimal().y()).isNotEqualTo(c.minimalThr().y());
+        // 어느 대수도 처리율 100 %에 닿지 않는 픽스처라 처리율 그림에는 권장이 찍힌다
+        assertThat(c.thrPeak().label()).isEqualTo("권장 14대");
     }
 
     @Test

@@ -6,6 +6,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
 public interface EstimateRepository extends JpaRepository<Estimate, Long> {
 
@@ -32,4 +33,10 @@ public interface EstimateRepository extends JpaRepository<Estimate, Long> {
     @Query(value = "select e from Estimate e left join fetch e.warehouse w left join fetch w.member",
             countQuery = "select count(e) from Estimate e")
     Page<Estimate> findAllWithOwner(Pageable pageable);
+
+    /** 한 회원의 견적만 — 관리자 화면에서 회원 카드를 눌렀을 때 (S15P21A106-271). */
+    @Query(value = "select e from Estimate e left join fetch e.warehouse w left join fetch w.member m"
+            + " where m.id = :memberId",
+            countQuery = "select count(e) from Estimate e where e.warehouse.member.id = :memberId")
+    Page<Estimate> findAllWithOwnerByMember(@Param("memberId") Long memberId, Pageable pageable);
 }

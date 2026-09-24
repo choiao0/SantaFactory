@@ -10,6 +10,12 @@ const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v))
 export default function FleetStep({ fleet, onChange, model, requesting, error, missing = [], onRequest }) {
   const trackRef = useRef(null)
   const dragging = useRef(null)
+  /**
+   * 입력 중인 글자. 한 글자마다 범위로 자르면 칸을 비울 수가 없다 — "1" 을 지우면 빈 칸이 0 으로
+   * 읽혀 다시 1 로 돌아오고, 15 를 넣으려면 1 뒤에 5 를 붙였다가 앞의 1 을 지우는 수밖에 없었다.
+   * 그래서 치는 동안에는 글자 그대로 두고, 칸을 벗어날 때 한 번만 범위로 자른다.
+   */
+  const [draft, setDraft] = useState({ min: null, max: null })
 
   const pct = (n) => ((n - MIN) / (MAX - MIN)) * 100
   const counts = []
@@ -22,6 +28,14 @@ export default function FleetStep({ fleet, onChange, model, requesting, error, m
     const rect = trackRef.current.getBoundingClientRect()
     const ratio = clamp((clientX - rect.left) / rect.width, 0, 1)
     return Math.round(MIN + ratio * (MAX - MIN))
+  }
+
+  /** 칸을 벗어나면 친 글자를 범위로 자르고, 비워 뒀으면 원래 값으로 되돌린다. */
+  const commit = (which) => () => {
+    const raw = draft[which]
+    setDraft((d) => ({ ...d, [which]: null }))
+    if (raw == null || raw.trim() === '') return
+    move(which, Number(raw))
   }
 
   const move = (which, n) => {
@@ -137,8 +151,11 @@ export default function FleetStep({ fleet, onChange, model, requesting, error, m
               type="number"
               min={MIN}
               max={fleet.max - 1}
-              value={fleet.min}
-              onChange={(e) => move('min', Number(e.target.value))}
+              value={draft.min ?? fleet.min}
+              onFocus={(e) => e.target.select()}
+              onChange={(e) => setDraft((d) => ({ ...d, min: e.target.value }))}
+              onBlur={commit('min')}
+              onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
             />
           </div>
           <div>
@@ -148,8 +165,11 @@ export default function FleetStep({ fleet, onChange, model, requesting, error, m
               type="number"
               min={fleet.min + 1}
               max={MAX}
-              value={fleet.max}
-              onChange={(e) => move('max', Number(e.target.value))}
+              value={draft.max ?? fleet.max}
+              onFocus={(e) => e.target.select()}
+              onChange={(e) => setDraft((d) => ({ ...d, max: e.target.value }))}
+              onBlur={commit('max')}
+              onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
             />
           </div>
         </div>
