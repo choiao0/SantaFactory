@@ -837,6 +837,15 @@ footer a:hover { color: #fff; }
 .button.danger:hover { background: var(--red-dark); border-color: var(--red-dark); }
 .button.sm { padding: 8px 16px; font-size: 13.5px; }
 
+/* 정렬 고르기 — 곡선 기준 토글과 같은 생김새. 제목 줄 오른쪽 끝에 붙는다 */
+.sortpick { display: inline-flex; margin-left: auto; border: 1px solid #d5d3ce; border-radius: 2px; overflow: hidden; }
+.sortpick button {
+  border: 0; background: transparent; cursor: pointer; padding: 6px 12px;
+  font: 500 12.5px var(--font-mono); letter-spacing: .04em; color: #77776f; text-transform: none;
+}
+.sortpick button + button { border-left: 1px solid #d5d3ce; }
+.sortpick button.on { background: var(--ink); color: #fbfaf8; }
+
 .admin-subhead {
   font: 600 15px var(--font-mono); letter-spacing: .06em; color: #5d5d58;
   margin: 32px 0 14px; text-transform: uppercase;

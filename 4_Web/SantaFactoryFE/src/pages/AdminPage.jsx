@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ESTIMATE_PAGE_SIZE, getAllEstimates, getMembers } from '../api/admin.js'
+import { deleteEstimate } from '../api/estimates.js'
 import { useAuth } from '../auth/authContext.js'
 
 const STATUS_LABEL = {
@@ -42,6 +43,13 @@ export default function AdminPage() {
   const [page, setPage] = useState(0)
   const [loadedPage, setLoadedPage] = useState(null)
   const [error, setError] = useState(null)
+  /** 지우려는 견적. 되돌릴 수 없는 일이라 카드에서 바로 지우지 않고 한 번 더 묻는다 */
+  const [pendingDelete, setPendingDelete] = useState(null)
+  const [deleting, setDeleting] = useState(false)
+  const [reload, setReload] = useState(0)
+  /** 회원 카드를 눌러 그 회원 것만 볼 때. null 이면 전체 */
+  const [member, setMember] = useState(null)
+  const [order, setOrder] = useState('desc')
 
   // 요청한 페이지와 받아둔 페이지가 다르면 아직 오는 중이다. 별도 상태를 두지 않고 파생한다
   const loading = loadedPage !== page
@@ -52,19 +60,35 @@ export default function AdminPage() {
 
   useEffect(() => {
     let cancelled = false
-    getAllEstimates(page)
+    getAllEstimates(page, { memberId: member?.member_id ?? null, order })
       .then((result) => { if (!cancelled) setEstimatePage(result) })
       .catch((e) => { if (!cancelled) setError(e.message) })
       .finally(() => { if (!cancelled) setLoadedPage(page) })
     // 빠르게 두 번 넘기면 먼저 보낸 요청의 응답이 나중에 도착할 수 있다.
     // 그대로 두면 화면이 방금 지나온 페이지로 되돌아간다
     return () => { cancelled = true }
-  }, [page])
+  }, [page, reload, member, order])
 
   // 기존 견적 화면(estimateId 기반 로딩)을 그대로 재사용 — App.jsx 와 같은 패턴.
   const openEstimate = (estimateId) => {
     sessionStorage.setItem('estimateId', String(estimateId))
     navigate('/estimate')
+  }
+
+  const confirmDelete = async () => {
+    setDeleting(true)
+    try {
+      await deleteEstimate(pendingDelete.estimate_id)
+      // 마지막 한 건을 지워 페이지가 비면 앞 페이지로 물러난다
+      setPage((p) => (estimates.length === 1 && p > 0 ? p - 1 : p))
+      setReload((n) => n + 1)
+      setPendingDelete(null)
+    } catch (e) {
+      setError(`삭제하지 못했습니다. ${e.message}`)
+      setPendingDelete(null)
+    } finally {
+      setDeleting(false)
+    }
   }
 
   const handleLogout = async () => {
@@ -103,7 +127,17 @@ export default function AdminPage() {
               <h3 className="admin-subhead">회원 {members.length}명</h3>
               <div className="admin-grid">
                 {members.map((m) => (
-                  <div key={m.member_id} className="spec admin-card">
+                  // 누르면 그 회원의 견적만 — 다시 누르면 전체로 돌아온다
+                  <button
+                    key={m.member_id}
+                    type="button"
+                    className={`spec selectable admin-card${member?.member_id === m.member_id ? ' on' : ''}`}
+                    aria-pressed={member?.member_id === m.member_id}
+                    onClick={() => {
+                      setPage(0)
+                      setMember((cur) => (cur?.member_id === m.member_id ? null : m))
+                    }}
+                  >
                     {m.role === 'ADMIN' && <span className="admin-badge">관리자</span>}
                     <h4>{m.company}</h4>
                     <div className="sub">{m.name} · {formatPhone(m.phone)}</div>
@@ -113,17 +147,30 @@ export default function AdminPage() {
                       <dt>요청 견적</dt>
                       <dd>{m.estimate_count}건</dd>
                     </dl>
-                  </div>
+                  </button>
                 ))}
               </div>
 
               <h3 className="admin-subhead">
-                견적
+                {member ? `${member.company} 견적` : '견적'}
                 {/* 서버가 페이지 단위로 자르므로 총 건수를 같이 보여준다 — 안 보여주면
                     다음 페이지에 남은 견적이 아예 없는 것처럼 읽힌다 */}
                 <span className="admin-count">
                   {total === 0 ? '0건' : `전체 ${total}건 중 ${firstRow}–${lastRow}`}
                 </span>
+                {member && (
+                  <button type="button" className="ghost sm"
+                          onClick={() => { setPage(0); setMember(null) }}>전체 보기</button>
+                )}
+                <div className="sortpick" role="group" aria-label="정렬">
+                  {[['desc', '최신순'], ['asc', '오래된순']].map(([key, text]) => (
+                    <button key={key} type="button" className={order === key ? 'on' : ''}
+                            aria-pressed={order === key}
+                            onClick={() => { setPage(0); setOrder(key) }}>
+                      {text}
+                    </button>
+                  ))}
+                </div>
               </h3>
 
               {loading && <p className="mono dim">불러오는 중…</p>}
@@ -131,8 +178,9 @@ export default function AdminPage() {
 
               <div className="admin-grid">
                 {estimates.map((item) => (
+                  // 카드가 버튼이라 삭제 버튼을 안에 둘 수 없다 — 나란히 놓고 카드 위에 겹친다
+                  <div className="card-slot" key={item.estimate_id}>
                   <button
-                    key={item.estimate_id}
                     type="button"
                     className="spec selectable admin-card"
                     onClick={() => openEstimate(item.estimate_id)}
@@ -153,6 +201,16 @@ export default function AdminPage() {
                       <dd className="admin-plain">{formatPhone(item.phone)}</dd>
                     </dl>
                   </button>
+                  <button
+                    type="button"
+                    className="card-del"
+                    aria-label={`견적 #${item.estimate_id} 삭제`}
+                    title="삭제"
+                    onClick={() => setPendingDelete(item)}
+                  >
+                    ×
+                  </button>
+                  </div>
                 ))}
               </div>
 
@@ -180,6 +238,24 @@ export default function AdminPage() {
             </>
           )}
         </section>
+
+        {pendingDelete && (
+          <div className="modal-back" role="dialog" aria-modal="true" aria-labelledby="del-title">
+            <div className="modal">
+              <h4 id="del-title">견적 #{pendingDelete.estimate_id}을 삭제할까요?</h4>
+              <p>
+                {pendingDelete.company ?? '회원'}의 견적입니다. 대수별 결과와 주행 리플레이, 물리 검증
+                결과까지 함께 지워집니다.<b> 삭제한 견적은 되돌릴 수 없습니다.</b>
+              </p>
+              <div className="modal-cta">
+                <button type="button" className="ghost sm" disabled={deleting}
+                        onClick={() => setPendingDelete(null)}>취소</button>
+                <button type="button" className="button danger sm" disabled={deleting}
+                        onClick={confirmDelete}>{deleting ? '삭제 중…' : '삭제'}</button>
+              </div>
+            </div>
+          </div>
+        )}
       </main>
     </>
   )
