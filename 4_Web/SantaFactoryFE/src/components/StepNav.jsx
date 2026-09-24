@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react'
 import { Link } from 'react-router-dom'
 import { STEPS, stepPath } from '../data/steps.js'
 
@@ -9,9 +10,20 @@ import { STEPS, stepPath } from '../data/steps.js'
  */
 export default function StepNav({ current, estimateId = null }) {
   const index = STEPS.findIndex((s) => s.key === current)
+  const navRef = useRef(null)
+  const hereRef = useRef(null)
+
+  useEffect(() => {
+    const nav = navRef.current
+    const here = hereRef.current
+    if (!nav || !here) return
+    // 좁은 화면에서는 다섯 칸이 한 줄에 안 들어가 지금 단계가 오른쪽 밖에 있을 수 있다.
+    // scrollIntoView 는 세로까지 움직여 방금 맞춘 화면 위치를 흔들므로 가로만 직접 맞춘다
+    nav.scrollLeft = Math.max(0, here.offsetLeft - (nav.clientWidth - here.offsetWidth) / 2)
+  }, [current])
 
   return (
-    <nav className="stepnav" aria-label="견적 단계">
+    <nav className="stepnav" aria-label="견적 단계" ref={navRef}>
       {STEPS.map((step, i) => {
         const to = step.key === current ? null : stepPath(step, estimateId)
         const state = i === index ? 'on' : i < index ? 'done' : 'todo'
@@ -25,6 +37,7 @@ export default function StepNav({ current, estimateId = null }) {
           <Link key={step.key} className={`stepnav-item ${state}`} to={to}>{inner}</Link>
         ) : (
           <span key={step.key} className={`stepnav-item ${state}`}
+                ref={i === index ? hereRef : undefined}
                 aria-current={i === index ? 'step' : undefined}>
             {inner}
           </span>

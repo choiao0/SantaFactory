@@ -1,4 +1,5 @@
-import { Navigate, Route, Routes } from 'react-router-dom'
+import { useEffect } from 'react'
+import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { AuthProvider } from './auth/AuthProvider.jsx'
 import RequireAuth from './auth/RequireAuth.jsx'
 import AdminPage from './pages/AdminPage.jsx'
@@ -24,9 +25,25 @@ import WarehousePage from './pages/estimate/WarehousePage.jsx'
  * <p>`/estimate/new` 가 `/estimate/:estimateId` 보다 먼저 잡히는 것은 라우터가 고정 조각을
  * 변수 조각보다 앞세우기 때문이다.
  */
+/**
+ * 단계를 넘길 때 화면 맨 위에서 시작한다.
+ *
+ * 라우터는 스크롤 위치를 건드리지 않는다 — 아래까지 내려 본 03 에서 다음을 누르면 04 가 같은
+ * 높이에서 열려 제목도 없이 중간부터 보였다. 스크롤 한 장이던 때는 다음 자리로 밀어 줬다.
+ * 즉시 옮긴다 — html 의 smooth 를 타면 새 화면이 한 번 흐른 뒤에야 자리를 잡는다.
+ */
+function ScrollToTop() {
+  const { pathname } = useLocation()
+  useEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: 'instant' })
+  }, [pathname])
+  return null
+}
+
 export default function App() {
   return (
     <AuthProvider>
+      <ScrollToTop />
       <Routes>
         <Route path="/" element={<LoginPage />} />
         <Route path="/signup" element={<SignupPage />} />

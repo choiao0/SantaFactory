@@ -132,7 +132,8 @@ button { font-family: inherit; }
 .stepnav {
   position: sticky; top: 72px; z-index: 25;
   display: flex;
-  background: rgba(9, 9, 9, .96);
+  /* 반투명으로 두면 아래로 지나가는 본문 글자가 비쳐 단계 이름과 겹쳐 읽힌다 */
+  background: #0b0b0b;
   border-bottom: 1px solid var(--line);
   /* 좁은 화면에서 다섯 칸을 접으면 두 줄이 되어 본문이 그만큼 밀린다 — 옆으로 민다 */
   overflow-x: auto; scrollbar-width: none;
