@@ -1859,6 +1859,29 @@ def _tol_env(name, default):
 #   넘는 것이 이것 때문인지 `tools/gain_balance.py` 로 먼저 확인하고 흔든다.
 K_CROSS = _tol_env("PIBT_K_CROSS", 1.8)
 K_HEAD = _tol_env("PIBT_K_HEAD", 2.2)
+# ★★ 진행축 이득 (2026-09-24, -267). 세 군데에 1.6 이 박혀 있던 것을 모았다.
+#
+#   이 값이 **서는 자리를 정한다.** 목표 근처에서는 속도가 `v = K_ALONG * along`
+#   이고, 도착 판정은 `|v| <= TOL_STOP_V` 를 함께 본다(`at_target`). 둘을
+#   같이 풀면 로봇이 서는 곳은
+#
+#       남는 거리 = TOL_STOP_V / K_ALONG = 0.02 / 1.6 = **12.5 mm**
+#
+#   이고, 목표에 **못 미쳐** 선다 — 뒤에서 감속해 오다 느려지면 멈추기 때문이다.
+#   9판 실측이 세로 **-11.9 mm** 였다 (양수 비율 2~16 %). 12.5 보다 조금 작은
+#   것은 가속 제한 때문에 v 가 `want` 를 살짝 밑돌아서다.
+#
+#   ☹ 이것은 마찰도 미끄러짐도 아니다. **제어 상수의 산수**다. 회전 속도를
+#     쓸어 봐도 이 값은 안 움직였다 — w 1.2·1.8·2.4 에서 전부 -11.9 였다.
+#
+#   줄이려면 둘 중 하나다. 남는 거리는 비(比)로만 정해진다.
+#       TOL_STOP_V 를 내린다   정확해지지만 **더 오래 기다린다**
+#                              (v 가 지수로 줄어 절반이면 ln2/K = 0.43 s 더)
+#       K_ALONG 을 올린다      시간 대가가 없다. 대신 이득을 올리는 것이라
+#                              오버슈트·진동을 재고 올려야 한다
+#   ★ 어느 쪽이든 **재고 바꾼다.** `path/test_stop_residual.py` 가 그 비를
+#     박아 두었으니, 상수를 바꾸면 그 시험이 같이 말해 준다.
+K_ALONG = _tol_env("PIBT_K_ALONG", 1.6)
 
 # ★★ 회전 각가속 제한 [rad/s^2] — 0 이면 끈다 (지금까지의 동작).
 #
@@ -2043,7 +2066,7 @@ def dump_turn_trace(trace, half: float = 0.0, n: int = 12) -> str:
 #     있어서 닫혔다. 진짜 자리는 여기다:
 #
 #         w    = K_CROSS*cross + K_HEAD*head     조향은 cross 를 본다
-#         want = clamp(1.6 * along, ...)         ★ 속도는 **along 만** 본다
+#         want = clamp(K_ALONG * along, ...)     ★ 속도는 **along 만** 본다
 #
 #     바퀴 달린 차는 **움직여야** 횡오차가 준다. `along` 이 0 에 가까워지면
 #     `v -> 0` 이고, 그 순간 `cross` 를 줄일 수단이 사라진다. 평형을 옮겨도
@@ -2157,7 +2180,7 @@ RECOV_WCMD = _tol_env("PIBT_RECOVER_WCMD", 0.30)
 #
 #   ☹ 대가 — 마지막 몇 cm 를 저속으로 간다. 액션마다 조금 느려진다.
 #     그리고 `|v|` 가 이 값 아래로 안 내려가면 워치독이 끊는다. 0.02 는
-#     한 스텝 0.33 mm 라 램프가 충분히 닿는다 (want = 1.6*along -> 0).
+#     한 스텝 0.33 mm 라 램프가 충분히 닿는다 (want = K_ALONG*along -> 0).
 TOL_STOP_V = _tol_env("PIBT_TOL_STOP_V", 0.0)      # m/s · 0 이면 끔
 
 
@@ -2459,7 +2482,7 @@ class MotionController:
         brake = (math.sqrt(self.exit_v ** 2 + 2.0 * self.a_exec * abs(along))
                  if along else self.exit_v)
         lim = min(v_cap, max(brake, 0.05))
-        want = clamp(1.6 * along, -lim, lim)
+        want = clamp(K_ALONG * along, -lim, lim)
         if self.exit_v > 0.0 and along > 0.0:
             want = max(want, min(lim, self.exit_v))   # 목표 근처에서 0 으로 안 죽게
 
@@ -2470,7 +2493,7 @@ class MotionController:
             if self._recov > 0.0:
                 # 물러나는 중 — 남은 거리만큼만. 방향은 진행의 **반대**다.
                 self._recov -= abs(self._v) * dt
-                want = clamp(-1.6 * max(self._recov, 0.05), -lim, lim)
+                want = clamp(-K_ALONG * max(self._recov, 0.05), -lim, lim)
                 # ★★ 조향도 **직접 준다.** 이게 대책의 본체다 (2026-09-17 정정).
                 #
                 #   처음에는 `want`(속도)만 되살렸는데 **아무 효과가 없었다.**
@@ -2508,7 +2531,7 @@ class MotionController:
                         self._recov = d
                         self._recov_n += 1
                         self.recovered += 1
-                        want = clamp(-1.6 * d, -lim, lim)
+                        want = clamp(-K_ALONG * d, -lim, lim)
         self._v += clamp(want - self._v, -self.a_exec * dt, self.a_exec * dt)
         return (sign * self._v, w)
 
