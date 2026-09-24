@@ -71,26 +71,34 @@ PITCH = os.environ.get("PIBT_PITCH", "1.0")
 MAX_SIM = float(os.environ.get("MAX_SIM", "300"))
 TURNS_PER_SIM_S = 89.0 / 463.8          # 실측 밀도 (12대 기준)
 
+# ★ 시드는 `PIBT_SEED` 다 — `SEED` 가 아니다 (run_headless.sh:55, 기본 104).
+#   처음에 `for s in 1 2 3; do SEED=$s ...` 를 건넸는데 그러면 **무시된다.**
+#   같은 판을 세 번 돌리고 「시드 셋을 봤다」고 결론낼 뻔했다. 게다가 태그에
+#   시드가 없어 NPZ 를 서로 덮어썼다. 그래서 루프를 도구 안으로 들인다.
+SEEDS = [int(x) for x in os.environ.get("SEEDS",
+                                        os.environ.get("PIBT_SEED", "104")).split(",")]
 
-def tag_of(w):
-    return "wsw%s" % ("%.2f" % w).replace(".", "p")
+
+def tag_of(w, seed):
+    return "wsw%s_s%d" % (("%.2f" % w).replace(".", "p"), seed)
 
 
-def run_one(w):
-    """한 값을 돌린다. (npz 경로, 로그 경로)."""
-    tag = tag_of(w)
+def run_one(w, seed):
+    """한 조합을 돌린다. (npz 경로, 로그 경로)."""
+    tag = tag_of(w, seed)
     npz = os.path.join(OUT, "rec_%s.npz" % tag)
     env = dict(os.environ)
     env["PIBT_W_EXEC"] = "%.4f" % w
     env["PIBT_RECORD"] = npz
     env["TAG"] = tag
+    env["PIBT_SEED"] = str(seed)
     if MAX_SIM > 0:
         env["PIBT_HL_MAX_SIM"] = "%.0f" % MAX_SIM
     cmd = ["bash", os.path.join(W, "run_headless.sh"), N]
     print("\n" + "=" * 70)
-    print("w_exec %.2f rad/s   ->  %s" % (w, npz))
-    print("  PIBT_W_EXEC=%.4f PIBT_RECORD=%s TAG=%s bash run_headless.sh %s"
-          % (w, npz, tag, N))
+    print("w_exec %.2f rad/s · 시드 %d   ->  %s" % (w, seed, npz))
+    print("  PIBT_W_EXEC=%.4f PIBT_SEED=%d PIBT_RECORD=%s TAG=%s "
+          "bash run_headless.sh %s" % (w, seed, npz, tag, N))
     if DRY:
         return npz, None
     log = os.path.join(LOGS, "hl_%s.log" % tag)
@@ -165,41 +173,63 @@ def main():
     print("회전 속도 쓸기 — 대수 %s · pitch %s · w = %s"
           % (N, PITCH, ", ".join("%.2f" % w for w in WS)))
     print("계획값은 geom.w_max = 1.8 이다. 그보다 낮은 판은 완주 시간을 안 본다.")
+    print("시드 %s" % ", ".join(str(s) for s in SEEDS))
+    n_run = len(WS) * len(SEEDS)
     if MAX_SIM > 0:
         # 준비 40 초(스테이지 1,923 박스 로딩·probe·시작 재정렬) + Isaac 부팅·계획.
         # RTF 는 jupyter04 실측 약 1.0 이고 촬영이 없으니 그보다 조금 낫다.
         per = MAX_SIM / 1.0 / 60.0 + 3.0
-        print("시뮬 상한 %.0f 초 (회전 약 %.0f건 예상) · 값당 대략 %.0f분 · "
-              "전체 대략 %.0f분"
-              % (MAX_SIM, MAX_SIM * TURNS_PER_SIM_S, per, per * len(WS)))
-        print("  ☹ 어림이다. RTF 1.0 과 준비 3분을 가정했다 — 첫 값이 끝나면 맞춰 볼 것.")
+        print("시뮬 상한 %.0f 초 (판당 회전 약 %.0f건 예상) · 판당 대략 %.0f분 · "
+              "%d판 = 대략 %.0f분"
+              % (MAX_SIM, MAX_SIM * TURNS_PER_SIM_S, per, n_run, per * n_run))
+        print("  ☹ 어림이다. RTF 1.0 과 준비 3분을 가정했다 — 첫 판이 끝나면 맞춰 볼 것.")
     else:
-        print("☹ MAX_SIM=0 — 완주까지 간다. 13대 판은 값당 40분 가까이 걸린다.")
+        print("☹ MAX_SIM=0 — 완주까지 간다. 13대 판은 판당 40분 가까이 걸린다.")
     rows = []
     for w in WS:
-        npz, _ = run_one(w)
-        if DRY or npz is None:
-            rows.append((w, None, None, None, None))
-            continue
-        text = measure(npz)
-        e_med, e_p95 = pick(text, "종료 오차")
-        m_med, m_p95 = pick(text, "구간 최대")
-        n_turn, lat_max, margin = pick_safety(text)
-        rows.append((w, e_med, e_p95, m_med, m_p95, n_turn, lat_max, margin))
+        for seed in SEEDS:
+            npz, _ = run_one(w, seed)
+            if DRY or npz is None:
+                rows.append((w, seed, None, None, None, None, None, None, None))
+                continue
+            text = measure(npz)
+            e_med, e_p95 = pick(text, "종료 오차")
+            m_med, m_p95 = pick(text, "구간 최대")
+            n_turn, lat_max, margin = pick_safety(text)
+            rows.append((w, seed, e_med, e_p95, m_med, m_p95,
+                         n_turn, lat_max, margin))
 
-    print("\n" + "=" * 78)
-    print("%7s %6s %9s %8s %9s %8s %9s %10s"
-          % ("w_exec", "회전수", "종료중앙", "종료p95", "구간중앙", "구간p95",
-             "가로최대", "앞2 남은여유"))
-    for w, a, b, c, d, n, lat, mg in rows:
+    print("\n" + "=" * 84)
+    print("%7s %6s %6s %9s %8s %9s %8s %9s %10s"
+          % ("w_exec", "시드", "회전수", "종료중앙", "종료p95", "구간중앙",
+             "구간p95", "가로최대", "앞2 남은여유"))
+    for w, seed, a, b, c, d, n, lat, mg in rows:
         if a is None:
-            print("%7.2f   (못 쟀다)" % w)
+            print("%7.2f %6d   (못 쟀다)" % (w, seed))
             continue
-        print("%7.2f %6s %9.1f %8.1f %9.1f %8.1f %9s %10s"
-              % (w, "?" if n is None else n, a, b, c, d,
+        print("%7.2f %6d %6s %9.1f %8.1f %9.1f %8.1f %9s %10s"
+              % (w, seed, "?" if n is None else n, a, b, c, d,
                  "?" if lat is None else "%.1f" % lat,
                  "?" if mg is None else "%.1f" % mg))
-    print("   (mm. 회전수가 값마다 다르면 같은 회전 집합이 아니다 — 교통이 달라진다)")
+
+    if len(SEEDS) > 1:
+        print("\n시드 평균 — w 마다")
+        print("%7s %6s %9s %8s %9s %8s %9s"
+              % ("w_exec", "판", "종료중앙", "종료p95", "구간중앙", "구간p95", "가로최대"))
+        for w in WS:
+            got = [r for r in rows if r[0] == w and r[2] is not None]
+            if not got:
+                print("%7.2f      0   (못 쟀다)" % w)
+                continue
+            def avg(i):
+                v = [r[i] for r in got if r[i] is not None]
+                return sum(v) / len(v) if v else float("nan")
+            print("%7.2f %6d %9.1f %8.1f %9.1f %8.1f %9.1f"
+                  % (w, len(got), avg(2), avg(3), avg(4), avg(5), avg(7)))
+        print("   ☹ **p95 의 평균은 합친 p95 가 아니다.** 꼬리를 제대로 합치려면")
+        print("     판마다의 회전을 한 통에 넣고 다시 분위수를 내야 한다. 여기서는")
+        print("     추세를 보는 용도로만 쓴다 — 판별은 위의 시드별 줄로 한다.")
+    print("   (mm. 회전수가 판마다 다르면 같은 회전 집합이 아니다 — 교통이 달라진다)")
     print("\n읽는 법 — w 가 커질 때")
     print("  ★ 판단은 **가로최대**로 한다. 종료·구간은 거리의 크기라 옆 칸")
     print("    여유에 그대로 안 들어간다. 옆 칸을 먹는 것은 가로 성분뿐이다.")
