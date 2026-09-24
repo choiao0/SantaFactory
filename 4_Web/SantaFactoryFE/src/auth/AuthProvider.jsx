@@ -1,11 +1,17 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { setSessionLostHandler } from '../api/client.js'
+import { clearEstimateDraft } from '../hooks/useEstimateDraft.js'
 import * as authApi from '../api/auth.js'
 import { AuthContext } from './authContext.js'
 
-/** 회원이 바뀌면 화면이 들고 있던 "무엇을 보던 중" 상태도 같이 버린다. */
+/**
+ * 회원이 바뀌면 화면이 들고 있던 입력값도 같이 버린다.
+ *
+ * 보던 견적 번호는 이제 주소에 있어 지울 것이 없다 — 남의 견적 주소를 그대로 들고 있어도
+ * 서버가 404 를 준다 (S15P21A106-274).
+ */
 function clearViewState() {
-  sessionStorage.removeItem('estimateId')
+  clearEstimateDraft()
 }
 
 /**
@@ -38,8 +44,7 @@ export function AuthProvider({ children }) {
 
   const login = useCallback(async (credentials) => {
     const loggedIn = await authApi.login(credentials)
-    // 앞사람이 보던 견적 번호가 남아 있으면 새 계정으로 그 화면이 열린다 — 남의 견적이라
-    // 서버가 404 를 주고, 사용자는 영문 모를 빈 화면을 본다
+    // 앞사람이 치던 창고 조건이 남아 있으면, 새 계정의 첫 입력칸이 남의 숫자로 차 있다
     clearViewState()
     setMember(loggedIn)
     return loggedIn

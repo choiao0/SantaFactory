@@ -17,7 +17,7 @@ const REFRESH_COOLDOWN_MS = 10_000
  */
 function placeholderFor({ estimateId, ready, verify, recommendedCount, started }) {
   if (estimateId == null) {
-    return { tag: 'QUEUED', label: '대기', text: '02 단계에서 견적을 요청하면 물리 검증 결과가 여기에 표시됩니다.' }
+    return { tag: 'QUEUED', label: '대기', text: '견적을 요청하면 물리 검증 결과가 여기에 표시됩니다.' }
   }
   if (!ready) {
     return { tag: 'RUNNING', label: '계산 중', live: true, text: '시뮬레이션 판정이 끝나면 권장 대수로 물리 검증을 돌립니다.' }

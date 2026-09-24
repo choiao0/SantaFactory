@@ -1,32 +1,15 @@
-import { useLocation, useNavigate } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/authContext.js'
 
-const LINKS = [
-  ['#s1', '운영 조건'],
-  ['#s2', '대수 범위'],
-  ['#s3', '시뮬레이션'],
-  ['#verify', '물리 검증'],
-  ['#quote', '견적'],
-]
-
-/**
- * @param sections 견적 화면의 섹션 앵커(WAREHOUSE·FLEET…)를 보일지. 그 앵커가 없는 화면에서는
- *                 눌러도 아무 일이 없으므로 끈다.
- */
-export default function Header({ sections = true }) {
+export default function Header() {
   const navigate = useNavigate()
-  const { pathname } = useLocation()
   const { member, isAdmin, logout } = useAuth()
 
-  // 로고는 홈으로 가는 자리다. #top 앵커는 견적 화면에만 있어서 다른 화면에서는 눌러도
-  // 아무 일이 없었다 (S15P21A106-263). 견적 화면에서는 예전처럼 맨 위로 올린다
+  // 로고는 홈으로 가는 자리다. 단계마다 페이지가 갈린 뒤로는 어느 화면에서 눌러도 같은 곳으로
+  // 간다 — 예전의 #top 앵커는 견적 화면에만 있어 다른 화면에서는 눌러도 아무 일이 없었다
   const goHome = (e) => {
     e.preventDefault()
-    if (pathname === '/estimate') {
-      document.getElementById('top')?.scrollIntoView({ behavior: 'smooth' })
-    } else {
-      navigate('/estimate')
-    }
+    navigate('/estimate')
   }
 
   const handleLogout = async () => {
@@ -41,13 +24,6 @@ export default function Header({ sections = true }) {
         {/* 좁은 화면에서 이 글자만 접으려면 요소여야 한다 — 텍스트 노드는 CSS 로 못 가린다 */}
         <span className="brand-text">SANTA FACTORY</span>
       </a>
-      {sections && (
-        <nav className="header-links">
-          {LINKS.map(([href, label]) => (
-            <a key={href} href={href}>{label}</a>
-          ))}
-        </nav>
-      )}
       <div className="header-account">
         {/* 창고·견적이 회원별로 갈리므로 지금 누구로 보고 있는지가 화면에 있어야 한다 */}
         {member && <span className="mono dim">{member.company} · {member.name}</span>}
