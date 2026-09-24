@@ -36,6 +36,8 @@
 #   RUN_TAG=이름     출력 폴더·파일 이름 (기본 시각)
 #   VIDEO=0          조립 건너뛰고 프레임만 남긴다 (★ 캡처는 그대로 돈다)
 #   CAPTURE=0        ★ 촬영을 **아예 끈다**. 계측 판·디스크 절약용
+#   CAPTURE=fpv      ★ 1번(천장)을 끄고 **1인칭만** 찍는다. 시연 영상용
+#                      — 1번 프레임 14 GB 를 안 쓴다. 검증 런에는 쓰지 말 것
 #   WAIT_BUSY=3600   ★ 내 Kit 이 돌고 있으면 그만큼 기다린다 (기본 0 = 즉시 끊음)
 #                    시드를 for 루프로 돌릴 때 반드시 준다
 #   STRICT=0         촬영이 안 켜져도 끊지 않는다 (기본은 끊는다)
@@ -107,19 +109,24 @@ fi
 SHOTS="$OUT/shots_$TAG"
 MP4="$OUT/demo_$TAG.mp4"
 
-# ★★ 두 번째 시점 (2026-09-22, -264). `SIDE_CAM` 이 비면 종전과 같다.
-#   백엔드가 상단 키에서 `_side` 를 계산해 MinIO 에 있는지 보고 버튼을
+# ★★ 두 번째 시점 (2026-09-22, -264). `FPV_CAM` 이 비면 종전과 같다.
+#   백엔드가 상단 키에서 `_fpv` 를 계산해 MinIO 에 있는지 보고 버튼을
 #   띄운다. 그래서 **이름만** 지키면 되고 결과 페이로드는 안 바뀐다.
 #   Cam_Overview 는 남쪽 62 m 에서 비스듬히 본다 — 위치와 높이가 한
 #   화면에 들어와 시연용으로 맞다 (build_amr_scene_v2.py:288).
-# ★ 기본은 **한 대를 대각선 뒤에서** 잡는 근접 화면이다 (2026-09-23).
-#   `Cam_Overview`(창고 전체 조망)로 시작했는데, 1.5 m 짜리 AMR 이 점이라
-#   선반의 상자가 안 보였다. `Cam_Spot` 을 `PIBT_SIDE_FOLLOW` 로봇 뒤에 붙여
-#   따라다니게 한다 (`headless_pibt._side_track`).
-#   조망으로 되돌리려면:  SIDE_CAM=/World/Cameras/Cam_Overview PIBT_SIDE_FOLLOW=-1
-SIDE_CAM="${SIDE_CAM:-/World/Cameras/Cam_Spot}"
-SHOTS_SIDE="$OUT/shots_${TAG}_side"
-MP4_SIDE="$OUT/demo_${TAG}_side.mp4"
+# ★ 기본은 **1인칭 주행 시점**이다 (2026-09-23). `Cam_Spot` 을
+#   `PIBT_FPV_FOLLOW` 로봇 앞머리에 붙여 주행 방향을 본다
+#   (`headless_pibt._fpv_track`).
+#
+#   조망 -> 3인칭 추종 -> 1인칭 순으로 옮겨 왔다. 조망은 1.5 m 짜리 AMR 이
+#   점이라 못 썼고, 3인칭은 창고를 넓게 담아 렌더가 무거웠다.
+#
+#   되돌리려면:  PIBT_FPV_VIEW=chase              3인칭 추종
+#               PIBT_FPV_FOLLOW=5                 특정 로봇을 따라간다
+#               PIBT_FPV_FOLLOW=-1 FPV_CAM=/World/Cameras/Cam_Overview   조망
+FPV_CAM="${FPV_CAM:-/World/Cameras/Cam_Spot}"
+SHOTS_FPV="$OUT/shots_${TAG}_fpv"
+MP4_FPV="$OUT/demo_${TAG}_fpv.mp4"
 MYLOG="$LOGS/record_$TAG.log"
 # [patch_record_seed] `--seed N` 을 **인자 목록에서 빼낸다** (2026-09-20).
 #   남은 인자는 그대로 run.sh 로 가므로, 여기서 안 빼면 run.sh 가 모르는
@@ -313,26 +320,41 @@ fi
 # ── 촬영 환경변수 (live_pibt.py 가 읽는 이름) ───────────────
 #   `live_pibt.py:191` 은 `PIBT_SHOTS` 가 **비면 아무것도 안 한다.** 그래서
 #   촬영을 끄는 방법은 이 값을 비우는 것뿐이다 — `VIDEO=0` 으로는 안 꺼진다.
-if [ "$CAPTURE" = "0" ]; then
+# ★ `CAPTURE=fpv` — **1번(천장)을 끄고 1인칭만** 찍는다 (2026-09-23).
+#   옛 이름 `side` 도 받는다 — 백엔드가 키를 `_side` 에서 `_fpv` 로 바꾸기 전에
+#   쓰던 이름이라 손에 익은 사람이 있다.
+#   시연 영상만 뽑을 때 쓴다. 1번 캡처 자체는 싸지만(뷰포트 비동기, 약
+#   1.0 ms/step) **프레임 디스크가 크다** — 13대 10분 판에서 약 14 GB 다.
+#   ☹ 검증 런에는 쓰지 말 것. 백엔드가 기다리는 것은 1번(`demo_<run_id>.mp4`)이다.
+if [ "$CAPTURE" = "0" ] || [ "$CAPTURE" = "fpv" ] || [ "$CAPTURE" = "side" ]; then
     export PIBT_SHOTS=""
 else
     export PIBT_SHOTS="$SHOTS"
 fi
 # ★ 측면 — 헤드리스(리플리케이터) 경로에서만 찍는다. 뷰포트 경로는
 #   활성 뷰포트 하나뿐이라 두 시점을 못 받는다.
-if [ "$CAPTURE" = "0" ] || [ -z "$SIDE_CAM" ] || [ "${HEADLESS:-0}" != "1" ]; then
-    export PIBT_SHOTS_SIDE=""
-    export PIBT_CAMERA_SIDE=""
-    [ -n "$SIDE_CAM" ] && [ "${HEADLESS:-0}" != "1" ] && \
-        echo "[rec] 측면은 HEADLESS=1 에서만 찍습니다 — 이번 판은 상단만."
+if [ "$CAPTURE" = "0" ] || [ -z "$FPV_CAM" ] || [ "${HEADLESS:-0}" != "1" ]; then
+    export PIBT_SHOTS_FPV=""
+    export PIBT_CAMERA_FPV=""
+    [ -n "$FPV_CAM" ] && [ "${HEADLESS:-0}" != "1" ] && \
+        echo "[rec] 2번영상은 HEADLESS=1 에서만 찍습니다 — 이번 판은 1번만."
 else
-    export PIBT_SHOTS_SIDE="$SHOTS_SIDE"
-    export PIBT_CAMERA_SIDE="$SIDE_CAM"
+    export PIBT_SHOTS_FPV="$SHOTS_FPV"
+    export PIBT_CAMERA_FPV="$FPV_CAM"
     # 근접 화면이라 조망만큼 클 필요가 없다. **복사량이 곧 비용**이다 —
     # 1280x720 두 시점이 28 ms/step(배속 0.60)이었다 (2026-09-23 실측).
-    export PIBT_SIDE_RES="${PIBT_SIDE_RES:-960x540}"
-    export PIBT_SIDE_FOLLOW="${PIBT_SIDE_FOLLOW:-0}"
-    export PIBT_SIDE_DIST="${PIBT_SIDE_DIST:-6}"
+    export PIBT_FPV_RES="${PIBT_FPV_RES:-960x540}"
+    # ★ `auto` — 초반에 가장 많이 움직인 로봇을 고른다 (2026-09-23).
+    #   여기가 `0` 으로 박혀 있어서 `headless_pibt` 의 auto 기본값이 못 닿았다.
+    #   0번은 충전존에서 시작해 한참 서 있어 영상이 33초 동안 안 바뀌었다
+    #   (`cam1` 실측: #0 도 #100 도 (103.50, 48.50) 그대로).
+    export PIBT_FPV_FOLLOW="${PIBT_FPV_FOLLOW:-auto}"
+    # ★ 기본 **1인칭**(대시캠). 3인칭 추종은 창고를 넓게 담아 렌더가 무겁다.
+    #   되돌리려면:  PIBT_FPV_VIEW=chase PIBT_FPV_DIST=6
+    export PIBT_FPV_VIEW="${PIBT_FPV_VIEW:-fpv}"
+    export PIBT_FPV_DIST="${PIBT_FPV_DIST:-6}"
+    # 렉이 심하면 올린다 — 측면 복사가 그만큼 나뉜다 (대신 측면만 그 배수로 빨라짐)
+    export PIBT_FPV_EVERY="${PIBT_FPV_EVERY:-1}"
 fi
 export PIBT_SHOT_STRIDE="$SHOT_STRIDE"
 export PIBT_SHOT_FPS="$SHOT_FPS"
@@ -443,6 +465,9 @@ fi
 echo "  프레임      $SHOTS"
 echo "  영상        $MP4"
 echo "  로그        $MYLOG"
+if [ "$CAPTURE" = "fpv" ] || [ "$CAPTURE" = "side" ]; then
+    echo "  설정        ★ 1번(천장) 꺼짐 (CAPTURE=fpv) — 1인칭만 만듭니다"
+fi
 if [ "$CAPTURE" = "0" ]; then
     echo "  설정        ★ 촬영 꺼짐 (CAPTURE=0) — 프레임도 영상도 안 만듭니다"
 else
@@ -581,10 +606,11 @@ cleanup() {
         for _ in $(seq 25); do sleep 1; kill -0 "$SCRIPT_PID" 2>/dev/null || break; done
         kill -0 "$SCRIPT_PID" 2>/dev/null && { _kill_mine KILL; kill -KILL "$SCRIPT_PID" 2>/dev/null; }
     fi
-    assemble "$SHOTS" "$MP4" "상단 "
+    # `CAPTURE=fpv` 면 1번은 애초에 안 찍었다 — 「0장입니다」로 오해시키지 않는다.
+    case "$CAPTURE" in fpv|side) ;; *) assemble "$SHOTS" "$MP4" "1번(천장) " ;; esac
     # ★ 측면이 켜져 있으면 이어서 만든다. 프레임이 0장이면 조용히 지나간다.
     #   업로드가 상단 -> 측면 순서로 기다리므로 여기서도 상단을 먼저 만든다.
-    [ -n "${PIBT_SHOTS_SIDE:-}" ] && assemble "$SHOTS_SIDE" "$MP4_SIDE" "측면 "
+    [ -n "${PIBT_SHOTS_FPV:-}" ] && assemble "$SHOTS_FPV" "$MP4_FPV" "2번영상(1인칭) "
 }
 trap cleanup EXIT
 trap 'exit 130' INT TERM
@@ -634,9 +660,12 @@ SCRIPT_PID=$!
   #   프레임도 「캡처 ON」도 영영 안 나오므로 ${WATCH_SEC}초에 무조건 걸려
   #   STRICT=1 기본값으로 **판을 죽인다.** 계측 판이 7분마다 끊긴다.
   [ "$CAPTURE" = "0" ] && exit 0
+  # `CAPTURE=fpv` 면 1번 폴더는 영영 비어 있다 — 1인칭 폴더를 본다.
+  _WSHOTS="$SHOTS"
+  case "$CAPTURE" in fpv|side) _WSHOTS="$SHOTS_FPV" ;; esac
   sleep "$WATCH_SEC"
   _parent_gone && exit 0                                   # 부모가 죽었으면 나도 끝
-  n=$(find "$SHOTS" -maxdepth 1 -name "f_*.$SHOT_EXT" 2>/dev/null | wc -l)
+  n=$(find "$_WSHOTS" -maxdepth 1 -name "f_*.$SHOT_EXT" 2>/dev/null | wc -l)
   if [ "$n" -gt 0 ]; then exit 0; fi                       # 촬영 중
   # ★ 「촬영 ON」은 헤드리스 경로(`headless_pibt.py:226,242`)의 말이다.
   #   안 보면 HEADLESS=1 판이 ${WATCH_SEC}초에 무조건 끊긴다 (2026-09-22).
