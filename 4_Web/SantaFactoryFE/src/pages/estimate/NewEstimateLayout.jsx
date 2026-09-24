@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Outlet, useNavigate } from 'react-router-dom'
 import Header from '../../components/Header.jsx'
 import Footer from '../../components/Footer.jsx'
-import { useEstimateDraft } from '../../hooks/useEstimateDraft.js'
+import { reusableWarehouseId, useEstimateDraft } from '../../hooks/useEstimateDraft.js'
 import { createEstimate, createWarehouse, getRobots } from '../../api/estimates.js'
 
 /**
@@ -31,14 +31,22 @@ export default function NewEstimateLayout() {
 
   const selectedModel = models.find((m) => m.model === draft.model) ?? null
 
-  /** 창고를 만들고 그 창고로 견적을 연다. 둘은 한 번의 제출이다 — 창고만 만들고 끝나면 쓰이지 않는 창고가 남는다. */
+  /**
+   * 창고를 만들고 그 창고로 견적을 연다. 둘은 한 번의 제출이다 — 창고만 만들고 끝나면 쓰이지 않는
+   * 창고가 남는다.
+   *
+   * <p>랜딩에서 저장된 조건을 골라 왔고 한 칸도 안 고쳤으면 창고를 새로 만들지 않고 그 번호를
+   * 그대로 쓴다. 견적 생성 API 가 원래 창고 번호를 받으므로(EstimateService.create) 서버는 그대로다.
+   */
   const requestEstimate = async () => {
     setRequesting(true)
     setRequestError(null)
     try {
-      const warehouse = await createWarehouse({ ...draft.form, budgetLimit: draft.form.budgetMan * 10000 })
+      const reusedId = reusableWarehouseId(draft)
+      const warehouseId = reusedId
+        ?? (await createWarehouse({ ...draft.form, budgetLimit: draft.form.budgetMan * 10000 })).warehouse_id
       const estimate = await createEstimate({
-        warehouseId: warehouse.warehouse_id,
+        warehouseId,
         amrModel: draft.model,
         fleetMin: draft.fleet.min,
         fleetMax: draft.fleet.max,

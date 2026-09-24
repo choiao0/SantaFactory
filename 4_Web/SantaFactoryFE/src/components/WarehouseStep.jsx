@@ -1,9 +1,7 @@
 import { useState } from 'react'
 import TimeField from './TimeField.jsx'
+import { MODEL_PHOTO } from '../data/models.js'
 import { formatWon } from '../utils/format.js'
-
-/** 모델 사진. 백엔드 목록에는 사양·단가만 있어 화면에서 붙인다 — 모델이 늘면 한 줄 더한다. */
-const MODEL_PHOTO = { 'iw.hub': '/amr-iw-hub.webp' }
 
 export default function WarehouseStep({ form, onChange, models, modelsError, model, onSelectModel }) {
   /** 고르는 중인가 — 고르기 전에는 안내만 보이고, 누르면 그때 고르는 판을 펼친다 */

@@ -17,6 +17,16 @@ export function getWarehouse(warehouseId) {
   return api.get(`/warehouses/${warehouseId}`)
 }
 
+/**
+ * 내가 저장해 둔 창고 운영 조건들. 견적을 낼 때마다 창고가 하나씩 쌓이므로 최근 것부터 쓸 만하다.
+ *
+ * 관리자에게는 서버가 전체를 준다(WarehouseService.list 의 isAdmin 분기) — 화면에서 관리자에게는
+ * 이 목록을 쓰지 않는다. 남의 창고가 "내 조건"으로 보이기 때문이다.
+ */
+export function getWarehouses() {
+  return api.get('/warehouses')
+}
+
 export function getRobots() {
   return api.get('/robots')
 }

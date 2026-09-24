@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom'
-import { FIRST_STEP_PATH, STEPS } from '../data/steps.js'
+import { FIRST_STEP_PATH } from '../data/steps.js'
 
 export default function Hero() {
   return (
@@ -22,19 +22,11 @@ export default function Hero() {
       <div className="philos">
         <b>선택은 고객이, 근거는 시스템이</b>
       </div>
+      {/* 다섯 단계 안내는 아래 제 구역이 맡는다 — 같은 내용을 두 번 늘어놓지 않는다 */}
       <div className="herocta">
         <Link className="button" to={FIRST_STEP_PATH}>견적 시작하기 ↗</Link>
         <Link className="ghost" to="/estimates">지난 견적 보기</Link>
       </div>
-      {/* 앞으로 지날 길의 안내다 — 아직 시작하지 않아 갈 수 있는 곳이 없으므로 링크로 두지 않는다 */}
-      <nav className="stepper" aria-label="진행 순서">
-        {STEPS.map((step) => (
-          <span key={step.key} className="stepitem">
-            {step.no} — {step.title}
-            <b>{step.desc}</b>
-          </span>
-        ))}
-      </nav>
     </section>
   )
 }
