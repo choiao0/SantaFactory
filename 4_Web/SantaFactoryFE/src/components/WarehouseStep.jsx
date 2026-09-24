@@ -1,7 +1,15 @@
+import { useState } from 'react'
 import TimeField from './TimeField.jsx'
 import { formatWon } from '../utils/format.js'
 
+/** 모델 사진. 백엔드 목록에는 사양·단가만 있어 화면에서 붙인다 — 모델이 늘면 한 줄 더한다. */
+const MODEL_PHOTO = { 'iw.hub': '/amr-iw-hub.webp' }
+
 export default function WarehouseStep({ form, onChange, models, modelsError, model, onSelectModel }) {
+  /** 고르는 중인가 — 고르기 전에는 안내만 보이고, 누르면 그때 고르는 판을 펼친다 */
+  const [picking, setPicking] = useState(false)
+  /** 판 안에서 짚어 둔 모델. 선택 완료를 눌러야 바깥으로 나간다 — 취소로 되돌릴 수 있어야 한다 */
+  const [draft, setDraft] = useState(null)
   const number = (key) => (e) => onChange({ [key]: e.target.value === '' ? '' : Number(e.target.value) })
   const digits = (key) => (e) => {
     const v = e.target.value.replace(/[^0-9]/g, '')
@@ -64,38 +72,75 @@ export default function WarehouseStep({ form, onChange, models, modelsError, mod
         </form>
 
         <aside className="models">
-          <div className="models-head">
-            <span className="mono dim">AMR 모델</span>
-            <span className="mono dim">단일 모델 · 1개 선택</span>
-          </div>
           {modelsError && <p className="form-error">모델 목록을 불러오지 못했습니다. {modelsError}</p>}
           {!modelsError && models.length === 0 && <p className="mono dim">모델 목록을 불러오는 중…</p>}
-          {models.map((m) => {
-            const on = m.model === model
-            return (
-              <button
-                type="button"
-                key={m.model}
-                className={`spec selectable${on ? ' on' : ''}`}
-                onClick={() => onSelectModel(m.model)}
-                aria-pressed={on}
-              >
-                <span className="lock">{on ? '✓ 선택됨' : '선택'}</span>
-                <h4>{m.model}</h4>
-                <div className="sub">AMR · 사양 · 단가</div>
-                <dl>
-                  <dt>속도</dt>
-                  <dd>{m.speed}<span>m/s</span></dd>
-                  <dt>적재 용량</dt>
-                  <dd>{m.capacity}<span>kg</span></dd>
-                  <dt>배터리</dt>
-                  <dd>{m.battery}<span>%</span></dd>
-                  <dt>대당 단가 / 설치비</dt>
-                  <dd>{formatWon(m.price)} / {formatWon(m.cost)}</dd>
-                </dl>
+
+          {/* 고르기 전에는 사양을 늘어놓지 않는다 — 고른 적도 없는데 선택됨으로 보이던 것을 고친다 */}
+          {!modelsError && models.length > 0 && model == null && !picking && (
+            <div className="modelask">
+              <h4>AMR 모델을 선택해주세요</h4>
+              <p>선택 후 사양과 단가를 확인할 수 있습니다.</p>
+              <button type="button" className="button"
+                      onClick={() => { setDraft(model); setPicking(true) }}>
+                AMR 선택하기 <span aria-hidden="true">›</span>
               </button>
-            )
-          })}
+            </div>
+          )}
+
+          {picking && (
+            <div className="modelpick">
+              <h4>AMR 모델 선택</h4>
+              <div className="picktiles">
+                {models.map((m) => (
+                  <button
+                    type="button"
+                    key={m.model}
+                    className={`picktile${draft === m.model ? ' on' : ''}`}
+                    onClick={() => setDraft((d) => (d === m.model ? null : m.model))}
+                    aria-pressed={draft === m.model}
+                  >
+                    <span>{m.model}</span>
+                    {MODEL_PHOTO[m.model] && <img src={MODEL_PHOTO[m.model]} alt="" />}
+                  </button>
+                ))}
+              </div>
+              <div className="pickcta">
+                <button type="button" className="button" disabled={draft == null}
+                        onClick={() => { onSelectModel(draft); setPicking(false) }}>
+                  선택 완료
+                </button>
+              </div>
+            </div>
+          )}
+
+          {!picking && models.filter((m) => m.model === model).map((m) => (
+            <div className="picked" key={m.model}>
+              <div className="picked-head">
+                <h4>{m.model}</h4>
+                {/* 카드 전체를 누르게 하지 않는다 — 사양을 읽다가 잘못 눌러 고르는 판이 열린다 */}
+                <button type="button" className="again"
+                        onClick={() => { setDraft(m.model); setPicking(true) }}>
+                  <span aria-hidden="true">↻</span> 다시 선택하기
+                </button>
+              </div>
+              {/* 사진을 위에 깔면 높이가 모자라 띠처럼 눌린다 — 왼쪽에 세워 두고 사양을 옆에 붙인다 */}
+              <div className="picked-body">
+                {MODEL_PHOTO[m.model] && <img src={MODEL_PHOTO[m.model]} alt="" />}
+                <dl className="picked-specs">
+                  <dt>속도</dt>
+                  <dd>{m.speed}<i>m/s</i></dd>
+                  <dt>적재 용량</dt>
+                  <dd>{m.capacity}<i>kg</i></dd>
+                  <dt>배터리</dt>
+                  <dd>{m.battery}<i>%</i></dd>
+                  <dt>대당 단가</dt>
+                  <dd>{formatWon(m.price)}</dd>
+                  <dt>설치비</dt>
+                  <dd>{formatWon(m.cost)}</dd>
+                </dl>
+              </div>
+            </div>
+          ))}
         </aside>
       </div>
     </section>

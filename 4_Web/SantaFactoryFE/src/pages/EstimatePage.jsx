@@ -57,7 +57,7 @@ export default function EstimatePage() {
     getRobots()
       .then((list) => {
         setModels(list)
-        setModel((current) => current ?? list[0]?.model ?? null)
+        // 자동으로 고르지 않는다 — 화면이 먼저 묻는다 (S15P21A106-271)
       })
       .catch((e) => setModelsError(e.message))
   }, [])
