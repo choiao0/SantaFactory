@@ -16,6 +16,8 @@ export function getMembers() {
  * 페이지를 넘기지 않으면 서버가 20건에서 자르므로, 화면도 반드시 총 건수를 같이 보여줘야
  * 한다 — 안 그러면 21번째부터는 없는 것처럼 보인다.
  */
-export function getAllEstimates(page = 0, size = ESTIMATE_PAGE_SIZE) {
-  return api.get(`/admin/estimates?page=${page}&size=${size}`)
+export function getAllEstimates(page = 0, { memberId = null, order = 'desc', size = ESTIMATE_PAGE_SIZE } = {}) {
+  const query = new URLSearchParams({ page, size, sort: `createdAt,${order}` })
+  if (memberId != null) query.set('memberId', memberId)
+  return api.get(`/admin/estimates?${query}`)
 }

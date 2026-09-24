@@ -68,8 +68,7 @@ public record QuoteDocument(
                         double svgH, double axisY, double xLabelY,
                         List<AxisLabel> xLabels, List<AxisLabel> xLabelsThr, List<AxisLabel> yLeft,
                         List<AxisLabel> yRight, double budgetY, String budgetLabel,
-                        Double kneeX, String kneeLabel, double recX, double recY,
-                        double recLabelX, double recLabelY, String recLabelAnchor, String recLabel,
+                        double recX, double recY, String recLabel,
                         Mark minimal, Mark minimalThr, Mark thrPeak) {
     }
 
@@ -80,8 +79,8 @@ public record QuoteDocument(
     public record Point(double x, double effY, double thrY, boolean met) {
     }
 
-    /** 곡선 위의 표식 하나 — 표식 자리와 그 설명 글자 자리. 없으면 null. */
-    public record Mark(double x, double y, double labelX, double labelY, String labelAnchor, String label) {
+    /** 곡선 위의 표식 하나 — 자리와 이름. 이름은 그림이 아니라 범례에 적는다. 없으면 null. */
+    public record Mark(double x, double y, String label) {
     }
 
     public record AxisLabel(double pos, String text, boolean highlight) {

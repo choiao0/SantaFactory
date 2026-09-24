@@ -49,8 +49,12 @@ public class AdminService {
 
     /** 전체 견적 — 최근순. 행마다 회사·담당자·연락처가 붙는다. */
     @Transactional(readOnly = true)
-    public Page<AdminEstimateResponse> estimates(Pageable pageable) {
-        return estimateRepository.findAllWithOwner(pageable).map(AdminEstimateResponse::from);
+    /** 회원을 지정하면 그 회원의 견적만. 정렬·페이지는 호출 쪽 Pageable 을 그대로 따른다. */
+    public Page<AdminEstimateResponse> estimates(Long memberId, Pageable pageable) {
+        Page<com.ssafy.santafactory.entity.estimate.Estimate> page = memberId == null
+                ? estimateRepository.findAllWithOwner(pageable)
+                : estimateRepository.findAllWithOwnerByMember(memberId, pageable);
+        return page.map(AdminEstimateResponse::from);
     }
 
     private Map<Long, Long> toMap(List<MemberCount> counts) {

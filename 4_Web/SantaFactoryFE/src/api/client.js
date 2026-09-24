@@ -88,6 +88,7 @@ function refreshSession() {
 export const api = {
   get: (path) => request(path),
   post: (path, body) => request(path, { method: 'POST', body }),
+  del: (path) => request(path, { method: 'DELETE' }),
   download: (path) => download(path),
 }
 
