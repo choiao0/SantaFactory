@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import ConfirmDialog from '../components/ConfirmDialog.jsx'
 import Header from '../components/Header.jsx'
 import { ESTIMATE_PAGE_SIZE, deleteEstimate, getMyEstimates } from '../api/estimates.js'
 import { ESTIMATE_STATUS_LABEL } from '../data/replay.js'
@@ -158,21 +159,16 @@ export default function MyEstimatesPage() {
         </section>
 
         {pendingDelete && (
-          <div className="modal-back" role="dialog" aria-modal="true" aria-labelledby="del-title">
-            <div className="modal">
-              <h4 id="del-title">견적 #{pendingDelete.estimate_id}을 삭제할까요?</h4>
-              <p>
-                대수별 결과와 주행 리플레이, 물리 검증 결과까지 함께 지워집니다.
-                <b> 삭제한 견적은 되돌릴 수 없습니다.</b>
-              </p>
-              <div className="modal-cta">
-                <button type="button" className="ghost sm" disabled={deleting}
-                        onClick={() => setPendingDelete(null)}>취소</button>
-                <button type="button" className="button danger sm" disabled={deleting}
-                        onClick={confirmDelete}>{deleting ? '삭제 중…' : '삭제'}</button>
-              </div>
-            </div>
-          </div>
+          <ConfirmDialog
+            title={`견적 #${pendingDelete.estimate_id}을 삭제할까요?`}
+            confirmLabel="삭제"
+            busy={deleting}
+            onCancel={() => setPendingDelete(null)}
+            onConfirm={confirmDelete}
+          >
+            대수별 결과와 주행 리플레이, 물리 검증 결과까지 함께 지워집니다.
+            <b> 삭제한 견적은 되돌릴 수 없습니다.</b>
+          </ConfirmDialog>
         )}
       </main>
     </>

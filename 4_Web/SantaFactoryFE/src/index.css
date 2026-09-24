@@ -805,8 +805,9 @@ footer a:hover { color: #fff; }
 .card-slot > .admin-card { flex: 1; }
 .card-del {
   position: absolute; top: 10px; right: 10px; z-index: 1;
-  width: 26px; height: 26px; line-height: 1; padding: 0;
+  width: 26px; height: 26px; padding: 0;
   border: 1px solid transparent; border-radius: 3px; background: transparent;
+  /* 축약형이 line-height 까지 정한다 — 따로 적어 두면 어느 쪽이 이기는지 읽는 사람이 헷갈린다 */
   font: 400 19px/1 var(--font-mono); color: #a3a29c; cursor: pointer;
 }
 .card-del:hover { background: #f3e3e0; border-color: var(--red); color: var(--red-dark); }
@@ -825,9 +826,9 @@ footer a:hover { color: #fff; }
 .modal {
   background: var(--paper, #fbfaf8); border: 1px solid #d5d3ce; border-radius: 3px;
   padding: 24px 26px; max-width: 420px; width: 100%;
+  /* 이 창은 어두운 구역 안에 열려 글자색이 흰색으로 상속된다 — 밝은 바탕 위에서 다시 정해 준다 */
+  color: var(--ink);
 }
-/* 이 화면은 어두운 구역 안이라 글자색이 흰색으로 상속된다 — 밝은 창 위에서는 다시 정해 준다 */
-.modal { color: var(--ink); }
 .modal h4 { margin: 0 0 10px; font-size: 18px; letter-spacing: -.01em; color: var(--ink); }
 .modal .ghost { color: var(--ink); border-color: #b7b5b0; background: transparent; }
 .modal .ghost:hover { border-color: var(--ink); }
