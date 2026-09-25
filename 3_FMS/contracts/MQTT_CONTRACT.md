@@ -23,7 +23,7 @@ FMS ↔ AMR 에이전트 ↔ sim-runner ↔ Host ↔ 시뮬 WMS 가 한 브로�
 | # | 항목 | 값 |
 |---|---|---|
 | 1 | Sparkplug group_id | `santa` 고정. 런 ID 는 메트릭 `Runner/RunId` |
-| 2 | edge_node_id | `sim-runner-gpu01`, `fms-core` |
+| 2 | edge_node_id | `sim-runner-gpu01`..`0N`(GPU 1대에 컨테이너 여러 개, spec244 §E — host-orch 가 노드 목록을 받아 비어 있는 노드에 배정), `fms-core` |
 | 3 | device_id | VDA serialNumber 와 동일 `amr01…` |
 | 4 | Primary Host | `host-orch` = GPU 런 큐(RabbitMQ `sim.verify.request`)의 유일한 소비자, 상시 Deployment 1개, AMQP ↔ MQTT 다리. 견적 BE 가 DES 결과(`sim.result`) 회수 후 최적 1건을 적재한다. DES 워커는 GPU 큐를 모른다. host_id 당 Host 하나 |
 | 5 | VDA manufacturer / serial | 기종별 manufacturer(iw.hub = `idealworks`), 시리얼은 기종당 고정 풀. FMS 구독은 `uagv/v2/+/+/…` |
@@ -64,7 +64,7 @@ FMS ↔ AMR 에이전트 ↔ sim-runner ↔ Host ↔ 시뮬 WMS 가 한 브로�
 |---|---|---|---|
 | `amr01…amrNN` (`^amr[0-9]+$`) | 에이전트 | `uagv/v2/+/{self}/connection · factsheet` (허용) · `state · visualization` (금지) | `uagv/v2/+/{self}/order · instantActions` |
 | `fms-core` | VDA 마스터 + SPB Edge | `uagv/v2/+/+/order · instantActions` · `biz/v1/event` · `spBv1.0/santa/{NBIRTH,NDEATH,NDATA}/fms-core` (전부 금지) | `uagv/v2/+/+/{state,connection,factsheet}` · `spBv1.0/STATE/+` · `spBv1.0/santa/NCMD/fms-core` · `biz/v1/order` |
-| `sim-runner-gpu01` | SPB Edge + state 거울 | `spBv1.0/santa/{NBIRTH,NDEATH,NDATA}/sim-runner-gpu01` · `{DBIRTH,DDEATH,DDATA}/sim-runner-gpu01/+` (전부 금지) | `spBv1.0/santa/NCMD/sim-runner-gpu01` · `DCMD/sim-runner-gpu01/+` · `spBv1.0/STATE/+` · `uagv/v2/+/+/{state,connection}` |
+| `sim-runner-gpu\d+`(gpu01..0N) | SPB Edge + state 거울 | `spBv1.0/santa/{NBIRTH,NDEATH,NDATA}/${username}` · `{DBIRTH,DDEATH,DDATA}/${username}/+` (전부 금지) | `spBv1.0/santa/NCMD/${username}` · `DCMD/${username}/+` · `spBv1.0/STATE/+` · `uagv/v2/+/+/{state,connection}` |
 | `host-orch` | Primary Host | `spBv1.0/STATE/host-orch` (허용) · `spBv1.0/santa/NCMD/+` · `DCMD/+/+` (금지) | `spBv1.0/#` · `biz/v1/#` · `uagv/v2/+/+/#` |
 | `sim-wms` | 시뮬 WMS | `biz/v1/order` (금지) | `biz/v1/event` |
 | 그 외 · 익명 | — | 거부 | 거부 |
@@ -141,7 +141,9 @@ FMS ↔ AMR 에이전트 ↔ sim-runner ↔ Host ↔ 시뮬 WMS 가 한 브로�
 | `Runner/RTF` · `IsaacInstances` · `RamMB` · `VramMB` | Double · Int32 | 5 s 샘플, 변화 시 |
 | `Runner/LastError` | String | ERROR 이유 |
 | `Runner/ScenarioSha` | String | 받은 scenario 의 sha256 (정규형). 런 없으면 `""`. Host 가 요청의 sha 와 대조 |
-| `Runner/VideoUrl` | String | (-215, 2026-09-15) 런이 끝나 IDLE 로 돌아가는 **같은 NDATA** 에 실리는 녹화 mp4 의 **객체 키** `<run_id>/<파일>`(-233, 2026-09-16 — 공개 URL 이 아니고 버킷 이름도 안 붙는다. 버킷 `verify-videos` 는 양쪽 설정이고 비공개. 화면용 서명 URL 은 백엔드 VerifyVideoPresigner(-89)가 만든다). 없으면 `""`. Host 가 `sim.verify.result.artifacts.video` 로 그대로 옮긴다 |
+| `Runner/VideoUrl` | String | (-215, 2026-09-15) 런이 끝나 IDLE 로 돌아가는 **같은 NDATA** 에 실리는 녹화 mp4 의 **객체 키** `<run_id>/<파일>`(-233, 2026-09-16 — 공개 URL 이 아니고 버킷 이름도 안 붙는다. 버킷 `verify-videos` 는 양쪽 설정이고 비공개. 화면용 서명 URL 은 백엔드 VerifyVideoPresigner(-89)가 만든다). 없으면 `""`. Host 가 `sim.verify.result.artifacts.video` 로 그대로 옮긴다. `Runner/VideoUrl`·아래 `Runner/Physics` 는 Host 가 **이 잡의 run_id 를 확인한 뒤에만** 받는다 — 노드가 아직 이전 런 값을 들고 있는 채로 STARTING 을 돌 때 읽으면 지난 런 값이 새 결과로 샌다(-244) |
+| `Runner/SimTime` | Double | alias 14. (2026-09-22) 지금까지 돈 **시뮬 시각**(초) — Host 가 창을 벽시계가 아니라 이 값으로 끊는다(`orchestrator._window_filled`). 구간(피크) 재생 런은 **워밍업을 뺀** 창 시계(`verify_slice.warmup_s` 이후부터). 0.0 은 "안 보낸 것"으로 본다(NBIRTH 기본값과 구분 못 함) — 그러면 Host 는 벽시계로 후퇴한다 |
+| `Runner/Physics` | String | alias 15. (S15P21A106-244·275) 구간 재생이 끝나면 접촉·간격·지연률·대기·완료 태스크를 담은 JSON 객체를 한 줄 문자열로. `Runner/VideoUrl` 과 **같은 NDATA** 에 싣는다. Host 는 파싱만 해서 `sim.verify.result.physics` 로 옮긴다(판정은 백엔드, SIM_VERIFY_CONTRACT §3). 없으면 `""` |
 | `Run Control/Start` · `Run Control/Stop` | Text(JSON) · Boolean | NCMD 용. NBIRTH 에 `""` · `false` 로 선언 |
 | **Device amr01… (state 거울)** | | |
 | `Robot/Model` · `Robot/Connection` · `Robot/LastNodeId` | String | factsheet seriesName / ONLINE · OFFLINE · CONNECTIONBROKEN / 틱 ack |
@@ -161,7 +163,7 @@ FMS ↔ AMR 에이전트 ↔ sim-runner ↔ Host ↔ 시뮬 WMS 가 한 브로�
 
 | 메트릭 | 값 | sim-runner 동작 | fms-core 동작 (같은 Start JSON, host-orch 가 sim-runner RUNNING 뒤에 보낸다) |
 |---|---|---|---|
-| `Run Control/Start` | JSON `{run_id, scenario_pkg, n_robots, models[{serial, manufacturer, model}], ros_domain_id, timeout_s, scenario?, scenario_sha256?}` (scenario 는 SIM_VERIFY_CONTRACT §2, 512 KB 이하) | Isaac + 에이전트 기동 → ready(전원 ONLINE + 포즈 수신) → DBIRTH ×N → RUNNING (실패 ERROR + LastError). 멱등: 같은 run_id 가 이미 RUNNING 이면 무시하고 상태만 재보고 (RabbitMQ 재전달 대비) | sha 대조 → STARTING: 전원 ONLINE+포즈(`uagv/v2/+/+/{connection,state}`) → 플래너 생성(로봇 첫 포즈 칸 = 홈) → 정렬 order → 도착 → RUNNING(틱 루프). 멱등·busy 규칙은 sim-runner 와 같다. `timeout_s` 경과 · 로봇 단절/오류 · host STATE offline 15 s → ERROR |
+| `Run Control/Start` | JSON `{run_id, scenario_pkg, n_robots, models[{serial, manufacturer, model}], ros_domain_id, timeout_s, scenario?, scenario_sha256?}` (scenario 는 SIM_VERIFY_CONTRACT §2, 900 KiB 이하 — DES 피크 구간 궤적 인라인(-244)으로 512 KiB 에서 올렸다) | Isaac + 에이전트 기동 → ready(전원 ONLINE + 포즈 수신) → DBIRTH ×N → RUNNING (실패 ERROR + LastError). 멱등: 같은 run_id 가 이미 RUNNING 이면 무시하고 상태만 재보고 (RabbitMQ 재전달 대비) | sha 대조 → STARTING: 전원 ONLINE+포즈(`uagv/v2/+/+/{connection,state}`) → 플래너 생성(로봇 첫 포즈 칸 = 홈) → 정렬 order → 도착 → RUNNING(틱 루프). 멱등·busy 규칙은 sim-runner 와 같다. `timeout_s` 경과 · 로봇 단절/오류 · host STATE offline 15 s → ERROR |
 | `Run Control/Stop` | true | 에이전트 SIGTERM(OFFLINE) → DDEATH ×N → Isaac 종료 → IDLE | 전 로봇 `instantActions cancelOrder` → `biz/v1/event` kpi_summary(§4.4) → IDLE |
 | `Node Control/Rebirth` | true | NBIRTH + 살아 있는 DBIRTH 재발행 | NBIRTH 재발행 |
 
@@ -174,6 +176,11 @@ FMS ↔ AMR 에이전트 ↔ sim-runner ↔ Host ↔ 시뮬 WMS 가 한 브로�
 - Host(적용): `spBv1.0/santa/#` 구독. seq 갭 · BIRTH 없는 노드 → Rebirth NCMD (노드당 5 s 에 1회). NDEATH 는 bdSeq 가 마지막 NBIRTH 와 같을 때만 offline(디바이스 stale), 아니면 stale death 로 무시. NDATA 가 15 s 없으면(하트비트 3회) 런 실패로 Stop. STATE 의 timestamp 는 접속마다 새로 — Edge 는 증가를 보고 BIRTH 재발행.
 - Start 의 `models[]` 가 비면 `amr01…` 순번 시리얼 · manufacturer `idealworks` · model `iw_hub`. sim-runner 는 factsheet 를 못 보므로(ACL) `Robot/Model` 은 이 목록에서 온다. 같은 run_id 는 무시하고 상태만 재보고, 다른 run_id 는 `LastError` "busy" 로 거절(상태 불변).
 - fms-core(적용): 유언·NBIRTH·Rebirth·Host STATE 규칙은 sim-runner 와 같다. keepalive 30 s. bdSeq 는 `~/.local/state/fms_core/bdseq`(컨테이너는 `/state`). Host 는 `Fms/Heartbeat` 15 s 결측 · NDEATH · `Fms/State` ERROR/IDLE(우리 run_id 이탈)을 런 실패로 본다.
+
+**v1.3-draft (2026-09-26, S15P21A106-244)**: 결정 2 · §3 sim-runner ACL 행을 `sim-runner-gpu\d+` 정규식 + `${username}` 로 일반화(GPU 1대에
+컨테이너 여러 개, spec244 §E) — 1항목 3에서 계정군은 같은 비밀번호를 쓴다(`infra/emqx/bootstrap_users.sh`). §5.2 메트릭 사전에
+`Runner/SimTime`(Double, alias 14 — 이미 2026-09-22부터 적용 중이었는데 이 표에 못 실었던 것을 채운다)과 `Runner/Physics`
+(String, alias 15, S15P21A106-275) 추가. §5.3 `Run Control/Start` 의 scenario 상한 512 KiB → 900 KiB(SIM_VERIFY_CONTRACT v0.5).
 
 **v1.2-draft (2026-09-10, S15P21A106-185)**: §4.4 `kpi_summary` 에 `warnings` 추가 — 플래너가 견적과 다른 조건으로 돈 런을 결과에서 구분할 수 있어야 한다(θ 파일 없음 등). 추가만.
 

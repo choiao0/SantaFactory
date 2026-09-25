@@ -14,7 +14,10 @@ from typing import Any, Optional
 
 SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 MAX_ROBOTS = 64
-MAX_SCENARIO_BYTES = 512 * 1024
+# host-orch(3_FMS/host_orch/orchestrator.py) · t3_amr 엣지(2_Simulation/t3_amr/edge/spec.py)와 같은 상한.
+# 512 KiB 였는데 DES 피크 구간 궤적(scenario.trajectory_gz_b64)을 인라인으로 실으면 10대 ≈ 300 KiB ·
+# 15대 ≈ 440 KiB 로 차서 올렸다(-244).
+MAX_SCENARIO_BYTES = 900 * 1024
 # 적재 기본값은 견적 워커(infra/worker/estimate_worker.py::_orders_flags)와 같은 값이어야 한다 — 검증 KPI 는 견적 KPI 와
 # 비교하려고 내는 값이다. 워커와 대조하는 테스트: fms_core/tests/test_des_parity.py::test_worker_defaults.
 DEFAULT_CAPACITY = 1          # 왕복당 토트 수 (요청에 amr.capacity 가 없으면 sim_v2 기본 1)

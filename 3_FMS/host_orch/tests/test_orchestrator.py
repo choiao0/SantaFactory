@@ -1,5 +1,6 @@
 """host_orch.orchestrator — 요청 검증 · Job 상태기계 · 결과 · Coordinator."""
 import json
+import logging
 
 import pytest
 
@@ -221,7 +222,7 @@ class TestCoordinator:
         job = c.submit(b'{"run_id": "x", "n_robots": "two"}')
 
         assert job.done and job.result() == {"run_id": "x", "status": "failed", "error": "bad request: n_robots must be an integer in 1..64",
-                                             "verify": None, "kpi": None, "artifacts": None,
+                                             "verify": None, "kpi": None, "artifacts": None, "physics": None,
                                              "source_run_id": None, "estimate_id": None}
         assert c.submit(b"garbage").result()["run_id"] is None
 
@@ -236,6 +237,7 @@ class TestCoordinator:
 
     def test_second_submit_while_busy_raises(self):
         c, _, _ = self.make()
+        c.on_mqtt(NB, spb.encode_birth(0, [(BD, 1), (STATE, "IDLE"), (RUN_ID, "")]))       # 노드가 비어 있어야 배정된다(-244)
         c.submit(req_json())
 
         with pytest.raises(ValueError):
@@ -317,7 +319,7 @@ class TestCoordinatorRedelivery:
         c, sent = self.make()
         job = c.submit(req_json(window_s=1))
         c.on_mqtt(ND, spb.encode_data(1, [(STATE, "RUNNING"), (RUN_ID, "verify-1")]))
-        job.step(c.tracker.node("sim-runner-gpu01"), 5.0, c.cmd)          # 창 종료 → Stop
+        job.step(c.tracker.node("sim-runner-gpu01"), 5.0, c.cmds["sim-runner-gpu01"])          # 창 종료 → Stop
         c.on_mqtt(ND, spb.encode_data(2, [(STATE, "IDLE"), (RUN_ID, "")]))
         assert job.done
 
@@ -328,7 +330,7 @@ class TestCoordinatorRedelivery:
     def test_failed_run_id_is_run_again_on_resubmit(self):
         c, sent = self.make()
         job = c.submit(req_json())
-        job.step(c.tracker.node("sim-runner-gpu01"), 1000.0, c.cmd)       # start timeout → FAILED
+        job.step(c.tracker.node("sim-runner-gpu01"), 1000.0, c.cmds["sim-runner-gpu01"])       # start timeout → FAILED
         assert job.done and job.phase == "FAILED"
 
         again = c.submit(req_json())
@@ -346,7 +348,7 @@ class TestCoordinatorRedelivery:
     def test_recent_is_bounded(self):
         c, _ = self.make()
         for i in range(O.Coordinator.RECENT_MAX + 5):
-            c.job = None
+            c.jobs.clear()          # 노드를 다시 비워 매번 새 잡을 배정시킨다(-244: 잡은 이제 노드별 dict)
             c.submit(req_json(run_id=f"r{i}"))
 
         assert len(c.recent) == O.Coordinator.RECENT_MAX and "r0" not in c.recent
@@ -627,16 +629,17 @@ class TestWindowSlice:
         assert len(src["orders"]["outbound"]) == 2 and "window_start_s" not in src
 
     def test_a_full_day_of_orders_passes_the_size_cap_once_sliced(self):
+        # 6,500 건 — 900 KiB 상한(-244)에서도 그대로면 거절되는 크기로 6,000 건(512 KiB 시절 크기)에서 올렸다
         day = {"seed": 42, "orders": {"outbound": [
             {"order_id": i, "ordered_at_s": 25200 + i * 3.6, "store_id": 1,
              "lines": [{"product_id": 3, "qty": 2, "rack_id": "A3"}, {"product_id": 9, "qty": 1, "rack_id": "B7"}]}
-            for i in range(6000)]}}
+            for i in range(6500)]}}
         assert len(O.canonical_json(day)) > O.MAX_SCENARIO_BYTES                  # 그대로면 거절되던 크기
 
         r = O.VerifyRequest.from_json(req_json(scenario=day, window_s=600))
 
         w = r.scenario["orders"]["window"]
-        assert w["total"] == 6000 and w["kept"] == 184 and r.scenario["window_start_s"] == 25200      # (600+60)/3.6 + 1
+        assert w["total"] == 6500 and w["kept"] == 184 and r.scenario["window_start_s"] == 25200      # (600+60)/3.6 + 1
         assert r.scenario_sha256 == O.scenario_sha256(r.scenario) and len(O.canonical_json(r.scenario)) < O.MAX_SCENARIO_BYTES
 
 
@@ -721,3 +724,221 @@ class TestSimTimeWindow:
         assert job.sim_time(node("RUNNING", "verify-1", sim_s=12.5)) == 12.5
         assert job.sim_time(node("RUNNING", "verify-1")) is None
         assert job.sim_time(None) is None
+
+
+class TestTrajectoryRequest:
+    """scenario.trajectory_gz_b64 가 있으면 주문 자르기 생략 · 900 KiB 상한 · 궤적 전용 timeout_s 기본값 (B §1, -244)."""
+
+    TRAJ = "H4sIAAAAAAAAA_dummy_trajectory_payload=="   # host-orch 는 디코드하지 않는다 — 형식만 문자열이면 된다
+
+    def test_trajectory_skips_order_slicing_and_keeps_scenario_as_sent(self):
+        scenario = {"seed": 101, "trajectory_gz_b64": self.TRAJ,
+                    "slice": {"t0_s": 4420.0, "warmup_s": 60.0, "window_s": 600.0, "tasks_done": 162}}
+        r = O.VerifyRequest.from_json(req_json(scenario=scenario, window_s=600))
+
+        assert r.is_trajectory is True and r.warmup_s == 60.0
+        assert r.scenario == scenario                          # 자르지 않은 그대로 — sha 도 이걸 기준으로 낸다
+        assert r.scenario_sha256 == O.scenario_sha256(scenario)
+        assert r.start_command()["scenario"] == scenario
+
+    def test_trajectory_default_timeout_uses_warmup_and_window(self):
+        scenario = {"trajectory_gz_b64": self.TRAJ, "slice": {"warmup_s": 60.0}}
+        r = O.VerifyRequest.from_json(req_json(scenario=scenario, window_s=600))
+
+        # ceil((60+600)/0.5) + 300 = 1620 (spec244 B 예시 값과 같다)
+        assert r.effective_timeout_s() == 1620.0
+        assert r.start_command()["timeout_s"] == 1620.0
+
+    def test_trajectory_missing_slice_warmup_defaults_to_60s(self):
+        r = O.VerifyRequest.from_json(req_json(scenario={"trajectory_gz_b64": self.TRAJ}, window_s=600))
+
+        assert r.warmup_s == 60.0 and r.effective_timeout_s() == 1620.0
+
+    def test_explicit_timeout_overrides_the_trajectory_default(self):
+        r = O.VerifyRequest.from_json(req_json(scenario={"trajectory_gz_b64": self.TRAJ}, window_s=600, timeout_s=999))
+
+        assert r.effective_timeout_s() == 999.0
+
+    def test_non_trajectory_request_keeps_the_window_plus_margin_default(self):
+        r = O.VerifyRequest.from_json(req_json(window_s=60))
+
+        assert r.is_trajectory is False and r.effective_timeout_s() == 60.0 + O.START_MARGIN_S
+
+    def test_size_cap_is_900_kib_and_applies_to_trajectory_too(self):
+        assert O.MAX_SCENARIO_BYTES == 900 * 1024
+        big = {"trajectory_gz_b64": "x" * (O.MAX_SCENARIO_BYTES + 1)}
+        with pytest.raises(ValueError, match="too large"):
+            O.VerifyRequest.from_json(req_json(scenario=big))
+
+    @pytest.mark.parametrize("bad", [{"trajectory_gz_b64": ""}, {"trajectory_gz_b64": 123},
+                                     {"trajectory_gz_b64": True}, {"trajectory_gz_b64": ["x"]}])
+    def test_trajectory_field_must_be_a_non_empty_string(self, bad):
+        with pytest.raises(ValueError, match="trajectory_gz_b64"):
+            O.VerifyRequest.from_json(req_json(scenario=bad))
+
+    def test_orders_fallback_when_no_trajectory_is_still_sliced(self):
+        """구간이 없는 run(구 견적 등)은 종전처럼 주문을 창으로 자른다 — B §1 의 폴백."""
+        scenario = TestWindowSlice.scen(100, 400, 2000)
+        r = O.VerifyRequest.from_json(req_json(scenario=scenario, window_s=600))
+
+        assert r.is_trajectory is False
+        assert [o["ordered_at_s"] for o in r.scenario["orders"]["outbound"]] == [100, 400]
+
+
+class TestPhysicsRelay:
+    """Runner/Physics(JSON 문자열) → result()['physics']. 노드가 이전 런 값을 들고 있어도 새지 않는다 (-244, C)."""
+
+    PHYSICS_JSON = json.dumps({"engine": "isaac-headless", "n_robots": 10, "robot_contacts": 0,
+                              "window_actions": {"planned": 3365, "started": 2804, "ratio": 0.833}})
+
+    def test_physics_parsed_into_the_result(self):
+        job, cmd = make_job()
+        job.step(node("IDLE"), 0.0, cmd)
+        job.step(node("RUNNING", "verify-1", last_seen=1.0), 1.0, cmd)
+        done = node("IDLE", "", last_seen=13.0)
+        done.metrics[O.PHYSICS] = self.PHYSICS_JSON
+
+        job.step(done, 13.0, cmd)
+
+        assert job.result()["physics"] == json.loads(self.PHYSICS_JSON)
+
+    def test_physics_is_null_when_the_runner_never_sent_it(self):
+        job, cmd = make_job()
+        job.step(node("IDLE"), 0.0, cmd)
+        job.step(node("RUNNING", "verify-1", last_seen=1.0), 1.0, cmd)
+        job.step(node("IDLE", "", last_seen=2.0), 2.0, cmd)
+
+        assert job.result()["physics"] is None
+
+    def test_bad_json_becomes_null_not_a_crash(self):
+        # caplog·capsys 둘 다 환경에 따라 불안정하다 — ROS2 ament pytest 플러그인이 낀 호스트에서는
+        # caplog 가 기본 핸들러를 못 가로채 항상 빈 문자열이고(재현: 아무 로거로 경고 하나만 찍어도
+        # caplog.text == ""), 반대로 pytest 자체 로그 캡처가 있는 환경(예: docker 테스트 이미지)에서는
+        # 그 캡처 핸들러가 record 를 삼켜 Python lastResort(stderr) 까지 안 내려가 capsys 가 못 잡는다.
+        # 로거에 우리 핸들러를 직접 붙이면 둘 다와 무관하게 확인할 수 있다.
+        logger = logging.getLogger("host_orch.orchestrator")
+        records: list = []
+        handler = logging.Handler()
+        handler.emit = records.append
+        logger.addHandler(handler)
+        try:
+            job, cmd = make_job()
+            job.step(node("IDLE"), 0.0, cmd)
+            job.step(node("RUNNING", "verify-1", last_seen=1.0), 1.0, cmd)
+            done = node("IDLE", "", last_seen=2.0)
+            done.metrics[O.PHYSICS] = "{not json"
+            job.step(done, 2.0, cmd)
+
+            result = job.result()      # 파싱(과 경고 로그)은 result() 호출 시점에 한 번만 일어난다
+        finally:
+            logger.removeHandler(handler)
+
+        assert result["physics"] is None
+        assert any("Runner/Physics" in r.getMessage() for r in records)
+
+    def test_stale_physics_from_a_previous_run_is_ignored_until_our_run_id_is_seen(self):
+        """노드가 STARTING 을 도는 동안 아직 **이전 런**의 Runner/Physics 를 들고 있어도 받지 않는다 —
+        우리 run_id 를 한 번도 못 봤을 때는 무시하고, RUNNING 이후에만 받는다."""
+        job, cmd = make_job()
+        stale = node("IDLE")
+        stale.metrics[O.PHYSICS] = json.dumps({"engine": "stale-previous-run"})
+        job.step(stale, 0.0, cmd)                                  # 아직 STARTING, 우리 run_id 를 못 봤다
+        job.step(node("RUNNING", "verify-1", last_seen=1.0), 1.0, cmd)
+        job.step(node("IDLE", "", last_seen=2.0), 2.0, cmd)         # 이번 런은 Physics 를 주지 않았다
+
+        assert job.result()["physics"] is None                     # 이전 런 값이 새지 않았다
+
+    def test_stale_video_url_from_a_previous_run_is_ignored_until_our_run_id_is_seen(self):
+        """VideoUrl 도 같은 버그 · 같은 수정 (-244)."""
+        job, cmd = make_job()
+        stale = node("IDLE")
+        stale.metrics[O.VIDEO_URL] = "https://example.invalid/verify-videos/OLD_RUN/demo.mp4"
+        job.step(stale, 0.0, cmd)
+        job.step(node("RUNNING", "verify-1", last_seen=1.0), 1.0, cmd)
+        job.step(node("IDLE", "", last_seen=2.0), 2.0, cmd)
+
+        assert job.result()["artifacts"] is None
+
+
+class TestMultiNodeCoordinator:
+    """spec244 §E: 노드 여러 개 — 노드당 한 건, 셋째 요청은 Busy, 어느 노드든 재전달 멱등, NDEATH 는 그 잡만 실패."""
+
+    NODES = ("sim-runner-gpu01", "sim-runner-gpu02")
+
+    def make(self, **kw):
+        sent, clock = [], {"t": 0.0}
+        c = O.Coordinator(HostTracker(), lambda n, m: sent.append((n, m)), list(self.NODES),
+                          O.JobConfig(start_resend_s=10), clock=lambda: clock["t"], **kw)
+        for n in self.NODES:
+            c.on_mqtt(f"spBv1.0/santa/NBIRTH/{n}", spb.encode_birth(0, [(BD, 1), (STATE, "IDLE"), (RUN_ID, "")]))
+        return c, sent, clock
+
+    def test_two_requests_go_to_two_different_nodes(self):
+        c, sent, _ = self.make()
+        j1 = c.submit(req_json(run_id="verify-1"))
+        j2 = c.submit(req_json(run_id="verify-2"))
+
+        assert j1.node_id != j2.node_id and {j1.node_id, j2.node_id} == set(self.NODES)
+        assert [n for n, m in sent if m[0][0] == O.CMD_START] == list(self.NODES)
+
+    def test_third_request_raises_busy_when_both_nodes_are_taken(self):
+        c, _, _ = self.make()
+        c.submit(req_json(run_id="verify-1"))
+        c.submit(req_json(run_id="verify-2"))
+
+        with pytest.raises(O.Busy):
+            c.submit(req_json(run_id="verify-3"))
+
+    def test_a_node_freed_by_a_finished_job_is_picked_up_again(self):
+        c, sent, clock = self.make()
+        j1 = c.submit(req_json(run_id="verify-1", window_s=1))
+        j2 = c.submit(req_json(run_id="verify-2", window_s=1))
+        for n, job in ((j1.node_id, j1), (j2.node_id, j2)):
+            c.on_mqtt(f"spBv1.0/santa/NDATA/{n}", spb.encode_data(1, [(STATE, "RUNNING"), (RUN_ID, job.req.run_id)]))
+        clock["t"] = 5.0
+        c.tick()
+        for n, job in ((j1.node_id, j1), (j2.node_id, j2)):
+            c.on_mqtt(f"spBv1.0/santa/NDATA/{n}", spb.encode_data(2, [(STATE, "IDLE"), (RUN_ID, "")]))
+        assert j1.done and j2.done
+
+        j3 = c.submit(req_json(run_id="verify-3"))
+
+        assert j3.node_id in self.NODES
+
+    def test_idempotent_resubmit_returns_the_same_job_regardless_of_which_node_it_is_on(self):
+        c, sent, _ = self.make()
+        j1 = c.submit(req_json(run_id="verify-1"))
+        c.submit(req_json(run_id="verify-2"))          # 두 번째 노드를 채운다
+        starts_before = [n for n, m in sent if m[0][0] == O.CMD_START]
+
+        again = c.submit(req_json(run_id="verify-1"))
+
+        assert again is j1 and again.node_id == j1.node_id
+        assert [n for n, m in sent if m[0][0] == O.CMD_START] == starts_before      # 재전송 없음(GPU 런 반복 안 함)
+
+    def test_node_ndeath_mid_run_fails_only_its_own_job(self):
+        c, sent, clock = self.make()
+        j1 = c.submit(req_json(run_id="verify-1", window_s=5))
+        j2 = c.submit(req_json(run_id="verify-2", window_s=5))
+        c.on_mqtt(f"spBv1.0/santa/NDATA/{j1.node_id}", spb.encode_data(1, [(STATE, "RUNNING"), (RUN_ID, "verify-1")]))
+        c.on_mqtt(f"spBv1.0/santa/NDATA/{j2.node_id}", spb.encode_data(1, [(STATE, "RUNNING"), (RUN_ID, "verify-2")]))
+        assert j1.phase == O.RUNNING and j2.phase == O.RUNNING
+
+        c.on_mqtt(f"spBv1.0/santa/NDEATH/{j1.node_id}", spb.encode_death(1))
+
+        assert j1.done and j1.phase == "FAILED" and j1.result()["verify"]["reason"] == "runner NDEATH"
+        assert j2.phase == O.RUNNING and not j2.done
+
+    def test_fms_link_is_attached_only_to_the_first_nodes_job(self):
+        c, _, _ = self.make(fms_node_id="fms-core")
+        j1 = c.submit(req_json(run_id="verify-1"))
+        j2 = c.submit(req_json(run_id="verify-2"))
+
+        assert j1.node_id == self.NODES[0] and j1.fms is not None
+        assert j2.node_id == self.NODES[1] and j2.fms is None
+
+    def test_single_string_node_id_still_works_like_before(self):
+        """생성자에 문자열 하나만 줘도(기존 배치) node_ids 튜플로 감싼다."""
+        c = O.Coordinator(HostTracker(), lambda n, m: None, "sim-runner-gpu01")
+
+        assert c.node_ids == ("sim-runner-gpu01",)

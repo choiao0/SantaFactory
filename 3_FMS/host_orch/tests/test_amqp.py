@@ -184,3 +184,81 @@ def test_unexpected_submit_error_becomes_failed_result_not_a_crash():
 
     assert ch.acks == [9]
     assert ch.published[0][1]["run_id"] == "v3" and ch.published[0][1]["error"] == "internal error: boom"
+
+
+# ── 다중 노드: prefetch = 노드 수, pending 여러 건 (spec244 §E, -244) ────────────────────────────
+class FakeMultiCoordinator:
+    """submit 마다 새 FakeJob 을 내주고 tick 은 아직 안 끝난 잡을 전부 진행시킨다 — 노드별 독립 pending 재현용.
+
+    (기존 FakeCoordinator 는 `self.job` 하나만 진행시켜 여러 pending 을 동시에 못 돌린다.)"""
+
+    def __init__(self, jobs):
+        self.to_hand_out, self.submitted, self.active = list(jobs), [], []
+
+    def submit(self, body):
+        self.submitted.append(body)
+        job = self.to_hand_out.pop(0)
+        self.active.append(job)
+        return job
+
+    def tick(self, now):
+        for job in self.active:
+            if not job.done:
+                job.left -= 1
+                job.done = job.left <= 0
+
+
+def test_prefetch_count_matches_the_given_node_count():
+    ch = FakeChannel([])
+    consumer = A.Consumer("amqp://x", FakeCoordinator([]), threading.RLock(), pika_module=FakePika(ch), prefetch_count=3)
+
+    consumer._serve()
+
+    assert ch.qos == 3
+
+
+def test_multiple_pending_requests_are_held_and_acked_independently():
+    j1, j2 = FakeJob(1, {"run_id": "v1", "status": "done"}), FakeJob(3, {"run_id": "v2", "status": "done"})
+    script = [(Method(1), None, b'{"run_id": "v1"}'), (Method(2), None, b'{"run_id": "v2"}')] + [(None, None, None)] * 5
+    ch = FakeChannel(script)
+    coord = FakeMultiCoordinator([j1, j2])
+    consumer = A.Consumer("amqp://x", coord, threading.RLock(), pika_module=FakePika(ch), prefetch_count=2)
+
+    consumer._serve()
+
+    assert ch.qos == 2
+    assert coord.submitted == [b'{"run_id": "v1"}', b'{"run_id": "v2"}']    # 둘 다 prefetch 안에서 동시에 받는다
+    assert ch.acks == [1, 2]                                                # v1 이 먼저 끝나 먼저 ack, v2 는 나중
+    assert [r["run_id"] for _q, r, _p in ch.published] == ["v1", "v2"]
+
+
+def test_stop_while_multiple_pending_nacks_all_with_requeue_and_cancels():
+    ch = FakeChannel([(Method(1), None, b'{"run_id": "a"}'), (Method(2), None, b'{"run_id": "b"}')]
+                     + [(None, None, None)] * 3)
+    coord = FakeMultiCoordinator([FakeJob(100, {}), FakeJob(100, {})])
+    consumer = A.Consumer("amqp://x", coord, threading.RLock(), pika_module=FakePika(ch), prefetch_count=2)
+    ch.on_yield = lambda: consumer.stop_event.set() if len(coord.submitted) >= 2 else None
+
+    consumer._serve()
+
+    assert sorted(ch.nacks) == [(1, True), (2, True)] and ch.acks == [] and ch.cancelled
+
+
+def test_busy_pending_is_requeued_after_a_short_hold_not_held_forever(monkeypatch):
+    """Busy(빈 노드 없음)로 계속 보류되던 메시지를 BUSY_REQUEUE_S 뒤에 requeue 한다 — 그러지 않으면 계속
+    unacked 로 남아 RabbitMQ consumer_timeout(기본 30 분, amqp.py 모듈 docstring)에 걸린다(-244, §3)."""
+    ch = FakeChannel([(Method(11), None, b'{"run_id": "v9"}')] + [(None, None, None)] * 4)
+    coord = BusyThenAcceptCoordinator([], busy_polls=10 ** 9)      # 영원히 Busy
+    consumer = A.Consumer("amqp://x", coord, threading.RLock(), pika_module=FakePika(ch))
+
+    clock = [1000.0]
+
+    def fake_time():
+        clock[0] += 3.0          # poll(0.5 s) 마다 3 s 씩 흐르는 걸로 쳐서 BUSY_REQUEUE_S(10 s)를 몇 번이면 넘는다
+        return clock[0]
+
+    monkeypatch.setattr(A.time, "time", fake_time)
+
+    consumer._serve()
+
+    assert ch.acks == [] and ch.nacks == [(11, True)]
