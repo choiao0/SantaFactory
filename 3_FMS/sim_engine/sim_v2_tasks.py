@@ -26,8 +26,11 @@
 #                              [--replan-max-extra=<칸>]  (v3.15, -247: 정체 재계획 우회 추가 비용 상한. 0 = 없음)
 #                              [--max-order-totes=24]  (v3.5: 토트 합계 초과 주문 = 팔레트 흐름 제외, 그 아래 큰 주문은 여러 왕복. 0 = 제한 없음)
 #                              [--speed=<m/s>]   (v3.3, -116: 틱 길이 = CELL_M / speed. 1칸 = 1틱은 그대로, 초 환산만 바뀐다)
-#                              [--footprint=exact|legacy|exact,front|exact,front_2cell] [--robot-dims=0.39,1.11,0.80]   (v3.4 -203, front 6칸 -79)
-#   --footprint: 회전할 때 차체가 실제로 쓸고 가는 자리. exact(기본) = 0.1 m 지도로 만든 정적 마스크(랙·벽 침범 금지),
+#                              [--footprint=exact,ban|exact|legacy|exact,front|exact,front_2cell|…,ban] [--robot-dims=0.39,1.11,0.80]
+#                              [--ban-release=<틱>]   (v3.4 -203, front 6칸 -79, ban·풀기 v3.17 -277)
+#   --footprint: 회전할 때 차체가 실제로 쓸고 가는 자리. exact,ban(기본, v3.17) = exact + 금지 조합표 거부(이웃이 제어 오차 5 cm
+#              안으로 붙는 회전을 계획하지 않는다; --ban-release 틱 넘게 정체한 로봇만 풀어 교착을 막는다, 기본 160).
+#              exact(v3.15 까지 기본) = 0.1 m 지도로 만든 정적 마스크(랙·벽 침범 금지),
 #              legacy = v3.3 과 비트 동일(뒤 3칸만, 양보 v1), exact,front = + 앞 4칸 soft 축 규칙(물리 팀 안전 규칙, 실험 인자 —
 #              처리량 −2~−15 %, 충전 존 매듭). --robot-dims 는 구동축 앞·뒤·폭 [m](기종 카드). SUMMARY footprint·robot_dims·turn_masked.
 #   --no-standoff: 대치 상태기계 V2(-79)를 끄고 양보 규칙 v1(v3.8 경로). v3.9 부터 헤딩 main exact·exact,front 기본 ON —
@@ -74,7 +77,7 @@ from map_loader import (load_map, make_homes, CELL_M, OFFSET_M, MAP_DIR, ROBOT_D
                         make_homes_zone, load_rack_map, load_topology_spec, masked_turn_ratio, turn_mask)
 from pibt.geometry import FOOTPRINT_MARGIN_M
 from order_stream import MAX_ORDER_TOTES, OrderStream
-from pibt_core import DEFAULT_FOOTPRINT, DIRS, MOVE_TICKS, REV_TICKS, TURN_TICKS
+from pibt_core import DEFAULT_FOOTPRINT, DIRS, FOOTPRINTS, MOVE_TICKS, REV_TICKS, TURN_TICKS
 
 SERVICE_TIME_S = 40 / 11            # v1과 동일 (docs/θ_경로_기준선.md#기준선-계보)
 SERVICE_STEPS = round(SERVICE_TIME_S / DT)
@@ -161,8 +164,8 @@ def _parse_model(a, argv):
     a.pocket_gain = _opt(argv, "pocket-gain", float, 2.0)
     # 회전 발자국 (-203, 계약 v3.4 결과 변경). 기본 exact = 정적 마스크. 회전이 없는 칸 모델·v1compat 은 legacy 로 둔다.
     a.footprint = _opt(argv, "footprint", str, DEFAULT_FOOTPRINT)
-    assert a.footprint in ("legacy", "exact", "exact,front", "exact,front_2cell"), \
-        f"--footprint 는 legacy|exact|exact,front|exact,front_2cell: {a.footprint}"
+    # -277: 끝에 ",ban"(금지 조합표 거부)을 붙일 수 있다 — exact,ban · exact,front_2cell,ban · exact,front,ban
+    assert a.footprint in FOOTPRINTS, f"--footprint 는 {'|'.join(FOOTPRINTS)}: {a.footprint}"
     dims = _opt(argv, "robot-dims", str, ",".join(f"{v:g}" for v in ROBOT_DIMS))
     a.robot_dims = tuple(float(x) for x in dims.split(","))
     assert len(a.robot_dims) == 3 and all(v > 0 for v in a.robot_dims), f"--robot-dims 는 앞,뒤,폭 양수 셋: {dims}"
@@ -251,6 +254,7 @@ def _parse_orders(a, argv):
     a.service_steps = _opt(argv, "service-steps", int)
     a.rev_ticks = _opt(argv, "rev-ticks", int)
     a.replan_max_extra = _opt(argv, "replan-max-extra", int, 0)
+    a.ban_release = _opt(argv, "ban-release", int, KernelConfig.ban_release)   # -277: 금지 조합표에서 풀 정체 틱
     # 주문 단위 경계 (v3.5, 2026-09-14): 토트 합계 초과 주문 = 팔레트 흐름 제외. 그 아래 큰 주문은 여러 왕복. 0 = 제한 없음.
     a.max_order_totes = _opt(argv, "max-order-totes", int, MAX_ORDER_TOTES)
     assert a.max_order_totes >= 0, f"--max-order-totes 는 0 이상 (0 = 제한 없음): {a.max_order_totes}"
@@ -261,6 +265,7 @@ def _parse_orders(a, argv):
     assert a.service_steps is None or a.service_steps >= 0, f"--service-steps 는 0 이상: {a.service_steps}"
     assert a.rev_ticks is None or a.rev_ticks >= 1, f"--rev-ticks 는 1 이상: {a.rev_ticks}"
     assert a.replan_max_extra >= 0, f"--replan-max-extra 는 0 이상 (0 = 없음): {a.replan_max_extra}"
+    assert a.ban_release >= 1, f"--ban-release 는 1 이상: {a.ban_release}"
     if a.tote_units is not None:
         assert a.tote_units >= 1, f"--tote-units 는 1 이상: {a.tote_units}"
         if a.orders_file is None:
@@ -382,7 +387,7 @@ def build(a):
                        yield_rule=a.yield_rule, section_limit=a.section_limit, standoff=a.standoff,
                        turn_ticks=TURN_TICKS, move_ticks=MOVE_TICKS,
                        rev_ticks=REV_TICKS if a.rev_ticks is None else a.rev_ticks,
-                       replan_max_extra=a.replan_max_extra,
+                       replan_max_extra=a.replan_max_extra, ban_release=a.ban_release,
                        stall_warn_only=a.horizon is not None,
                        footprint=a.footprint, robot_dims=a.robot_dims, **bat)
     kernel = FmsKernel(free, st_cell, edge_cost, wait_cost, homes, a.n_robots, cfg,

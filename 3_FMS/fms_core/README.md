@@ -30,7 +30,7 @@ EC2 에 상시로 떠서 host-orch 의 NCMD Start 를 받으면 (1) GPU 박스�
 | 조건 | 값 | 출처 |
 |---|---|---|
 | 통로차단 | ON | `run_once(aisle_block=1)` — `DES_AISLE_BLOCK` |
-| θ 비용 | `THETA_PATH` 또는 `infra/out/theta_wallA_r20_c6_v36.json`, 없으면 중립 + 경고 | 워커 `THETA_PATH` 와 같은 값(`kernel_planner.DEFAULT_THETA`). r24_g15 로 적혀 있던 것은 오기 — 2026-09-16 정정 |
+| θ 비용 | `THETA_PATH`, 없으면 **중립**(-277, 2026-09-25) | 워커 `THETA_PATH` 와 같은 값(`kernel_planner.DEFAULT_THETA = ""`). 예전 기본은 `infra/out/theta_wallA_r20_c6_v36.json` |
 | 차선·양보 | ON (`lane_gain = pocket_gain = 2.0`) | sim_v2 v3 기본 (헤딩 main) |
 | 적재 | `capacity` = 왕복당 토트 1~6, `tote_units` = 토트당 상품(기본 10, 계약 v3.9 — 개인 주문 상한 10개 = 토트 1개; v2.6~v3.8 은 8), `svc_per_tote` = 5틱 | 워커 `_orders_flags` (계약 v2.6) |
 | 교대 | **출고 전용** (견적 기본은 `in,out,out`) | 의도된 차이 — 검증 창은 출고 구간 한 조각이라 창 길이에 in 교대를 다시 자르면 그 시각의 견적 모델과 달라진다 |

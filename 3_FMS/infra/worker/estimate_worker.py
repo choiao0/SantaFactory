@@ -9,7 +9,7 @@
 #   python estimate_worker.py --once <요청.json>   큐 없이 1건 실행, 결과 JSON 을 stdout 에
 #
 # 환경: SIM_ENGINE_DIR(기본 /work/sim_engine, 없으면 이 파일 기준 ../../sim_engine)
-#       THETA_PATH(기본 <3_FMS>/infra/out/theta_wallA_r20_c6_v36.json, "" 이면 중립)
+#       THETA_PATH(기본 "" = 중립 θ (-277). 파일 경로를 주면 그 θ)
 #       THETA_MODEL(비면 꺼짐. 채우면 ai_theta 모델로 **대수별** θ 를 뽑고, 실패하면 THETA_PATH 로)
 #       THETA_MAP_DIR(예측할 맵 폴더. 비면 공식 맵)  THETA_AI_DIR(기본 <3_FMS>/ai_theta)
 #       SIM_TIMEOUT_S(기본 1200)  SIM_REQUEST_QUEUE/SIM_RESULT_QUEUE(기본 sim.request/sim.result)
@@ -37,11 +37,11 @@ _LOCAL_FMS = os.path.dirname(os.path.dirname(HERE))                       # infr
 SIM_ENGINE_DIR = os.environ.get("SIM_ENGINE_DIR") or (
     "/work/sim_engine" if os.path.isdir("/work/sim_engine") else os.path.join(_LOCAL_FMS, "sim_engine"))
 FMS_DIR = os.path.dirname(SIM_ENGINE_DIR)
-# 계약 v3.6(-194) 조건에서 뽑은 θ — 회전 마스크(v3.4) 위에서 재탐색한 값이다.
-# 이전 기본값 theta_wallA_r24_g15.json 은 구 조건(24대 · gap 15 · 1토트 · 속도 1.0 ·
-# 1칸=1틱 · 마스크 없음)이라 지금 시뮬과 다른 세계의 값이다.
-THETA_PATH = os.environ.get("THETA_PATH",
-                            os.path.join(FMS_DIR, "infra", "out", "theta_wallA_r20_c6_v36.json"))
+# θ 는 **중립으로 고정**한다 (-277, 2026-09-25). 금지 조합표 커널(footprint exact,ban) 위에서 est_18 을
+# 6·8·10·12대로 재면 중립이 대수별 모델 예측(THETA_MODEL, -206)과 ±1.3 % 안이었고, 고정 θ v36(20대에서 뽑은
+# 값, 이전 기본)은 6대에서 −24 % 였다. 대수마다 같은 규칙이어야 대수 비교가 규칙 차이로 흐려지지 않는다.
+# 다른 θ 로 돌리려면 THETA_PATH 에 파일을 준다 — infra/out/theta_wallA_r20_c6_v36.json 은 그대로 남아 있다.
+THETA_PATH = os.environ.get("THETA_PATH", "")
 if FMS_DIR not in sys.path:                                                # contracts/ (이미지 안 /app/contracts, 로컬 3_FMS/contracts)
     sys.path.insert(0, FMS_DIR)
 from contracts.speed_model import speed_for_load  # noqa: E402
@@ -68,9 +68,9 @@ def log(msg):
 # ------------------------------------------------------------
 # θ 예측 (S15P21A106-206) — 기본은 꺼져 있다
 #
-# THETA_MODEL 이 비어 있으면 이 부분은 **한 줄도 안 돌고**, 견적은 지금까지와 비트 단위로
-# 같은 고정 θ(THETA_PATH)로 돈다. 켜도 실패하면 조용히 고정 θ 로 떨어진다 — 모델 때문에
-# 견적이 멈추면 안 된다.
+# THETA_MODEL 이 비어 있으면 이 부분은 **한 줄도 안 돌고**, 견적은 THETA_PATH(기본 중립)로
+# 돈다. 켜도 실패하면 조용히 THETA_PATH 로 떨어진다 — 모델 때문에 견적이 멈추면 안 된다.
+# -277 부터 배포 세 곳(EC2·GCP compose, k8s)이 모두 끈다(중립 고정, 위 THETA_PATH 주석).
 #
 # **대수마다 다른 θ 를 뽑는다.** 견적 1건은 1~28대 run 을 한꺼번에 발행하는데, 모델 입력의
 # `fleet` 이 바로 그 대수다. 파일 하나를 THETA_PATH 로 묶으면 20대에서 뽑은 값이 1대에도

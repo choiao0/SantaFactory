@@ -221,6 +221,10 @@ def report(a, kernel, stream, ctx):
                 section_blocks=int(kernel.section_blocks),
                 section_releases=int(kernel.section_releases))
            if getattr(a, "section_limit", 0) else {}),
+        # 금지 조합표 (-277). ban 을 안 붙이면 키가 안 붙는다. 교착 탈출로 표에서 풀린 (로봇 × 틱)
+        # 값은 커널 설정에서 읽는다 — fms_core 처럼 인자 객체 없이 report() 를 부르는 쪽도 있다
+        **(dict(ban_release=int(kernel.cfg.ban_release), ban_releases=int(kernel.ban_releases))
+           if "ban" in str(kernel.cfg.footprint).split(",") else {}),
         **(dict(order_gap=a.order_gap) if a.order_gap_arg is not None else {}),   # v1compat SUMMARY 불변
         **(dict(inbound_gap=a.inbound_gap_arg) if a.inbound_gap_arg is not None else {}),
         **lifelong_extra, **bat_extra,

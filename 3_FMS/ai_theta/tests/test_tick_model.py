@@ -96,7 +96,9 @@ class TestCadence(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        a = S.parse_args(["cad", "6", "40", "42", "1"])
+        # 박자(틱 모델)만 잰다 — 회전 발자국 규칙과 무관하다. 기본 exact,ban(계약 v3.17, -277)은 좁은 회전을 거부해
+        # 대기가 늘고 「혼잡 아닌 구간이 다수」 전제가 깨진다(전진 최빈 4틱 비율 < 0.9). 그래서 exact 로 고정한다.
+        a = S.parse_args(["cad", "6", "40", "42", "1", "--footprint=exact"])
         k, stream, _ = S.build(a)
         prev = {r: (k.robots[r]["pos"], k.robots[r]["h"]) for r in k.rids}
         run, started = {r: 0 for r in k.rids}, {r: None for r in k.rids}
