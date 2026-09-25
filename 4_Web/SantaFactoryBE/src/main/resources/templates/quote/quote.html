@@ -229,6 +229,22 @@ tr.total td{border-top:1.5px solid var(--ink);border-bottom:0;font-weight:800;fo
       <p class="note vnote"><b>주의</b><span th:text="${q.verification.noticeText}"></span></p>
     </th:block>
     <p class="note" th:if="${q.verification == null}">권장 구성의 3D 물리 검증은 아직 진행되지 않았습니다. 웹 리포트의 '검증' 단계에서 요청할 수 있습니다.</p>
+    <th:block th:if="${not #lists.isEmpty(q.physicsRows)}">
+      <table>
+        <thead><tr><th>대수</th><th>물리 판정</th><th class="num">창 동작 시작 비율</th><th class="num">시작 지연 (중앙값)</th><th class="num">접촉</th><th class="num">최소 간격</th></tr></thead>
+        <tbody>
+          <tr th:each="r : ${q.physicsRows}">
+            <td th:text="${r.count} + '대' + (${r.recommended} ? ' (권장)' : '')"></td>
+            <td th:text="${r.verdictLabel}"></td>
+            <td class="num" th:text="${r.windowRatio}"></td>
+            <td class="num" th:text="${r.lagP50}"></td>
+            <td class="num" th:text="${r.contacts}"></td>
+            <td class="num" th:text="${r.minGap}"></td>
+          </tr>
+        </tbody>
+      </table>
+      <p class="note" th:if="${q.physicsLimitLine != null}" th:text="${q.physicsLimitLine}"></p>
+    </th:block>
   </div>
   </th:block>
 

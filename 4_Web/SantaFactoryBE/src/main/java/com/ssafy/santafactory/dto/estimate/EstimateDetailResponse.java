@@ -2,6 +2,7 @@ package com.ssafy.santafactory.dto.estimate;
 
 import com.fasterxml.jackson.databind.PropertyNamingStrategies;
 import com.fasterxml.jackson.databind.annotation.JsonNaming;
+import com.ssafy.santafactory.dto.simulation.PhysicsMetrics;
 import com.ssafy.santafactory.entity.estimate.Estimate;
 import com.ssafy.santafactory.entity.estimate.EstimateStatus;
 import com.ssafy.santafactory.entity.estimate.ReasonCode;
@@ -42,7 +43,14 @@ public record EstimateDetailResponse(
         String verifyVideoFpvUrl,
         List<Run> runs,
         /** 물리 검증 결과와 계산 대비 (S15P21A106-236). 검증 전이면 null. */
-        Verification verification
+        Verification verification,
+        /**
+         * 대수별 물리 검증 회차 — 대수마다 최신 시도 1건, 대수 오름차순 (S15P21A106-244).
+         * 한 번도 검증하지 않았으면 빈 리스트.
+         */
+        List<VerificationRun> verifications,
+        /** 후보 대수 중 물리 판정이 PASS 인 가장 큰 대수. 없으면 null (S15P21A106-244). */
+        Integer physicsLimit
 ) {
 
     /** 대수 1개 = 표의 한 행. */
@@ -130,7 +138,8 @@ public record EstimateDetailResponse(
 
     public static EstimateDetailResponse of(Estimate estimate, List<SimScenario> runs,
                                            String verifyVideoUrl, String verifyVideoFpvUrl,
-                                            Verification verification) {
+                                            Verification verification,
+                                            List<VerificationRun> verifications, Integer physicsLimit) {
         return new EstimateDetailResponse(
                 estimate.getId(),
                 estimate.getStatus(),
@@ -148,6 +157,36 @@ public record EstimateDetailResponse(
                 verifyVideoUrl,
                 verifyVideoFpvUrl,
                 runs.stream().map(Run::from).toList(),
-                verification);
+                verification,
+                verifications,
+                physicsLimit);
+    }
+
+    /**
+     * 대수 하나의 물리 검증 결과 — 최신 시도 (S15P21A106-244). {@code status} 는
+     * {@link com.ssafy.santafactory.entity.estimate.VerifyRunStatus} 이름, {@code verdict} 는
+     * {@link com.ssafy.santafactory.service.estimate.PhysicsVerdict.Verdict} 이름 그대로 나간다 —
+     * 화면이 한글 라벨(통과/주의/실패/해당없음)로 옮긴다.
+     */
+    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
+    public record VerificationRun(
+            Integer nRobots,
+            Integer attempt,
+            String status,
+            String verdict,
+            String error,
+            String reason,
+            String videoUrl,
+            String videoFpvUrl,
+            PhysicsMetrics physics,
+            Slice slice,
+            LocalDateTime requestedAt,
+            LocalDateTime finishedAt
+    ) {
+
+        /** 요청 시 쓴 구간 경계 — 화면이 "DES 창 완료 태스크" 등을 보이는 데 쓴다. */
+        @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
+        public record Slice(Double t0S, Double windowS, Integer tasksDone) {
+        }
     }
 }

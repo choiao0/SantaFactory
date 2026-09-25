@@ -136,7 +136,7 @@ class QuoteDocumentFactoryTest {
         var d = QuoteFixtures.detail(142L, 14, 15, null);
         var adjacent = new EstimateDetailResponse(d.estimateId(), d.status(), d.amrModel(),
                 d.targetThroughput(), d.targetUtilization(), d.budgetLimit(), 14, 13, d.kneeCount(),
-                null, d.createdAt(), d.completedAt(), d.elapsedSeconds(), null, null, d.runs(), null);
+                null, d.createdAt(), d.completedAt(), d.elapsedSeconds(), null, null, d.runs(), null, List.of(), null);
 
         QuoteDocument.Curve c = factory.build(new QuoteSource(adjacent, QuoteFixtures.warehouse())).curve();
 
@@ -152,7 +152,7 @@ class QuoteDocumentFactoryTest {
     void no_recommendation_gives_a_reason_and_no_cost_or_targets() {
         EstimateDetailResponse d = new EstimateDetailResponse(7L, EstimateStatus.DONE, "iw.hub", 95.0, 60.0, 50_000_000L,
                 null, null, null, ReasonCode.BUDGET_EXCEEDED, LocalDateTime.of(2026, 9, 17, 10, 0), LocalDateTime.of(2026, 9, 17, 10, 5),
-                300L, null, null, QuoteFixtures.runs(7L, 5), null);
+                300L, null, null, QuoteFixtures.runs(7L, 5), null, List.of(), null);
 
         QuoteDocument q = factory.build(new QuoteSource(d, QuoteFixtures.warehouse()));
 
