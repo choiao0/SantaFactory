@@ -1,51 +1,76 @@
 # 로컬(GPU 박스) 검증용 — k3s 전 단계. docker compose -f 2_Simulation/t3_amr/deploy/compose.yml up
 # 필요: docker 그룹 권한 + nvidia-container-toolkit + buildx·compose 플러그인 (deploy/README.md §0)
+#
+# ★ 러너 여러 대 (S15P21A106-244): 후보 대수(권장 −1 · 0 · +1)를 동시에 검증하려고 노드를 늘린다.
+#   docker compose -f compose.yml --profile multi up -d   → sim-runner-gpu01 + sim-runner-gpu02
+#   host-orch 의 노드 목록(HOST_ORCH_NODES)과 EMQX 계정(sim-runner-gpu02)이 같이 있어야 한다.
+#   한 대가 RAM 약 16 GB · VRAM 약 5 GB 를 쓴다 — 이 박스(64 GB · RTX 5080 16 GB)는 2대가 한계다
+#   (3대 동시 실측 2026-09-26: RAM 59/62 GB 에 스왑까지, VRAM 15.4/16.3 GB).
+x-runner-env: &runner-env
+  MINIO_ENDPOINT: ${MINIO_ENDPOINT:-100.100.149.68:9002}     # tailnet 직결(http). 업로드만 하므로 공개 주소가 필요 없다
+  MINIO_BUCKET: ${MINIO_BUCKET:-verify-videos}
+  SHOT_STRIDE: ${SHOT_STRIDE:-10}   # 배속 = SHOT_STRIDE × SHOT_FPS / 60 → 10 이면 5배속(창 600 s → 약 53 s). 기본 20 은 10배속 (-241)
+
+x-runner: &runner
+  image: t3amr-runner:dev
+  command: ["edge"]                 # 한 번 녹화만 보려면: ["record", "3"]
+  env_file:
+    - ../../../3_FMS/infra/emqx/.env      # MQTT_HOST · MQTT_PORT · MQTT_PW_SIM_RUNNER (gitignored)
+    - .env                                # MINIO_ACCESS_KEY · MINIO_SECRET_KEY = EC2 ~/minio-keys/sim-runner.env (쓰기 전용 계정, gitignored, -233)
+  # ★ 장치를 docker 자신의 목록에 올린다(-241). nvidia 훅이 넣는 /dev/nvidia* 허용은 systemd daemon-reload
+  #   (unattended-upgrade 가 부른다) 때 docker(systemd cgroup, v2)가 device cgroup 을 다시 적용하며 사라진다 —
+  #   컨테이너는 살아 있는데 NVML 999 · Vulkan INCOMPATIBLE_DRIVER (2026-09-17 새벽 실측, 복구 = 재생성).
+  #   여기 적힌 장치는 docker 의 HostConfig 라 재적용에서 살아남는다(NVIDIA 문서의 처방; 대안은 CDI).
+  #   엣지는 그래도 Start 마다 nvidia-smi 로 확인하고(edge/gpu.py) 안 되면 ERROR 보고 뒤 스스로 내려간다 → restart 가 재주입.
+  devices:
+    - /dev/nvidia0
+    - /dev/nvidiactl
+    - /dev/nvidia-modeset
+    - /dev/nvidia-uvm
+    - /dev/nvidia-uvm-tools
+  # WebRTC 관전 포트는 기본으로 열지 않는다(녹화에 불필요, 캠퍼스망 UDP 차단). 필요하면 ports: ["49100:49100/tcp", "47998:47998/udp"]
+  deploy:
+    resources:
+      reservations:
+        devices:
+          - driver: nvidia
+            count: 1
+            # ★ ngx 가 있어야 NGX(DLSS 디노이저) 라이브러리가 들어온다(-237). 이 목록이 마운트 범위를 정하므로 이미지의
+            #   NVIDIA_DRIVER_CAPABILITIES=all 은 여기서 무시된다. 없으면 Kit 이 "Failed to create NGX context" 로
+            #   디노이저 없이 렌더해 프레임이 온통 노이즈가 되고 mp4 가 100 Mbps(30 s 에 366 MB)로 커진다 — 2026-09-16 verify_4.
+            #   단독 `docker run --gpus all` 은 all 이라 괜찮았다. k8s 는 env all 그대로.
+            capabilities: [gpu, graphics, utility, compute, video, ngx]
+  restart: unless-stopped
+
 services:
   t3amr-runner:
+    <<: *runner
     build:
       context: ..
       dockerfile: deploy/Dockerfile
       additional_contexts:
         sim_engine: ../../../3_FMS/sim_engine     # 계획기 원본 — Dockerfile 의 COPY --from=sim_engine (compose ≥ 2.17)
         fms_map: ../../../3_FMS/map               # FMS 공식 맵 데이터 — 궤적 재생(FMS 격자)이 읽는다 (-275)
-    image: t3amr-runner:dev
     container_name: t3amr-runner
-    command: ["edge"]                 # 한 번 녹화만 보려면: ["record", "3"]
-    env_file:
-      - ../../../3_FMS/infra/emqx/.env      # MQTT_HOST · MQTT_PORT · MQTT_PW_SIM_RUNNER (gitignored)
-      - .env                                # MINIO_ACCESS_KEY · MINIO_SECRET_KEY = EC2 ~/minio-keys/sim-runner.env (쓰기 전용 계정, gitignored, -233)
     environment:
-      NODE_ID: sim-runner-gpu01       # host-orch --node 와 같아야 한다
-      MINIO_ENDPOINT: ${MINIO_ENDPOINT:-100.100.149.68:9002}     # tailnet 직결(http). 업로드만 하므로 공개 주소가 필요 없다
-      MINIO_BUCKET: ${MINIO_BUCKET:-verify-videos}
-      SHOT_STRIDE: ${SHOT_STRIDE:-10}   # 배속 = SHOT_STRIDE × SHOT_FPS / 60 → 10 이면 5배속(창 600 s → 약 53 s). 기본 20 은 10배속 (-241)
-    # ★ 장치를 docker 자신의 목록에 올린다(-241). nvidia 훅이 넣는 /dev/nvidia* 허용은 systemd daemon-reload
-    #   (unattended-upgrade 가 부른다) 때 docker(systemd cgroup, v2)가 device cgroup 을 다시 적용하며 사라진다 —
-    #   컨테이너는 살아 있는데 NVML 999 · Vulkan INCOMPATIBLE_DRIVER (2026-09-17 새벽 실측, 복구 = 재생성).
-    #   여기 적힌 장치는 docker 의 HostConfig 라 재적용에서 살아남는다(NVIDIA 문서의 처방; 대안은 CDI).
-    #   엣지는 그래도 Start 마다 nvidia-smi 로 확인하고(edge/gpu.py) 안 되면 ERROR 보고 뒤 스스로 내려간다 → restart 가 재주입.
-    devices:
-      - /dev/nvidia0
-      - /dev/nvidiactl
-      - /dev/nvidia-modeset
-      - /dev/nvidia-uvm
-      - /dev/nvidia-uvm-tools
+      <<: *runner-env
+      NODE_ID: sim-runner-gpu01       # host-orch 노드 목록과 같아야 한다
     volumes:
       - ov-cache:/cache/ov            # Kit 셰이더 캐시 — 첫 기동 수 분, 이후 재사용
       - ./data:/data                  # out(mp4·프레임) · state(bdSeq · 런 로그)
-    # WebRTC 관전 포트는 기본으로 열지 않는다(녹화에 불필요, 캠퍼스망 UDP 차단). 필요하면 ports: ["49100:49100/tcp", "47998:47998/udp"]
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              # ★ ngx 가 있어야 NGX(DLSS 디노이저) 라이브러리가 들어온다(-237). 이 목록이 마운트 범위를 정하므로 이미지의
-              #   NVIDIA_DRIVER_CAPABILITIES=all 은 여기서 무시된다. 없으면 Kit 이 "Failed to create NGX context" 로
-              #   디노이저 없이 렌더해 프레임이 온통 노이즈가 되고 mp4 가 100 Mbps(30 s 에 366 MB)로 커진다 — 2026-09-16 verify_4.
-              #   단독 `docker run --gpus all` 은 all 이라 괜찮았다. k8s 는 env all 그대로.
-              capabilities: [gpu, graphics, utility, compute, video, ngx]
-    restart: unless-stopped
+
+  # 두 번째 러너 (-244) — 같은 이미지, 다른 노드 이름 · 다른 상태 폴더(bdSeq·런 로그가 섞이면 안 된다).
+  t3amr-runner-2:
+    <<: *runner
+    profiles: ["multi"]
+    container_name: t3amr-runner-2
+    environment:
+      <<: *runner-env
+      NODE_ID: sim-runner-gpu02
+    volumes:
+      - ov-cache:/cache/ov            # 셰이더 캐시는 같이 쓴다(읽기 위주)
+      - ./data2:/data
+
 volumes:
   ov-cache:
     name: t3amr-ov-cache            # 고정 이름 — compose 프로젝트명(폴더명)에 안 묶여 단독 docker run(deploy/README §1)과 셰이더 캐시를 공유한다

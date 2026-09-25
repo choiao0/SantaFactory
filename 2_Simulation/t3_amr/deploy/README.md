@@ -125,6 +125,28 @@ cd 2_Simulation/t3_amr && python3 -m edge --env-file ../../3_FMS/infra/emqx/.env
 엣지가 `Runner/VideoUrl` 로 보내는 값은 버킷 없는 객체 키 `<run_id>/<파일>` 이고(버킷은 양쪽 `MINIO_BUCKET`), 화면용 서명 URL 은 백엔드 `VerifyVideoPresigner`(-89) 몫이다 —
 서명 방법과 nginx `/media/` 함정은 `3_FMS/contracts/SIM_VERIFY_CONTRACT.md` §7 에 적었다(2026-09-16 실측: 서명 있으면 200, 없으면 403).
 
+## 3-1. 러너 여러 대 — 후보 대수 동시 검증 (-244)
+
+백엔드가 권장 대수 −1 · 0 · +1 을 한 번에 검증 요청하고, host-orch 가 **비어 있는 노드**에 한 건씩 나눠 준다.
+노드 = 러너 컨테이너 하나(엣지 하나, `NODE_ID`). 같은 이미지를 노드 이름과 상태 폴더만 바꿔 띄운다.
+
+```bash
+docker compose -f compose.yml --profile multi up -d        # sim-runner-gpu01 + sim-runner-gpu02
+```
+
+| 필요한 것 | 어디 |
+|---|---|
+| 노드마다 다른 `NODE_ID` · `container_name` · 데이터 폴더(`./data`, `./data2`) | `compose.yml` 의 `t3amr-runner-2` (profile `multi`) |
+| EMQX 계정 `sim-runner-gpu02`(비밀번호는 gpu01 과 같은 `MQTT_PW_SIM_RUNNER`) · ACL | `3_FMS/infra/emqx` — 떠 있는 브로커에는 한 번 손으로 추가 |
+| host-orch 노드 목록 `HOST_ORCH_NODES=sim-runner-gpu01,sim-runner-gpu02` | `3_FMS/infra/compose.host-orch.yml` |
+
+용량 실측(2026-09-26, 이 박스 RTX 5080 16 GB · RAM 64 GB, 10대 피크 구간 재생): 한 대당 RAM 약 16 GB · VRAM 약 5 GB.
+**2대 동시**는 RAM 42 GB · VRAM 10.6 GB, 배속 0.83~0.86 으로 여유가 있다. 3대는 RAM 59/62 GB 에 스왑까지 쓰고
+VRAM 15.4/16.3 GB 라 쓰지 않는다.
+
+다른 GPU 서버로 옮길 때: **RT 코어가 있는 GPU**라야 한다(RTX · L4 · L40S 계열. A100 · H100 은 Isaac 렌더링 불가).
+MQTT · MinIO 는 지금 tailnet 주소라 그 서버에서는 공인 경로(TLS · 출발지 제한 · 전용 계정)가 따로 필요하다.
+
 ## 4. 아직 안 정한 것
 - 검증 런에서 fms-core 를 뺄지(권장, 영상이 목표) — 빼면 host-orch 를 `--fms-node` 없이 띄운다.
 - 창 길이(300~600 s)와 RTF. 녹화는 실시간보다 느릴 수 있어 벽시계 = 창 ÷ RTF.
