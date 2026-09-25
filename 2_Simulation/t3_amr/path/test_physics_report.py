@@ -73,6 +73,14 @@ class TestSummarize:
         assert doc["robot_contacts"] == 1 and doc["window_sim_s"] == 0.0
         assert doc["robot_min_gap_m"] is None                          # 한 번도 안 가까워졌다
 
+    def test_self_planned_runs_have_no_plan_comparison(self):
+        """DES 계획이 없는 런 — 태스크 첫 동작의 주문 도착 시각만 남아 있어도 견주지 않는다."""
+        s = stats(started=1462, start_lag=[(3.0, 3.01), (5.0, 5.02)])
+        doc = PR.summarize(s, None, sim_s=600.0, wall_s=701.0, warmup_s=0.0, window_s=600.0,
+                           n_robots=12, planned_s=None)
+        assert doc["lag"] is None and doc["window_actions"] is None
+        assert doc["actions_started"] == 1462                          # 나머지는 그대로 센다
+
     def test_file_is_written_whole(self, tmp_path):
         p = str(tmp_path / "physics_x.json")
         PR.write_atomic(p, {"robot_contacts": 0})

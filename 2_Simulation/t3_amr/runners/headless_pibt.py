@@ -215,8 +215,11 @@ sys.path.insert(0, os.path.join(os.environ.get("W", os.path.dirname(os.path.dirn
     os.path.abspath(__file__)))), "path"))
 import physics_report as PR                             # noqa: E402
 
-_PLANNED = [fleet.rt.release_time(a) for a in fleet.rt.adg.actions
-            if getattr(a, "release_tick", None) is not None]
+#   DES 궤적을 재생한 런(live_pibt 가 traj_dt 를 채웠다)만 계획과 견준다. 자체 계획이면 None —
+#   지연·창 수행은 null 로 나간다(`physics_report.summarize` 주석).
+_PLANNED = ([fleet.rt.release_time(a) for a in fleet.rt.adg.actions
+             if getattr(a, "release_tick", None) is not None]
+            if state.get("traj_dt") is not None else None)
 _PH_BASE = None                                         # 워밍업 끝 기준선
 
 
@@ -241,7 +244,7 @@ def _physics_write(t_sim, wall):
 
 if _SLICE:
     print(f"[hl] ★★ 구간 재생 — 워밍업 {WARMUP:g}s 뒤 창 {WINDOW:g}s 를 센다 · "
-          f"계획 동작 {len(_PLANNED):,}개 · 지표 -> {PHYSICS_OUT or '(안 씀)'}")
+          f"계획 동작 {len(_PLANNED or ()):,}개 · 지표 -> {PHYSICS_OUT or '(안 씀)'}")
 print(f"[hl] 준비 완료 — 프레임 {_frames:,} · {time.time() - _w0:.0f}s. "
       + (f"여기서부터 렌더는 **{SHOT_STRIDE}스텝에 한 번**뿐" if SHOTS
          else "여기서부터 **렌더 없음**"))

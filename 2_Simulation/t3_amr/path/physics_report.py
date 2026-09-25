@@ -99,8 +99,13 @@ def progress(planned_s, started_plans, lo_s, hi_s, now_s):
 
 
 def summarize(stats, base, *, sim_s, wall_s, warmup_s, window_s, n_robots,
-              planned_s=(), rt=None, des_window=None, engine="isaac-headless"):
-    """물리 블록 dict. `base` 가 None 이면(워밍업 전) 런 전체를 센다."""
+              planned_s=None, rt=None, des_window=None, engine="isaac-headless"):
+    """물리 블록 dict. `base` 가 None 이면(워밍업 전) 런 전체를 센다.
+
+    `planned_s` 가 None 이면 DES 계획이 없는 런(러너 자체 계획)이다 — `lag`·`window_actions` 를
+    null 로 낸다. 자체 계획에서는 태스크 첫 동작만 계획 시각(주문 도착)을 갖고 재계획한 동작은
+    처음 목록에 없어, 그 둘이 「계획 33개 중 12개 시작 · 580 s 밀림」처럼 거짓으로 나왔다(09-25 verify_19).
+    """
     base = base or _zero_base()
     d = {k: int(getattr(stats, k, 0) or 0) - int(base.get(k, 0)) for k in COUNTERS}
     why_now = _why_totals(rt)
@@ -110,6 +115,7 @@ def summarize(stats, base, *, sim_s, wall_s, warmup_s, window_s, n_robots,
     gap = getattr(stats, "worst_gap", float("inf"))
     lo, hi = float(warmup_s), float(warmup_s) + float(window_s)
     started_plans = [plan for plan, _ in getattr(stats, "start_lag", ())]
+    replay = planned_s is not None
     return {
         "engine": engine,
         "n_robots": n_robots,
@@ -131,8 +137,8 @@ def summarize(stats, base, *, sim_s, wall_s, warmup_s, window_s, n_robots,
         "cell_overlaps": d["overlap_events"],
         "actions_started": d["started"],
         "actions_completed": d["completed"],
-        "lag": lag_summary(getattr(stats, "start_lag", ()), lo, hi),
-        "window_actions": progress(planned_s, started_plans, lo, hi, float(sim_s)),
+        "lag": lag_summary(getattr(stats, "start_lag", ()), lo, hi) if replay else None,
+        "window_actions": progress(planned_s, started_plans, lo, hi, float(sim_s)) if replay else None,
         "blocked": {"robot_frames": denom,
                     **{n: why[i] for i, n in enumerate(WHY_NAMES)},
                     "ratio": round(sum(why) / denom, 4) if denom else None},
