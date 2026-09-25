@@ -75,7 +75,7 @@ function VerifyPlayer({ estimateId, current }) {
 
   const views = useMemo(() => [
     { key: 'top', label: '상단 시점', url: current.video_url },
-    { key: 'fpv', label: '1인칭 시점', url: current.video_fpv_url },
+    { key: 'fpv', label: 'AMR 추종 시점', url: current.video_fpv_url },
   ].filter((v) => v.url), [current.video_url, current.video_fpv_url])
   const activeView = views.find((v) => v.key === view) ?? views[0]
   const videoUrl = refreshed && refreshed.replaces === activeView?.url ? refreshed.url : activeView?.url
