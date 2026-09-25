@@ -491,7 +491,7 @@ section.step > p.desc { font-size: 18px; line-height: 1.7; max-width: 760px; mar
 .status.DONE { color: #6fe5a5; border-color: #2f7a52; background: rgba(79, 209, 139, .12); }
 .status.RUNNING { color: #ff6b6b; border-color: var(--red); background: rgba(231, 45, 45, .14); }
 .status.RUNNING::before { animation: blink .9s step-start infinite; }
-.status.QUEUED { color: #aaa; border-color: #555; }
+.status.QUEUED, .status.PENDING { color: #aaa; border-color: #555; }
 .status.FAILED, .status.TIMEOUT, .status.PARTIAL { color: #ffc14d; border-color: #a5730e; background: rgba(224, 160, 30, .14); }
 .status.CANCELLED { color: #777; border-color: #444; }
 
@@ -683,6 +683,51 @@ section.step > p.desc { font-size: 18px; line-height: 1.7; max-width: 760px; mar
   margin: 0; max-width: min(100%, 620px);
   font: 400 15px/1.8 var(--font-sans); color: #8f8f8b;
 }
+
+/* 대수별 물리 검증 후보 카드 (S15P21A106-244) — 고르면 아래 재생·지표가 그 대수로 바뀐다 */
+.verify-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px;
+  max-width: 920px; margin: 0 0 14px;
+}
+.verify-card {
+  display: flex; flex-direction: column; gap: 8px; align-items: flex-start;
+  background: #141414; border: 1px solid #2c2c2c; padding: 12px 14px; text-align: left; cursor: pointer;
+  transition: border-color .15s ease, background .15s ease;
+}
+.verify-card:hover { border-color: #555; }
+.verify-card.on { border-color: var(--red); background: rgba(231, 45, 45, .1); }
+.vc-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; }
+.vc-count { font: 700 16px var(--font-head); letter-spacing: -.02em; color: #fff; }
+.vc-count em { font: 500 12px var(--font-mono); font-style: normal; color: #ff8a8a; margin-left: 2px; }
+.vc-verdict {
+  font: 600 11px var(--font-mono); letter-spacing: .05em; padding: 3px 8px; border: 1px solid #555; color: #aaa;
+  white-space: nowrap;
+}
+.vc-verdict.PASS { color: #6fe5a5; border-color: #2f7a52; background: rgba(79, 209, 139, .12); }
+.vc-verdict.WARN { color: #ffc14d; border-color: #a5730e; background: rgba(224, 160, 30, .14); }
+.vc-verdict.FAIL { color: #ff6b6b; border-color: var(--red); background: rgba(231, 45, 45, .14); }
+.vc-verdict.NA { color: #888; border-color: #4a4a4a; }
+.vc-status { font-size: 12px; letter-spacing: .05em; }
+.vc-error { font: 400 12px/1.5 var(--font-sans); color: #ff8a8a; }
+
+.verify-limit { max-width: 920px; margin: 0 0 16px; font-size: 13px; }
+
+/* 고른 대수의 지표 — 명세 §D 문구 그대로, 두 칸씩 흐르게 */
+.verify-metrics {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px 20px;
+  margin: 14px 0 0; padding-top: 14px; border-top: 1px solid #2c2c2c;
+}
+.vm-row { display: flex; justify-content: space-between; gap: 10px; font-size: 13px; }
+.vm-row dt { color: #8a8a86; }
+.vm-row dd { margin: 0; color: #eee; font-weight: 600; text-align: right; }
+
+/* 후보 비교 표 — 카드보다 조밀하게, 한눈에 대수를 비교한다 */
+.verify-compare-wrap { max-width: 920px; margin-top: 18px; overflow-x: auto; }
+.verify-compare { width: 100%; border-collapse: collapse; font-size: 13px; }
+.verify-compare th, .verify-compare td { padding: 8px 10px; border-bottom: 1px solid #2c2c2c; text-align: left; }
+.verify-compare th { color: #8a8a86; font: 600 12px var(--font-mono); letter-spacing: .04em; text-transform: uppercase; }
+.verify-compare td { color: #ddd; }
+.verify-compare tr.on td { color: #fff; background: rgba(231, 45, 45, .08); }
 
 .paper { background: var(--white); color: var(--ink); }
 /* 위 여백은 다른 섹션의 큰 제목(section.step h2)과 같은 18px — QUOTE 만 제목이 없어

@@ -11,85 +11,87 @@ import { useVerifyStream } from '../hooks/useVerifyStream.js'
  */
 const REFRESH_COOLDOWN_MS = 10_000
 
-/**
- * 영상이 없을 때 자리를 채우는 내용. 섹션 자체는 언제나 그린다 — 헤더의 VERIFY 앵커가 가리키는
- * 곳이라, 영상이 생겨야 섹션이 나타나면 그 전까지는 눌러도 아무 데도 가지 않는다.
- */
-function placeholderFor({ estimateId, ready, verify, recommendedCount, started }) {
+const STATUS_LABEL = { PENDING: '대기', RUNNING: '검증 중', DONE: '완료', FAILED: '실패' }
+const VERDICT_LABEL = { PASS: '통과', WARN: '주의', FAIL: '실패', NA: '해당없음' }
+
+const pct = (ratio) => (ratio == null ? '—' : `${Math.round(ratio * 100)}%`)
+const secs = (v) => (v == null ? '—' : `${v.toFixed(1)}초`)
+const meters = (v) => (v == null ? '—' : `${v.toFixed(2)} m`)
+const contactsOf = (p) => (p?.robot_contacts ?? 0) + (p?.rack_contacts ?? 0)
+
+/** 카드 한 장의 지표 목록 — 명세 §D 문구 그대로. physics 가 없으면(N/A) 빈 배열. */
+function metricsFor(run) {
+  const p = run.physics
+  if (!p) return []
+  return [
+    ['창 안 계획 동작 중 시작한 비율', pct(p.window_actions?.ratio)],
+    ['시작 지연 중앙값', secs(p.lag?.p50_s)],
+    ['시작 지연 상위 10%', secs(p.lag?.p90_s)],
+    ['로봇 접촉', p.robot_contacts ?? '—'],
+    ['랙 접촉', p.rack_contacts ?? '—'],
+    ['최소 간격', meters(p.robot_min_gap_m)],
+    ['다른 로봇 대기 비율', pct(p.blocked?.ratio)],
+    ['배속', p.rtf != null ? `${p.rtf.toFixed(2)}x` : '—'],
+    ['DES 창 완료 태스크', run.slice?.tasks_done ?? p.des_window?.tasks_done ?? '—'],
+  ]
+}
+
+/** 아직 후보가 하나도 없을 때(검증 전) 보여줄 자리 — 기존 단일 검증 화면과 같은 문구. */
+function idlePlaceholder({ estimateId, ready, recommendedCount, started }) {
   if (estimateId == null) {
     return { tag: 'QUEUED', label: '대기', text: '견적을 요청하면 물리 검증 결과가 여기에 표시됩니다.' }
   }
   if (!ready) {
-    return { tag: 'RUNNING', label: '계산 중', live: true, text: '시뮬레이션 판정이 끝나면 권장 대수로 물리 검증을 돌립니다.' }
+    return { tag: 'RUNNING', label: '계산 중', live: true, text: '시뮬레이션 판정이 끝나면 권장 대수 전후로 물리 검증을 돌립니다.' }
   }
-  // 권장 대수가 없으면 Isaac 에게 "몇 대로 재현하라" 를 말할 수 없어 서버가 요청을 거부한다.
-  // 그대로 두면 아래 "검증하고 있습니다" 로 떨어져, 시작할 수도 없는 검증이 도는 것처럼 보였다
-  if (recommendedCount == null && (!verify.status || verify.status === 'PENDING') && !verify.error) {
+  if (recommendedCount == null) {
     return {
       tag: 'QUEUED', label: '대기',
       text: '권장 대수가 없어 물리 검증을 돌릴 수 없습니다',
       hint: ['목표를 만족하는 구성이 나오면 이 자리에서 검증을 시작할 수 있습니다.'],
     }
   }
-  // 아직 시작 전 — 여기서 사람이 버튼을 눌러야 Isaac 이 돈다. 이 분기가 없으면 요청도 안 했는데
-  // "검증하고 있습니다" 가 떠서, 10분을 기다려도 아무 일이 안 일어난다
-  if (!started && recommendedCount != null && (!verify.status || verify.status === 'PENDING') && !verify.error) {
+  if (!started) {
     return {
       tag: 'QUEUED', label: '대기', action: true,
-      text: `권장 ${recommendedCount}대로 물리 검증을 시작할 수 있습니다`,
-      hint: ['Isaac Sim 이 실제 로봇 물리로 재현해 동작을 확인합니다.'],
+      text: `권장 ${recommendedCount}대 전후로 물리 검증을 시작할 수 있습니다`,
+      hint: ['Isaac Sim 이 후보 대수마다 실제 로봇 물리로 재현해 동작을 확인합니다.'],
     }
-  }
-  if (verify.error) {
-    return { tag: 'FAILED', label: '실패', text: `물리 검증에 실패했습니다 — ${verify.error}` }
-  }
-  // 워커가 끝났다고 알렸는데 영상이 없는 경우 — 검증은 돌았으니 진행 중이라고 하면 안 된다
-  if (verify.status && verify.status !== 'PENDING' && verify.status !== 'RUNNING') {
-    return { tag: 'PARTIAL', label: '영상 없음', text: '물리 검증은 끝났지만 재생할 영상이 남지 않았습니다.' }
   }
   return {
     tag: 'RUNNING', label: '검증 중', live: true,
     text: 'Isaac Sim에서 로봇 동작을 검증하고 있습니다',
-    hint: [
-      '실제 환경에 가까운 정밀한 물리 검증을 위해 다소 시간이 필요합니다.',
-      '완료되면 이 화면에서 결과 영상을 바로 확인할 수 있습니다.',
-    ],
+    hint: ['실제 환경에 가까운 정밀한 물리 검증을 위해 다소 시간이 필요합니다.', '완료되면 이 화면에서 후보 대수별 결과를 바로 확인할 수 있습니다.'],
   }
 }
 
-export default function VerifyStep({ estimateId, ready, recommendedCount }) {
-  const verify = useVerifyStream(ready ? estimateId : null)
-  // 서버는 '요청 전'과 '검증 중'을 구분해 주지 않는다 — 눌렀다는 사실은 화면이 기억한다
-  const [started, setStarted] = useState(false)
-  const [refreshed, setRefreshed] = useState(null)
-  // 시점은 화면에서만 고르는 값이다 — 영상이 하나뿐이면 버튼 없이 그것만 튼다
+/** 재생 중인 회차의 시점 버튼·영상 자리 — 대수 카드를 고르면 바뀐다. */
+function VerifyPlayer({ estimateId, current }) {
   const [view, setView] = useState('top')
+  const [refreshed, setRefreshed] = useState(null)
   const videoRef = useRef(null)
   const resumeAt = useRef(null)
   const lastRefresh = useRef(0)
 
   const views = useMemo(() => [
-    { key: 'top', label: '상단 시점', url: verify.videoUrl },
-    { key: 'fpv', label: '1인칭 시점', url: verify.videoFpvUrl },
-  ].filter((v) => v.url), [verify.videoUrl, verify.videoFpvUrl])
-  const current = views.find((v) => v.key === view) ?? views[0]
-
-  // 재발급본은 그것을 대신하는 스트림 URL 에 묶어 둔다 — 스트림이 다른 영상을 주면 자연히 버려진다
-  // refreshed 를 먼저 확인한다 — 영상이 아직 없으면 양쪽이 모두 undefined 라 조건이 참이 되고
-  //                          null 인 refreshed 를 읽어 터진다
-  const videoUrl = refreshed && refreshed.replaces === current?.url ? refreshed.url : current?.url
+    { key: 'top', label: '상단 시점', url: current.video_url },
+    { key: 'fpv', label: '1인칭 시점', url: current.video_fpv_url },
+  ].filter((v) => v.url), [current.video_url, current.video_fpv_url])
+  const activeView = views.find((v) => v.key === view) ?? views[0]
+  const videoUrl = refreshed && refreshed.replaces === activeView?.url ? refreshed.url : activeView?.url
+  const playable = current.status === 'DONE' && Boolean(videoUrl)
 
   const refreshUrl = async () => {
     const now = Date.now()
     if (now - lastRefresh.current < REFRESH_COOLDOWN_MS) return
     lastRefresh.current = now
-
     const video = videoRef.current
     resumeAt.current = { time: video?.currentTime ?? 0, playing: Boolean(video && !video.paused) }
     try {
       const detail = await getEstimate(estimateId)
-      const fresh = view === 'fpv' ? detail?.verify_video_fpv_url : detail?.verify_video_url
-      if (fresh) setRefreshed({ replaces: current?.url, url: fresh })
+      const match = detail?.verifications?.find((v) => v.n_robots === current.n_robots)
+      const fresh = view === 'fpv' ? match?.video_fpv_url : match?.video_url
+      if (fresh) setRefreshed({ replaces: activeView?.url, url: fresh })
     } catch (e) {
       console.error(`[verify] estimateId=${estimateId} 영상 URL 재발급 실패`, e)
     }
@@ -104,8 +106,58 @@ export default function VerifyStep({ estimateId, ready, recommendedCount }) {
     if (at.playing) video.play().catch(() => {})
   }
 
-  const playable = ready && verify.status === 'done' && Boolean(videoUrl)
-  const placeholder = playable ? null : placeholderFor({ estimateId, ready, verify, recommendedCount, started })
+  return (
+    <>
+      {playable && views.length > 1 && (
+        <div className="verify-views" role="group" aria-label="카메라 시점">
+          {views.map((v) => (
+            <button
+              key={v.key}
+              type="button"
+              className={`ghost sm${v.key === activeView.key ? ' on' : ''}`}
+              aria-pressed={v.key === activeView.key}
+              onClick={() => setView(v.key)}
+            >
+              {v.label}
+            </button>
+          ))}
+        </div>
+      )}
+      {playable ? (
+        <video
+          key={`${current.n_robots}-${activeView.key}`}
+          ref={videoRef}
+          className="verify-video"
+          src={videoUrl}
+          controls
+          onError={refreshUrl}
+          onLoadedMetadata={resume}
+        />
+      ) : (
+        <div className="verify-placeholder">
+          {current.status === 'RUNNING' && <AmrRunning />}
+          <p className="vp-note">
+            {current.status === 'PENDING' && '검증 대기 중입니다.'}
+            {current.status === 'RUNNING' && 'Isaac Sim에서 로봇 동작을 검증하고 있습니다.'}
+            {current.status === 'FAILED' && `물리 검증에 실패했습니다${current.error ? ` — ${current.error}` : ''}`}
+            {current.status === 'DONE' && '검증은 끝났지만 재생할 영상이 남지 않았습니다.'}
+          </p>
+        </div>
+      )}
+    </>
+  )
+}
+
+export default function VerifyStep({ estimateId, ready, recommendedCount }) {
+  const stream = useVerifyStream(ready ? estimateId : null)
+  // 서버는 '요청 전'과 '검증 중'을 구분해 주지 않는다 — 눌렀다는 사실은 화면이 기억한다
+  const [started, setStarted] = useState(false)
+  const [selected, setSelected] = useState(null)
+
+  const verifications = stream.verifications
+  const effectiveRecommended = stream.recommendedCount ?? recommendedCount
+  const current = verifications.find((v) => v.n_robots === selected) ?? verifications[0] ?? null
+  const placeholder = idlePlaceholder({ estimateId, ready, recommendedCount, started })
 
   return (
     <section className="step section-dark" id="verify">
@@ -114,65 +166,104 @@ export default function VerifyStep({ estimateId, ready, recommendedCount }) {
         04 — 물리 검증
       </div>
       <h2>Confirm it physically.</h2>
-      <p className="desc">권장 대수를 Isaac Sim으로 재현해 실제로 문제없이 동작하는지 검증합니다.</p>
+      <p className="desc">권장 대수 전후를 Isaac Sim으로 재현해 실제로 문제없이 동작하는지 검증합니다.</p>
 
-      <div className="sim-board">
-        <div className="board-head">
-          <span>물리 검증 · Isaac Sim</span>
-          <span className={`status ${playable ? 'DONE' : placeholder.tag}`}>
-            {playable ? '완료' : placeholder.label}
-          </span>
-        </div>
-        {playable && views.length > 1 && (
-          // 시점이 둘 다 올라온 회차에만 고르게 한다 — 하나뿐이면 버튼이 고를 것 없는 장식이 된다
-          <div className="verify-views" role="group" aria-label="카메라 시점">
-            {views.map((v) => (
-              <button
-                key={v.key}
-                type="button"
-                className={`ghost sm${v.key === current.key ? ' on' : ''}`}
-                aria-pressed={v.key === current.key}
-                onClick={() => setView(v.key)}
-              >
-                {v.label}
-              </button>
-            ))}
+      {verifications.length === 0 ? (
+        <div className="sim-board">
+          <div className="board-head">
+            <span>물리 검증 · Isaac Sim</span>
+            <span className={`status ${placeholder.tag}`}>{placeholder.label}</span>
           </div>
-        )}
-        {playable ? (
-          <video
-            // 시점을 바꾸면 다른 파일이므로 엘리먼트를 새로 만든다 — src 만 갈면 앞 영상의 재생 위치가 남는다
-            key={current.key}
-            ref={videoRef}
-            className="verify-video"
-            src={videoUrl}
-            controls
-            onError={refreshUrl}
-            onLoadedMetadata={resume}
-          />
-        ) : (
           <div className="verify-placeholder">
             {placeholder.live && <AmrRunning />}
-            {/* 검증이 도는 동안만 제목처럼 세운다 — 대기·실패 같은 한 줄 안내는 원래의 옅은 문구 */}
             <p className={placeholder.hint ? 'vp-text' : 'vp-note'}>{placeholder.text}</p>
             {placeholder.hint && (
               <p className="vp-hint">
-                {/* 문장 단위로 끊는다 — 폭에 맡기면 "필요합니" / "다." 처럼 문장 가운데서 잘린다 */}
                 {placeholder.hint.map((line, i) => (
                   <span key={line}>{i > 0 && <br />}{line}</span>
                 ))}
               </p>
             )}
             {placeholder.action && (
-              <VerifyTrigger
-                estimateId={estimateId}
-                recommendedCount={recommendedCount}
-                onStarted={() => setStarted(true)}
-              />
+              <VerifyTrigger estimateId={estimateId} recommendedCount={recommendedCount} onStarted={() => setStarted(true)} />
             )}
           </div>
-        )}
-      </div>
+        </div>
+      ) : (
+        <>
+          <div className="verify-grid" role="list">
+            {verifications.map((v) => (
+              <button
+                key={v.n_robots}
+                type="button"
+                role="listitem"
+                className={`verify-card${current?.n_robots === v.n_robots ? ' on' : ''}`}
+                onClick={() => setSelected(v.n_robots)}
+              >
+                <div className="vc-head">
+                  <span className="vc-count">
+                    {v.n_robots}대{v.n_robots === effectiveRecommended ? <em> · 권장</em> : null}
+                  </span>
+                  <span className={`vc-verdict ${v.verdict ?? 'NA'}`}>{VERDICT_LABEL[v.verdict] ?? '해당없음'}</span>
+                </div>
+                <div className="vc-status mono dim">{STATUS_LABEL[v.status] ?? v.status}</div>
+                {v.error && <div className="vc-error">{v.error}</div>}
+              </button>
+            ))}
+          </div>
+
+          <p className="verify-limit mono dim">
+            {stream.physicsLimit != null
+              ? `물리 상한 ${stream.physicsLimit}대 — 후보 중 물리 판정이 통과인 가장 큰 대수`
+              : '물리 상한 없음 — 후보 중 통과한 대수가 아직 없습니다'}
+          </p>
+
+          {current && (
+            <div className="sim-board">
+              <div className="board-head">
+                <span>{current.n_robots}대 물리 검증</span>
+                <span className={`status ${current.status}`}>{STATUS_LABEL[current.status] ?? current.status}</span>
+              </div>
+              {/* 대수를 바꾸면 컴포넌트를 새로 만든다 — 시점·재생 위치 같은 내부 상태가 다른 회차로 새지 않게 */}
+              <VerifyPlayer key={current.n_robots} estimateId={estimateId} current={current} />
+              {metricsFor(current).length > 0 && (
+                <dl className="verify-metrics">
+                  {metricsFor(current).map(([label, value]) => (
+                    <div key={label} className="vm-row">
+                      <dt>{label}</dt>
+                      <dd>{value}</dd>
+                    </div>
+                  ))}
+                </dl>
+              )}
+            </div>
+          )}
+
+          {verifications.length > 1 && (
+            <div className="verify-compare-wrap">
+              <table className="verify-compare">
+                <thead>
+                  <tr>
+                    <th>대수</th><th>판정</th><th>창 동작 비율</th><th>지연(중앙값)</th><th>접촉</th><th>최소 간격</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {verifications.map((v) => (
+                    <tr key={v.n_robots} className={v.n_robots === current?.n_robots ? 'on' : ''}>
+                      <td>{v.n_robots}대{v.n_robots === effectiveRecommended ? ' (권장)' : ''}</td>
+                      <td>{VERDICT_LABEL[v.verdict] ?? '해당없음'}</td>
+                      <td>{pct(v.physics?.window_actions?.ratio)}</td>
+                      <td>{secs(v.physics?.lag?.p50_s)}</td>
+                      <td>{v.physics ? contactsOf(v.physics) : '—'}</td>
+                      <td>{meters(v.physics?.robot_min_gap_m)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
+      )}
     </section>
   )
 }
