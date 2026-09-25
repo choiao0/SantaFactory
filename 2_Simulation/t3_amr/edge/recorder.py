@@ -219,6 +219,11 @@ def environment(cfg: RecorderConfig, spec: RunSpec, base: dict | None = None,
         #   판을 그대로 물리에 올려 접촉·지연을 드러내는 것이라 2칸이 뜻에 맞다.
         #   엣지 환경에 PIBT_FRONT_RULE 이 있으면 그쪽이 이긴다(4칸 비교 실험용).
         e.setdefault("PIBT_FRONT_RULE", "2")
+        # ★ 회전 관문 (-244) — 칸이 겹쳐도 **차체 틈**이 넉넉하면 돌고(GEO), 막혀도 20 s 만 기다린다.
+        #   기본(칸만 보고 90 s)은 인계 회전 한 건이 90 s 서면 뒤가 줄줄이 밀렸다. 피크 10대 두 구간 실측:
+        #   창 동작 시작 83.3→88.5 % · 54.7→76.3 %, 지연 p50 40→32 s · 253→107 s, 접촉 0 · 최소 간격 0.31 m.
+        e.setdefault("PIBT_TURN_BODY_GEO", "1")
+        e.setdefault("PIBT_TURN_BODY_MAX", "20")
         # 실행 속도를 DES 순항 속도에 맞춘다. DES 는 적재 무게로 속도를 바꿀 수 있다.
         sp = slice_meta.get("speed_mps")
         if isinstance(sp, (int, float)) and not isinstance(sp, bool) and sp > 0:
