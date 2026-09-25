@@ -31,8 +31,11 @@ export MAP=$W/warehouse/map
 export ROBOT=$W/robots/iwhub/iw_hub.usd              # iw.hub 에셋 (git 제외, tools/fetch_iwhub.py 가 여기 받는다)
 
 # --- 파생물 (지워도 된다. 빌드로 다시 만들어진다) ---
-export STAGE=$W/stage                                # 빌드된 씬 USD
-export PLAN=$W/plan                                  # 궤적 (계획 산출물, 로컬에서 옴)
+#   ★ `T3AMR_STAGE`·`T3AMR_PLAN` 으로 **런마다 따로** 둘 수 있다 (-275). 엣지가 DES 구간
+#     재생에서 `runs/<run_id>/{stage,plan}` 을 준다 — 구간의 스폰 자리로 지은 씬·계획이
+#     공용 폴더에 남으면 다음 자체 계획 판이 그걸 재사용해 시작 자세가 어긋난다.
+export STAGE=${T3AMR_STAGE:-$W/stage}                # 빌드된 씬 USD
+export PLAN=${T3AMR_PLAN:-$W/plan}                   # 궤적 (계획 산출물, 로컬에서 옴)
 
 # --- 결과 ---
 export OUT=$W/out                                    # kpi · trace · rec · video

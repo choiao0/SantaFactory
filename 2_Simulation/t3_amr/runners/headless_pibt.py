@@ -201,6 +201,50 @@ if not state.get("ready"):
     sys.exit(3)
 
 fleet = state["fleet"]
+
+# ===========================================================================
+# 물리 지표 (-275) — 워밍업 뒤 창만 센다. 엣지가 PIBT_PHYSICS_OUT 을 읽어 결과에 싣는다
+# ===========================================================================
+#   구간 재생이면 `state["slice"]` 에 워밍업·창이 있다(live_pibt 가 궤적에서 읽었다).
+#   구간이 아니면 워밍업 0 · 창 = 지금까지 전부로 센다.
+PHYSICS_OUT = (os.environ.get("PIBT_PHYSICS_OUT", "") or "").strip()
+_SLICE = state.get("slice") or {}
+WARMUP = float(_SLICE.get("warmup_s") or 0.0)
+WINDOW = float(_SLICE.get("window_s") or 0.0)
+sys.path.insert(0, os.path.join(os.environ.get("W", os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__)))), "path"))
+import physics_report as PR                             # noqa: E402
+
+#   DES 궤적을 재생한 런(live_pibt 가 traj_dt 를 채웠다)만 계획과 견준다. 자체 계획이면 None —
+#   지연·창 수행은 null 로 나간다(`physics_report.summarize` 주석).
+_PLANNED = ([fleet.rt.release_time(a) for a in fleet.rt.adg.actions
+             if getattr(a, "release_tick", None) is not None]
+            if state.get("traj_dt") is not None else None)
+_PH_BASE = None                                         # 워밍업 끝 기준선
+
+
+def _physics(t_sim, wall):
+    return PR.summarize(fleet.stats, _PH_BASE, sim_s=t_sim, wall_s=wall,
+                        warmup_s=WARMUP, window_s=WINDOW or max(t_sim - WARMUP, 0.0),
+                        n_robots=len(fleet.drivers), planned_s=_PLANNED, rt=fleet.rt,
+                        des_window=_SLICE.get("des_window"))
+
+
+def _physics_write(t_sim, wall):
+    if not PHYSICS_OUT:
+        return None
+    try:
+        doc = _physics(t_sim, wall)
+        PR.write_atomic(PHYSICS_OUT, doc)
+        return doc
+    except Exception as e:                  # 지표 때문에 주행을 멈추지 않는다 — 알리기만
+        print(f"[hl] ☹ 물리 지표 쓰기 실패: {e!r}", flush=True)
+        return None
+
+
+if _SLICE:
+    print(f"[hl] ★★ 구간 재생 — 워밍업 {WARMUP:g}s 뒤 창 {WINDOW:g}s 를 센다 · "
+          f"계획 동작 {len(_PLANNED or ()):,}개 · 지표 -> {PHYSICS_OUT or '(안 씀)'}")
 print(f"[hl] 준비 완료 — 프레임 {_frames:,} · {time.time() - _w0:.0f}s. "
       + (f"여기서부터 렌더는 **{SHOT_STRIDE}스텝에 한 번**뿐" if SHOTS
          else "여기서부터 **렌더 없음**"))
@@ -637,15 +681,23 @@ try:
         t_sim += DT
         n += 1
 
+        if _PH_BASE is None and WARMUP and t_sim >= WARMUP:
+            _PH_BASE = PR.snapshot(fleet.stats, fleet.rt)
+            print(f"[hl] ★ 워밍업 {WARMUP:g}s 끝 — 여기서부터 창 {WINDOW:g}s 를 센다", flush=True)
+
         if n % REPORT == 0:
             wall = time.time() - wall0
             d_n, d_w = n - last_n, time.time() - last_wall
             last_n, last_wall = n, time.time()
             inst = (d_n * DT) / d_w if d_w > 0 else 0.0
+            # ☹ 앞머리 `[hl] sim <초>s` 는 엣지가 정규식으로 읽는다(edge/recorder.py) — 바꾸지 말 것.
+            #   창 시각(워밍업을 뺀 것)은 뒤에 따로 붙인다.
             print(f"[hl] sim {t_sim:8.1f}s | 벽시계 {wall:8.1f}s | "
                   f"배속 {t_sim / wall if wall > 0 else 0:5.2f}x "
-                  f"(순간 {inst:5.2f}x) | {d_w / d_n * 1000:6.2f} ms/step",
+                  f"(순간 {inst:5.2f}x) | {d_w / d_n * 1000:6.2f} ms/step"
+                  + (f" | 창 {max(0.0, t_sim - WARMUP):7.1f}s" if _SLICE else ""),
                   flush=True)
+            _physics_write(t_sim, wall)
 
         if MAX_SIM and t_sim >= MAX_SIM:
             print(f"[hl] ★ 시뮬 상한 {MAX_SIM:.0f}s 도달 — 끊는다")
@@ -674,6 +726,15 @@ try:
     print(f"[hl] {fleet.stats}")
 except Exception as e:
     print(f"[hl] stats 출력 실패: {e!r}")
+# ★ 마지막 지표 — 검증 런은 늘 SIGINT(Stop)로 여기 온다. 엣지는 업로드 전에 이 파일을 읽는다.
+_ph = _physics_write(t_sim, wall)
+if _ph:
+    _lag, _wa = _ph["lag"], _ph["window_actions"]
+    print(f"[hl] 물리 지표 — 창 {_ph['window_sim_s']:.0f}s · 접촉 로봇 {_ph['robot_contacts']} "
+          f"랙 {_ph['rack_contacts']} · 최소 간격 {_ph['robot_min_gap_m']} m · "
+          f"지연 p50 {_lag['p50_s']} p90 {_lag['p90_s']} 최대 {_lag['max_s']} s · "
+          f"창 동작 {_wa['started']}/{_wa['planned']} (밀림 {_wa['overdue_s']} s) -> {PHYSICS_OUT}",
+          flush=True)
 
 if _cap:
     # viewport 경로는 live_pibt 가 세므로(state) 그 값을, 리플리케이터는 우리 값을.

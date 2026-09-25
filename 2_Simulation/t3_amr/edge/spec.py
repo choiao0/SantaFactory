@@ -6,9 +6,12 @@ t3_amr 에는 ROS 도메인도 로봇 시리얼도 필요 없어 받기만 하�
 """
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
 import json
 import re
+import zlib
 from dataclasses import dataclass
 from typing import Any
 
@@ -17,7 +20,10 @@ DEFAULT_TIMEOUT_S = 3600.0
 START_MARGIN_S = 300.0                      # host-orch: timeout_s = window_s + START_MARGIN_S (SIM_VERIFY_CONTRACT §2)
 MIN_WINDOW_S = 60.0
 SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")   # run_id: 파일명 · 토픽 · RUN_TAG 에 들어간다
-MAX_SCENARIO_BYTES = 512 * 1024              # MQTT 패킷 상한 1 MB(계약 §0) 아래
+# MQTT 패킷 상한 1 MB(계약 §0) 아래. 512 KiB 였는데 DES 피크 구간(-275)을 인라인으로 실으면
+# 10대 295 KiB · 15대 약 440 KiB 로 차고, 28대는 넘는다 → 900 KiB. host-orch 의 같은 상한도 맞춘다.
+MAX_SCENARIO_BYTES = 900 * 1024
+MAX_TRAJ_BYTES = 64 * 1024 * 1024            # 궤적 풀린 크기 상한 — gzip 폭탄을 막는다 (10대 구간 1.5 MB)
 
 
 def canonical_json(obj: Any) -> bytes:
@@ -83,6 +89,18 @@ class RunSpec:
         return t or None
 
     @property
+    def trajectory_b64(self) -> str | None:
+        """scenario.trajectory_gz_b64 — DES 피크 구간 궤적을 **메시지에 통째로** 실은 것 (-275).
+
+        gzip 한 JSON(`fms_traj` 가 읽는 형식 + `slice` 블록)의 base64. 경로(`trajectory`)는
+        파일이 GPU 박스에 미리 있어야 하지만 이건 그럴 필요가 없다. 둘 다 오면 이쪽이 이긴다.
+        푸는 것은 `decode_trajectory()` 다.
+        """
+        t = (self.scenario or {}).get("trajectory_gz_b64")
+        t = t.strip() if isinstance(t, str) else ""
+        return t or None
+
+    @property
     def order_gap_s(self) -> float | None:
         """scenario.outbound_gap_s — 출고 주문 간격(초).
 
@@ -99,13 +117,11 @@ class RunSpec:
     def orders(self) -> dict | None:
         """scenario.orders — 백엔드가 견적 생성 시 저장한 주문 목록.
 
-        ☹ **아직 러너로 못 넘긴다.** 계약의 주문은 `{rack_id, product_id, qty}`
-          인데 우리 `fms_stream.FileOrderStream` 이 읽는 CSV 는
-          `order_id,task_id,frm_name,to_name,created_tick` 이고, `frm_name` 은
-          `aisle_buf[2]` 처럼 **스테이션 카테고리+인덱스**다. `rack_id "A3"` 를
-          그 이름으로 옮기는 규칙과 목적지(포장대)를 정하는 규칙이 어디에도
-          없다 — 그건 FMS/WMS 가 정할 일이다.
-          그래서 지금은 **받아만 두고**, 간격(`order_gap_s`)으로만 재생한다.
+        러너가 **읽는다** (-261): 엣지가 scenario 를 `runs/<run_id>/scenario.json` 에 쓰고
+        `SIM_SCENARIO_PATH` 로 넘기면 `live_pibt` 가 `fms_stream.JsonOrderStream` 으로
+        rack_id → 버퍼, 수량 → 토트로 바꿔 우리 계획기로 돌린다(포장대는 우리 난수).
+        ☹ 궤적(`trajectory` · `trajectory_b64`)이 오면 **궤적이 이긴다** — 궤적에는 DES 의
+          배정 결과가 이미 들어 있어 주문 목록을 쓸 자리가 없다.
         """
         o = (self.scenario or {}).get("orders")
         return o if isinstance(o, dict) else None
@@ -118,6 +134,33 @@ class RunSpec:
         if isinstance(w, (int, float)) and not isinstance(w, bool) and w > 0:
             return float(w)
         return max(MIN_WINDOW_S, self.timeout_s - START_MARGIN_S)
+
+
+def decode_trajectory(b64: str) -> tuple:
+    """`scenario.trajectory_gz_b64` → (풀린 JSON 바이트, slice 블록 dict 또는 None).
+
+    형식만 본다 — 로봇·헤딩·틱 길이가 있는 JSON 객체인지. 칸 변환·전이 검사는 러너
+    (`fms_traj.load_history`)가 한다. 풀린 크기가 `MAX_TRAJ_BYTES` 를 넘으면 멈춘다.
+    """
+    try:
+        gz = base64.b64decode(b64, validate=True)
+    except (binascii.Error, ValueError) as e:
+        raise ValueError(f"trajectory_gz_b64 is not base64: {e}") from None
+    d = zlib.decompressobj(16 + zlib.MAX_WBITS)             # gzip 머리
+    try:
+        body = d.decompress(gz, MAX_TRAJ_BYTES + 1)
+    except zlib.error as e:
+        raise ValueError(f"trajectory_gz_b64 is not gzip: {e}") from None
+    if len(body) > MAX_TRAJ_BYTES or d.unconsumed_tail:
+        raise ValueError(f"trajectory too large (> {MAX_TRAJ_BYTES} B unpacked)")
+    try:
+        doc = json.loads(body)
+    except ValueError as e:
+        raise ValueError(f"trajectory is not JSON: {e}") from None
+    if not isinstance(doc, dict) or not all(k in doc for k in ("dt_s", "robots", "headings")):
+        raise ValueError("trajectory must be an object with dt_s · robots · headings")
+    sl = doc.get("slice")
+    return body, (sl if isinstance(sl, dict) else None)
 
 
 def _scenario(obj: Any, given_sha: Any) -> tuple:

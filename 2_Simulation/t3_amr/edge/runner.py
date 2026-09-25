@@ -36,6 +36,10 @@ SIM_TIME = "Runner/SimTime"
 # (-215) 런이 끝나며 올린 mp4 를 가리킨다. 값은 URL 이 아니라 버킷 없는 객체 키 `<run_id>/<파일>` 이다(-233).
 # host-orch 가 sim.verify.result.artifacts.video 로 그대로 옮긴다.
 VIDEO_URL = "Runner/VideoUrl"
+# ★★ 물리 지표 (-275) — 러너가 쓴 `physics_<run_id>.json`(path/physics_report.summarize)을 한 줄
+#   JSON 문자열로. 영상 URL 과 **같은 NDATA** 에 실어 host-orch 가 런을 닫을 때 함께 본다
+#   → `sim.verify.result.physics`. 모르는 host-orch 는 이름으로만 담아 두고 쓰지 않는다(tracker 가 범용).
+PHYSICS = "Runner/Physics"
 
 NODE_METRICS = {d.name: d for d in (
     MetricDef(BDSEQ, spb.INT64, 0, 0), MetricDef(REBIRTH, spb.BOOLEAN, 1, False),
@@ -44,7 +48,8 @@ NODE_METRICS = {d.name: d for d in (
     MetricDef(ISAAC, spb.INT32, 6, 0), MetricDef(RAM, spb.INT32, 7, 0), MetricDef(VRAM, spb.INT32, 8, 0),
     MetricDef(LAST_ERROR, spb.STRING, 9, ""), MetricDef(CMD_START, spb.TEXT, 10, ""),
     MetricDef(CMD_STOP, spb.BOOLEAN, 11, False), MetricDef(SCENARIO_SHA, spb.STRING, 12, ""),
-    MetricDef(VIDEO_URL, spb.STRING, 13, ""), MetricDef(SIM_TIME, spb.DOUBLE, 14, 0.0))}
+    MetricDef(VIDEO_URL, spb.STRING, 13, ""), MetricDef(SIM_TIME, spb.DOUBLE, 14, 0.0),
+    MetricDef(PHYSICS, spb.STRING, 15, ""))}
 
 
 @dataclass(frozen=True)
@@ -163,12 +168,13 @@ class Runner:
         self.spec, self.rec, self.started_at, self.final_state = spec, self.recorder_factory(), now, IDLE
         try:
             self.rec.start(spec, now)
-        except (OSError, RuntimeError) as e:
+        except (OSError, RuntimeError, ValueError) as e:
+            # ValueError — 인라인 궤적이 깨졌다(`spec.decode_trajectory`, -275). 엣지는 살려 두고 런만 실패
             self._set_state(ERROR, {LAST_ERROR: f"launch failed: {e}", RUN_ID: ""})
             return
         log.info("run %s: recording %d robots, window %.0fs (scenario %s)", spec.run_id, spec.n_robots, spec.window_s,
                  (spec.scenario_sha256 or "none")[:12])
-        self._set_state(STARTING, {RUN_ID: spec.run_id, LAST_ERROR: "", VIDEO_URL: "",
+        self._set_state(STARTING, {RUN_ID: spec.run_id, LAST_ERROR: "", VIDEO_URL: "", PHYSICS: "",
                                    SCENARIO_SHA: spec.scenario_sha256 or ""})
 
     def handle_stop(self, now: float) -> None:
@@ -228,9 +234,17 @@ class Runner:
         elif self.host_offline_since is not None and now - self.host_offline_since > self.cfg.host_offline_s:
             self._fail(now, f"host-orch offline > {self.cfg.host_offline_s:g}s")
 
+    def _physics_str(self) -> str:
+        """러너가 남긴 물리 지표를 한 줄 JSON 으로. 없으면 빈 문자열 (-275)."""
+        doc = self.rec.physics() if self.rec else None
+        return json.dumps(doc, ensure_ascii=False, separators=(",", ":")) if doc else ""
+
     def _finish(self) -> None:
-        """레코더가 끝났다. 정상 종료면 mp4 를 워커 스레드로 올리기 시작하고(STOPPING 유지), 아니면 바로 최종 상태."""
-        extra = {RUN_ID: "", SCENARIO_SHA: ""}
+        """레코더가 끝났다. 정상 종료면 mp4 를 워커 스레드로 올리기 시작하고(STOPPING 유지), 아니면 바로 최종 상태.
+
+        물리 지표는 실패로 끝나도 싣는다 — 어디까지 돌다 멈췄는지가 진단 거리다.
+        """
+        extra = {RUN_ID: "", SCENARIO_SHA: "", PHYSICS: self._physics_str()}
         if self.final_state != IDLE:
             self._set_state(self.final_state, extra)
             return
@@ -278,7 +292,7 @@ class Runner:
     def _finish_upload(self) -> None:
         """업로드 결과 → URL 과 함께 IDLE, 실패면 ERROR. 어느 쪽이든 그 NDATA 하나로 host-orch 가 런을 닫는다."""
         fut, self._upload = self._upload, None
-        extra = {RUN_ID: "", SCENARIO_SHA: ""}
+        extra = {RUN_ID: "", SCENARIO_SHA: "", PHYSICS: self._physics_str()}
         try:
             url = fut.result()
         except Exception as e:  # noqa: BLE001 — 업로드 실패는 런 실패로 보고한다

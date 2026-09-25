@@ -52,6 +52,7 @@ class FakeRecorder:
         self.exits_after_stop = True
         self.frames_removed = False
         self.sim_s = None                 # 시뮬 시각(초). None = 러너가 안 보고한다(Kit 경로)
+        self.physics_doc = None           # 러너가 쓴 물리 지표(-275). None = 파일 없음
 
     def start(self, spec, now):
         if self.launch_error:
@@ -72,6 +73,9 @@ class FakeRecorder:
 
     def sim_time(self):
         return self.sim_s
+
+    def physics(self):
+        return self.physics_doc
 
     def request_stop(self, now):
         self.stop_requested_at = now

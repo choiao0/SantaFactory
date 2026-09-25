@@ -285,8 +285,16 @@ RENDER_EVERY = max(1, int(os.environ.get("PIBT_RENDER_EVERY", "1")))
 #   계획·ADG·probe·재정렬·주행 로직은 **한 줄도 다르지 않다.**
 HEADLESS = os.environ.get("PIBT_HEADLESS", "0") not in ("0", "", "false", "no")
 
+# ★★ 다 끝나도 **Stop 까지 계속 돈다** (-275). 검증 런은 host-orch 가 시뮬 시간으로
+#   창을 끊는다(Stop). 그 전에 러너가 「전원 완주」로 스스로 내려가면 host-orch 는
+#   창을 못 채운 것으로 적는다(FAILED). 구간 끝이 한가하면 흔히 그렇게 된다.
+#   켜면 동작이 다 끝난 뒤에도 물리는 그대로 밟고(로봇은 서 있다) 촬영도 이어진다.
+HOLD_UNTIL_STOP = os.environ.get("PIBT_HOLD_UNTIL_STOP", "0") not in ("0", "", "false", "no")
+
 state = {"sub": None, "fleet": None, "n": 0, "t": 0.0, "done": False,
-         "vp": None, "shots": 0, "shot_fail": 0, "ready": False}
+         "vp": None, "shots": 0, "shot_fail": 0, "ready": False,
+         # 궤적 재생(-275): 궤적의 틱 길이와 구간 블록(`fms_traj.SLICE_KEYS`). 없으면 None
+         "traj_dt": None, "slice": None}
 
 
 def wrap_pi(a):
@@ -976,11 +984,18 @@ def _tick(f, dt):
         carb.log_warn("[pibt]   주행은 계속합니다 — 멈추는 기준은 접촉입니다.")
 
     if f.finished:
-        carb.log_warn(f"[pibt] 전원 완주 — 시뮬 {state['t']:.1f}s")
-        carb.log_warn(f"[pibt] {f.stats}")
-        _shot_report()
-        state["done"] = True
-        return
+        if HOLD_UNTIL_STOP:
+            # 한 번만 알리고 계속 밟는다 — 끝내는 것은 host-orch 의 Stop(SIGINT) 이다
+            if not state.get("held"):
+                state["held"] = True
+                carb.log_warn(f"[pibt] 전원 동작 끝 — 시뮬 {state['t']:.1f}s · "
+                              "Stop 까지 서서 기다립니다 (PIBT_HOLD_UNTIL_STOP)")
+        else:
+            carb.log_warn(f"[pibt] 전원 완주 — 시뮬 {state['t']:.1f}s")
+            carb.log_warn(f"[pibt] {f.stats}")
+            _shot_report()
+            state["done"] = True
+            return
 
     if state["n"] % 600 == 0:
         # 렌더가 실제로 줄었는지 여기서 보인다 (patch_render_rate.py)
@@ -1137,6 +1152,15 @@ async def _run():
                               f"{os.path.basename(_tj)}")
                 adg, order, history, info = fms_traj.build(_tj, geom, verbose=True)
                 _m = (info.get("lifelong") or {}).get("fms_traj") or {}
+                # 틱 길이는 궤적 것을 쓴다 — DES 속도가 우리 v_max 와 다를 수 있다 (-275)
+                state["traj_dt"] = _m.get("dt")
+                state["slice"] = _m.get("slice")
+                if state["slice"]:
+                    _s = state["slice"]
+                    carb.log_warn(f"[pibt] ★★ 구간 재생 — DES t0 {float(_s['t0_s']):,.0f}s · "
+                                  f"워밍업 {float(_s['warmup_s']):g}s + 창 {float(_s['window_s']):g}s · "
+                                  f"틱 {_m.get('dt'):.4f}s · 창 안 DES 태스크 "
+                                  f"{(_s.get('des_window') or {}).get('tasks_done', '?')}")
                 carb.log_warn(f"[pibt] ★★ 궤적 {_m.get('n_robots')}대 · "
                               f"틱 {_m.get('ticks', 0):,} · 태스크 {_m.get('tasks', 0):,} "
                               f"· 모델 {_m.get('model')}")
@@ -1379,7 +1403,8 @@ async def _run():
     #   느슨하게(26도) 본다. 느슨하게 갈 때는 그 사실을 로그에 남긴다 —
     #   조용히 완화하면 검사가 있는 의미가 없다.
     fleet = FleetController(geom, adg, drivers, order=order,
-                            release=(MODE == "lifelong"))
+                            release=(MODE == "lifelong"),
+                            tick_s=state.get("traj_dt"))
     fleet.starts = history[0]
     yaw_tol = 0.20 if not nfail else 0.45
     if nfail:

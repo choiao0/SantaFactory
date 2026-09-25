@@ -63,10 +63,18 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     && ffmpeg -version | head -1 \
     && python -c 'import psutil, numba, llvmlite, numpy; from numba import njit; print("psutil", psutil.__version__, "numba", numba.__version__, "llvmlite", llvmlite.__version__, "numpy", numpy.__version__)'
 
-# 계획기 원본 — 이름 있는 컨텍스트(--build-context sim_engine=3_FMS/sim_engine). t3_amr 이 쓰는 것은
-# pibt_core.py(파사드)와 pibt/ 패키지뿐이라 그 둘만 넣는다 (results/·tests/·sweeps/ 제외).
-COPY --from=sim_engine pibt_core.py /app/3_FMS/sim_engine/
+# 계획기 원본 — 이름 있는 컨텍스트(--build-context sim_engine=3_FMS/sim_engine). 코드만 넣는다
+# (results/·tests/·sweeps/ 제외).
+#   ★ 최상위 모듈 전부와 kernel/ 까지 (-275). 예전에는 pibt_core.py·pibt/ 뿐이라 궤적 재생
+#     (`PIBT_TRAJ` = FMS 격자 `PIBT_FMS_GRID`)이 map_loader·topology_spec 을, 백엔드 주문
+#     (`JsonOrderStream`)이 order_stream(→ kernel.core)을 못 불러 **컨테이너에서는 한 번도 못 돌았다**
+#     (09-24 verify_18 로그: `No module named 'order_stream'` — 대형 주문 거름이 조용히 빠졌다).
+COPY --from=sim_engine *.py /app/3_FMS/sim_engine/
 COPY --from=sim_engine pibt /app/3_FMS/sim_engine/pibt
+COPY --from=sim_engine kernel /app/3_FMS/sim_engine/kernel
+# FMS 공식 맵 데이터(--build-context fms_map=3_FMS/map) — map_loader.MAP_DIR(= sim_engine/../map) 이
+# 읽는 파일만. 코드·그림·synth/ 는 뺀다.
+COPY --from=fms_map occupancy_grid.npy stations.json charge_zone.json rack_buffers.json /app/3_FMS/map/
 
 ENV T3=/app/2_Simulation/t3_amr
 WORKDIR $T3

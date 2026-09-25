@@ -2665,6 +2665,11 @@ class FleetStats:
     turn_geo_min: float = float("inf")   # 그때 본 최소 거리 중 가장 작은 값
     stall_steps: int = 0
     sim_time: float = 0.0
+    # ★★ 동작마다 (계획 시작 시각, 실제 시작 시각) [s] (-275). 계획 시각이 있는 동작
+    #   (궤적 재생은 전부, 우리 lifelong 판은 태스크 첫 동작)만 담는다.
+    #   실제 − 계획 = 물리가 DES 보다 늦은 만큼이다. 일찍은 못 가므로 늘 0 이상이다.
+    #   분포라 repr 에서는 뺀다 — 로그 한 줄이 수천 개로 불어난다.
+    start_lag: list = field(default_factory=list, repr=False)
 
     @property
     def clean(self) -> bool:
@@ -2751,7 +2756,8 @@ class FleetController:
                  stall_timeout: float = 20.0,
                  starts: dict[int, State] | None = None,
                  release: bool = False, carry: bool = True,
-                 v_exec: float | None = None, a_exec: float | None = None):
+                 v_exec: float | None = None, a_exec: float | None = None,
+                 tick_s: float | None = None):
         self.g = geom
         # release=True 면 계획의 출발 시각을 지킨다 (lifelong 에서 필수).
         # one-shot 은 도착 시각이라는 개념이 없으니 기본값 False 로 둔다.
@@ -2767,9 +2773,14 @@ class FleetController:
         #   **틱 != 칸**이다. 릴리스 바닥은 `action.tick x tick_s` 라 틱 단위를
         #   써야 한다. `HORIZON` 도 같이 4배가 되어야 지평(350 s)이 보존된다 —
         #   한쪽만 바꾸면 87.5 s 나 1,400 s 가 되고 **에러는 안 난다**.
+        #   ★ `tick_s` 를 주면 그것을 쓴다 (-275). DES 궤적은 제 틱 길이(`dt_s`)로
+        #     적혀 있고, 그건 DES 속도에서 나온다(`1 m ÷ (속도 × MOVE_TICKS)`). 여기서
+        #     우리 v_max 로 다시 계산하면 DES 가 0.9 m/s 가 아닐 때 모든 계획 시각이
+        #     그 비만큼 어긋난다 — 1.0 m/s 궤적이면 11 % 늦게 잡힌다.
         self.rt = AdgRuntime(
             adg,
-            tick_s=(geom.pitch / (geom.v_max * MOVE_TICKS)) if release else None)
+            tick_s=(float(tick_s) if tick_s else geom.pitch / (geom.v_max * MOVE_TICKS))
+            if release else None)
         self.drivers = drivers
         # chains의 인덱스 = extract_actions가 쓴 agent 순서. 명시적으로 받는다.
         self.order = list(order) if order is not None else sorted(drivers)
@@ -3114,6 +3125,16 @@ class FleetController:
             k += 1
         return n
 
+    def _note_start(self, act: Action) -> None:
+        """동작이 **시작한 순간**의 (계획 시각, 실제 시각)을 남긴다 (-275).
+
+        계획 시각이 없는 동작(우리 판의 태스크 중간 동작, one-shot)은 뺀다 — 거기서
+        `release_time` 은 0 이라 「지연」이 곧 경과 시간이 되어 뜻이 없다.
+        """
+        if self.rt.tick_s is None or act.release_tick is None:
+            return
+        self.stats.start_lag.append((self.rt.release_time(act), self.rt.clock))
+
     def _carry(self, a: int, act: Action) -> float:
         """이 액션의 종단속도. 0 이면 목표 칸에서 완전히 선다.
 
@@ -3282,6 +3303,7 @@ class FleetController:
                         self.running[a] = nxt
                         self.stats.started += 1
                         self.stats.carried += 1
+                        self._note_start(nxt)
                         c.exit_v = self._carry(a, nxt)
                         cmd = c.update(pose, dt)
                         drv.command(*cmd)
@@ -3349,6 +3371,7 @@ class FleetController:
                 self.running[a] = nxt
                 self.elapsed[a] = 0.0
                 self.stats.started += 1
+                self._note_start(nxt)
                 self.ctrl[a].exit_v = self._carry(a, nxt)
                 cmd = self.ctrl[a].update(pose, dt)
                 drv.command(*cmd)

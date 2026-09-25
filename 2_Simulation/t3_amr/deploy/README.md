@@ -38,12 +38,15 @@ usermod 뒤 재로그인이 어려우면 `sg docker -c '<docker 명령>'` 으로
 ```bash
 cd <repo>
 docker build -f 2_Simulation/t3_amr/deploy/Dockerfile \
-    --build-context sim_engine=3_FMS/sim_engine -t t3amr-runner:dev 2_Simulation/t3_amr   # Isaac 휠 26 GB, 첫 빌드 ≈ 25 분(11 MB/s)
+    --build-context sim_engine=3_FMS/sim_engine --build-context fms_map=3_FMS/map \
+    -t t3amr-runner:dev 2_Simulation/t3_amr                                               # Isaac 휠 26 GB, 첫 빌드 ≈ 25 분(11 MB/s)
 docker run --rm --gpus all t3amr-runner:dev check                                          # GPU · Isaac import · ffmpeg · 에셋 · 계획기 원본
 docker compose -f 2_Simulation/t3_amr/deploy/compose.yml run --rm t3amr-runner record 3    # 3대 녹화 1회 → deploy/data/out/*.mp4
 ```
 `--build-context sim_engine=…` 은 빠뜨리면 안 된다 — 계획기 원본(`3_FMS/sim_engine`)이 빌드 컨텍스트 밖이라 이름 있는 컨텍스트로 넣는다
 (compose 는 `additional_contexts` 로 같은 일을 한다). 없으면 계획 단계가 옛 벤더 사본으로 후퇴해 `MOVE_TICKS` ImportError 로 죽는다.
+`--build-context fms_map=…` 도 같다(-275) — 궤적 재생(DES 피크 구간, FMS 격자)이 `3_FMS/map` 의 맵 데이터를 읽는다.
+손 배포로 GPU 박스 트리를 맞출 때도 `3_FMS/map` 의 데이터 파일 넷(`occupancy_grid.npy`·`stations.json`·`charge_zone.json`·`rack_buffers.json`)을 함께 옮긴다.
 
 이미지에 굽는 것과 재빌드 비용:
 

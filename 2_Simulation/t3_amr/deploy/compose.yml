@@ -7,6 +7,7 @@ services:
       dockerfile: deploy/Dockerfile
       additional_contexts:
         sim_engine: ../../../3_FMS/sim_engine     # 계획기 원본 — Dockerfile 의 COPY --from=sim_engine (compose ≥ 2.17)
+        fms_map: ../../../3_FMS/map               # FMS 공식 맵 데이터 — 궤적 재생(FMS 격자)이 읽는다 (-275)
     image: t3amr-runner:dev
     container_name: t3amr-runner
     command: ["edge"]                 # 한 번 녹화만 보려면: ["record", "3"]
