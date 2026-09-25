@@ -71,8 +71,11 @@ class _PIBTStepH:
 
     def __init__(self, states, dists, edge_cost, wait_cost, free, turn_cost, extra,
                  bias, sec_map=None, sec_limit=0, sec_free=(), forbid=None, forbid_axle=None, soft_hold=None,
-                 turning=None):
+                 turning=None, ban_free=()):
         self.states = states
+        # 표에서 풀린 로봇(-277): 오래 정체하면 자기 검사를 건너뛴다 — 코를 맞댄 1차선은 둘 다 못 돌아 영원히 되풀이한다.
+        # 풀린 로봇이 도는 회전의 금지 자리는 그대로 예약한다(남은 못 들어온다).
+        self.ban_free = frozenset(ban_free)
         # 금지 조합표 거부 (-277). 상태 (r, c, h) -> 그 상태를 금지하는 회전 로봇들. 다틱 회전(-194) 중인 로봇의 몫은
         # 미리 채워 온다(turning = {agent: (s0, s1)}) — 결정 틱에만 보면 2~5틱째 들어오는 로봇을 못 막는다.
         self.ban_next = {}
@@ -289,7 +292,7 @@ class _PIBTStepH:
             if fa and s2[:2] in fa:
                 continue                                    # 축 금지 칸 (-79 V1b)
             ban = ban_states(cur[0], cur[1], cur[2], s2[2]) if s2[:2] == cur[:2] and s2[2] != cur[2] else frozenset()
-            if (ban or self.ban_next) and self._ban_blocked(a, s2, ban):
+            if (ban or self.ban_next) and a not in self.ban_free and self._ban_blocked(a, s2, ban):
                 continue                                    # 금지 조합표 (-277)
             if self._soft_blocked(a, s2, soft):
                 if self._make_room(a, cur, soft, parent):
@@ -309,17 +312,18 @@ class _PIBTStepH:
 
 def step_h(states, dists, edge_cost, wait_cost, free, priority_order,
            turn_cost=None, extra=None, bias=None, sec_map=None, sec_limit=0, sec_free=(), forbid=None,
-           forbid_axle=None, soft_hold=None, turning=None):
+           forbid_axle=None, soft_hold=None, turning=None, ban_free=()):
     """헤딩 모델 한 틱. states: {a: (r,c,h)}, dists: {a: (H,W,4)},
     extra: {a: 추가 점유 칸(회전 중 스윙)}, bias: {a: 대기 점수 가산(wait_bias)}.
     sec_map/sec_limit: 구간 대수 제한(-193) — sec_limit 0 이면 장치가 통째로 꺼진다.
     turning: {a: (s0, s1)} 다틱 회전 중인 로봇 — 금지 조합표(-277, geometry.configure(ban=True))가 켜졌을 때만 본다.
+    ban_free: 표 검사를 건너뛸 로봇(오래 정체) — 교착 탈출용 안전판(-277).
     반환 (다음 상태 dict, 예약 칸 dict, 정원 때문에 막힌 agent 집합)."""
     if turn_cost is None:
         turn_cost = float(TURN_COST)
     ps = _PIBTStepH(states, dists, edge_cost, wait_cost, free, turn_cost,
                     extra or {}, bias or {}, sec_map, sec_limit, sec_free, forbid, forbid_axle, soft_hold,
-                    turning)
+                    turning, ban_free)
     for a in priority_order:
         if a not in ps.next_of:
             ps.resolve(a)

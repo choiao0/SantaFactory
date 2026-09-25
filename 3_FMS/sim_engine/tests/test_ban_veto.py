@@ -87,6 +87,36 @@ class TestTurnVeto:
         assert new["B"] == (5, 4, 1)
 
 
+class TestStuckRelease:
+    """오래 정체한 로봇은 표에서 푼다 — 코를 맞댄 1차선에서는 둘 다 못 돌아 후진·전진을 영원히 되풀이한다
+    (base 2 40 42 1 · exact,ban 실측 STALL). 구간 정원(-193 sec_free)과 같은 안전판이다."""
+
+    def test_a_released_robot_may_take_the_tight_turn(self):
+        free, states, dists = _scene()
+        _ban_on()
+        assert _step(free, states, dists, ["A", "B"], ban_free={"A"})["A"] == (4, 4, 3)
+
+    def test_the_released_turn_still_keeps_others_out(self):
+        """풀린 로봇이 돌아도 그 회전의 금지 자리는 예약한다 — 제3자가 이번 틱 들어오지 못한다.
+        B (4,3) 북향 = A 기준 ((0,−1), h0) 금지 → A 는 풀려서 돈다. C (5,5) 서향이 전진하면 (5,4) 서향 =
+        ((1,0), h3) 금지 자리다."""
+        free = np.ones((9, 9), dtype=bool)
+        states = {"A": (4, 4, 0), "B": (4, 3, 0), "C": (5, 5, 3)}
+        dists = {"A": dist_map_h(free, (4, 2)), "B": dist_map_h(free, (4, 3)), "C": dist_map_h(free, (5, 0))}
+        _ban_on()
+        assert (4, 3, 0) in geo.ban_states(4, 4, 0, 3) and (5, 4, 3) in geo.ban_states(4, 4, 0, 3)
+        new = _step(free, states, dists, ["A", "B", "C"], ban_free={"A"})
+        assert new["A"] == (4, 4, 3)
+        assert new["C"] != (5, 4, 3)
+
+    def test_without_release_the_same_turn_waits(self):
+        free = np.ones((9, 9), dtype=bool)
+        states = {"A": (4, 4, 0), "B": (4, 3, 0), "C": (5, 5, 3)}
+        dists = {"A": dist_map_h(free, (4, 2)), "B": dist_map_h(free, (4, 3)), "C": dist_map_h(free, (5, 0))}
+        _ban_on()
+        assert _step(free, states, dists, ["A", "B", "C"])["A"][2] == 0
+
+
 def _mid_turn_scene():
     """A 는 (4,4) 에서 북→서 회전 중(DES 는 첫 틱에 상태를 바꾼다). B 는 (5,5) 서향, 목표 (5,0) — 한 칸 전진하면
     (5,4) 서향 = A 기준 ((1,0), h3), 표에 걸린다. B 의 새 몸 (5,4)·(5,5) 는 A 의 hard 칸 밖."""

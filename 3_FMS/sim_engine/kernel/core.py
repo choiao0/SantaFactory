@@ -22,7 +22,7 @@ import numpy as np
 
 from map_loader import ROBOT_DIMS, front_swing, zone_cells
 from pibt.geometry import configure as configure_footprint
-from pibt.geometry import footprint_flags, front_cells, front_swing_on
+from pibt.geometry import ban_on, footprint_flags, front_cells, front_swing_on
 from pibt.liveness import WAIT_ESC_GRACE
 from pibt_core import (DIRS, MOVE_TICKS, REV_TICKS, TURN_COST, TURN_TICKS, Replanner, Stagnation, candidates_h,
                        dist_map, dist_map_h, occupied, stay_map_h, step,
@@ -61,6 +61,10 @@ class KernelConfig:
     move_ticks: int = MOVE_TICKS  # 전진 1칸에 쓰는 틱 (실행, -194)
     rev_ticks: int = REV_TICKS    # 후진 1칸에 쓰는 틱 (계약 v3.15, -250: MOVE_TICKS -> 12).
                                   # 근거·출처는 geometry.REV_TICKS 주석. v3.14 로 되돌리려면 --rev-ticks=4.
+    ban_release: int = 160        # 금지 조합표(-277, footprint …,ban)에서 풀어 줄 정체 틱. 코를 맞댄 1차선은 둘 다 못 돌아
+                                  # 후진·전진을 되풀이한다(base 2 40 42 1 STALL). 160틱 ≈ 44 s(0.9 m/s). 정체(stag)는 포장대 줄
+                                  # 대기에도 쌓여 낮추면 좁은 회전이 되살아난다 — est_18 10대 금지 회전 32틱 9.5 % · 64 7.6 % ·
+                                  # 160 2.9 %, 기준 세트 40행 STALL 은 셋 다 0, 처리량 평균 −2.9 · −5.0 · −7.7 %
     replan_max_extra: int = 0     # 정체 재계획 우회 추가 비용 상한 [칸] (-247). 0 = 없음 -> 비트 동일.
                                   # 없으면 반경 3 안의 로봇 하나 때문에 +200칸 우회를 받고,
                                   # stag 는 평소 거리장으로 재이므로 그 내내 안 풀린다 (liveness.REPLAN_MAX_EXTRA)
@@ -111,6 +115,7 @@ class FmsKernel(BatteryMixin, MetricsMixin):
         # 구간 대수 제한 (-193). 맵이 안 주면(sec_map None) 또는 정원 0 이면 장치가 꺼진다.
         self.sec_map = sec_map if cfg.section_limit > 0 else None
         self.section_blocks = self.section_releases = 0
+        self.ban_releases = 0        # 금지 조합표에서 풀린 (로봇 × 틱) — 교착 탈출 안전판이 쓰인 양 (-277)
         self.zone_stats = dict(wait=0, retargets=0, degraded=0, occ=[])   # 구현 설계 §4. occ = 틱별 존 안 로봇 수
         self.on_task_completed = on_task_completed
         self.station_cells = frozenset(st_cell.values())
@@ -495,10 +500,14 @@ class FmsKernel(BatteryMixin, MetricsMixin):
         # 구간 밖에 없을 때 순환 대기를 깨는 마지막 안전판이다 (-193).
         sec_free = ({rid for rid in rids if self._stag.get(rid) > SECTION_RELEASE}
                     if cfg.section_limit else ())
+        # 금지 조합표에서 푸는 로봇 (-277): 오래 정체한 로봇만 좁은 회전을 허락한다 — 구간 정원의 sec_free 와 같은 안전판
+        ban_free = ({rid for rid in rids if self._stag.get(rid) > cfg.ban_release} if turning is not None and ban_on()
+                    else ())
+        self.ban_releases += len(ban_free)
         new, cells, denied = step_h(states, dists, self.edge_cost, self.wait_cost, free, prio,
                                     self.turn_cost, extra, bias,
                                     self.sec_map, cfg.section_limit, sec_free, forbid, forbid_axle, soft_hold,
-                                    turning)
+                                    turning, ban_free)
         self.section_blocks += len(denied)      # 정원에 막힌 (로봇 × 틱). 0 이면 제한이 논 것
         self.section_releases += len(sec_free)
         if cfg.check:

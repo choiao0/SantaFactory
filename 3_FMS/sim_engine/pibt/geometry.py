@@ -164,7 +164,10 @@ REV_TICKS = round(MOVE_TICKS * REVERSE_FACTOR)   # 후진 1칸 실행 틱 (계�
 # 12틱 = 3.3333 s/칸 = **0.300 m/s** 로 그쪽 후진 p99 와 같다(후진 상한 0.3 = 전진 0.9 의 1/3).
 # 값을 여기 한 곳에만 둔다 — KernelConfig 와 sim_v2_tasks 가 이 이름을 쓴다.
 
-DEFAULT_FOOTPRINT = "exact"   # 운영 기본 회전 발자국 — sim_v2_tasks 와 fms_core.kernel_planner 가 이 이름을 쓴다 (-251)
+DEFAULT_FOOTPRINT = "exact,ban"   # 운영 기본 회전 발자국 — sim_v2_tasks 와 fms_core.kernel_planner 가 이 이름을 쓴다 (-251)
+# 계약 v3.17 (-277, 2026-09-25): exact → exact,ban. 아래 ☹ 의 「근본 고침(금지 조합표)」이 이것이다 — 거리장 벌점 대신
+# 오래 정체한 로봇만 표에서 푸는 안전판(KernelConfig.ban_release)으로 교착을 막았다. est_18 10대: 금지 회전 17.0 → 2.9 %,
+# 기준 세트 40행 STALL 0, Isaac 피크 재현의 창 동작 시작 19 → 83 %(풀지 않은 판). 처리량은 포화 전 약 −8 %.
 # 받는 발자국 문자열 전부 (-277: 끝에 ",ban" = 금지 조합표 거부). sim_v2_tasks --footprint 검증이 이 목록을 쓴다.
 FOOTPRINTS = ("legacy", "exact", "exact,front", "exact,front_2cell",
               "exact,ban", "exact,front_2cell,ban", "exact,front,ban")

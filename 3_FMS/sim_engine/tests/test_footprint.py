@@ -147,7 +147,7 @@ def test_cli_defaults_exact_and_dims():
     """기본 발자국은 **단일 출처**(geometry.DEFAULT_FOOTPRINT)에서 온다(-251). 문자열을 여기
     다시 적으면 기본값이 두 벌이 된다 — 값이 바뀌면 이 줄의 리터럴도 같이 바꾼다."""
     a = parse_args(BASE)
-    assert a.footprint == DEFAULT_FOOTPRINT == "exact"
+    assert a.footprint == DEFAULT_FOOTPRINT == "exact,ban"          # 계약 v3.17 (-277)
     assert a.robot_dims == (0.39, 1.11, 0.80)
     assert a.yield_rule
 
