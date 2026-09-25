@@ -9,7 +9,7 @@ VDA 5050(AMR 제어) · Sparkplug B(런 제어·텔레메트리) · biz/v1 JSON(
 | `compose.yml` | `emqx/emqx:6.3.0@sha256:3b6d9c0c…` 단일 노드. 1883(MQTT) · 127.0.0.1:18083(대시보드, 로컬 전용) |
 | `emqx.conf` | HOCON. 내장 DB 계정(`etc/users.csv` 부트스트랩) · 파일 ACL(`no_match = deny`, 위반 시 `disconnect`) · QoS 상한 1 · retainer |
 | `acl.conf` | 계정별 허용 토픽. retained 는 `connection`·`factsheet`·`STATE` 에만 (`{publish, [{retain, false}]}`) |
-| `bootstrap_users.sh` | `.env` → `users.csv` (amr01..amrNN, fms-core, sim-runner-gpu01, host-orch, sim-wms) |
+| `bootstrap_users.sh` | `.env` → `users.csv` (amr01..amrNN, fms-core, sim-runner-gpu01..0N, host-orch, sim-wms) |
 | `.env.example` | 쿠키 · 대시보드 비밀번호 · 계정 비밀번호 견본. `.env`·`users.csv` 는 커밋되지 않는다 |
 | `../../contracts/tests/test_acl_matrix.py` | ACL 행렬 50항목을 살아 있는 브로커에 대고 고정 |
 
@@ -26,6 +26,27 @@ cd ../.. && python3 -m pytest contracts/tests/test_acl_matrix.py -q      # 50 pa
 
 계정을 바꾸려면 `users.csv` 를 다시 만들고 `docker compose down -v && docker compose up -d` (볼륨의 내장 DB 초기화),
 또는 대시보드(http://127.0.0.1:18083, admin / `EMQX_DASHBOARD_PASSWORD`) · REST(API 키 필요) 로 고친다.
+
+### 떠 있는 브로커에 계정 하나만 추가 (재기동 없이, -244)
+
+`users.csv` 는 **최초 기동 때만** 읽는다 — 노드를 하나 더 늘려 `sim-runner-gpu04` 같은 계정을 나중에 추가하려는데
+`down -v` 로 볼륨(내장 DB)을 지우고 싶지 않다면(다른 노드 계정까지 같이 날아간다) 다음 중 하나로 간다.
+`emqx ctl` 에는 내장 DB(built_in_database) 인증에 계정을 추가하는 서브커맨드가 없다(5.x/6.x 공통) — 대시보드 또는
+REST API 만 된다.
+
+- **대시보드**: http://127.0.0.1:18083 → Access Control → Authentication → `password_based:built_in_database` →
+  Users → Add.
+- **REST API** (API 키는 대시보드 → System → API Keys 에서 발급):
+  ```bash
+  curl -u "$API_KEY:$API_SECRET" -H 'content-type: application/json' \
+    -X POST 'http://127.0.0.1:18083/api/v5/authentication/password_based:built_in_database/users' \
+    -d '{"user_id": "sim-runner-gpu04", "password": "<MQTT_PW_SIM_RUNNER 와 같은 값>"}'
+  ```
+  `acl.conf` 는 파일이라 재기동 없이는 안 바뀌지만, `sim-runner-gpu\d+` 정규식이 이미 새 노드 이름도 매칭하므로
+  ACL 쪽은 손댈 것이 없다 — 계정만 있으면 바로 붙는다.
+
+두 방법 다 대시보드 인증서(cookie)나 API 키가 필요해 `.env` 만으로는 못 하고, 위 REST 예시는 로컬 포트포워드
+기준이다 — EC2 등 원격 브로커는 대시보드 포트(18083)가 공인망에 열려 있지 않으므로 tailnet·SSH 터널로 붙는다.
 
 도커 없이(예: GPU 서버에서 sudo 없이 확인할 때): 같은 버전의 tar.gz 를 받아 같은 etc 파일로 띄운다.
 
