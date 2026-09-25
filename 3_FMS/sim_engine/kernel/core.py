@@ -22,7 +22,7 @@ import numpy as np
 
 from map_loader import ROBOT_DIMS, front_swing, zone_cells
 from pibt.geometry import configure as configure_footprint
-from pibt.geometry import front_cells, front_swing_on
+from pibt.geometry import footprint_flags, front_cells, front_swing_on
 from pibt.liveness import WAIT_ESC_GRACE
 from pibt_core import (DIRS, MOVE_TICKS, REV_TICKS, TURN_COST, TURN_TICKS, Replanner, Stagnation, candidates_h,
                        dist_map, dist_map_h, occupied, stay_map_h, step,
@@ -93,9 +93,10 @@ class FmsKernel(BatteryMixin, MetricsMixin):
     def __init__(self, free, st_cell, edge_cost, wait_cost, homes, n_robots, cfg,
                  zone_mask=None, on_task_completed=None, lane_dir=None, sec_map=None, turn_mask=None):
         # 회전 발자국 설정은 모듈 전역(pibt.geometry) — Replanner/HGraph 를 만들기 전에 넣는다 (-203).
-        configure_footprint(turn_mask if cfg.footprint != "legacy" else None,
-                            "front" in cfg.footprint, front_diag=cfg.footprint == "exact,front",
-                            robot_dims=cfg.robot_dims)                          # front = 4칸, front_2cell = 2칸; pitch 게이팅은 geometry (-79)
+        fp = footprint_flags(cfg.footprint)                                     # front = 4칸, front_2cell = 2칸; pitch 게이팅은 geometry (-79)
+        configure_footprint(turn_mask if not fp["legacy"] else None,
+                            fp["front_swing"], front_diag=fp["front_diag"],
+                            robot_dims=cfg.robot_dims, ban=fp["ban"])            # ban = 금지 조합표 거부 (-277)
         self.free, self.st_cell = free, st_cell
         self.H, self.W = free.shape
         self.edge_cost, self.wait_cost = edge_cost, wait_cost
@@ -176,7 +177,7 @@ class FmsKernel(BatteryMixin, MetricsMixin):
                                     turns_idle=0, goal_prev=None, goal_t=0, idle_moves=0, leave_from=None,
                                     yield_peer=None, yield_target=None, yield_until=-1, yield_hold=False,
                                     hd_peer=None, hd_role=None, hd_until=-1, hd_swapped=False, hd_t0=-1, swing_soft=set(),
-                                    soc=1.0, charge_n=0, chg=0, soc_empty=0)
+                                    turn_pair=None, soc=1.0, charge_n=0, chg=0, soc_empty=0)
             if self.battery:
                 self.robots[rid]["soc"] = float(cfg.soc_init[rid])
         if self.battery:
@@ -454,6 +455,9 @@ class FmsKernel(BatteryMixin, MetricsMixin):
         # 두 회전 로봇의 soft 칸이 겹치면 낮은 rid 가 주인(결정적) — 제3자에게는 누구든 똑같이 막힌다 (답신 11 §4)
         soft_hold = {cell: rid for rid in sorted(rids, reverse=True) if robots[rid]["busy"] > 0
                      for cell in robots[rid]["swing_soft"]}
+        # 회전 진행 중인 로봇 (-277): 금지 조합표가 켜졌으면 step_h 가 그 기준 금지 자리로 남을 못 들인다
+        turning = {rid: robots[rid]["turn_pair"] for rid in rids
+                   if robots[rid]["busy"] > 0 and robots[rid].get("turn_pair")}
         if cfg.yield_rule and not standoff:
             self._refresh_yields(t, states)
         if standoff:
@@ -493,7 +497,8 @@ class FmsKernel(BatteryMixin, MetricsMixin):
                     if cfg.section_limit else ())
         new, cells, denied = step_h(states, dists, self.edge_cost, self.wait_cost, free, prio,
                                     self.turn_cost, extra, bias,
-                                    self.sec_map, cfg.section_limit, sec_free, forbid, forbid_axle, soft_hold)
+                                    self.sec_map, cfg.section_limit, sec_free, forbid, forbid_axle, soft_hold,
+                                    turning)
         self.section_blocks += len(denied)      # 정원에 막힌 (로봇 × 틱). 0 이면 제한이 논 것
         self.section_releases += len(sec_free)
         if cfg.check:
@@ -902,12 +907,14 @@ class FmsKernel(BatteryMixin, MetricsMixin):
             # -79: 다틱 회전(-194) 동안 soft 칸(축 금지)도 쥔다 — 축 규칙은 회전 시작·끝 시각 모두에 상대 축이 없어야 한다.
             # hard 스윙은 extra 로 이미 쥐지만 soft 는 결정 틱에만 검사돼 2~5틱째 다른 축이 앞 칸에 들어올 수 있었다.
             rb["swing_soft"] = front_cells(s0[0], s0[1], s0[2], s1[2])
+            rb["turn_pair"] = (s0, s1)                   # -277: 회전 내내 금지 조합표로 이웃을 막는다 (step_h turning)
             return True, False
         if moved:                                        # 전진·후진 시작 (첫 틱)
             backward = (s1[0] - s0[0], s1[1] - s0[1]) != DIRS[s0[2]]   # -247: 후진은 더 오래 걸린다
             rb["busy"] = (self.cfg.rev_ticks if backward else self.cfg.move_ticks) - 1
             rb["busy_move"] = 1
             rb["swing"] = set()
+            rb["turn_pair"] = None
             return False, False
         if rb["busy"] > 0:                               # 진행 중
             rb["busy"] -= 1
@@ -915,6 +922,7 @@ class FmsKernel(BatteryMixin, MetricsMixin):
             if rb["busy"] == 0:
                 rb["swing"] = set()
                 rb["swing_soft"] = set()
+                rb["turn_pair"] = None
                 rb["busy_move"] = 0
             return (not was_move), was_move
         return False, False

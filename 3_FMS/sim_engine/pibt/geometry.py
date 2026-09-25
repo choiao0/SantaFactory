@@ -2,6 +2,8 @@
 import math
 import numpy as np
 
+from .ban import FRONT, HALF_W, REAR, absolute_states, build_table
+
 DIRS = [(1, 0), (0, 1), (-1, 0), (0, -1)]  # 0=N 1=E 2=S 3=W
 
 # ============================================================
@@ -80,19 +82,57 @@ FOOTPRINT_MARGIN_M = 0.05  # 회전 마스크 여유 = Isaac 정지 허용 오�
 _TURN_MASK = None     # bool[H, W, 4, 4] — [r, c, h, h2] = 회전 스윕이 장애물과 안 겹침. None = 마스크 없음
 _FRONT_SWING = False  # 회전 시 앞 칸(front(h), front(h2))을 soft 칸으로 검사
 _FRONT_DIAG = False   # soft 에 섞임 대각 2칸(mA, mB)도 포함 = 4칸 (-79, 물리 팀 2026-09-14 답신: 뒤 대각은 몸 칸(hard), 코 대각은 여유 무관)
+_BAN = None           # 금지 조합표 {+1: {((dr, dc), hb)}, -1: {...}} (-277). None = 거부 안 함
+_ban_cache = {}       # (r, c, h, h2) -> 절대 금지 상태 frozenset. 상한 H·W·8 키(공식 맵 약 10만) — configure 때 비운다
+
+FOOTPRINT_TOKENS = ("legacy", "exact", "front", "front_2cell", "ban")
 
 
-def configure(turn_mask=None, front_swing=False, front_diag=False, robot_dims=None, pitch=1.0):
+def configure(turn_mask=None, front_swing=False, front_diag=False, robot_dims=None, pitch=1.0,
+              ban=False, ban_margin=None):
     """회전 발자국 설정. FmsKernel.__init__ 가 Replanner/HGraph 를 만들기 **전에** 부른다.
     front_swing: 앞 2칸(f0, f1) soft. front_diag: 섞임 대각 2칸(mA, mB)도 soft = 4칸(`--footprint=exact,front`; 2칸은 `exact,front_2cell`).
     robot_dims=(앞, 뒤, 폭) 를 주면 pitch 게이팅을 여기서 한다: 코 반경 hypot(앞, 폭/2) × 2 ≤ pitch 면 코가 칸을 안 벗어나
-    규칙이 필요 없다(∅) — 계획기와 실행층(ADG)이 같은 판정을 보게 규칙 함수 쪽에 둔다(물리 팀 2026-09-14 §1)."""
-    global _TURN_MASK, _FRONT_SWING, _FRONT_DIAG
+    규칙이 필요 없다(∅) — 계획기와 실행층(ADG)이 같은 판정을 보게 규칙 함수 쪽에 둔다(물리 팀 2026-09-14 §1).
+    ban: 금지 조합표(pibt/ban.py, 여유 ban_margin, 기본 FOOTPRINT_MARGIN_M)로 회전을 거부한다(-277, `--footprint=…,ban`).
+    칸 규칙은 표와 모양이 달라 금지 회전을 0 으로 못 내린다(est_18 10대: exact 17.0 % · 2칸 5.1 % · 4칸 2.7 %)."""
+    global _TURN_MASK, _FRONT_SWING, _FRONT_DIAG, _BAN
     _TURN_MASK = None if turn_mask is None else np.asarray(turn_mask, dtype=bool)
     if front_swing and robot_dims is not None:
         front_swing = front_needed(robot_dims, pitch)
     _FRONT_SWING = bool(front_swing)
     _FRONT_DIAG = bool(front_swing and front_diag)
+    _ban_cache.clear()
+    _BAN = None
+    if ban:
+        dims = (FRONT, REAR, HALF_W) if robot_dims is None else (robot_dims[0], robot_dims[1], robot_dims[2] / 2)
+        _BAN = build_table(pitch, FOOTPRINT_MARGIN_M if ban_margin is None else ban_margin, dims)
+
+
+def footprint_flags(footprint):
+    """발자국 문자열 → configure 인자. 검증한 조합(FOOTPRINTS)만 받는다 — 토큰만 보면 legacy,ban 같은
+    시험 안 한 조합이 fms_core(--planner-opt footprint=…) 경로로 들어온다(CLI 검증은 sim_v2 에만 있다).
+    예전 판정(`"front" in s` 부분 문자열 · `s == "exact,front"`)과 기존 네 문자열에서 같은 값을 낸다."""
+    if footprint not in FOOTPRINTS:
+        raise ValueError(f"발자국 문자열을 모른다: {footprint!r} (허용 {FOOTPRINTS})")
+    tokens = set(footprint.split(","))
+    return dict(legacy="legacy" in tokens, front_swing=bool(tokens & {"front", "front_2cell"}),
+                front_diag="front" in tokens, ban="ban" in tokens)
+
+
+def ban_on():
+    return _BAN is not None
+
+
+def ban_states(r, c, h, h2):
+    """(r, c) 에서 h → h2 회전 동안 **남이 있으면 안 되는** 절대 상태. 거부가 꺼져 있으면 빈 집합."""
+    if _BAN is None:
+        return frozenset()
+    key = (r, c, h, h2)
+    got = _ban_cache.get(key)
+    if got is None:
+        got = _ban_cache[key] = absolute_states(_BAN, r, c, h, h2)
+    return got
 
 
 def front_needed(robot_dims, pitch=1.0):
@@ -125,6 +165,9 @@ REV_TICKS = round(MOVE_TICKS * REVERSE_FACTOR)   # 후진 1칸 실행 틱 (계�
 # 값을 여기 한 곳에만 둔다 — KernelConfig 와 sim_v2_tasks 가 이 이름을 쓴다.
 
 DEFAULT_FOOTPRINT = "exact"   # 운영 기본 회전 발자국 — sim_v2_tasks 와 fms_core.kernel_planner 가 이 이름을 쓴다 (-251)
+# 받는 발자국 문자열 전부 (-277: 끝에 ",ban" = 금지 조합표 거부). sim_v2_tasks --footprint 검증이 이 목록을 쓴다.
+FOOTPRINTS = ("legacy", "exact", "exact,front", "exact,front_2cell",
+              "exact,ban", "exact,front_2cell,ban", "exact,front,ban")
 # 전엔 문자열 "exact" 가 두 곳에 복제돼 있었다. 값을 여기 한 곳에만 둔다 — REV_TICKS·CELL_M 과 같은 이유.
 # ☹ exact 는 앞 칸 규칙이 없어 회전 중 코가 들어가는 칸을 아무도 안 막는다(pitch 1.0 에서 코 반경
 # hypot(0.39, 0.40) = 0.5587 > 반칸 0.50). 물리 팀 금지 조합표로 세면 위험한 회전 exact 9.85 % · 2칸 1.79 % · 4칸 0.95 %.

@@ -3,7 +3,7 @@
 import numpy as np
 
 from .geometry import (DIRS, MOVE_TICKS, REVERSE_FACTOR, TURN_COST, TURN_TICKS, _inb,
-                       front_cells, front_swing_on, occupied, stay_map_h, swing_cells,
+                       ban_on, ban_states, front_cells, front_swing_on, occupied, stay_map_h, swing_cells,
                        turn_mask, turn_ok, valid_state)
 from .hgraph import dist_map_h
 from .liveness import Replanner, Stagnation, wait_bias
@@ -70,8 +70,17 @@ class _PIBTStepH:
     """헤딩 모델 한 틱: 칸 하나 → 칸 집합으로 일반화한 우선순위 상속 + 백트래킹."""
 
     def __init__(self, states, dists, edge_cost, wait_cost, free, turn_cost, extra,
-                 bias, sec_map=None, sec_limit=0, sec_free=(), forbid=None, forbid_axle=None, soft_hold=None):
+                 bias, sec_map=None, sec_limit=0, sec_free=(), forbid=None, forbid_axle=None, soft_hold=None,
+                 turning=None):
         self.states = states
+        # 금지 조합표 거부 (-277). 상태 (r, c, h) -> 그 상태를 금지하는 회전 로봇들. 다틱 회전(-194) 중인 로봇의 몫은
+        # 미리 채워 온다(turning = {agent: (s0, s1)}) — 결정 틱에만 보면 2~5틱째 들어오는 로봇을 못 막는다.
+        self.ban_next = {}
+        self.next_ban = {}      # agent -> 이번 틱 회전 예약으로 더한 금지 상태
+        if ban_on():
+            for a, (s0, s1) in (turning or {}).items():
+                for st in ban_states(s0[0], s0[1], s0[2], s1[2]):
+                    self.ban_next.setdefault(st, set()).add(a)
         self.forbid = forbid or {}             # agent -> 금지 칸 (-79 대치: 지는 쪽은 이기는 쪽의 몸·원하는 자리에 못 들어간다)
         # agent -> 축 금지 칸 (-79): 다음 상태의 축이 여기 있으면 안 됨. 대치의 지는 쪽(이기는 쪽 soft 칸) + soft 밀기로 임시 부여.
         self.forbid_axle = {a: set(v) for a, v in (forbid_axle or {}).items()}
@@ -156,7 +165,7 @@ class _PIBTStepH:
         for s in now - nxt:
             self.sec_cnt[s] = self.sec_cnt.get(s, 0) - sign
 
-    def _reserve(self, a, s2, cells, soft=frozenset()):
+    def _reserve(self, a, s2, cells, soft=frozenset(), ban=frozenset()):
         self.next_of[a] = s2
         self.next_cells[a] = cells
         for cell in cells:
@@ -165,9 +174,18 @@ class _PIBTStepH:
         self.next_soft[a] = soft
         for cell in soft:
             self.soft_next[cell] = a
+        self.next_ban[a] = ban
+        for st in ban:
+            self.ban_next.setdefault(st, set()).add(a)
         self._count(a, cells, +1)          # 미정(현 위치) → 확정(예약 위치)로 계수 이전
 
     def _release(self, a):
+        for st in self.next_ban.pop(a, ()):
+            owners = self.ban_next.get(st)
+            if owners is not None:
+                owners.discard(a)
+                if not owners:
+                    del self.ban_next[st]
         self._count(a, self.next_cells[a], -1)
         for cell in self.next_cells.pop(a):
             if self.occ_next.get(cell) == a:       # 밀린 쪽이 제자리 예약으로
@@ -182,6 +200,16 @@ class _PIBTStepH:
                     del self.soft_next[cell]
                 else:
                     self.soft_next[cell] = base    # 회전 중인 제3 로봇의 주입분 복원 — 옛 코드는 지워서 보호가 사라졌다(Isaac 접촉 2/5시드)
+
+    def _ban_blocked(self, a, s2, ban):
+        """금지 조합표 (-277): 내 다음 상태가 남의 회전 기준 금지 자리이거나, 내 회전(ban = 그 금지 상태들)의
+        자리에 남이 **지금 있거나 이번 틱 온다**. 지금 있는 로봇은 이번 틱 떠나도 막는다 — 몸이 빠지는 데 여러 틱이 든다."""
+        if any(o != a for o in self.ban_next.get(s2, ())):
+            return True
+        if not ban:
+            return False
+        # 로봇 전체를 훑는다(회전 후보당 O(대수)) — 15대까지는 무시할 만하다. 대수가 크게 늘면 표 범위(3칸)로 먼저 거른다.
+        return any(b != a and (sb in ban or self.next_of.get(b) in ban) for b, sb in self.states.items())
 
     def _soft_blocked(self, a, s2, soft):
         """soft 충돌: 내 앞 2칸에 다른 축이 있거나/들어오거나, 내 축이 놓일 칸을 다른 로봇이 soft 예약했다."""
@@ -260,6 +288,9 @@ class _PIBTStepH:
             fa = self.forbid_axle.get(a)
             if fa and s2[:2] in fa:
                 continue                                    # 축 금지 칸 (-79 V1b)
+            ban = ban_states(cur[0], cur[1], cur[2], s2[2]) if s2[:2] == cur[:2] and s2[2] != cur[2] else frozenset()
+            if (ban or self.ban_next) and self._ban_blocked(a, s2, ban):
+                continue                                    # 금지 조합표 (-277)
             if self._soft_blocked(a, s2, soft):
                 if self._make_room(a, cur, soft, parent):
                     return True                             # soft 밀기 성공: 이번 틱 대기, 다음 틱 회전 (-79 V1b)
@@ -268,7 +299,7 @@ class _PIBTStepH:
                 continue                                    # 부모와 맞교환(swap) 금지
             if not self._entry_ok(a, cells):
                 continue                                    # 정원 찬 구간 진입 금지
-            self._reserve(a, s2, cells, soft)
+            self._reserve(a, s2, cells, soft, ban)
             if self._push_occupants(a, cells):
                 return True
             self._release(a)
@@ -278,15 +309,17 @@ class _PIBTStepH:
 
 def step_h(states, dists, edge_cost, wait_cost, free, priority_order,
            turn_cost=None, extra=None, bias=None, sec_map=None, sec_limit=0, sec_free=(), forbid=None,
-           forbid_axle=None, soft_hold=None):
+           forbid_axle=None, soft_hold=None, turning=None):
     """헤딩 모델 한 틱. states: {a: (r,c,h)}, dists: {a: (H,W,4)},
     extra: {a: 추가 점유 칸(회전 중 스윙)}, bias: {a: 대기 점수 가산(wait_bias)}.
     sec_map/sec_limit: 구간 대수 제한(-193) — sec_limit 0 이면 장치가 통째로 꺼진다.
+    turning: {a: (s0, s1)} 다틱 회전 중인 로봇 — 금지 조합표(-277, geometry.configure(ban=True))가 켜졌을 때만 본다.
     반환 (다음 상태 dict, 예약 칸 dict, 정원 때문에 막힌 agent 집합)."""
     if turn_cost is None:
         turn_cost = float(TURN_COST)
     ps = _PIBTStepH(states, dists, edge_cost, wait_cost, free, turn_cost,
-                    extra or {}, bias or {}, sec_map, sec_limit, sec_free, forbid, forbid_axle, soft_hold)
+                    extra or {}, bias or {}, sec_map, sec_limit, sec_free, forbid, forbid_axle, soft_hold,
+                    turning)
     for a in priority_order:
         if a not in ps.next_of:
             ps.resolve(a)
