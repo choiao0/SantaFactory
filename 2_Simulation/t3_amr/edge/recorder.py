@@ -224,6 +224,9 @@ def environment(cfg: RecorderConfig, spec: RunSpec, base: dict | None = None,
         #   창 동작 시작 83.3→88.5 % · 54.7→76.3 %, 지연 p50 40→32 s · 253→107 s, 접촉 0 · 최소 간격 0.31 m.
         e.setdefault("PIBT_TURN_BODY_GEO", "1")
         e.setdefault("PIBT_TURN_BODY_MAX", "20")
+        # ★ 두 번째 영상은 **드론 추종** (-244) — 1인칭은 포장대에서 흰 벽만 찍혀 하역 장면(주문 처리의 핵심)이
+        #   사라진다. 뒤·선반 위에서 보면 로봇 선반의 상자와 포장대의 토트가 한 화면에 든다(headless_pibt 주석).
+        e.setdefault("PIBT_FPV_VIEW", "drone")
         # 실행 속도를 DES 순항 속도에 맞춘다. DES 는 적재 무게로 속도를 바꿀 수 있다.
         sp = slice_meta.get("speed_mps")
         if isinstance(sp, (int, float)) and not isinstance(sp, bool) and sp > 0:

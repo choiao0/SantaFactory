@@ -128,6 +128,15 @@ class TestRecorderSliceMode:
         plain = REC.environment(cfg(tmp_path), spec_with(), base={}, plan_exists=True)
         assert "PIBT_TURN_BODY_GEO" not in plain
 
+    def test_slice_videos_follow_the_amr_from_behind_and_above(self, tmp_path):
+        """1인칭은 포장대에서 흰 벽만 찍혀 하역 장면이 사라진다 — 구간 재생은 드론 추종이 기본, 엣지 환경이 이긴다."""
+        e = REC.environment(cfg(tmp_path), spec_with(), base={}, plan_exists=True,
+                            traj_path="/x/traj.json", slice_meta=SLICE)
+        assert e["PIBT_FPV_VIEW"] == "drone"
+        kept = REC.environment(cfg(tmp_path), spec_with(), base={"PIBT_FPV_VIEW": "fpv"}, plan_exists=True,
+                               traj_path="/x/traj.json", slice_meta=SLICE)
+        assert kept["PIBT_FPV_VIEW"] == "fpv"
+
     def test_every_run_writes_physics_and_holds_until_stop(self, tmp_path):
         """구간이든 아니든 — 창을 끊는 것은 host-orch 다. 러너가 먼저 내려가면 FAILED 가 된다."""
         c = cfg(tmp_path)

@@ -311,6 +311,7 @@ def _attach_fpv():
               + (" · 고정" if FPV_FOLLOW < 0 else
                  f" · 로봇 {'auto' if FPV_AUTO else FPV_FOLLOW} "
                  + (f"3인칭 {FPV_DIST:g}m" if FPV_VIEW == "chase"
+                    else f"드론 뒤 {FPV_BACK:g}m · 높이 {FPV_UP:g}m" if FPV_VIEW == "drone"
                     else f"**1인칭** 앞 {FPV_FWD:g}m · 높이 {FPV_EYE_Z:g}m"
                        f" · 초점 {FPV_FOCAL:g}mm"))
               + (f" · {FPV_EVERY}번에 한 번" if FPV_EVERY > 1 else ""))
@@ -332,7 +333,7 @@ FPV_FAIL_MAX = int(os.environ.get("PIBT_FPV_FAIL_MAX", "") or 20)
 #   대상 로봇 뒤로 옮긴다.
 #
 #       PIBT_FPV_FOLLOW   auto(기본) | 로봇 번호 | -1(카메라 고정)
-#       PIBT_FPV_VIEW     fpv(기본) | chase
+#       PIBT_FPV_VIEW     fpv(기본) | chase | drone (뒤 PIBT_FPV_BACK · 높이 PIBT_FPV_UP)
 #       PIBT_FPV_DIST     chase 일 때 거리 [m]
 #       PIBT_FPV_LR       chase 일 때 좌/우  (-1 왼쪽 · +1 오른쪽)
 #
@@ -356,6 +357,13 @@ WARMSTART = (os.environ.get("PIBT_FPV_WARMSTART", "") or "1") not in ("0", "", "
 FPV_VIEW = (os.environ.get("PIBT_FPV_VIEW", "") or "fpv").strip().lower()
 FPV_DIST = float(os.environ.get("PIBT_FPV_DIST", "") or 6.0)
 FPV_LR = 1.0 if (os.environ.get("PIBT_FPV_LR", "") or "-1").strip() != "-1" else -1.0
+# drone 일 때 — 로봇 뒤로 [m] · 높이 [m] · 겨냥점을 구동축 앞으로 [m]. 20 mm 와 짝으로 차체 전체(뒤 1.11 m ·
+#   높이 1.65 m)가 화면 아래 1/3 에 들고 앞 통로·포장대가 위에 든다.
+FPV_BACK = float(os.environ.get("PIBT_FPV_BACK", "") or 4.5)
+FPV_UP = float(os.environ.get("PIBT_FPV_UP", "") or 5.0)
+FPV_AHEAD = float(os.environ.get("PIBT_FPV_AHEAD", "") or 1.0)
+# drone 카메라 방향을 이만큼씩만 로봇 방향으로 돌린다(캡처마다) — 제자리 회전 때 5배속 영상이 휙 돌지 않게.
+FPV_YAW_EASE = min(1.0, max(0.05, float(os.environ.get("PIBT_FPV_YAW_EASE", "") or 0.35)))
 # ★ 1인칭 눈 위치 — **차 앞면보다 앞**이어야 한다.
 #   구동축이 앞이라(heading_offset=0) 차체는 뒤로 뻗지만, 선반은 축 앞으로도
 #   0.39 m 나오고 z 0.22~1.65 를 채운다. 축 바로 위에 두면 카메라가 **선반
@@ -380,10 +388,163 @@ _fpv_xop = None            # 카메라 transform op — 한 번만 만들고 값
 #   (`build_amr_scene_v2.py:308`). 눈높이 1.2 m 에서 화각 47도면 아래쪽이 4 m 앞
 #   바닥을 잡아 **하단 절반이 바닥**이 된다. 주행 화면으로는 35 mm 쯤이 낫다.
 #     24 mm -> 화각 47.0도    35 mm -> 33.5도    50 mm -> 23.7도
-FPV_FOCAL = float(os.environ.get("PIBT_FPV_FOCAL", "") or 35.0)
+FPV_FOCAL = float(os.environ.get("PIBT_FPV_FOCAL", "") or (20.0 if FPV_VIEW == "drone" else 35.0))
 _fpv_cam_n = 0             # 카메라를 옮긴 횟수 (로그용)
+_fpv_yaw = None            # drone 카메라가 지금 보는 방향 (FPV_YAW_EASE 로 로봇 방향을 따라간다)
 _fpv_pick = None           # auto 로 고른 로봇 (한 번 고르면 안 바꾼다)
 _fpv_home = None           # 각 로봇의 시작 자리 — 움직인 거리를 재는 기준
+
+# ★★ 영상 글씨 (-244) — 「이 AMR 이 지금 무슨 주문을 어디서 어디로 나르나」.
+#   영상만 봐서는 AMR 이 주문을 처리하는지 그냥 돌아다니는지 모른다. DES 구간(궤적 파일)에서 로봇별
+#   운행(픽업 → 적재 → 운반 → 하역)을 짜서(`path/demo_overlay.py`) 프레임에 적는다. 구간 재생에서만.
+#     · 1인칭 — 윗줄(로봇 · 창 시계) · 운행(주문·토트 · 출발 → 도착) · 단계 알약 · 그 로봇 실적
+#     · 천장 — 로봇마다 단계 색 원 · 진행 방향 · 번호, 1인칭 대상은 분홍 고리, 포장대 이름, 범례, 전체 실적.
+#       120 m 광각에서 AMR 이 흰 점 18 px 라 바닥과 구분이 안 됐다. USD 에 표시 prim 을 달면 물리 링크
+#       밑이라 판이 달라질 위험이 있어 **프레임 위에 그린다** (물리 무관).
+#       PIBT_FPV_HUD=0         1인칭 글씨 끈다
+#       PIBT_TOP_MARK=0        천장 표시 끈다
+#       PIBT_TOP_FIT=0         천장 카메라를 로봇이 다닌 범위에 맞추지 않는다 (씬 기본 120 m 전경)
+#       PIBT_HUD_FONT=<ttf>    한글 글꼴 (이미지에 fonts-nanum). 없으면 영어 글씨 + PIL 기본 글꼴
+#   ★ auto 추종은 **창 안에서 운행을 가장 많이 끝내는 로봇**을 첫 프레임부터 따라간다. 초반 10초를
+#     지켜보고 고르는 방식(`FPV_AUTO_AFTER`)은 구간표가 없을 때만 쓴다.
+HUD_ON = (os.environ.get("PIBT_FPV_HUD", "") or "1") not in ("0", "no", "off")
+TOP_MARK = (os.environ.get("PIBT_TOP_MARK", "") or "1") not in ("0", "no", "off")
+TOP_FIT = (os.environ.get("PIBT_TOP_FIT", "") or "1") not in ("0", "no", "off")
+HUD_FONT = (os.environ.get("PIBT_HUD_FONT", "")
+            or "/usr/share/fonts/truetype/nanum/NanumGothicBold.ttf").strip()
+# 구동축은 차 앞쪽이다 — 차체는 뒤로 1.11 m · 앞으로 0.39 m (iw.hub). 천장 원은 차체 가운데에 둔다.
+BODY_BACK_M = 0.36
+# 포장대 이름은 그 칸(로봇이 서는 자리)이 아니라 벽 쪽으로 이만큼 내려 적는다 — 선 로봇을 안 가린다.
+STATION_LABEL_DY_M = 1.6
+_hud_warned, _top_warned = False, False
+
+
+def _hud_load():
+    """구간 재생이면 (운행표, 따라갈 로봇). 아니거나 실패하면 (None, None) — 글씨 없이 찍는다."""
+    want = (HUD_ON and SHOTS_FPV and CAMERA_FPV) or (TOP_MARK and SHOTS)
+    if not (_SLICE and want):
+        return None, None
+    try:
+        import demo_overlay as DO
+        path = (os.environ.get("PIBT_TRAJ", "") or "").strip()
+        if not os.path.isabs(path):
+            path = os.path.join(os.environ.get("W", _BASE), path)
+        lang = "ko" if os.path.isfile(HUD_FONT) else "en"
+        tl = DO.Timeline.from_file(path, lang)
+        rid = tl.busiest()
+        pick = int(rid) if rid is not None and str(rid).isdigit() and int(rid) in fleet.drivers else None
+        print(f"[hl] 영상 글씨 ON — 운행 {sum(len(v) for v in tl.trips.values())}개 · 글꼴 "
+              + (HUD_FONT if lang == "ko" else "(없음 → 영어)")
+              + (f" · 창에서 가장 바쁜 로봇 {pick}" if pick is not None else ""), flush=True)
+        return tl, pick
+    except Exception as e:                                # noqa: BLE001
+        print(f"[hl] ☹ 영상 글씨를 못 켠다 — 글씨 없이 찍는다: {e!r}", flush=True)
+        return None, None
+
+
+_tl, _hud_pick = _hud_load()
+_hud_ok = _tl is not None and HUD_ON and bool(SHOTS_FPV and CAMERA_FPV)
+_top = None                 # (카메라→월드, 초점, 수평 조리개, 크기, 포장대 화면 좌표) — `_top_setup`
+
+
+def _plan_k(a):
+    """로봇 a 의 계획 틱 — 그 로봇이 Isaac 에서 실제로 붙잡고 있는 동작 기준 (`demo_overlay.plan_tick`)."""
+    import demo_overlay as DO
+    act = fleet.rt.pending(fleet.slot[a])
+    return DO.plan_tick(act.tick if act is not None else None, fleet.rt.clock, fleet.rt.tick_s)
+
+
+def _window_clock(sim_t):
+    return min(sim_t - WARMUP, WINDOW) if sim_t >= WARMUP else None
+
+
+def _hud_prep(sim_t):
+    """1인칭 프레임에 얹을 글씨를 정해 **그리는 함수**를 돌려준다(그리기·저장은 쓰기 스레드가 한다).
+    단계는 **그 로봇이 Isaac 에서 실제로 붙잡고 있는 동작**으로 정한다 — DES 시각으로 고르면 물리가 늦은 만큼
+    화면과 글씨가 어긋난다. 실패하면 한 번만 알리고 끈다 — 프레임은 잃지 않는다."""
+    global _hud_ok, _hud_warned
+    try:
+        import demo_overlay as DO
+        who = _fpv_pick if _fpv_pick is not None else FPV_FOLLOW
+        k, rid = _plan_k(who), str(who)
+        lines, key = _tl.lines(rid, k, _window_clock(sim_t)), _tl.phase(rid, k).key
+        return lambda img: DO.draw(img, lines, HUD_FONT, key)
+    except Exception as e:                                # noqa: BLE001
+        if not _hud_warned:
+            _hud_warned = True
+            print(f"[hl] ☹ 1인칭 글씨 준비 실패 — 끄고 글씨 없이 찍는다: {e!r}", flush=True)
+        _hud_ok = False
+        return None
+
+
+def _top_setup(cam_path, size):
+    """천장 카메라를 로봇이 다닌 범위에 맞추고(`PIBT_TOP_FIT`), 투영에 쓸 값을 돌려준다. 실패하면 None."""
+    if _tl is None or not TOP_MARK:
+        return None
+    try:
+        import numpy as _np
+        import demo_overlay as DO
+        from pxr import Gf, Usd, UsdGeom                 # noqa: E402
+        import omni.usd                                  # noqa: E402
+        prim = omni.usd.get_context().get_stage().GetPrimAtPath(cam_path)
+        cam = UsdGeom.Camera(prim)
+        focal = float(cam.GetFocalLengthAttr().Get())
+        hap = float(cam.GetHorizontalApertureAttr().Get())
+        xf = UsdGeom.Xformable(prim)
+        if TOP_FIT and _tl.extent:
+            m = DO.top_down(*DO.fit_top(_tl.extent, size, focal, hap))
+            ops = xf.GetOrderedXformOps()
+            op = ops[0] if len(ops) == 1 and ops[0].GetOpType() == UsdGeom.XformOp.TypeTransform else None
+            if op is None:
+                xf.ClearXformOpOrder()
+                op = xf.AddTransformOp()
+            op.Set(Gf.Matrix4d(*[v for row in m for v in row]))
+        m = _np.array(xf.ComputeLocalToWorldTransform(Usd.TimeCode.Default()))
+        st = [(name, *uv) for name, uv in zip(_tl.stations, DO.project(
+            [(x, y - STATION_LABEL_DY_M, 0.0) for x, y in _tl.stations.values()], m, focal, hap, size))
+              if uv is not None]
+        print(f"[hl] 천장 표시 ON — 카메라 {cam_path} · 높이 {m[3][2]:.0f} m · 중심 ({m[3][0]:.1f}, "
+              f"{m[3][1]:.1f})" + (" (로봇이 다닌 범위에 맞춤)" if TOP_FIT else "") + f" · 포장대 {len(st)}곳",
+              flush=True)
+        return m, focal, hap, size, st
+    except Exception as e:                                # noqa: BLE001
+        print(f"[hl] ☹ 천장 표시를 못 켠다 — 표시 없이 찍는다: {e!r}", flush=True)
+        return None
+
+
+def _top_prep(sim_t):
+    """천장 프레임에 얹을 로봇 표시를 정해 **그리는 함수**를 돌려준다. 자세·단계는 여기(주 스레드)서 읽는다.
+    실패하면 한 번만 알리고 끈다 — 프레임은 잃지 않는다."""
+    global _top, _top_warned
+    try:
+        import math as _m
+        import demo_overlay as DO
+        m, focal, hap, size, st = _top
+        agents = list(fleet.agents)
+        pts, ks = [], {}
+        for a in agents:
+            x, y, yaw = fleet.drivers[a].axle_pose()
+            fx, fy = _m.cos(yaw), _m.sin(yaw)
+            cx, cy = x - BODY_BACK_M * fx, y - BODY_BACK_M * fy
+            pts += [(cx, cy, 1.0), (cx + 0.75 * fx, cy + 0.75 * fy, 1.0)]
+            ks[str(a)] = _plan_k(a)
+        uv = DO.project(pts, m, focal, hap, size)
+        marks = []
+        for i, a in enumerate(agents):
+            c, n = uv[2 * i], uv[2 * i + 1]
+            if c is None or n is None:
+                continue
+            marks.append(DO.Mark(num=int(a) + 1, u=c[0], v=c[1], hu=n[0] - c[0], hv=n[1] - c[1],
+                                 key=_tl.phase(str(a), ks[str(a)]).key,
+                                 follow=bool(SHOTS_FPV) and a == _fpv_pick))
+        lines, lang = _tl.top_lines(ks, _window_clock(sim_t), len(agents)), _tl.lang
+        return lambda img: DO.draw_top(img, marks, lines, HUD_FONT, st, lang)
+    except Exception as e:                                # noqa: BLE001
+        if not _top_warned:
+            _top_warned = True
+            print(f"[hl] ☹ 천장 표시 준비 실패 — 끄고 표시 없이 찍는다: {e!r}", flush=True)
+        _top = None
+        return None
 
 
 def _fpv_track(fleet_):
@@ -392,7 +553,7 @@ def _fpv_track(fleet_):
     실패해도 주행을 죽이지 않는다 — 한 번만 알리고 그 뒤로 조용히 넘어간다.
     카메라가 안 움직이면 마지막 자리에 머물 뿐이다.
     """
-    global _fpv_cam_warned, _fpv_pick, _fpv_home, _fpv_xop, _fpv_cam_n
+    global _fpv_cam_warned, _fpv_pick, _fpv_home, _fpv_xop, _fpv_cam_n, _fpv_yaw
     if (not FPV_AUTO and FPV_FOLLOW < 0) or _rep_annot2 is None or not CAMERA_FPV:
         return
     try:
@@ -402,6 +563,10 @@ def _fpv_track(fleet_):
         #   매 프레임 갈아타면 화면이 튄다.
         who = FPV_FOLLOW
         if FPV_AUTO:
+            if _fpv_pick is None and _hud_pick is not None:
+                _fpv_pick = _hud_pick
+                print(f"[hl]   [cam] ★ 로봇 {_fpv_pick} 를 따라간다 (DES 구간표 — 창 안 운행이 "
+                      f"가장 많다) — 첫 프레임부터 녹화한다", flush=True)
             if _fpv_pick is not None:
                 who = _fpv_pick
             else:
@@ -430,6 +595,16 @@ def _fpv_track(fleet_):
             eye = Gf.Vec3d(x - 0.75*d*fx - 0.5*d*(-fy)*FPV_LR,
                            y - 0.75*d*fy - 0.5*d*(fx)*FPV_LR, 0.55*d)
             tgt = Gf.Vec3d(x, y, 0.75)
+        elif FPV_VIEW == "drone":
+            # ★ 드론 추종 (-244) — 로봇 **바로 뒤·선반 위**에서 로봇과 그 앞을 내려다본다. 옆으로 비끼지 않아
+            #   통로에서 선반에 안 가리고, 1인칭처럼 포장대 앞 흰 벽만 찍히지도 않는다 — 로봇 선반의 상자와
+            #   포장대의 토트가 한 화면에 든다. 방향은 FPV_YAW_EASE 로 천천히 따라간다.
+            if _fpv_yaw is None:
+                _fpv_yaw = yaw
+            _fpv_yaw += FPV_YAW_EASE * _m.atan2(_m.sin(yaw - _fpv_yaw), _m.cos(yaw - _fpv_yaw))
+            cfx, cfy = _m.cos(_fpv_yaw), _m.sin(_fpv_yaw)
+            eye = Gf.Vec3d(x - FPV_BACK*cfx, y - FPV_BACK*cfy, FPV_UP)
+            tgt = Gf.Vec3d(x + FPV_AHEAD*cfx, y + FPV_AHEAD*cfy, 0.3)
         else:
             # ★ 1인칭 — 차 앞머리에서 주행 방향을 본다 (대시캠).
             eye = Gf.Vec3d(x + FPV_FWD*fx, y + FPV_FWD*fy, FPV_EYE_Z)
@@ -499,7 +674,7 @@ def _save_fpv(sim_t):
     if FPV_AUTO and WARMSTART and _fpv_pick is None:
         return
     try:
-        _save_one(_rep_annot2, SHOTS_FPV, sim_t)
+        _save_one(_rep_annot2, SHOTS_FPV, sim_t, _hud_prep if _hud_ok else None, "fpv")
         _fpv_n += 1
     except Exception as e:                                # noqa: BLE001
         _fpv_fail += 1
@@ -517,6 +692,18 @@ def _save_fpv(sim_t):
 
 if SHOTS:
     os.makedirs(SHOTS, exist_ok=True)
+    # ★ 천장 표시(-244)는 프레임을 **우리 손으로 저장해야** 그 위에 그릴 수 있다. 뷰포트 캡처
+    #   (`live_pibt._shot`)는 비동기로 파일을 바로 써서 틈이 없다. 표시를 켜면 뷰포트 캡처를 끄고
+    #   (`state["vp"] = None` — live_pibt 가 더는 안 찍는다) 같은 카메라를 리플리케이터로 받는다.
+    #   뷰포트 자체 렌더도 멈춘다 — 안 쓰는 화면을 그리느라 렌더가 두 번 돌지 않게.
+    #   ☹ 뷰포트 렌더를 못 멈추면 **바꾸지 않는다** — 둘 다 돌면 렌더가 두 번이다. 천장은 표시 없이 뷰포트로 찍는다.
+    if state.get("vp") is not None and _tl is not None and TOP_MARK:
+        try:
+            state["vp"].updates_enabled = False
+            state["vp"] = None
+            print("[hl] 천장 표시를 그리려고 뷰포트 캡처 대신 리플리케이터로 찍는다")
+        except Exception as e:                            # noqa: BLE001
+            print(f"[hl] ☹ 뷰포트 렌더를 못 멈췄다 — 천장은 표시 없이 뷰포트로 찍는다: {e!r}")
     if state.get("vp") is not None:
         _cap = "viewport"
         print(f"[hl] 촬영 ON (뷰포트) {SHOTS} · {SHOT_STRIDE}스텝마다 .{SHOT_EXT}")
@@ -530,6 +717,7 @@ if SHOTS:
             import omni.replicator.core as rep          # noqa: E402
             _cam = os.environ.get("PIBT_CAMERA", "/World/Cameras/Cam_Top")
             _w, _h = (int(x) for x in SHOT_RES.split("x"))
+            _top = _top_setup(_cam, (_w, _h))       # 렌더 프로덕트 전에 — 첫 장부터 맞춘 화각
             _rp = rep.create.render_product(_cam, (_w, _h))
             _rep_annot = rep.AnnotatorRegistry.get_annotator("rgb")
             _rep_annot.attach([_rp])
@@ -564,8 +752,69 @@ _PIL_FORMAT = {"jpg": "JPEG", "jpeg": "JPEG", "png": "PNG"}.get(
     SHOT_EXT.lower(), SHOT_EXT.upper())
 
 
-def _save_one(annot, out_dir, sim_t):
-    """rgb 한 장을 live_pibt 와 **같은 파일명**으로 저장한다.
+# ★ 프레임 쓰기는 **뒤 스레드**가 한다 (-244). PNG 인코딩(zlib)이 1280x720 한 장에 193 ms(레벨 6)라,
+#   천장 영상을 리플리케이터로 받자 주 루프가 40 ms/step(배속 0.42)까지 느려졌다 — 뷰포트 캡처는 Kit 이
+#   네이티브 스레드에서 쓰므로 몰랐던 비용이다. 레벨 1(41 ms, 파일 +10~18 %)로 낮추고 글씨 그리기·인코딩·
+#   쓰기를 스레드 둘에 맡긴다(zlib 은 GIL 을 놓는다). 주 루프는 버퍼 복사와 그릴 값 계산만 한다.
+#       PIBT_PNG_LEVEL   PNG 압축 0~9 (기본 1)
+import threading                                        # noqa: E402
+from concurrent.futures import ThreadPoolExecutor      # noqa: E402
+
+PNG_LEVEL = int(os.environ.get("PIBT_PNG_LEVEL", "") or 1)
+_IO_MAX = 8                 # 밀린 쓰기 상한 — 넘으면 가장 오래된 것을 기다린다(메모리 상한 ~30 MB)
+_io = ThreadPoolExecutor(max_workers=2, thread_name_prefix="shot")
+_io_pending = []
+# 쓰기 스레드가 센다 — 영상별 **쓰기** 실패(그 프레임이 없다)와 글씨 실패(프레임은 글씨 없이 있다). 끝 보고가
+#   제출 수에서 쓰기 실패를 뺀다 — 안 그러면 디스크가 차도 「실패 0회」로 찍힌다.
+_io_lock = threading.Lock()
+_io_fail = {"top": 0, "fpv": 0}
+_paint_fail = 0
+
+
+def _io_count(stream):
+    """실패 하나를 센다(잠금). 처음 셋만 알리도록 지금까지의 합을 돌려준다."""
+    global _paint_fail
+    with _io_lock:
+        if stream == "paint":
+            _paint_fail += 1
+        else:
+            _io_fail[stream] += 1
+        return _paint_fail + sum(_io_fail.values())
+
+
+def _write_frame(arr, final, paint, stream):
+    """쓰기 스레드 — 글씨를 얹고(`paint`) `.part` 로 쓴 뒤 `os.replace`. 실패는 세고 처음 셋만 알린다."""
+    try:
+        from PIL import Image
+        img = Image.fromarray(arr)
+        if paint is not None:
+            try:
+                img = paint(img)
+            except Exception as e:                        # noqa: BLE001 — 글씨가 안 돼도 프레임은 쓴다
+                if _io_count("paint") <= 3:
+                    print(f"[hl] ☹ 글씨 그리기 실패 (프레임은 글씨 없이 쓴다): {e!r}", flush=True)
+        tmp = final + ".part"
+        # ★ 포맷을 **명시**한다. PIL 은 확장자로 포맷을 정하는데 `.part` 를 모른다
+        #   — `ValueError: unknown file extension: .part` (r13peak 실측, 2026-09-23).
+        img.save(tmp, format=_PIL_FORMAT, **({"compress_level": PNG_LEVEL} if _PIL_FORMAT == "PNG" else {}))
+        os.replace(tmp, final)
+    except Exception as e:                                # noqa: BLE001
+        if _io_count(stream) <= 3:
+            print(f"[hl] ☹ 프레임 쓰기 실패: {final}: {e!r}", flush=True)
+
+
+def _io_drain():
+    """밀린 쓰기를 다 끝낸다 — 끝낼 때(SIGINT 포함) 조립 전에 부른다."""
+    _io.shutdown(wait=True)
+    if _paint_fail or any(_io_fail.values()):
+        print(f"[hl] ☹ 프레임 쓰기 실패 천장 {_io_fail['top']} · 추종 {_io_fail['fpv']}회 · "
+              f"글씨 실패 {_paint_fail}회", flush=True)
+
+
+def _save_one(annot, out_dir, sim_t, overlay=None, stream="top"):
+    """rgb 한 장을 live_pibt 와 **같은 파일명**으로 저장한다. `overlay(sim_t)` 가 그리는 함수를 주면 얹는다.
+
+    버퍼는 다음 렌더에 덮이므로 **복사해서** 쓰기 스레드(`_write_frame`)에 넘긴다.
 
     ★ **원자적으로 쓴다** (2026-09-23). `.part` 로 쓰고 `os.replace` 로 옮긴다.
 
@@ -582,23 +831,24 @@ def _save_one(annot, out_dir, sim_t):
       `.part` 는 조립 glob(`f_*.png`)에 안 걸리므로, 끊겨서 남더라도
       무해하다 — 프레임이 **온전하거나 없거나** 둘 중 하나가 된다.
     """
+    import numpy as np
     data = annot.get_data()
     if data is None or not len(data):
         raise RuntimeError("rgb 버퍼가 비었다")
-    from PIL import Image
     final = os.path.join(out_dir, f"f_{int(round(sim_t * 100)):09d}.{SHOT_EXT}")
-    tmp = final + ".part"
-    # ★ 포맷을 **명시**한다. PIL 은 확장자로 포맷을 정하는데 `.part` 를 모른다
-    #   — `ValueError: unknown file extension: .part` (r13peak 실측, 2026-09-23).
-    Image.fromarray(data[:, :, :3]).save(tmp, format=_PIL_FORMAT)
-    os.replace(tmp, final)
+    arr = np.array(data[:, :, :3], copy=True)
+    paint = overlay(sim_t) if overlay is not None else None
+    _io_pending[:] = [f for f in _io_pending if not f.done()]
+    while len(_io_pending) >= _IO_MAX:
+        _io_pending.pop(0).result()
+    _io_pending.append(_io.submit(_write_frame, arr, final, paint, stream))
 
 
 def _save_replicator(sim_t):
     """상단 한 장 (리플리케이터 경로). 측면은 `_save_fpv` 가 따로 한다."""
     global _shot_n, _shot_fail
     try:
-        _save_one(_rep_annot, SHOTS, sim_t)
+        _save_one(_rep_annot, SHOTS, sim_t, _top_prep if _top is not None else None)
         _shot_n += 1
     except Exception as e:                                # noqa: BLE001
         _shot_fail += 1
@@ -722,6 +972,7 @@ except Exception:
 wall = time.time() - wall0
 print(f"[hl] 주행 종료 — sim {t_sim:.1f}s · 벽시계 {wall:.1f}s · "
       f"평균 배속 {t_sim / wall if wall > 0 else 0:.2f}x · 스텝 {n:,}")
+_io_drain()                                            # 밀린 프레임 쓰기를 끝낸다 — 조립 전에
 try:
     print(f"[hl] {fleet.stats}")
 except Exception as e:
@@ -738,8 +989,8 @@ if _ph:
 
 if _cap:
     # viewport 경로는 live_pibt 가 세므로(state) 그 값을, 리플리케이터는 우리 값을.
-    _n = state.get("shots", 0) if _cap == "viewport" else _shot_n
-    _f = state.get("shot_fail", 0) if _cap == "viewport" else _shot_fail
+    _n = state.get("shots", 0) if _cap == "viewport" else _shot_n - _io_fail["top"]
+    _f = state.get("shot_fail", 0) if _cap == "viewport" else _shot_fail + _io_fail["top"]
     _fps = int(os.environ.get("PIBT_SHOT_FPS", "30"))
     print(f"[hl] 촬영 {_n:,}장 · 실패 {_f}회 -> {SHOTS}")
     if _n:
@@ -755,6 +1006,7 @@ if _cap:
 #   장수가 나와야 한다. 켠 적이 있으면 0 장이어도 찍는다: 백엔드는 `_fpv` 키가
 #   없으면 **오류 없이** 버튼만 안 띄우므로, 조용한 0 장이 제일 나쁘다.
 if SHOTS_FPV and CAMERA_FPV:
+    _fpv_n, _fpv_fail = _fpv_n - _io_fail["fpv"], _fpv_fail + _io_fail["fpv"]
     _fps2 = int(os.environ.get("PIBT_SHOT_FPS", "30"))
     print(f"[hl] 촬영(2번영상) {_fpv_n:,}장 · 실패 {_fpv_fail}회 -> {SHOTS_FPV}"
           + ("" if _fpv_n else f"   ★ 한 장도 안 나왔다 (카메라 {CAMERA_FPV})"))
