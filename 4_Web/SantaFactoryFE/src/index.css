@@ -326,13 +326,16 @@ section.step > p.desc { font-size: 18px; line-height: 1.7; max-width: 760px; mar
 /* 사진(왼쪽)과 사양(오른쪽)을 나란히 — 상자 높이가 고정이라 세로로 쌓으면 사진이 눌린다 */
 .picked-body { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; flex: 1 1 auto; min-height: 0; }
 .picked-body img {
-  display: block; width: 100%; height: 100%; object-fit: cover;
+  /* 높이를 묶어 둔다 — 칸이 넓어질수록 사진이 비율대로 길어져 카드를 밀어 올렸다. 화면이 클수록
+     카드만 계속 자라 옆 입력칸과 어긋난다 (S15P21A106-278) */
+  display: block; width: 100%; height: 100%; min-height: 150px; max-height: 210px; object-fit: cover;
   border-radius: 6px; background: #141312;
 }
 .picked-specs {
   display: grid; grid-template-columns: auto 1fr; gap: 8px 12px; margin: 0;
-  /* 다섯 줄을 사진 높이에 맞춰 고르게 벌린다 — 위로 몰리면 아래가 휑하다 */
-  height: 100%; align-content: space-between;
+  /* 남는 높이가 있으면 다섯 줄을 고르게 벌린다 — 위로 몰리면 아래가 휑하다. 모자라면 제 높이를
+     쓴다(자르지 않는다) */
+  min-height: 100%; align-content: space-between;
 }
 .picked-specs dt { font: 500 13.5px var(--font-mono); letter-spacing: .04em; color: #77776f; align-self: center; }
 .picked-specs dd {
@@ -349,7 +352,7 @@ section.step > p.desc { font-size: 18px; line-height: 1.7; max-width: 760px; mar
 .picktiles {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 14px;
   /* 상자 높이가 고정이라 사진이 남는 높이에 맞춰 줄어든다 — 굴리지 않는다 */
-  flex: 1 1 auto; min-height: 0; grid-auto-rows: 1fr; overflow: hidden;
+  flex: 1 1 auto; min-height: 0; grid-auto-rows: 142px; overflow: hidden;
 }
 .picktile {
   position: relative; display: block; width: 100%; height: 100%; padding: 0; cursor: pointer;
@@ -365,13 +368,17 @@ section.step > p.desc { font-size: 18px; line-height: 1.7; max-width: 760px; mar
   font: 700 17px var(--font-head); letter-spacing: -.01em; color: #f5f4f0; text-align: left;
   background: linear-gradient(180deg, rgba(10, 9, 9, .72) 0%, rgba(10, 9, 9, 0) 100%);
 }
-.pickcta { display: flex; gap: 12px; justify-content: flex-end; margin-top: auto; padding-top: 26px; }
+/* 사진 바로 밑에 붙인다 — 아래로 밀어 두면 사진과 버튼 사이가 휑하게 벌어지고 판만 길어진다 */
+.pickcta { display: flex; gap: 12px; justify-content: flex-end; margin-top: 18px; }
 .pickcta .button { min-width: 130px; text-align: center; }
 .pickcta .button:disabled { opacity: .45; cursor: default; }
 
 /* 세 상태(안내 · 고르는 판 · 고른 카드)의 상자 크기를 하나로 묶는다 — 고를 때마다 오른쪽 칸이
    늘었다 줄었다 하면 왼쪽 입력칸까지 같이 흔들린다 */
-.models > .modelask, .models > .modelpick, .models > .picked { height: 300px; overflow: hidden; }
+/* 세 상태(안내 · 고르는 판 · 고른 카드)의 상자 크기를 맞춘다 — 고를 때마다 오른쪽 칸이 늘었다
+   줄었다 하면 왼쪽 입력칸까지 흔들린다. 다만 높이를 못 박지는 않는다: 화면이 넓으면 사양 줄이
+   길어져 300px 을 넘는데, 그때 잘라내면 설치비 줄과 사진 아래가 사라진다 (S15P21A106-278) */
+.models > .modelask, .models > .modelpick, .models > .picked { min-height: 308px; }
 
 /* 고르기 전 안내 — 어두운 판 하나로 세워 "아직 고르지 않았다" 를 분명히 한다 */
 .modelask {
