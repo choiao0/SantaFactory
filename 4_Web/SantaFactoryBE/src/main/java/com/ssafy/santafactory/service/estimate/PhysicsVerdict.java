@@ -16,7 +16,8 @@ import com.ssafy.santafactory.entity.estimate.VerifyRunStatus;
 public final class PhysicsVerdict {
 
     /** 창 안 계획 동작 중 시작한 비율의 통과선. */
-    private static final double PASS_RATIO = 0.80;
+    /** 적합 기준 — 견적서 보고서의 판정 설명도 이 값을 쓴다 (S15P21A106-280). */
+    public static final double PASS_RATIO = 0.80;
 
     private PhysicsVerdict() {
     }
