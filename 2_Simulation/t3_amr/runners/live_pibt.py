@@ -1134,6 +1134,7 @@ async def _run():
                                                       verbose=False)
     else:
         geom, free, starts, goals = PS.setup(MAP, N, PITCH, SEED, verbose=False)
+    state["free"] = free          # 헤드리스 추종 카메라가 벽·선반 칸을 피할 때 쓴다 (-279)
     carb.log_warn(f"[pibt] {geom.pivot_name}  격자 {free.shape} "
                   f"통행가능 {100*free.mean():.1f}%")
     try:

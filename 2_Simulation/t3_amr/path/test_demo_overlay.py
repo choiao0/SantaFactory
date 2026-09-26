@@ -44,7 +44,7 @@ class TestTrips:
         t = trips[0]
         assert (t.pick_arrive_k, t.pick_leave_k, t.drop_arrive_k, t.done_k) == (6, 9, 12, 14)
         assert t.totes == 3 and t.orders == 3                  # 두 태스크 + 동승 하나
-        assert t.frm_label == "통로 버퍼 5" and t.to_label == "포장대 1"
+        assert t.frm_label == "피킹 지점 5" and t.to_label == "포장대 1"
 
 
     def test_a_rider_listed_twice_is_one_tote(self):
@@ -93,37 +93,44 @@ class TestPick:
 
 
 class TestLines:
-    def test_the_hud_reads_like_order_work(self):
-        tl = DO.Timeline.from_slice(slice_doc())
-        top, sub, big, right = tl.lines("0", des_k=10, window_clock_s=8.0)
-        assert "AMR 1" in top and "00:08 / 00:15" in top
-        assert "주문 3건" in sub and "토트 3개" in sub and "통로 버퍼 5 → 포장대 1" in sub
-        assert "운반 중" in big and "포장대 1" in big
-        assert "완료 운행 0회" in right
+    """(-279) 영상 글씨는 사전으로 넘긴다 — 그리는 쪽이 카드·태그·단계 막대로 배치한다."""
 
-    def test_before_the_window_it_says_warming_up(self):
-        top, *_ = DO.Timeline.from_slice(slice_doc()).lines("0", des_k=0, window_clock_s=None)
-        assert "준비 중" in top
+    def test_the_hud_reads_like_order_work(self):
+        info = DO.Timeline.from_slice(slice_doc()).lines("0", des_k=10, window_clock_s=8.0)
+        assert info["robot"] == 1 and info["phase"] == "carrying" and info["phase_label"] == "포장대로 운반 중"
+        assert (info["frm"], info["to"], info["orders"], info["totes"]) == ("피킹 지점 5", "포장대 1", 3, 3)
+        assert info["step"] == 2 and info["clock"] == 8.0 and info["window"] == 15.0
+        assert info["title"] == "3D 주행 검증 · 주문 집중 10분"
+
+    def test_waiting_shows_only_while_it_should_be_moving(self):
+        tl = DO.Timeline.from_slice(slice_doc())
+        assert tl.lines("0", des_k=10, window_clock_s=8.0, waiting=True)["waiting"] is True      # 운반 중 정지
+        assert tl.lines("0", des_k=7, window_clock_s=5.0, waiting=True)["waiting"] is False      # 싣는 중은 원래 선다
+
+    def test_before_the_window_the_clock_is_empty(self):
+        info = DO.Timeline.from_slice(slice_doc()).lines("0", des_k=0, window_clock_s=None)
+        assert info["clock"] is None
 
     def test_english_labels_when_no_korean_font(self):
-        tl = DO.Timeline.from_slice(slice_doc(), lang="en")
-        _, sub, big, _ = tl.lines("0", des_k=10, window_clock_s=8.0)
-        assert "Aisle buffer 5 -> Packing 1" in sub and "Carrying" in big
+        info = DO.Timeline.from_slice(slice_doc(), lang="en").lines("0", des_k=10, window_clock_s=8.0)
+        assert info["frm"] == "Picking point 5" and info["to"] == "Packing 1" and info["phase_label"] == "To packing"
 
 
 class TestDraw:
     def test_draws_on_a_frame_of_the_same_size(self):
         from PIL import Image
         img = Image.new("RGB", (960, 540), (40, 40, 40))
-        lines = DO.Timeline.from_slice(slice_doc(), lang="en").lines("0", des_k=10, window_clock_s=8.0)
-        out = DO.draw(img, lines, None, "carrying")
+        info = DO.Timeline.from_slice(slice_doc(), lang="en").lines("0", des_k=10, window_clock_s=8.0, waiting=True)
+        out = DO.draw(img, info, None, "carrying")
         assert out.size == img.size and out.mode == "RGB"
-        assert out.getpixel((20, 540 - 20)) != (40, 40, 40)      # 단계 알약이 칠해졌다
+        assert out.getpixel((21, 540 - 60)) != (40, 40, 40)      # 정보 카드 왼쪽 색 띠가 칠해졌다
 
     def test_a_missing_font_file_falls_back_instead_of_losing_the_frame(self):
         from PIL import Image
         img = Image.new("RGB", (480, 270))
-        out = DO.draw(img, ("a", "b", "c", "d"), "/no/such/font.ttf", "idle")
+        # 한글 글꼴이 없으면 러너가 영어 글씨로 바꾼다(headless_pibt HUD_FONT) — 기본 글꼴은 한글을 못 그린다
+        info = DO.Timeline.from_slice(slice_doc(), lang="en").lines("1", des_k=3, window_clock_s=None)
+        out = DO.draw(img, info, "/no/such/font.ttf", "idle")
         assert out.size == (480, 270)
 
 
@@ -157,26 +164,31 @@ class TestProject:
 class TestTopView:
     def test_fleet_totals_sum_every_robot(self):
         tl = DO.Timeline.from_slice(slice_doc())
-        head, right = tl.top_lines({"0": 14, "1": 14}, window_clock_s=12.0, n_robots=2)
-        assert "AMR 2대" in head and "00:12 / 00:15" in head
-        assert "완료 운행 1회" in right and "토트 3개" in right
+        info = tl.top_lines({"0": 14, "1": 14}, window_clock_s=12.0, n_robots=2)
+        assert info["sub"] == "AMR 2대 · 주문 집중 10분" and (info["clock"], info["window"]) == (12.0, 15.0)
+        assert (info["trips"], info["totes"]) == (1, 3)
 
     def test_packing_stations_are_labelled_where_the_totes_go(self):
         tl = DO.Timeline.from_slice(slice_doc())
         assert tl.stations == {"포장대 1": (6.1, 5.5)}
 
-    def test_robots_are_painted_in_their_phase_colour(self):
+    def test_robots_are_ringed_in_their_phase_colour_not_covered(self):
+        """(-279) 채운 원이 로봇을 가렸다 — 고리만 그리고 가운데는 비워 둔다."""
         from PIL import Image
         img = Image.new("RGB", SIZE, (40, 40, 40))
         marks = [DO.Mark(num=1, u=300.0, v=300.0, hu=12.0, hv=0.0, key="carrying", follow=True),
                  DO.Mark(num=2, u=900.0, v=400.0, hu=0.0, hv=-12.0, key="idle", follow=False)]
-        out = DO.draw_top(img, marks, ("head", "right"), None, stations=[("Packing 1", 640.0, 100.0)], lang="en")
+        info = DO.Timeline.from_slice(slice_doc(), lang="en").top_lines({"0": 14}, window_clock_s=12.0, n_robots=2)
+        out = DO.draw_top(img, marks, info, None, stations=[("Packing 1", 640.0, 100.0)], lang="en")
         assert out.size == SIZE
-        assert out.getpixel((300 - 5, 300 + 5)) == DO.PHASE_RGB["carrying"]
+        assert out.getpixel((300, 300)) == (40, 40, 40)                         # 가운데(로봇)는 그대로
+        dist = min(sum(abs(a - b) for a, b in zip(out.getpixel((x, 300)), DO.PHASE_RGB["carrying"]))
+                   for x in range(309, 317))                                    # 반지름 14 고리 둘레
+        assert dist < 60
 
 
 class TestNames:
     def test_known_station_names_become_readable(self):
-        assert DO.label("aisle_buf[0]") == "통로 버퍼 1"
+        assert DO.label("aisle_buf[0]") == "피킹 지점 1"
         assert DO.label("packing[2]") == "포장대 3"
         assert DO.label("mystery") == "mystery"

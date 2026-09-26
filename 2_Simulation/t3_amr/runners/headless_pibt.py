@@ -410,8 +410,15 @@ _fpv_home = None           # 각 로봇의 시작 자리 — 움직인 거리를
 HUD_ON = (os.environ.get("PIBT_FPV_HUD", "") or "1") not in ("0", "no", "off")
 TOP_MARK = (os.environ.get("PIBT_TOP_MARK", "") or "1") not in ("0", "no", "off")
 TOP_FIT = (os.environ.get("PIBT_TOP_FIT", "") or "1") not in ("0", "no", "off")
+# 글꼴 — Noto Sans CJK KR(이미지 fonts-noto-cjk, 굵기 셋을 쓴다), 없으면 나눔고딕 (-279)
+_HUD_FONTS = ("/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
+              "/usr/share/fonts/truetype/nanum/NanumGothicBold.ttf")
 HUD_FONT = (os.environ.get("PIBT_HUD_FONT", "")
-            or "/usr/share/fonts/truetype/nanum/NanumGothicBold.ttf").strip()
+            or next((f for f in _HUD_FONTS if os.path.isfile(f)), _HUD_FONTS[0])).strip()
+# 「통행 대기」 — 따라가는 로봇이 이동 단계인데 이만큼 서 있으면 붙인다 (앞 로봇이 지나가길 기다리는 중)
+WAIT_AFTER_S = 3.0
+WAIT_MOVE_M = 0.10
+_follow_ref = None         # (x, y, 마지막으로 움직인 시뮬 초)
 # 구동축은 차 앞쪽이다 — 차체는 뒤로 1.11 m · 앞으로 0.39 m (iw.hub). 천장 원은 차체 가운데에 둔다.
 BODY_BACK_M = 0.36
 # 포장대 이름은 그 칸(로봇이 서는 자리)이 아니라 벽 쪽으로 이만큼 내려 적는다 — 선 로봇을 안 가린다.
@@ -462,12 +469,18 @@ def _hud_prep(sim_t):
     """1인칭 프레임에 얹을 글씨를 정해 **그리는 함수**를 돌려준다(그리기·저장은 쓰기 스레드가 한다).
     단계는 **그 로봇이 Isaac 에서 실제로 붙잡고 있는 동작**으로 정한다 — DES 시각으로 고르면 물리가 늦은 만큼
     화면과 글씨가 어긋난다. 실패하면 한 번만 알리고 끈다 — 프레임은 잃지 않는다."""
-    global _hud_ok, _hud_warned
+    global _hud_ok, _hud_warned, _follow_ref
     try:
+        import math as _m
         import demo_overlay as DO
         who = _fpv_pick if _fpv_pick is not None else FPV_FOLLOW
         k, rid = _plan_k(who), str(who)
-        lines, key = _tl.lines(rid, k, _window_clock(sim_t)), _tl.phase(rid, k).key
+        # 멈춰 있는데 「운반 중」이면 고장 난 것처럼 보인다 — 서 있는 시간을 재서 「통행 대기」를 붙인다 (-279)
+        px, py, _ = fleet.drivers[who].axle_pose()
+        if _follow_ref is None or _m.hypot(px - _follow_ref[0], py - _follow_ref[1]) > WAIT_MOVE_M:
+            _follow_ref = (px, py, sim_t)
+        waiting = sim_t - _follow_ref[2] >= WAIT_AFTER_S
+        lines, key = _tl.lines(rid, k, _window_clock(sim_t), waiting=waiting), _tl.phase(rid, k).key
         return lambda img: DO.draw(img, lines, HUD_FONT, key)
     except Exception as e:                                # noqa: BLE001
         if not _hud_warned:
@@ -547,6 +560,34 @@ def _top_prep(sim_t):
         return None
 
 
+FPV_BACK_MIN = 1.2         # drone 카메라를 벽 앞으로 당길 때의 최소 뒤 거리 [m]
+_fpv_back = None
+
+
+def _drone_back(x, y, dx, dy):
+    """drone 카메라의 뒤 거리 — 카메라 자리가 벽·선반 칸이면 로봇 쪽으로 당긴다 (-279).
+
+    로봇이 벽 가까이에서 돌면 4.5 m 뒤 카메라가 벽 안에 묻혀 화면이 하얗게 찼다. 로봇에서 뒤로 0.25 m 씩
+    지도(`state["free"]`)를 짚어 가다 처음 막힌 칸 앞에서 멈춘다. 당길 때는 바로, 물러날 때는 천천히 — 튀지 않게.
+    """
+    global _fpv_back
+    want = FPV_BACK
+    free, g = state.get("free"), getattr(fleet, "g", None)
+    if free is not None and g is not None:
+        d = 0.25
+        while d <= FPV_BACK + 1e-9:
+            r, c = g.world_to_cell(x - d * dx, y - d * dy)
+            if not (0 <= r < free.shape[0] and 0 <= c < free.shape[1]) or not free[r, c]:
+                want = max(FPV_BACK_MIN, d - 0.35)
+                break
+            d += 0.25
+    if _fpv_back is None or want < _fpv_back:
+        _fpv_back = want
+    else:
+        _fpv_back += 0.15 * (want - _fpv_back)
+    return _fpv_back
+
+
 def _fpv_track(fleet_):
     """측면 카메라를 대상 로봇에 붙인다 — 기본은 **1인칭 주행 시점**.
 
@@ -603,7 +644,8 @@ def _fpv_track(fleet_):
                 _fpv_yaw = yaw
             _fpv_yaw += FPV_YAW_EASE * _m.atan2(_m.sin(yaw - _fpv_yaw), _m.cos(yaw - _fpv_yaw))
             cfx, cfy = _m.cos(_fpv_yaw), _m.sin(_fpv_yaw)
-            eye = Gf.Vec3d(x - FPV_BACK*cfx, y - FPV_BACK*cfy, FPV_UP)
+            back = _drone_back(x, y, cfx, cfy)
+            eye = Gf.Vec3d(x - back*cfx, y - back*cfy, FPV_UP)
             tgt = Gf.Vec3d(x + FPV_AHEAD*cfx, y + FPV_AHEAD*cfy, 0.3)
         else:
             # ★ 1인칭 — 차 앞머리에서 주행 방향을 본다 (대시캠).
