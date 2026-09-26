@@ -12,57 +12,58 @@ import { useVerifyStream } from '../hooks/useVerifyStream.js'
  */
 const REFRESH_COOLDOWN_MS = 10_000
 
-const STATUS_LABEL = { PENDING: '대기', RUNNING: '검증 중', DONE: '완료', FAILED: '실패' }
-const VERDICT_LABEL = { PASS: '통과', WARN: '주의', FAIL: '실패', NA: '해당없음' }
+const STATUS_LABEL = { PENDING: '대기', RUNNING: '검증 중', DONE: '완료', FAILED: '미완료' }
+const VERDICT_LABEL = { PASS: '적합', WARN: '주의', FAIL: '부적합', NA: '판정 불가' }
 
 const pct = (ratio) => (ratio == null ? '—' : `${Math.round(ratio * 100)}%`)
 const secs = (v) => (v == null ? '—' : `${v.toFixed(1)}초`)
 const meters = (v) => (v == null ? '—' : `${v.toFixed(2)} m`)
+const times = (v) => (v == null ? '—' : `${v}회`)
+const tasks = (v) => (v == null ? '—' : `${v}건`)
 const contactsOf = (p) => (p?.robot_contacts ?? 0) + (p?.rack_contacts ?? 0)
 
-/** 카드 한 장의 지표 목록 — 명세 §D 문구 그대로. physics 가 없으면(N/A) 빈 배열. */
+/** 카드 한 장의 지표 목록. physics 가 없으면(N/A) 빈 배열. */
 function metricsFor(run) {
   const p = run.physics
   if (!p) return []
   return [
-    ['창 안 계획 동작 중 시작한 비율', pct(p.window_actions?.ratio)],
-    ['시작 지연 중앙값', secs(p.lag?.p50_s)],
-    ['시작 지연 상위 10%', secs(p.lag?.p90_s)],
-    ['로봇 접촉', p.robot_contacts ?? '—'],
-    ['랙 접촉', p.rack_contacts ?? '—'],
-    ['최소 간격', meters(p.robot_min_gap_m)],
-    ['다른 로봇 대기 비율', pct(p.blocked?.ratio)],
-    ['배속', p.rtf != null ? `${p.rtf.toFixed(2)}x` : '—'],
-    ['DES 창 완료 태스크', run.slice?.tasks_done ?? p.des_window?.tasks_done ?? '—'],
+    ['계획 대비 수행률', pct(p.window_actions?.ratio)],
+    ['작업 지연(보통)', secs(p.lag?.p50_s)],
+    ['작업 지연(상위 10%)', secs(p.lag?.p90_s)],
+    ['로봇 충돌', times(p.robot_contacts)],
+    ['랙 충돌', times(p.rack_contacts)],
+    ['로봇 간 최소 거리', meters(p.robot_min_gap_m)],
+    ['혼잡 대기 비율', pct(p.blocked?.ratio)],
+    ['완료 작업(시뮬레이션 기준)', tasks(run.slice?.tasks_done ?? p.des_window?.tasks_done)],
   ]
 }
 
 /** 아직 후보가 하나도 없을 때(검증 전) 보여줄 자리 — 기존 단일 검증 화면과 같은 문구. */
 function idlePlaceholder({ estimateId, ready, recommendedCount, started }) {
   if (estimateId == null) {
-    return { tag: 'QUEUED', label: '대기', text: '견적을 요청하면 물리 검증 결과가 여기에 표시됩니다.' }
+    return { tag: 'QUEUED', label: '대기', text: '견적을 요청하면 3D 주행 검증 결과가 여기에 표시됩니다.' }
   }
   if (!ready) {
-    return { tag: 'RUNNING', label: '계산 중', live: true, text: '시뮬레이션 판정이 끝나면 권장 대수 전후로 물리 검증을 돌립니다.' }
+    return { tag: 'RUNNING', label: '계산 중', live: true, text: '대수별 시뮬레이션이 끝나면 권장 대수와 앞뒤 대수의 3D 주행 검증을 시작할 수 있습니다.' }
   }
   if (recommendedCount == null) {
     return {
       tag: 'QUEUED', label: '대기',
-      text: '권장 대수가 없어 물리 검증을 돌릴 수 없습니다',
-      hint: ['목표를 만족하는 구성이 나오면 이 자리에서 검증을 시작할 수 있습니다.'],
+      text: '권장 대수가 없어 3D 주행 검증을 진행할 수 없습니다.',
+      hint: ['목표나 예산을 조정해 견적을 다시 요청해 주세요.'],
     }
   }
   if (!started) {
     return {
       tag: 'QUEUED', label: '대기', action: true,
-      text: `권장 ${recommendedCount}대 전후로 물리 검증을 시작할 수 있습니다`,
-      hint: ['Isaac Sim 이 후보 대수마다 실제 로봇 물리로 재현해 동작을 확인합니다.'],
+      text: `권장 ${recommendedCount}대와 앞뒤 대수의 3D 주행 검증을 시작할 수 있습니다.`,
+      hint: ['주문 집중 10분을 대수별로 3D 환경에서 재현해 로봇이 막힘없이 움직이는지 확인합니다.'],
     }
   }
   return {
     tag: 'RUNNING', label: '검증 중', live: true,
-    text: 'Isaac Sim에서 로봇 동작을 검증하고 있습니다',
-    hint: ['실제 환경에 가까운 정밀한 물리 검증을 위해 다소 시간이 필요합니다.', '완료되면 이 화면에서 후보 대수별 결과를 바로 확인할 수 있습니다.'],
+    text: '3D 주행 검증을 진행하고 있습니다.',
+    hint: ['검증에는 다소 시간이 걸립니다.', '완료되면 이 화면에서 대수별 결과를 바로 확인할 수 있습니다.'],
   }
 }
 
@@ -83,8 +84,8 @@ function VerifyPlayer({ estimateId, current }) {
   if (topUrl !== pinned.top || fpvUrl !== pinned.fpv) setPinned({ top: topUrl, fpv: fpvUrl })
 
   const views = useMemo(() => [
-    { key: 'top', label: '상단 시점', url: topUrl },
-    { key: 'fpv', label: 'AMR 추종 시점', url: fpvUrl },
+    { key: 'top', label: '전체 보기', url: topUrl },
+    { key: 'fpv', label: '로봇 따라가기', url: fpvUrl },
   ].filter((v) => v.url), [topUrl, fpvUrl])
   const activeView = views.find((v) => v.key === view) ?? views[0]
   const videoUrl = refreshed && refreshed.replaces === activeView?.url ? refreshed.url : activeView?.url
@@ -147,9 +148,9 @@ function VerifyPlayer({ estimateId, current }) {
           {current.status === 'RUNNING' && <AmrRunning />}
           <p className="vp-note">
             {current.status === 'PENDING' && '검증 대기 중입니다.'}
-            {current.status === 'RUNNING' && 'Isaac Sim에서 로봇 동작을 검증하고 있습니다.'}
-            {current.status === 'FAILED' && `물리 검증에 실패했습니다${current.error ? ` — ${current.error}` : ''}`}
-            {current.status === 'DONE' && '검증은 끝났지만 재생할 영상이 남지 않았습니다.'}
+            {current.status === 'RUNNING' && '3D 주행 검증을 진행하고 있습니다.'}
+            {current.status === 'FAILED' && '3D 주행 검증을 완료하지 못했습니다. 다시 요청해 주세요.'}
+            {current.status === 'DONE' && '검증은 완료되었지만 재생할 영상이 없습니다.'}
           </p>
         </div>
       )}
@@ -178,15 +179,15 @@ export default function VerifyStep({ estimateId, ready, recommendedCount }) {
     <section className="step section-dark" id="verify">
       <div className="eyebrow red">
         <span className="live-dot" />
-        04 — 물리 검증
+        04 · 3D 주행 검증
       </div>
       <h2>Confirm it physically.</h2>
-      <p className="desc">권장 대수 전후를 Isaac Sim으로 재현해 실제로 문제없이 동작하는지 검증합니다.</p>
+      <p className="desc">권장 대수와 앞뒤 대수로 주문 집중 10분을 3D로 재현해 로봇이 문제없이 움직이는지 확인합니다.</p>
 
       {verifications.length === 0 ? (
         <div className="sim-board">
           <div className="board-head">
-            <span>물리 검증 · Isaac Sim</span>
+            <span>3D 주행 검증</span>
             <span className={`status ${placeholder.tag}`}>{placeholder.label}</span>
           </div>
           <div className="verify-placeholder">
@@ -219,18 +220,18 @@ export default function VerifyStep({ estimateId, ready, recommendedCount }) {
                   <span className="vc-count">
                     {v.n_robots}대{v.n_robots === effectiveRecommended ? <em> · 권장</em> : null}
                   </span>
-                  <span className={`vc-verdict ${v.verdict ?? 'NA'}`}>{VERDICT_LABEL[v.verdict] ?? '해당없음'}</span>
+                  <span className={`vc-verdict ${v.verdict ?? 'NA'}`}>{VERDICT_LABEL[v.verdict] ?? '판정 불가'}</span>
                 </div>
                 <div className="vc-status mono dim">{STATUS_LABEL[v.status] ?? v.status}</div>
-                {v.error && <div className="vc-error">{v.error}</div>}
+                {v.error && <div className="vc-error">검증을 완료하지 못했습니다.</div>}
               </button>
             ))}
           </div>
 
           <p className="verify-limit mono dim">
             {stream.physicsLimit != null
-              ? `물리 상한 ${stream.physicsLimit}대 — 후보 중 물리 판정이 통과인 가장 큰 대수`
-              : '물리 상한 없음 — 후보 중 통과한 대수가 아직 없습니다'}
+              ? `${stream.physicsLimit}대까지 3D 주행 검증을 통과했습니다.`
+              : '아직 3D 주행 검증을 통과한 대수가 없습니다.'}
           </p>
 
           {failedCounts.length > 0 && !anyPending && (
@@ -240,7 +241,7 @@ export default function VerifyStep({ estimateId, ready, recommendedCount }) {
                 estimateId={estimateId}
                 recommendedCount={effectiveRecommended}
                 counts={failedCounts}
-                idleLabel={`실패한 ${failedCounts.join('·')}대 다시 검증`}
+                idleLabel={`미완료 ${failedCounts.join('·')}대 다시 검증`}
                 onStarted={() => setEpoch((e) => e + 1)}
               />
             </div>
@@ -249,7 +250,7 @@ export default function VerifyStep({ estimateId, ready, recommendedCount }) {
           {current && (
             <div className="sim-board">
               <div className="board-head">
-                <span>{current.n_robots}대 물리 검증</span>
+                <span>{current.n_robots}대 3D 주행 검증</span>
                 <span className={`status ${current.status}`}>{STATUS_LABEL[current.status] ?? current.status}</span>
               </div>
               {/* 대수를 바꾸면 컴포넌트를 새로 만든다 — 시점·재생 위치 같은 내부 상태가 다른 회차로 새지 않게 */}
@@ -272,17 +273,17 @@ export default function VerifyStep({ estimateId, ready, recommendedCount }) {
               <table className="verify-compare">
                 <thead>
                   <tr>
-                    <th>대수</th><th>판정</th><th>창 동작 비율</th><th>지연(중앙값)</th><th>접촉</th><th>최소 간격</th>
+                    <th>대수</th><th>판정</th><th>계획 대비 수행률</th><th>작업 지연(보통)</th><th>충돌</th><th>로봇 간 최소 거리</th>
                   </tr>
                 </thead>
                 <tbody>
                   {verifications.map((v) => (
                     <tr key={v.n_robots} className={v.n_robots === current?.n_robots ? 'on' : ''}>
                       <td>{v.n_robots}대{v.n_robots === effectiveRecommended ? ' (권장)' : ''}</td>
-                      <td>{VERDICT_LABEL[v.verdict] ?? '해당없음'}</td>
+                      <td>{VERDICT_LABEL[v.verdict] ?? '판정 불가'}</td>
                       <td>{pct(v.physics?.window_actions?.ratio)}</td>
                       <td>{secs(v.physics?.lag?.p50_s)}</td>
-                      <td>{v.physics ? contactsOf(v.physics) : '—'}</td>
+                      <td>{v.physics ? times(contactsOf(v.physics)) : '—'}</td>
                       <td>{meters(v.physics?.robot_min_gap_m)}</td>
                     </tr>
                   ))}

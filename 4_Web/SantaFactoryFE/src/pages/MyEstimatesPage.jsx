@@ -20,9 +20,9 @@ const REASON_LABEL = {
   BUDGET_EXCEEDED: '예산 초과',
   THROUGHPUT_SHORT: '처리율 미달',
   UTILIZATION_SHORT: '가동률 미달',
-  LEAD_TIME_LONG: '리드타임 초과',
-  ALL_FAILED: '전부 실패',
-  LOAD_TOO_LOW: '부하 부족',   // 더 이상 만들어지지 않는다 — 옛 견적용
+  LEAD_TIME_LONG: '처리 시간 초과',
+  ALL_FAILED: '계산 미완료',
+  LOAD_TOO_LOW: '주문량 부족',   // 더 이상 만들어지지 않는다 — 옛 견적용
 }
 
 export default function MyEstimatesPage() {
@@ -43,7 +43,10 @@ export default function MyEstimatesPage() {
     let cancelled = false
     getMyEstimates(page)
       .then((r) => { if (!cancelled) setResult(r) })
-      .catch((e) => { if (!cancelled) setError(e.message) })
+      .catch((e) => {
+        console.error(`[estimates] page=${page} 목록 조회 실패`, e)
+        if (!cancelled) setError('견적 목록을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.')
+      })
       .finally(() => { if (!cancelled) setLoadedPage(page) })
     // 빠르게 두 번 넘기면 먼저 보낸 응답이 나중에 올 수 있다
     return () => { cancelled = true }
@@ -66,7 +69,8 @@ export default function MyEstimatesPage() {
       setReload((n) => n + 1)
       setPendingDelete(null)
     } catch (e) {
-      setError(`삭제하지 못했습니다. ${e.message}`)
+      console.error(`[estimates] estimateId=${pendingDelete.estimate_id} 삭제 실패`, e)
+      setError('견적을 삭제하지 못했습니다. 잠시 후 다시 시도해 주세요.')
       setPendingDelete(null)
     } finally {
       setDeleting(false)
@@ -87,10 +91,10 @@ export default function MyEstimatesPage() {
             <span className="live-dot" />
             <span>내 견적</span>
           </div>
-          <h2>지난 견적.</h2>
-          <p className="desc">요청했던 견적을 다시 엽니다. 대수별 결과와 주행 리플레이가 그대로 남아 있습니다.</p>
+          <h2>지난 견적</h2>
+          <p className="desc">요청한 견적을 다시 확인할 수 있습니다. 대수별 결과와 주행 재생도 그대로 볼 수 있습니다.</p>
 
-          {error && <p className="form-error">목록을 불러오지 못했습니다. {error}</p>}
+          {error && <p className="form-error">{error}</p>}
           {!error && loading && <p className="mono dim">불러오는 중…</p>}
 
           {!error && !loading && total === 0 && (
@@ -121,15 +125,14 @@ export default function MyEstimatesPage() {
                     <dl>
                       <dt>요청</dt>
                       <dd className="admin-plain">{formatDateTime(e.created_at)}</dd>
-                      <dt>{e.recommended_count != null ? '권장 대수' : '판정'}</dt>
+                      <dt>권장 대수</dt>
                       <dd>
                         {e.recommended_count != null
                           ? `${e.recommended_count}대`
                           : (
-                            // 사유가 없으면 아직 안 끝난 것이다. 모르는 코드는 코드 그대로 — 조용히 삼키면
-                            // 백엔드가 사유를 추가했을 때 화면만 거짓말을 한다
+                            // 사유가 없으면 아직 안 끝난 것이다. 모르는 코드는 코드 대신 공통 문구로 보인다
                             <span className="admin-plain">
-                              {e.reason_code ? (REASON_LABEL[e.reason_code] ?? e.reason_code) : '진행 중'}
+                              {e.reason_code ? (REASON_LABEL[e.reason_code] ?? '권장 대수 없음') : '계산 중'}
                             </span>
                           )}
                       </dd>
@@ -163,14 +166,14 @@ export default function MyEstimatesPage() {
 
         {pendingDelete && (
           <ConfirmDialog
-            title={`견적 #${pendingDelete.estimate_id}을 삭제할까요?`}
+            title={`견적 #${pendingDelete.estimate_id} 삭제`}
             confirmLabel="삭제"
             busy={deleting}
             onCancel={() => setPendingDelete(null)}
             onConfirm={confirmDelete}
           >
-            대수별 결과와 주행 리플레이, 물리 검증 결과까지 함께 지워집니다.
-            <b> 삭제한 견적은 되돌릴 수 없습니다.</b>
+            대수별 시뮬레이션 결과, 주행 재생, 3D 주행 검증 결과가 함께 삭제됩니다.
+            <b> 삭제한 견적은 복구할 수 없습니다.</b>
           </ConfirmDialog>
         )}
       </main>

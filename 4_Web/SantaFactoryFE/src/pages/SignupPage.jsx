@@ -135,13 +135,13 @@ export default function SignupPage() {
                   onClick={handleSendCode}
                   disabled={verified || busy != null || cooldown > 0}
                 >
-                  {verified ? '인증 완료' : cooldown > 0 ? `재전송 ${cooldown}s` : codeSentTo ? '다시 보내기' : '인증 코드 보내기'}
+                  {verified ? '인증 완료' : cooldown > 0 ? `${cooldown}초 후 재전송` : codeSentTo ? '다시 보내기' : '인증 코드 보내기'}
                 </button>
               </div>
             </label>
             {codeSentTo && !verified && (
               <label>
-                <span>인증 코드 · {codeSentTo} 로 보냈습니다</span>
+                <span>인증 코드 · {codeSentTo}에 보냈습니다</span>
                 <div className="verify-row">
                   <input
                     inputMode="numeric"

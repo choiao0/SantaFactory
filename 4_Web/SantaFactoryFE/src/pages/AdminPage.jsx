@@ -9,7 +9,7 @@ const STATUS_LABEL = {
   QUEUED: '대기 중',
   RUNNING: '진행 중',
   DONE: '완료',
-  PARTIAL: '일부 실패',
+  PARTIAL: '일부 완료',
   CANCELLED: '취소됨',
 }
 
@@ -56,14 +56,20 @@ export default function AdminPage() {
   const loading = loadedPage !== page
 
   useEffect(() => {
-    getMembers().then(setMembers).catch((e) => setError(e.message))
+    getMembers().then(setMembers).catch((e) => {
+      console.error('[admin] 회원 목록 조회 실패', e)
+      setError('회원 목록을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.')
+    })
   }, [])
 
   useEffect(() => {
     let cancelled = false
     getAllEstimates(page, { memberId: member?.member_id ?? null, order })
       .then((result) => { if (!cancelled) setEstimatePage(result) })
-      .catch((e) => { if (!cancelled) setError(e.message) })
+      .catch((e) => {
+        console.error(`[admin] page=${page} 견적 목록 조회 실패`, e)
+        if (!cancelled) setError('견적 목록을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.')
+      })
       .finally(() => { if (!cancelled) setLoadedPage(page) })
     // 빠르게 두 번 넘기면 먼저 보낸 요청의 응답이 나중에 도착할 수 있다.
     // 그대로 두면 화면이 방금 지나온 페이지로 되돌아간다
@@ -84,7 +90,8 @@ export default function AdminPage() {
       setReload((n) => n + 1)
       setPendingDelete(null)
     } catch (e) {
-      setError(`삭제하지 못했습니다. ${e.message}`)
+      console.error(`[admin] estimateId=${pendingDelete.estimate_id} 삭제 실패`, e)
+      setError('견적을 삭제하지 못했습니다. 잠시 후 다시 시도해 주세요.')
       setPendingDelete(null)
     } finally {
       setDeleting(false)
@@ -117,10 +124,10 @@ export default function AdminPage() {
             <span className="live-dot" />
             <span>전체 견적</span>
           </div>
-          <h2>회원별 견적 현황.</h2>
-          <p className="desc">회원마다 등록한 창고와 최근 견적을 한눈에 봅니다. 카드를 누르면 그 견적 화면으로 이동합니다.</p>
+          <h2>회원별 견적 현황</h2>
+          <p className="desc">회원별 등록 창고와 견적을 확인합니다. 견적 카드를 누르면 해당 견적 화면으로 이동합니다.</p>
 
-          {error && <p className="form-error">현황을 불러오지 못했습니다. {error}</p>}
+          {error && <p className="form-error">{error}</p>}
 
           {!error && (
             <>
@@ -241,14 +248,14 @@ export default function AdminPage() {
 
         {pendingDelete && (
           <ConfirmDialog
-            title={`견적 #${pendingDelete.estimate_id}을 삭제할까요?`}
+            title={`견적 #${pendingDelete.estimate_id} 삭제`}
             confirmLabel="삭제"
             busy={deleting}
             onCancel={() => setPendingDelete(null)}
             onConfirm={confirmDelete}
           >
-            {pendingDelete.company ?? '회원'}의 견적입니다. 대수별 결과와 주행 리플레이, 물리 검증
-            결과까지 함께 지워집니다.<b> 삭제한 견적은 되돌릴 수 없습니다.</b>
+            {pendingDelete.company ?? '회원'}의 견적입니다. 대수별 시뮬레이션 결과, 주행 재생, 3D 주행 검증
+            결과가 함께 삭제됩니다.<b> 삭제한 견적은 복구할 수 없습니다.</b>
           </ConfirmDialog>
         )}
       </main>

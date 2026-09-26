@@ -1,7 +1,14 @@
 import { useState } from 'react'
 import { requestVerify } from '../api/estimates.js'
 
-const BUTTON_LABEL = { idle: '물리 검증 시작', loading: '요청 중…', done: '검증 요청됨', error: '다시 시도' }
+const BUTTON_LABEL = { idle: '3D 주행 검증 시작', loading: '요청 중…', done: '검증 요청 완료', error: '다시 시도' }
+
+/** 서버 오류 코드별 안내 문구. 서버가 준 문장을 그대로 띄우지 않는다 — 모르는 코드는 공통 문구로 */
+const ERROR_TEXT = {
+  EST409_1: '권장 대수가 없어 3D 주행 검증을 시작할 수 없습니다.',
+  EST409_3: '3D 주행 검증이 이미 진행 중입니다. 완료된 뒤 다시 요청해 주세요.',
+}
+const ERROR_FALLBACK = '3D 주행 검증을 요청하지 못했습니다. 잠시 후 다시 시도해 주세요.'
 
 /**
  * 물리 검증을 사람이 시작한다 (S15P21A106-265 에서 수동 유지로 결정).
@@ -24,7 +31,7 @@ export default function VerifyTrigger({ estimateId, recommendedCount, onStarted,
       onStarted?.()
     } catch (e) {
       setState('error')
-      setError(e.message)
+      setError(ERROR_TEXT[e.code] ?? ERROR_FALLBACK)
     }
   }
 

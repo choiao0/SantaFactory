@@ -10,9 +10,9 @@ export function formatWon(won) {
   const man = Math.round(won / 10000)
   const eok = Math.floor(man / 10000)
   const rest = man % 10000
-  if (eok === 0) return `${rest.toLocaleString()}만원`
-  if (rest === 0) return `${eok}억원`
-  return `${eok}억 ${rest.toLocaleString()}만원`
+  if (eok === 0) return `${rest.toLocaleString()}만 원`
+  if (rest === 0) return `${eok}억 원`
+  return `${eok}억 ${rest.toLocaleString()}만 원`
 }
 
 export function formatPercent(value) {

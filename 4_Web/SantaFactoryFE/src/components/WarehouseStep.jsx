@@ -18,10 +18,10 @@ export default function WarehouseStep({ form, onChange, models, modelsError, mod
     <section className="step section-light reveal" id="s1">
       <div className="eyebrow red">
         <span className="live-dot" />
-        01 — 운영 조건
+        01 · 운영 조건
       </div>
       <h2>Define the operation.</h2>
-      <p className="desc">창고 운영 조건과 목표, 예산을 입력하고 시뮬레이션에 쓸 AMR 모델을 선택합니다.</p>
+      <p className="desc">창고 운영 조건과 목표, 예산을 입력하고 시뮬레이션에 사용할 AMR 모델을 선택합니다.</p>
 
       <div className="duo">
         <form onSubmit={(e) => e.preventDefault()}>
@@ -46,7 +46,7 @@ export default function WarehouseStep({ form, onChange, models, modelsError, mod
             </div>
 
             <div className="span2">
-              <label htmlFor="target">목표 출고 처리율</label>
+              <label htmlFor="target">목표 주문 처리율</label>
               <div className="field">
                 <input id="target" type="number" value={form.targetThroughput} min={1} max={100} onChange={number('targetThroughput')} />
                 <span className="suffix">%</span>
@@ -63,20 +63,20 @@ export default function WarehouseStep({ form, onChange, models, modelsError, mod
               <label htmlFor="budget">최대 구축 예산</label>
               <div className="field">
                 <input id="budget" type="number" value={form.budgetMan} step={1000} min={0} onChange={number('budgetMan')} />
-                <span className="suffix">만원</span>
+                <span className="suffix">만 원</span>
               </div>
             </div>
           </div>
         </form>
 
         <aside className="models">
-          {modelsError && <p className="form-error">모델 목록을 불러오지 못했습니다. {modelsError}</p>}
+          {modelsError && <p className="form-error">모델 목록을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.</p>}
           {!modelsError && models.length === 0 && <p className="mono dim">모델 목록을 불러오는 중…</p>}
 
           {/* 고르기 전에는 사양을 늘어놓지 않는다 — 고른 적도 없는데 선택됨으로 보이던 것을 고친다 */}
           {!modelsError && models.length > 0 && model == null && !picking && (
             <div className="modelask">
-              <h4>AMR 모델을 선택해주세요</h4>
+              <h4>AMR 모델을 선택해 주세요</h4>
               <p>선택 후 사양과 단가를 확인할 수 있습니다.</p>
               <button type="button" className="button"
                       onClick={() => { setDraft(model); setPicking(true) }}>
