@@ -61,7 +61,7 @@ pip 핀은 Isaac 이 못박은 것을 따른다 — llvmlite 0.46(→ numba 0.64
 numba ≥0.63 이 `coverage.types.Tracer`(7.5+)를 요구해 import 가 죽기 때문이고, Kit 테스트 도구용 패키지라 런타임엔 무관하다. `pip check` 가 그 하나를 보고하는 건 의도한 것.
 
 개발 중 코드 수정은 재빌드 없이도 된다 — compose 에서 작업 트리를 `/app/2_Simulation/t3_amr` 에 bind mount 하면 그대로 보인다(`out/`·`stage/`·`logs/` 심링크가 가려지니 그 셋은 따로 마운트).
-첫 실행은 셰이더 캐시(볼륨 `ov-cache`)를 만드느라 몇 분 더 걸린다.
+첫 실행은 캐시를 만드느라 몇 분 더 걸린다. 캐시는 볼륨 둘이다 — `ov-cache`(`~/.cache/ov`)와 러너별 `kit-cache-N`(`isaacsim/kit/cache`: 셰이더 · DerivedDataCache 약 3 GB, -280). `kit-cache` 가 없던 때는 러너를 다시 띄울 때마다 셰이더를 새로 구웠고, 2026-09-27 재배포 직후 첫 검증의 씬 빌드가 그 도중 Kit 종료 assert 로 죽었다(`runners/build_amr_scene_v2.py` 끝 주석).
 **GPU capability 에 `ngx` 가 있어야 한다**(-237). compose 는 `deploy.resources.reservations.devices.capabilities` 목록이 곧 마운트 범위라
 `ngx` 를 빼면 DLSS 디노이저 라이브러리가 안 들어와 프레임이 노이즈로 덮이고 mp4 가 100 Mbps 가 된다(2026-09-16 verify_4: 366 MB/30 s,
 `ngx` 넣은 뒤 같은 조건 2~3 MB). 확인: 컨테이너 안 `ls /usr/lib/x86_64-linux-gnu | grep -c ngx` → 2. `docker run --gpus all` 과 k8s(env `all`)는 해당 없음.
@@ -107,7 +107,7 @@ numba ≥0.63 이 `coverage.types.Tracer`(7.5+)를 요구해 import 가 죽기 �
 - 1인칭(대시캠)을 기본에서 뺀 이유: 포장대가 흰 벽 앞이라 **하역하는 동안 화면이 하얗게** 찍혔다(주문 처리의 핵심 장면). 추종 시점은 로봇 선반의 상자와 포장대의 토트가 한 화면에 든다.
 - 디자인(-279): 반투명 검정 각진 카드에 왼쪽 색 띠(제목 = 빨강, 로봇 카드 = 지금 단계 색), 위쪽 밝은 1 px 선, 각진 태그. 2배로 그려 줄여 가장자리를 매끈하게.
 - 글꼴은 이미지의 `fonts-noto-cjk`·`fonts-noto-cjk-extra`(Noto Sans CJK KR 보통·중간·굵게, 중간은 extra 에만 있다). 없으면 영어 글씨로 찍힌다(`PIBT_HUD_FONT`).
-- 고객에게 보이는 말은 확정 용어만 — 3D 주행 검증 · 주문 집중 10분 · 피킹 지점 · 포장대 · 상자 · 배송.
+- 고객에게 보이는 말은 확정 용어만 — 3D 주행 검증 · 피크 작업 10분(대수마다 작업이 가장 많은 10분, -280) · 피킹 지점 · 포장대 · 상자 · 배송.
 - 상단을 뷰포트 대신 리플리케이터로 받고, 프레임 쓰기(글씨·PNG 인코딩)는 뒤 스레드가 한다 — PNG 레벨 1(`PIBT_PNG_LEVEL`). 10대 구간 두 시점 **12.3 ms/step(실시간 1.35배)**, 이전 뷰포트 경로 15~20 ms/step.
 - 회전 관문도 구간 재생 기본을 바꿨다: `PIBT_TURN_BODY_GEO=1` · `PIBT_TURN_BODY_MAX=20`(칸이 겹쳐도 차체 틈이 넉넉하면 돈다 · 대기 상한 20 s). 피크 10대 두 구간 실측 창 동작 시작 83.3→88.5 % · 54.7→76.3 %, 접촉 0.
 

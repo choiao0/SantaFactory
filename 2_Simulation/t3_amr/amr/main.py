@@ -99,6 +99,38 @@ def cmd_cmds(args):
         print(ln)
 
 
+def scene_saved(usd, since):
+    """이번 빌드가 씬을 저장했나 — 비어 있지 않고 빌드 시작(`since`, time.time()) 뒤에 쓰였다.
+
+    파일 시각은 커널의 거친 시계라 직전에 잰 time.time() 보다 몇 ms 이를 수 있어 1 초 여유를 둔다.
+    빌드는 Kit 기동에만 수 초가 걸리므로 지난 빌드의 파일과 헷갈릴 일은 없다.
+    """
+    try:
+        st = os.stat(usd)
+    except OSError:
+        return False
+    return st.st_size > 0 and st.st_mtime >= since - 1.0
+
+
+def build_scene(sh, cwd, usd):
+    """씬 빌드 셸 명령을 돌린다. 실패면 SystemExit.
+
+    ★ 종료 코드만 보지 않는다 (-280). 빌드는 USD 를 저장(Export)하고 `[s] DONE` 을 찍은 **뒤**
+      Kit 종료 단계에서 코드 1 로 죽을 수 있다 — est_21 10대(2026-09-27 00:59)가 carb
+      "Destroying busy TaskGroup!" 로 그랬다. 씬 파일이 이번 빌드에서 새로 쓰였으면 일은 끝난 것이라
+      계속 간다. 지난 빌드의 USD 만 남아 있으면 멈춘다(옛 궤적으로 주행하면 안 된다).
+    """
+    import subprocess
+    import time
+    since = time.time()
+    rc = subprocess.run(["bash", "-c", sh], cwd=cwd).returncode
+    if not rc:
+        return
+    if not scene_saved(usd, since):
+        raise SystemExit("  ★ 씬 빌드 실패 — 위 [s] 줄을 보세요")
+    print(f"  ☹ 씬 빌드가 코드 {rc} 로 끝났지만 씬은 저장됐습니다 — 계속합니다 (Kit 종료 단계 오류)")
+
+
 def cmd_run(args):
     """서버에서 실제로 실행한다. `cmds` 가 찍는 것과 **같은 정의**를 쓴다."""
     import subprocess
@@ -136,9 +168,7 @@ def cmd_run(args):
              or os.path.getmtime(p["traj"]) > os.path.getmtime(usd))
     if stale:
         print(f"-- 씬 빌드 -> {usd}")
-        sh = "\n".join(m.scene_cmd(n))
-        if subprocess.run(["bash", "-c", sh], cwd=os.environ["W"]).returncode:
-            raise SystemExit("  ★ 씬 빌드 실패 — 위 [s] 줄을 보세요")
+        build_scene("\n".join(m.scene_cmd(n)), os.environ["W"], usd)
     else:
         kb = os.path.getsize(usd) / 1024
         print(f"-- 씬 재사용: {usd} ({kb:.1f} KB)   다시 빌드하려면 --rebuild")

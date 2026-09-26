@@ -12,7 +12,7 @@
 화면 디자인(v2, -279): 반투명 검정 **각진** 카드에 왼쪽 색 띠(제목 = 빨강, 로봇 카드 = 지금 단계 색), 위쪽 밝은 1 px 선.
 Noto Sans CJK KR 세 굵기, 2배로 그려 줄여 가장자리를 매끈하게. 천장 영상은 로봇을 **고리로 비워 두고** 가는 선으로
 상태 말풍선을 잇는다(겹치지 않는 자리를 찾아 둔다). 고객에게 보이는 말은 확정 용어만 쓴다 —
-3D 주행 검증 · 주문 집중 10분 · 피킹 지점 · 포장대 · 상자 · 배송.
+3D 주행 검증 · 피크 작업 10분 · 피킹 지점 · 포장대 · 상자 · 배송.
 
 Isaac 이 없어도 도는 순수 함수다(`path/test_demo_overlay.py`). 그리기(`draw` · `draw_top`)만 PIL 을 쓴다.
 """
@@ -204,7 +204,7 @@ class Timeline:
         if t is not None and t.pick_arrive_k is None and step < 2:
             step = 2                                        # 구간 전에 이미 실었다
         return dict(robot=int(rid) + 1 if str(rid).isdigit() else rid, lang=self.lang,
-                    title="3D 주행 검증 · 주문 집중 10분" if ko else "3D drive check · busiest 10 min",
+                    title="3D 주행 검증 · 피크 작업 10분" if ko else "3D drive check · busiest 10 min",
                     clock=window_clock_s, window=self.window_s, phase=ph.key,
                     waiting=bool(waiting) and ph.key in ("to_pick", "carrying"),
                     phase_label=_PHASES[ph.key][0 if ko else 1], step=step,
@@ -217,7 +217,7 @@ class Timeline:
         ko = self.lang == "ko"
         done = [self.done(rid, k) for rid, k in ks.items()]
         return dict(lang=self.lang, title="3D 주행 검증" if ko else "3D drive check",
-                    sub=(f"AMR {n_robots}대 · 주문 집중 10분" if ko else f"{n_robots} AMRs · busiest 10 min"),
+                    sub=(f"AMR {n_robots}대 · 피크 작업 10분" if ko else f"{n_robots} AMRs · busiest 10 min"),
                     clock=window_clock_s, window=self.window_s,
                     trips=sum(d[0] for d in done), totes=sum(d[1] for d in done))
 

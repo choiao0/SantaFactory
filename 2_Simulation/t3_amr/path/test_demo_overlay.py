@@ -100,7 +100,7 @@ class TestLines:
         assert info["robot"] == 1 and info["phase"] == "carrying" and info["phase_label"] == "포장대로 운반 중"
         assert (info["frm"], info["to"], info["orders"], info["totes"]) == ("피킹 지점 5", "포장대 1", 3, 3)
         assert info["step"] == 2 and info["clock"] == 8.0 and info["window"] == 15.0
-        assert info["title"] == "3D 주행 검증 · 주문 집중 10분"
+        assert info["title"] == "3D 주행 검증 · 피크 작업 10분"
 
     def test_waiting_shows_only_while_it_should_be_moving(self):
         tl = DO.Timeline.from_slice(slice_doc())
@@ -165,7 +165,7 @@ class TestTopView:
     def test_fleet_totals_sum_every_robot(self):
         tl = DO.Timeline.from_slice(slice_doc())
         info = tl.top_lines({"0": 14, "1": 14}, window_clock_s=12.0, n_robots=2)
-        assert info["sub"] == "AMR 2대 · 주문 집중 10분" and (info["clock"], info["window"]) == (12.0, 15.0)
+        assert info["sub"] == "AMR 2대 · 피크 작업 10분" and (info["clock"], info["window"]) == (12.0, 15.0)
         assert (info["trips"], info["totes"]) == (1, 3)
 
     def test_packing_stations_are_labelled_where_the_totes_go(self):

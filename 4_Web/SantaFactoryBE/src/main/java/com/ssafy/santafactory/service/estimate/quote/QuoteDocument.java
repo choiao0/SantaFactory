@@ -25,10 +25,12 @@ public record QuoteDocument(
         Ops ops,
         String siteUrl,
         String logoDataUri,
-        /** 대수별 물리 검증 (S15P21A106-244). 한 번도 검증하지 않았으면 빈 리스트. */
-        List<PhysicsRow> physicsRows,
         /** "N대까지 3D 주행 검증을 통과했습니다." 한 줄. 통과한 대수가 없으면 그 안내, 검증한 대수가 없으면 null. */
-        String physicsLimitLine
+        String physicsLimitLine,
+        /** 3~5쪽 도입 검토 보고서 (S15P21A106-280). 권장 대수가 없으면 null. */
+        QuoteReport report,
+        /** 전체 쪽 수 — 보고서가 있으면 5, 없으면 2. 머리말·꼬리말의 "n / 전체" 에 쓴다. */
+        int pages
 ) {
 
     /** 01 발행 정보. */
@@ -59,11 +61,6 @@ public record QuoteDocument(
     }
 
     public record CompareRow(String label, String expected, String verified, String diff, boolean warn) {
-    }
-
-    /** 05 부록 — 대수 하나의 물리 검증 판정 한 행 (S15P21A106-244). */
-    public record PhysicsRow(int count, boolean recommended, String verdictLabel,
-                             String windowRatio, String lagP50, String contacts, String minGap) {
     }
 
     /** 06 로봇 대수별 비교의 한 행. */

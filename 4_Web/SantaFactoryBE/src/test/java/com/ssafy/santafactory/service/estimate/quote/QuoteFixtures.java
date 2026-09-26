@@ -7,6 +7,7 @@ import com.ssafy.santafactory.dto.estimate.EstimateDetailResponse.Verification;
 import com.ssafy.santafactory.dto.estimate.EstimateDetailResponse.Verification.Comparison;
 import com.ssafy.santafactory.dto.estimate.EstimateDetailResponse.Verification.Metric;
 import com.ssafy.santafactory.dto.estimate.VerifyNoticeCode;
+import com.ssafy.santafactory.dto.simulation.PhysicsMetrics;
 import com.ssafy.santafactory.dto.warehouse.WarehouseResponse;
 import com.ssafy.santafactory.entity.estimate.EstimateStatus;
 import com.ssafy.santafactory.entity.estimate.RunStatus;
@@ -64,6 +65,32 @@ final class QuoteFixtures {
         return new EstimateDetailResponse(estimateId, EstimateStatus.DONE, "iw.hub", 95.0, 60.0, BUDGET,
                 recommended, recommended, knee, null, LocalDateTime.of(2026, 9, 17, 14, 13, 50), LocalDateTime.of(2026, 9, 17, 14, 32, 32),
                 1122L, null, null, runs(estimateId, 28), verification, List.of(), null);
+    }
+
+    /** 대수별 3D 주행 검증 한 회차 (S15P21A106-280). 구간 시작 t0S 는 출고 시작(13:00)부터의 초. */
+    static EstimateDetailResponse.VerificationRun physicsRun(int n, String verdict, double ratio, double lagP50, double lagP90,
+                                                             int contacts, double minGap, double t0S) {
+        PhysicsMetrics p = new PhysicsMetrics("isaac", n, 660.0, 600.0, 60.0, 600.0, 700.0, 0.94, contacts, minGap, 0, null,
+                0, null, 0, 0, 0, 0, 1000, 990,
+                new PhysicsMetrics.Lag(900, lagP50, lagP90, lagP90 * 2, lagP50, 0.3),
+                new PhysicsMetrics.WindowActions(1000, (int) Math.round(ratio * 1000), ratio, null),
+                null, new PhysicsMetrics.DesWindow(170, 1900, 150, 130));
+        return new EstimateDetailResponse.VerificationRun(n, 1, "DONE", verdict, null, null, null, null, p,
+                new EstimateDetailResponse.VerificationRun.Slice(t0S, 600.0, 170),
+                LocalDateTime.of(2026, 9, 17, 15, 0), LocalDateTime.of(2026, 9, 17, 15, 12));
+    }
+
+    /** 권장 14대 앞뒤를 검증한 견적 — 13대 주의 · 14대 적합 · 15대 주의(수행률이 더 낮다). 물리 상한 14대. */
+    static EstimateDetailResponse detailWithPhysics(long estimateId) {
+        List<EstimateDetailResponse.VerificationRun> runs = List.of(
+                physicsRun(13, "WARN", 0.738, 105.0, 170.0, 0, 0.327, 19_190.0),
+                physicsRun(14, "PASS", 0.805, 62.0, 126.0, 0, 0.026, 10_060.0),
+                physicsRun(15, "WARN", 0.695, 71.0, 171.0, 0, 0.026, 10_620.0));
+        EstimateDetailResponse d = detail(estimateId, 14, 15, verification(VerifyNoticeCode.SLOWER_AT_PEAK, slowerAtPeak()));
+        return new EstimateDetailResponse(d.estimateId(), d.status(), d.amrModel(), d.targetThroughput(), d.targetUtilization(),
+                d.budgetLimit(), d.recommendedCount(), d.minimalCount(), d.kneeCount(), d.reasonCode(), d.createdAt(),
+                d.completedAt(), d.elapsedSeconds(), d.verifyVideoUrl(), d.verifyVideoFpvUrl(), d.runs(), d.verification(),
+                runs, 14);
     }
 
     static WarehouseResponse warehouse() {

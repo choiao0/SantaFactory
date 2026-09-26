@@ -10,7 +10,8 @@
 # 빌드 (저장소 루트에서. docker 그룹 권한 + buildx — deploy/README.md §0·§1):
 #   docker build -f 2_Simulation/t3_amr/deploy/Dockerfile \
 #       --build-context sim_engine=3_FMS/sim_engine -t t3amr-runner:dev 2_Simulation/t3_amr
-# 이미지는 26 GB(Isaac 휠)다. 셰이더 캐시(약 5 GB)는 이미지가 아니라 볼륨(/cache/ov)에 쌓인다.
+# 이미지는 26 GB(Isaac 휠)다. 캐시는 이미지가 아니라 볼륨 둘에 쌓인다 — /cache/ov(~/.cache/ov, 약 5 GB)와
+# Kit 캐시 isaacsim/kit/cache(셰이더 · DerivedDataCache, 약 3 GB, compose kit-cache-N, -280).
 #
 # 이미지 안 배치는 저장소와 같은 두 단이다 — /app/2_Simulation/t3_amr · /app/3_FMS/sim_engine.
 # path/pibt_core_v2.py 가 계획기 원본을 `../../3_FMS/sim_engine` 로 찾기 때문이다. 못 찾으면 옛 벤더 사본으로
