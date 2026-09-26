@@ -15,8 +15,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from kernel.core import SLOT_ENTRY_COST, FmsKernel, KernelConfig, slot_entry_cost  # noqa: E402
 from kernel.states import IDLE, TO_HOME  # noqa: E402
-from map_loader import (MAP_DIR, load_charge_zone, load_map, make_homes_zone,  # noqa: E402
-                        park_slots)
+from map_loader import (MAP_DIR, clear_of_docks, load_charge_zone, load_map,  # noqa: E402
+                        make_homes_zone, park_slots)
 from pibt_core import DIRS, candidates_h, dist_map_h  # noqa: E402
 
 # 16 × 20 격자. 존 = 행 3~13 · 열 7~12. 서쪽 열 6(통로)과 남쪽 행 2 만 존 밖 통행 칸 — 북 · 동은 벽.
@@ -73,6 +73,14 @@ class TestParkSlots:
         free, zone = synth()
         assert make_homes_zone(free, zone, 4) == park_slots(free, zone)[:4]
 
+    def test_battery_homes_skip_slots_next_to_a_dock(self):
+        free, zone = synth()
+        docks = [(13, 11), (7, 11)]                                       # 동쪽 열 옆 도크 둘 (wallA 충전기처럼 안쪽 벽)
+        homes = make_homes_zone(free, zone, 4, docks=docks)
+        assert homes == clear_of_docks(park_slots(free, zone), docks)[:4]
+        assert all(max(abs(r - dr), abs(c - dc)) > 1 for r, c in homes for dr, dc in docks)
+        assert (13, 12) in park_slots(free, zone) and (13, 12) not in homes
+
     def test_more_robots_than_slots_still_get_homes(self):
         free, zone = synth()
         n = len(park_slots(free, zone)) + 3
@@ -80,9 +88,10 @@ class TestParkSlots:
         assert len(homes) == n and len(set(homes)) == n
 
 
-def kernel(homes, zone, heading=False):
+def kernel(homes, zone, heading=False, docks=()):
     free = synth()[0]
-    cfg = KernelConfig(heading=heading, zone=True, capacity=1, service_steps=4)
+    bat = dict(battery=True, dock_cells=tuple(docks), soc_init=(1.0,) * len(homes)) if docks else {}
+    cfg = KernelConfig(heading=heading, zone=True, capacity=1, service_steps=4, **bat)
     return FmsKernel(free, {"home": homes[0]}, np.ones((H, W, 4)), np.ones((H, W)),
                      homes, len(homes), cfg, zone_mask=zone)
 
@@ -118,6 +127,13 @@ class TestZoneGoal:
         assert goal not in slots and zone[goal]
         assert k.zone_stats["slots_full"] == 1
 
+
+    def test_battery_kernel_parks_where_the_shell_placed_robots(self):
+        free, zone = synth()
+        docks = [(13, 11), (7, 11)]
+        homes = make_homes_zone(free, zone, 3, docks=docks)
+        k = kernel(homes, zone, docks=docks)
+        assert k.park_slots[:3] == homes                                  # 초기 배치와 복귀 목표가 같은 칸 순서
 
     def test_two_displaced_robots_on_each_others_slot_swap_slots(self):
         free, zone = synth()

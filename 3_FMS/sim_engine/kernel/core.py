@@ -20,7 +20,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from map_loader import ROBOT_DIMS, front_swing, park_slots, zone_cells
+from map_loader import ROBOT_DIMS, clear_of_docks, front_swing, park_slots, zone_cells
 from pibt.geometry import configure as configure_footprint
 from pibt.geometry import ban_on, footprint_flags, front_cells, front_swing_on
 from pibt.liveness import WAIT_ESC_GRACE
@@ -189,9 +189,7 @@ class FmsKernel(BatteryMixin, MetricsMixin):
             assert len(cfg.soc_init) == n_robots, f"soc_init {len(cfg.soc_init)} != 로봇 {n_robots}"
             dock_set = set(self.docks)
             self.zone_cells = [rc for rc in self.zone_cells if rc not in dock_set]
-            # 주차 칸도 도크와 그 이웃은 뺀다 — 주차한 로봇이 도킹 자세를 막지 않게 (-145 §2-5 와 같은 이유)
-            self.park_slots = [rc for rc in self.park_slots
-                               if all(max(abs(rc[0] - d[0]), abs(rc[1] - d[1])) > 1 for d in self.docks)]
+            self.park_slots = clear_of_docks(self.park_slots, self.docks)    # 셸의 초기 배치와 같은 규칙 (-281)
         self.bat_stats = dict(events=0, charging=0, dock_wait=0, evictions=0, soc_min=1.0, empty=0)
 
     def _init_robots(self, homes, n_robots):

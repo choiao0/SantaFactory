@@ -315,6 +315,7 @@ def build(a):
     free, st_cell, stations = load_map(map_dir, aisle_block=a.aisle_block)
     H, W = free.shape
     zone_mask, homes = None, None
+    docks = tuple(st_cell[f"charger[{i}]"] for i in range(a.chargers)) if a.battery else ()
     if a.zone:
         zm = load_charge_zone(free, map_dir)
         if zm is None:
@@ -322,7 +323,7 @@ def build(a):
             a.zone = False
         else:
             zone_mask = zm & free
-            homes = make_homes_zone(free, zone_mask, a.n_robots)
+            homes = make_homes_zone(free, zone_mask, a.n_robots, docks=docks)   # 도크 이웃 칸은 커널 복귀 목표와 같이 뺀다 (-281)
     if homes is None:
         # 존을 쓸 때는 고정 홈을 만들지 않는다 — 어차피 버리던 값인데, 충전기 수가 6이 아닌
         # 합성 창고에서는 make_homes 가 여기서 터졌다 (-139). 존 경로 결과는 그대로다.
@@ -365,7 +366,6 @@ def build(a):
     # 주행 1틱 소모 = 1/(가동 틱 × (0.7 + 0.3×0.25)) : "주행 70 %·유휴 30 % 혼합에서 runtime_h" 정규화, 정지 = 1/4.
     bat = {}
     if a.battery:
-        docks = tuple(st_cell[f"charger[{i}]"] for i in range(a.chargers))
         soc_init = tuple(float(x) for x in np.random.default_rng([a.seed, 0x145]).uniform(0.3, 1.0, a.n_robots))
         drain_drive = 1.0 / (a.runtime_h * 3600 / a.dt * (0.7 + 0.3 * 0.25))
         bat = dict(battery=True, dock_cells=docks, soc_init=soc_init, drain_drive=drain_drive,

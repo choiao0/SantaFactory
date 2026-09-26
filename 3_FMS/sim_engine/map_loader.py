@@ -308,13 +308,19 @@ def park_slots(free, zone_mask, row_gap=3, col_gap=2):
     return sorted(slots, key=lambda rc: (-depth[rc], -rc[0], -rc[1]))
 
 
-def make_homes_zone(free, zone_mask, n_robots, spacing=2):
-    """충전 존 초기 배치. 대수가 주차 칸(park_slots) 이하면 그 칸을 안쪽부터 쓴다 — 운행 중 복귀와 같은 자리
-    (S15P21A106-281). 칸보다 많으면 예전 배치 그대로(존 수용량을 줄이지 않는다 — 견적은 최대 28대):
+def clear_of_docks(slots, docks):
+    """도크와 그 이웃(체비쇼프 ≤ 1)을 뺀 주차 칸 — 주차한 로봇이 도킹 자세를 막지 않게 (-145 §2-5).
+    초기 배치(make_homes_zone)와 커널 복귀 목표가 같은 규칙을 쓴다."""
+    return [rc for rc in slots if all(max(abs(rc[0] - d[0]), abs(rc[1] - d[1])) > 1 for d in docks)]
+
+
+def make_homes_zone(free, zone_mask, n_robots, spacing=2, docks=()):
+    """충전 존 초기 배치. 대수가 주차 칸(park_slots, 배터리 모드면 도크 이웃을 뺀 것) 이하면 그 칸을 안쪽부터
+    쓴다 — 운행 중 복귀와 같은 자리 (S15P21A106-281). 칸보다 많으면 예전 배치 그대로(존 수용량을 줄이지 않는다 — 견적은 최대 28대):
     충전존_결정 §2 '통로 쪽부터, 몸 겹침 없이'. zone_cells 순서로 훑으며 기존 홈과 체비쇼프 거리 ≥ spacing 인
     칸을 채택. spacing=2: 2칸 차체가 어느 방향으로 서도 앞축 칸이 겹치지 않고 뒤 칸은 헤딩
     초기화가 골라 피한다 (간격 3은 용량 1/9 — 구현 설계 §3). 부족하면 assert."""
-    slots = park_slots(free, zone_mask)
+    slots = clear_of_docks(park_slots(free, zone_mask), docks)
     if n_robots <= len(slots):
         return slots[:n_robots]
     homes = []
