@@ -57,6 +57,10 @@ public class QuoteDocumentFactory {
     /** 2면 비교표 행 수 — A4 한 면에 그래프·운영 예상·유의 사항까지 들어가는 최대치. */
     static final int FLEET_ROWS = 10;
 
+    /** 보고서(3~5쪽)가 붙으면 전체 쪽 수. */
+    static final int PAGES_WITH_REPORT = 5;
+    static final int PAGES_QUOTE_ONLY = 2;
+
     static final double SVG_W = 672, SVG_H = 112, PAD_L = 36, PAD_R = 48, PAD_T = 14, PAD_B = 22;
 
     /** 이 처리율부터는 하루 주문을 다 뺀 것으로 본다. */
@@ -86,6 +90,7 @@ public class QuoteDocumentFactory {
 
         String docNo = QuoteFormat.docNo(d.createdAt(), d.estimateId());
         String model = modelName(d.amrModel());
+        QuoteReport report = rec == null ? null : QuoteReports.build(d, w, done, rec, estimateProperties);
         return new QuoteDocument(
                 docNo,
                 QuoteFormat.dateTime(d.createdAt()),
@@ -101,37 +106,19 @@ public class QuoteDocumentFactory {
                 rec == null || rec.kpi() == null ? null : ops(rec),
                 pdfProperties.siteUrl() + "/estimates",
                 logoDataUri,
-                physicsRows(d),
-                physicsLimitLine(d));
+                physicsLimitLine(d),
+                report,
+                report == null ? PAGES_QUOTE_ONLY : PAGES_WITH_REPORT);
     }
 
-    // ── 05 부록 — 대수별 물리 검증 (S15P21A106-244) ──────────────────────────
+    // ── 05 · 17 — 대수별 3D 주행 검증 (S15P21A106-244 · 280: 대수별 표는 보고서 17로 옮겼다) ──
 
-    private List<QuoteDocument.PhysicsRow> physicsRows(EstimateDetailResponse d) {
-        return d.verifications().stream()
-                .sorted(Comparator.comparingInt(EstimateDetailResponse.VerificationRun::nRobots))
-                .map(v -> physicsRow(v, d.recommendedCount()))
-                .toList();
-    }
-
-    private QuoteDocument.PhysicsRow physicsRow(EstimateDetailResponse.VerificationRun v, Integer recommended) {
-        var p = v.physics();
-        var windowActions = p == null ? null : p.windowActions();
-        var lag = p == null ? null : p.lag();
-        String ratio = windowActions == null || windowActions.ratio() == null ? "—" : ratioPct(windowActions.ratio()) + "%";
-        String lagP50 = lag == null || lag.p50S() == null ? "—" : oneDecimal(lag.p50S()) + "초";
-        String contacts = p == null ? "—" : comma(contactCount(p)) + "회";
-        String minGap = p == null || p.robotMinGapM() == null ? "—" : oneDecimal(p.robotMinGapM()) + " m";
-        return new QuoteDocument.PhysicsRow(v.nRobots(), v.nRobots().equals(recommended),
-                verdictLabel(v.verdict()), ratio, lagP50, contacts, minGap);
-    }
-
-    private static long contactCount(PhysicsMetrics p) {
+    static long contactCount(PhysicsMetrics p) {
         return (p.robotContacts() == null ? 0 : p.robotContacts()) + (p.rackContacts() == null ? 0 : p.rackContacts());
     }
 
     /** 명세 §D 한글 라벨 — 화면과 같은 말을 쓴다. */
-    private static String verdictLabel(String verdict) {
+    static String verdictLabel(String verdict) {
         return switch (verdict) {
             case "PASS" -> "적합";
             case "WARN" -> "주의";
@@ -141,7 +128,7 @@ public class QuoteDocumentFactory {
     }
 
     /** 검증한 대수가 있을 때만 한 줄을 낸다 — 통과한 대수가 없으면 그 사실을 적는다. */
-    private String physicsLimitLine(EstimateDetailResponse d) {
+    static String physicsLimitLine(EstimateDetailResponse d) {
         if (d.physicsLimit() != null) {
             return d.physicsLimit() + "대까지 3D 주행 검증을 통과했습니다.";
         }
@@ -257,7 +244,8 @@ public class QuoteDocumentFactory {
         }
         int robots = v.nRobots() == null ? rec.amrCount() : v.nRobots();
         String method = "로봇 " + robots + "대를 실제 크기와 속도로 3D 창고에서 주행";
-        String window = v.windowS() == null ? "주문 집중 구간" : "주문 집중 " + Math.round(v.windowS() / 60.0) + "분";
+        // 대수마다 작업이 가장 많이 끝난 10분을 고른다 — 주문이 몰린 시각이 아니다 (S15P21A106-280, 보고서 17과 같은 이름)
+        String window = v.windowS() == null ? "피크 작업 구간" : "피크 작업 " + Math.round(v.windowS() / 60.0) + "분";
         boolean finished = v.notice() != VerifyNoticeCode.NOT_FINISHED;
         String result;
         if (!finished) {
@@ -320,7 +308,13 @@ public class QuoteDocumentFactory {
     /** 권장 · 최소 구성 · 효과 정체 · 양끝 · 예산 경계 앞뒤는 항상, 나머지는 간격을 고르게 채워 최대 12행. */
     static List<Integer> pickRows(List<Integer> counts, Integer recommended, Integer minimal, Integer knee,
                                   Integer firstOverBudget) {
-        if (counts.size() <= FLEET_ROWS) {
+        return pickRows(counts, recommended, minimal, knee, firstOverBudget, FLEET_ROWS);
+    }
+
+    /** {@code limit} 행까지 — 보고서의 서비스 수준 표(S15P21A106-280)는 한 쪽을 다 쓰므로 더 많이 싣는다. */
+    static List<Integer> pickRows(List<Integer> counts, Integer recommended, Integer minimal, Integer knee,
+                                  Integer firstOverBudget, int limit) {
+        if (counts.size() <= limit) {
             return counts;
         }
         TreeSet<Integer> picked = new TreeSet<>();
@@ -337,8 +331,8 @@ public class QuoteDocumentFactory {
                 picked.add(counts.get(i - 1));
             }
         }
-        int slots = FLEET_ROWS - picked.size();
-        for (int k = 1; k <= slots && picked.size() < FLEET_ROWS; k++) {
+        int slots = limit - picked.size();
+        for (int k = 1; k <= slots && picked.size() < limit; k++) {
             int idx = (int) Math.round(k * (counts.size() - 1) / (double) (slots + 1));
             int j = idx;
             while (j < counts.size() && picked.contains(counts.get(j))) {
@@ -376,7 +370,7 @@ public class QuoteDocumentFactory {
     }
 
     /** 목표는 처리율과 가동률을 <b>둘 다</b> 넘어야 달성이다 — 처리율만 보면 로봇이 노는 구성도 달성으로 읽힌다. */
-    private static boolean targetMet(Run r, EstimateDetailResponse d) {
+    static boolean targetMet(Run r, EstimateDetailResponse d) {
         return r.throughput() >= d.targetThroughput() && r.utilization() >= d.targetUtilization();
     }
 
@@ -435,7 +429,7 @@ public class QuoteDocumentFactory {
         return note.toString();
     }
 
-    private static double efficiency(Run r) {
+    static double efficiency(Run r) {
         return r.throughput() * r.utilization() / 100.0;
     }
 

@@ -985,7 +985,7 @@ class EstimateServiceTest {
         assertThat(events.getAllValues()).noneMatch(VerificationsFinished.class::isInstance);
     }
 
-    /** 후보 중 물리 판정이 PASS 인 가장 큰 대수가 물리 상한이다 — 접촉이 있으면 그 대수는 FAIL 이라 빠진다. */
+    /** 후보 중 물리 판정이 PASS 인 가장 큰 대수가 물리 상한이다 — 검증을 끝내지 못한 대수는 판정 불가(NA)라 빠진다 (-280). */
     @Test
     void detail_reports_the_largest_passing_candidate_as_the_physics_limit() throws Exception {
         Estimate estimate = withId(estimate(85.0, 90.0, 1_000_000_000L), 77L);
@@ -1006,7 +1006,7 @@ class EstimateServiceTest {
         assertThat(detail.verifications().stream().filter(v -> v.nRobots() == 9).findFirst().orElseThrow().verdict())
                 .isEqualTo("PASS");
         assertThat(detail.verifications().stream().filter(v -> v.nRobots() == 10).findFirst().orElseThrow().verdict())
-                .isEqualTo("FAIL");
+                .isEqualTo("NA");
     }
 
     // ── TIMEOUT 스윕 ─────────────────────────────────────────────────────────

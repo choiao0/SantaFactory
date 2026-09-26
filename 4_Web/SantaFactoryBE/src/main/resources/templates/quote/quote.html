@@ -27,6 +27,8 @@ body{font-family:var(--sans);color:var(--ink);font-size:12.5px;line-height:1.5;-
 .head .meta b{color:var(--ink);font-weight:600;letter-spacing:.02em}
 
 .block{margin-top:12px}
+#p1 .block{margin-top:10px}
+#p1 td{padding:4px 8px}
 #p2 .block{margin-top:14px}
 .eyebrow{display:flex;align-items:center;gap:8px;font-size:9.5px;font-weight:700;letter-spacing:.1em;color:var(--red-dark)}
 .eyebrow::after{content:"";flex:1;height:1px;background:var(--rule)}
@@ -106,6 +108,32 @@ tr.total td{border-top:1.5px solid var(--ink);border-bottom:0;font-weight:800;fo
 .disc{margin-top:7px;border-left:3px solid var(--red);background:var(--card);padding:8px 14px;font-size:10px;line-height:1.5;color:#4a4a46}
 .disc .link{display:block;margin-top:6px;font-size:9.5px;color:var(--muted)}
 .disc .link b{font-weight:600;color:var(--ink)}
+
+/* 3~5쪽 도입 검토 보고서 (S15P21A106-280) */
+.rp .block{margin-top:14px}
+.rp td{padding:3.5px 8px;font-size:10.5px}
+.rp th{padding:5px 8px}
+.basis{list-style:none;margin-top:10px;counter-reset:b}
+.basis li{position:relative;padding:7px 0 7px 30px;border-bottom:1px solid var(--rule2);font-size:12px;line-height:1.55;letter-spacing:-.01em}
+.basis li::before{counter-increment:b;content:counter(b);position:absolute;left:0;top:8px;width:18px;height:18px;border:1.5px solid var(--red-dark);color:var(--red-dark);font-size:10px;font-weight:800;text-align:center;line-height:15px}
+.alt{margin-top:10px;border:1px solid var(--line);border-left:3px solid var(--ink);background:var(--card);padding:9px 14px 10px}
+.alt .l{font-size:10px;font-weight:700;color:var(--muted);letter-spacing:.02em}
+.alt p{margin-top:4px;font-size:11.5px;line-height:1.6}
+.steps{display:grid;grid-template-columns:repeat(3,1fr);gap:0;border:1px solid var(--line);border-left:0;margin-top:10px;background:var(--card)}
+.steps > div{padding:10px 14px 11px;border-left:1px solid var(--line)}
+.steps .n{font-size:10px;font-weight:800;color:var(--red-dark);letter-spacing:.06em}
+.steps b{display:block;margin-top:3px;font-size:12.5px;font-weight:800;letter-spacing:-.02em}
+.steps p{margin-top:5px;font-size:10.5px;line-height:1.55;color:#4a4a46}
+.defs td{white-space:normal;vertical-align:top}
+.defs td:first-child{font-weight:700;white-space:nowrap}
+.defs td:last-child{color:var(--muted);white-space:nowrap}
+.cols2{display:grid;grid-template-columns:1fr 1fr;gap:22px;margin-top:10px}
+.cols2 .cap{font-size:10px;font-weight:700;color:var(--muted);letter-spacing:.02em;padding-bottom:5px;border-bottom:1.5px solid var(--ink)}
+.cols2 ul{list-style:none}
+.cols2 li{position:relative;padding:6px 0 6px 12px;border-bottom:1px solid var(--rule2);font-size:10.5px;line-height:1.55;color:#33332f}
+.cols2 li::before{content:"";position:absolute;left:0;top:12px;width:5px;height:5px;background:var(--ink)}
+.cols2 .risk li::before{background:var(--red)}
+.legend i.sq{width:9px;height:9px}
 </style>
 </head>
 <body th:with="base=${q.verdict.recommended} ? 5 : 2">
@@ -116,7 +144,7 @@ tr.total td{border-top:1.5px solid var(--ink);border-bottom:0;font-weight:800;fo
       <img th:src="${q.logoDataUri}" alt="">
       <div><h1>AMR 도입 견적서</h1><small>SANTA FACTORY · 시뮬레이션 기반 로봇 도입 규모 산정</small></div>
     </div>
-    <div class="meta">견적 번호 <b th:text="${q.docNo}">EST</b><br>1 / 2 쪽 · 발행 <b th:text="${q.issuedAt}">발행일</b></div>
+    <div class="meta">견적 번호 <b th:text="${q.docNo}">EST</b><br><span th:text="'1 / ' + ${q.pages} + ' 쪽'">1 / 2 쪽</span> · 발행 <b th:text="${q.issuedAt}">발행일</b></div>
   </header>
 
   <div class="block">
@@ -212,7 +240,7 @@ tr.total td{border-top:1.5px solid var(--ink);border-bottom:0;font-weight:800;fo
             <dt>검증 방법</dt><dd th:text="${q.verification.methodLine}"></dd>
             <dt>검증 구간</dt><dd th:text="${q.verification.windowLine}"></dd>
             <dt>결과</dt><dd><span class="dot" th:classappend="${q.verification.resultOk} ? '' : 'bad'"></span><span th:text="${q.verification.resultLine}"></span></dd>
-            <dt>영상</dt><dd>견적 결과 화면에서 재생 (주소는 <span th:text="${#numbers.formatInteger(base + 5, 2)}"></span> 유의 사항 참고)</dd>
+            <th:block th:if="${q.physicsLimitLine != null}"><dt>대수별</dt><dd><span th:text="${q.physicsLimitLine}"></span> <span class="sub">17 참고</span></dd></th:block>
           </dl>
         </div>
         <table th:if="${q.verification.hasComparison}">
@@ -228,26 +256,10 @@ tr.total td{border-top:1.5px solid var(--ink);border-bottom:0;font-weight:800;fo
       <p class="note vnote"><b>참고</b><span th:text="${q.verification.noticeText}"></span></p>
     </th:block>
     <p class="note" th:if="${q.verification == null}">권장 구성의 3D 주행 검증은 아직 진행하지 않았습니다. 견적 결과 화면에서 요청할 수 있습니다.</p>
-    <th:block th:if="${not #lists.isEmpty(q.physicsRows)}">
-      <table>
-        <thead><tr><th>대수</th><th>판정</th><th class="num">계획 대비 수행률</th><th class="num">작업 지연(보통)</th><th class="num">충돌</th><th class="num">로봇 간 최소 거리</th></tr></thead>
-        <tbody>
-          <tr th:each="r : ${q.physicsRows}">
-            <td th:text="${r.count} + '대' + (${r.recommended} ? ' (권장)' : '')"></td>
-            <td th:text="${r.verdictLabel}"></td>
-            <td class="num" th:text="${r.windowRatio}"></td>
-            <td class="num" th:text="${r.lagP50}"></td>
-            <td class="num" th:text="${r.contacts}"></td>
-            <td class="num" th:text="${r.minGap}"></td>
-          </tr>
-        </tbody>
-      </table>
-      <p class="note" th:if="${q.physicsLimitLine != null}" th:text="${q.physicsLimitLine}"></p>
-    </th:block>
   </div>
   </th:block>
 
-  <div class="foot"><span>이 견적서는 시뮬레이션 결과를 바탕으로 한 참고 자료이며 확정 견적이 아닙니다.</span><b th:text="${q.docNo} + ' · 1 / 2'"></b></div>
+  <div class="foot"><span>이 견적서는 시뮬레이션 결과를 바탕으로 한 참고 자료이며 확정 견적이 아닙니다.</span><b th:text="${q.docNo} + ' · 1 / ' + ${q.pages}"></b></div>
 </section>
 
 <section class="page" id="p2">
@@ -256,7 +268,7 @@ tr.total td{border-top:1.5px solid var(--ink);border-bottom:0;font-weight:800;fo
       <img th:src="${q.logoDataUri}" alt="">
       <div><h1>AMR 도입 견적서</h1><small>부록 · 로봇 대수별 비교</small></div>
     </div>
-    <div class="meta">견적 번호 <b th:text="${q.docNo}"></b><br>2 / 2 쪽 · 발행 <b th:text="${q.issuedAt}"></b></div>
+    <div class="meta">견적 번호 <b th:text="${q.docNo}"></b><br><span th:text="'2 / ' + ${q.pages} + ' 쪽'"></span> · 발행 <b th:text="${q.issuedAt}"></b></div>
   </header>
 
   <div class="block">
@@ -388,8 +400,222 @@ tr.total td{border-top:1.5px solid var(--ink);border-bottom:0;font-weight:800;fo
     </div>
   </div>
 
-  <div class="foot"><span>이 견적서는 시뮬레이션 결과를 바탕으로 한 참고 자료이며 확정 견적이 아닙니다.</span><b th:text="${q.docNo} + ' · 2 / 2'"></b></div>
+  <div class="foot"><span>이 견적서는 시뮬레이션 결과를 바탕으로 한 참고 자료이며 확정 견적이 아닙니다.</span><b th:text="${q.docNo} + ' · 2 / ' + ${q.pages}"></b></div>
 </section>
+
+<th:block th:if="${q.report != null}" th:with="r=${q.report}">
+<section class="page rp" id="p3">
+  <header class="head">
+    <div class="brand">
+      <img th:src="${q.logoDataUri}" alt="">
+      <div><h1>AMR 도입 검토 보고서</h1><small>부록 · 판단 근거와 산정 방법</small></div>
+    </div>
+    <div class="meta">견적 번호 <b th:text="${q.docNo}"></b><br><span th:text="'3 / ' + ${q.pages} + ' 쪽'"></span> · 발행 <b th:text="${q.issuedAt}"></b></div>
+  </header>
+
+  <div class="block">
+    <div class="eyebrow">11 <span class="t" th:text="'판단 근거 · 권장 ' + ${q.verdict.count} + '대'"></span></div>
+    <ol class="basis">
+      <li th:each="b : ${r.basis}" th:text="${b}"></li>
+    </ol>
+    <div class="alt" th:if="${r.alternative != null}">
+      <div class="l" th:text="${r.alternativeTitle}"></div>
+      <p th:text="${r.alternative}"></p>
+    </div>
+  </div>
+
+  <div class="block">
+    <div class="eyebrow">12 <span class="t">산정 방법</span></div>
+    <div class="steps">
+      <div th:each="m, st : ${r.method}">
+        <div class="n" th:text="${st.count} + '단계'"></div>
+        <b th:text="${#strings.substringBefore(m, ' — ')}"></b>
+        <p th:text="${#strings.substringAfter(m, ' — ')}"></p>
+      </div>
+    </div>
+  </div>
+
+  <div class="block">
+    <div class="eyebrow">13 <span class="t">이 보고서의 지표</span></div>
+    <table class="defs">
+      <thead><tr><th>지표</th><th>뜻</th><th>쓰는 곳</th></tr></thead>
+      <tbody>
+        <tr><td>주문 처리율</td><td>계산한 운영 시간 안에 처리를 마친 주문 ÷ 접수한 주문</td><td>목표 달성 판정</td></tr>
+        <tr><td>주문 처리 시간</td><td>주문 접수부터 그 주문의 상자가 모두 포장대에 도착할 때까지 걸린 시간. 90% 기준은 주문 10건 중 9건이 끝나는 시간</td><td>서비스 수준</td></tr>
+        <tr><td>로봇 배정 대기</td><td>주문 접수부터 로봇이 배정될 때까지 기다린 시간</td><td>병목 진단</td></tr>
+        <tr><td>로봇 가동률</td><td>로봇이 이동 · 대기 · 상하차로 일한 시간의 비율</td><td>여유 판단</td></tr>
+        <tr><td>혼잡 대기 비율</td><td>로봇 이동 시간 중 다른 로봇 때문에 멈춘 시간의 비율</td><td>혼잡 진단</td></tr>
+        <tr><td>운영 효율</td><td>주문 처리율 × 로봇 가동률. 로봇이 쉬는 시간이 적을수록 높음</td><td>권장 대수 산정</td></tr>
+        <tr><td>늘어난 처리량</td><td>로봇 한 대를 더할 때 늘어나는 시간당 처리 주문</td><td>증설 판단</td></tr>
+        <tr><td>계획 대비 수행률</td><td>3D 주행에서 피크 작업 10분 동안 계획한 이동과 작업 중 제시간에 시작한 비율</td><td>3D 주행 검증 판정</td></tr>
+        <tr><td>충돌 · 로봇 간 최소 거리</td><td>3D 주행 중 로봇 · 선반과 닿은 횟수, 로봇 차체 사이의 가장 가까운 거리</td><td>3D 주행 검증 판정</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="foot"><span>이 보고서는 시뮬레이션 결과를 바탕으로 한 참고 자료이며 확정 견적이 아닙니다.</span><b th:text="${q.docNo} + ' · 3 / ' + ${q.pages}"></b></div>
+</section>
+
+<section class="page rp" id="p4">
+  <header class="head">
+    <div class="brand">
+      <img th:src="${q.logoDataUri}" alt="">
+      <div><h1>AMR 도입 검토 보고서</h1><small>부록 · 대수별 서비스 수준</small></div>
+    </div>
+    <div class="meta">견적 번호 <b th:text="${q.docNo}"></b><br><span th:text="'4 / ' + ${q.pages} + ' 쪽'"></span> · 발행 <b th:text="${q.issuedAt}"></b></div>
+  </header>
+
+  <div class="block">
+    <div class="eyebrow">14 <span class="t">대수별 서비스 수준</span></div>
+    <table>
+      <thead><tr>
+        <th>로봇 대수</th><th class="num">주문 처리율</th><th class="num">시간당 처리</th><th class="num">평균 처리 시간</th>
+        <th class="num">90% 기준</th><th class="num">배정 대기 비중</th><th class="num">가동률</th><th class="num">혼잡 대기</th><th class="num">구축 비용</th>
+      </tr></thead>
+      <tbody>
+        <tr th:each="s : ${r.service}" th:classappend="${s.recommended} ? 'hl'">
+          <td><span th:text="${s.count} + '대'"></span><span th:if="${s.recommended}" class="chip">권장</span><span th:if="${s.knee}" class="chip g">증설 효과 둔화 지점</span></td>
+          <td class="num"><span th:classappend="${s.targetOk} ? 'ok' : 'miss'" th:text="${s.throughput}"></span></td>
+          <td class="num" th:text="${s.perHour}"></td>
+          <td class="num" th:text="${s.leadMean}"></td>
+          <td class="num" th:text="${s.leadP90}"></td>
+          <td class="num" th:text="${s.queueShare}"></td>
+          <td class="num" th:text="${s.utilization}"></td>
+          <td class="num" th:text="${s.conflict}"></td>
+          <td class="num"><span th:classappend="${s.overBudget} ? 'over'" th:text="${s.cost}"></span></td>
+        </tr>
+      </tbody>
+    </table>
+    <p class="note" th:text="${r.serviceNote}"></p>
+  </div>
+
+  <div class="block" th:if="${r.waitChart != null}">
+    <div class="eyebrow">15 <span class="t">주문이 기다리는 곳</span></div>
+    <div class="chart" th:with="c=${r.waitChart}">
+      <svg th:attr="viewBox='0 0 672 ' + ${c.svgH}" xmlns="http://www.w3.org/2000/svg">
+        <g th:each="y : ${c.yTicks}">
+          <line x1="40" x2="660" th:y1="${y.pos}" th:y2="${y.pos}" stroke="#e0ded9"/>
+          <text x="34" th:y="${y.pos + 3}" font-size="8" fill="#77776f" text-anchor="end" th:text="${y.text}"></text>
+        </g>
+        <g th:each="b : ${c.bars}">
+          <rect th:if="${b.recommended}" th:x="${b.x - 6}" y="10" th:width="${b.w + 12}" th:height="${c.axisY - 10}" fill="#f3e3e0"/>
+          <rect th:x="${b.x}" th:y="${b.yQueue}" th:width="${b.w}" th:height="${b.hQueue}" fill="#3f3f3d"/>
+          <rect th:x="${b.x}" th:y="${b.yWork}" th:width="${b.w}" th:height="${b.hWork}" fill="#94918a"/>
+          <line th:if="${b.hasP90}" th:x1="${b.x - 3}" th:x2="${b.x + b.w + 3}" th:y1="${b.p90Y}" th:y2="${b.p90Y}" stroke="#111" stroke-width="1.6"/>
+        </g>
+        <line x1="40" x2="660" th:y1="${c.axisY}" th:y2="${c.axisY}" stroke="#3f3f3d"/>
+        <text th:each="x : ${c.xLabels}" th:x="${x.pos}" th:y="${c.xLabelY}" font-size="8" text-anchor="middle"
+              th:fill="${x.highlight} ? '#b51616' : '#77776f'" th:attr="font-weight=${x.highlight} ? '700' : '400'" th:text="${x.text}"></text>
+        <text x="40" y="9" font-size="8" fill="#77776f">주문 처리 시간(분)</text>
+      </svg>
+      <div class="legend">
+        <span><i class="sq" style="background:#3f3f3d"></i>로봇 배정 대기</span>
+        <span><i class="sq" style="background:#94918a"></i>이동과 작업</span>
+        <span><i style="background:#111"></i>주문 처리 시간 (90% 기준)</span>
+        <span><i class="sq" style="background:#f3e3e0"></i>권장 대수</span>
+      </div>
+    </div>
+    <p class="note" th:text="${r.waitNote}"></p>
+  </div>
+
+  <div class="foot"><span>이 보고서는 시뮬레이션 결과를 바탕으로 한 참고 자료이며 확정 견적이 아닙니다.</span><b th:text="${q.docNo} + ' · 4 / ' + ${q.pages}"></b></div>
+</section>
+
+<section class="page rp" id="p5">
+  <header class="head">
+    <div class="brand">
+      <img th:src="${q.logoDataUri}" alt="">
+      <div><h1>AMR 도입 검토 보고서</h1><small>부록 · 증설 효과 · 3D 주행 검증 · 위험</small></div>
+    </div>
+    <div class="meta">견적 번호 <b th:text="${q.docNo}"></b><br><span th:text="'5 / ' + ${q.pages} + ' 쪽'"></span> · 발행 <b th:text="${q.issuedAt}"></b></div>
+  </header>
+
+  <div class="block">
+    <div class="eyebrow">16 <span class="t">한 대를 더할 때 얻는 것</span></div>
+    <div class="chart" th:if="${r.marginal != null}" th:with="c=${r.marginal}">
+      <svg th:attr="viewBox='0 0 672 ' + ${c.svgH}" xmlns="http://www.w3.org/2000/svg">
+        <g th:each="y : ${c.yTicks}">
+          <line x1="40" x2="660" th:y1="${y.pos}" th:y2="${y.pos}" stroke="#e0ded9"/>
+          <text x="34" th:y="${y.pos + 3}" font-size="8" fill="#77776f" text-anchor="end" th:text="${y.text}"></text>
+        </g>
+        <g th:each="b : ${c.bars}">
+          <rect th:x="${b.x}" th:y="${b.y}" th:width="${b.w}" th:height="${b.h}" th:attr="fill=${b.recommended} ? '#e72d2d' : '#3f3f3d'"/>
+          <text th:if="${b.label != null}" th:x="${b.x + b.w / 2}" th:y="${b.y - 3}" font-size="8" font-weight="700" fill="#111" text-anchor="middle" th:text="${b.label}"></text>
+        </g>
+        <line x1="40" x2="660" th:y1="${c.axisY}" th:y2="${c.axisY}" stroke="#3f3f3d"/>
+        <text th:each="x : ${c.xLabels}" th:x="${x.pos}" th:y="${c.xLabelY}" font-size="8" text-anchor="middle"
+              th:fill="${x.highlight} ? '#b51616' : '#77776f'" th:attr="font-weight=${x.highlight} ? '700' : '400'" th:text="${x.text}"></text>
+        <text x="40" y="9" font-size="8" fill="#77776f">로봇 한 대를 더할 때 늘어나는 시간당 처리 주문(건)</text>
+      </svg>
+      <div class="legend">
+        <span><i class="sq" style="background:#e72d2d"></i><span th:text="${q.verdict.count} + '번째 로봇 (권장 대수)'"></span></span>
+        <span><i class="sq" style="background:#3f3f3d"></i>그 밖의 로봇</span>
+      </div>
+    </div>
+    <table>
+      <thead><tr>
+        <th>로봇 대수</th><th class="num">구축 비용</th><th class="num">주문 처리율</th><th class="num">가동률</th>
+        <th class="num">주문 처리 시간 (평균 / 90% 기준)</th><th class="num">늘어난 처리량 (시간당)</th><th class="num">시간당 1건 늘리는 비용</th>
+      </tr></thead>
+      <tbody>
+        <tr th:each="m : ${r.marginalRows}" th:classappend="${m.recommended} ? 'hl'">
+          <td><span th:text="${m.count} + '대'"></span><span th:if="${m.recommended}" class="chip">권장</span></td>
+          <td class="num" th:text="${m.cost}"></td>
+          <td class="num" th:text="${m.throughput}"></td>
+          <td class="num" th:text="${m.utilization}"></td>
+          <td class="num" th:text="${m.lead}"></td>
+          <td class="num" th:text="${m.gain}"></td>
+          <td class="num" th:text="${m.costPerGain}"></td>
+        </tr>
+      </tbody>
+    </table>
+    <p class="note" th:text="${r.marginalNote}"></p>
+  </div>
+
+  <div class="block">
+    <div class="eyebrow">17 <span class="t">3D 주행 검증 · 피크 작업 10분</span></div>
+    <th:block th:if="${not #lists.isEmpty(r.peak)}">
+      <table>
+        <thead><tr>
+          <th>로봇 대수</th><th>판정</th><th>검증 구간</th><th class="num">계획 대비 수행률</th>
+          <th class="num">작업 지연 (보통)</th><th class="num">작업 지연 (상위 10%)</th><th class="num">충돌</th><th class="num">로봇 간 최소 거리</th>
+        </tr></thead>
+        <tbody>
+          <tr th:each="p : ${r.peak}" th:classappend="${p.recommended} ? 'hl'">
+            <td><span th:text="${p.count} + '대'"></span><span th:if="${p.recommended}" class="chip">권장</span></td>
+            <td th:text="${p.verdict}"></td>
+            <td th:text="${p.window}"></td>
+            <td class="num" th:text="${p.ratio}"></td>
+            <td class="num" th:text="${p.lagP50}"></td>
+            <td class="num" th:text="${p.lagP90}"></td>
+            <td class="num" th:text="${p.contacts}"></td>
+            <td class="num" th:text="${p.minGap}"></td>
+          </tr>
+        </tbody>
+      </table>
+      <p class="note" th:text="${r.peakNote}"></p>
+      <p class="note" th:if="${q.physicsLimitLine != null}"><b style="color:#111" th:text="${q.physicsLimitLine}"></b></p>
+    </th:block>
+    <p class="note" th:if="${#lists.isEmpty(r.peak)}">아직 3D 주행 검증을 하지 않았습니다. 견적 결과 화면에서 요청할 수 있습니다.</p>
+  </div>
+
+  <div class="block">
+    <div class="eyebrow">18 <span class="t">위험과 가정</span></div>
+    <div class="cols2">
+      <div class="risk">
+        <div class="cap">운영 위험</div>
+        <ul><li th:each="x : ${r.risks}" th:text="${x}"></li></ul>
+      </div>
+      <div>
+        <div class="cap">계산 가정</div>
+        <ul><li th:each="x : ${r.assumptions}" th:text="${x}"></li></ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="foot"><span>이 보고서는 시뮬레이션 결과를 바탕으로 한 참고 자료이며 확정 견적이 아닙니다.</span><b th:text="${q.docNo} + ' · 5 / ' + ${q.pages}"></b></div>
+</section>
+</th:block>
 
 </body>
 </html>

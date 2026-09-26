@@ -62,7 +62,7 @@ class QuoteDocumentFactoryTest {
 
         QuoteDocument.Verification v = q.verification();
         assertThat(v.methodLine()).startsWith("로봇 14대를 실제 크기와 속도로");
-        assertThat(v.windowLine()).isEqualTo("주문 집중 10분");
+        assertThat(v.windowLine()).isEqualTo("피크 작업 10분");
         assertThat(v.resultOk()).isTrue();
         assertThat(v.resultLine()).isEqualTo("완료 · 로봇 14대 모두 가동");
         assertThat(v.hasComparison()).isTrue();
@@ -98,7 +98,7 @@ class QuoteDocumentFactoryTest {
         QuoteDocument none = factory.build(new QuoteSource(withPhysics(d, runs, null), QuoteFixtures.warehouse()));
         QuoteDocument notRun = factory.build(new QuoteSource(d, QuoteFixtures.warehouse()));
 
-        assertThat(passed.physicsRows()).extracting(QuoteDocument.PhysicsRow::verdictLabel)
+        assertThat(passed.report().peak()).extracting(QuoteReport.PeakRow::verdict)
                 .containsExactly("적합", "주의", "부적합", "판정 불가");
         assertThat(passed.physicsLimitLine()).isEqualTo("13대까지 3D 주행 검증을 통과했습니다.");
         assertThat(none.physicsLimitLine()).isEqualTo("아직 3D 주행 검증을 통과한 대수가 없습니다.");

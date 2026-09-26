@@ -35,10 +35,8 @@ class QuoteTemplateTest {
     private final QuotePdfService service = new QuotePdfService(null, factory, engine(), mock(GotenbergClient.class), QuoteFixtures.PDF);
 
     @Test
-    void renders_two_pages_with_every_block() throws Exception {
-        QuoteDocument q = factory.build(new QuoteSource(
-                QuoteFixtures.detail(142L, 14, 15, QuoteFixtures.verification(VerifyNoticeCode.SLOWER_AT_PEAK, QuoteFixtures.slowerAtPeak())),
-                QuoteFixtures.warehouse()));
+    void renders_the_quote_and_the_report_pages() throws Exception {
+        QuoteDocument q = factory.build(new QuoteSource(QuoteFixtures.detailWithPhysics(142L), QuoteFixtures.warehouse()));
 
         String html = service.html(q);
         Path out = Path.of("build", "quote-preview.html");
@@ -51,6 +49,16 @@ class QuoteTemplateTest {
             assertThat(html).contains(block);
         }
         assertThat(html).contains(">06</span>").contains(">10</span>");
+        // 3~5쪽 도입 검토 보고서 (S15P21A106-280) — 쪽 번호는 전체 5쪽 기준
+        assertThat(html).contains("id=\"p3\"").contains("id=\"p4\"").contains("id=\"p5\"")
+                .contains("1 / 5 쪽").contains("EST-20260917-0142 · 5 / 5").doesNotContain("/ 2 쪽");
+        for (String block : new String[]{"판단 근거 · 권장 14대", "산정 방법", "이 보고서의 지표", "대수별 서비스 수준",
+                "주문이 기다리는 곳", "한 대를 더할 때 얻는 것", "3D 주행 검증 · 피크 작업 10분", "위험과 가정",
+                "한 대 더 두는 경우 (15대)", "15:47–15:57"}) {
+            assertThat(html).contains(block);
+        }
+        assertThat(html).doesNotContain("주문 집중").doesNotContain("DES").doesNotContain("리드타임").doesNotContain("STEP")
+                .contains("1단계");
         // 고객 문서에는 내부 용어·소요 시간을 싣지 않는다
         assertThat(html).doesNotContain("계산 소요 시간").doesNotContain("물리 검증").doesNotContain("웹 리포트")
                 .doesNotContain("효율 점수").doesNotContain(" %");
@@ -71,5 +79,6 @@ class QuoteTemplateTest {
         String html = service.html(factory.build(new QuoteSource(noRec, QuoteFixtures.warehouse())));
 
         assertThat(html).contains("목표 주문 처리율을 달성할 수 없습니다").doesNotContain("금액 (원)").doesNotContain("목표 달성 여부").contains(">03</span>").contains(">07</span>");
+        assertThat(html).doesNotContain("id=\"p3\"").contains("1 / 2 쪽");
     }
 }

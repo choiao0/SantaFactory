@@ -77,6 +77,11 @@ final class QuoteFormat {
         return percent == null ? "—" : oneDecimal(percent);
     }
 
+    /** 로봇 간 거리 m → "0.03 m" (소수 둘째 자리). 화면 {@code meters} 와 같다 — 한 자리로 줄이면 2.6 cm 가 "0 m" 가 된다. */
+    static String meters(Double m) {
+        return m == null ? "—" : String.format(Locale.ROOT, "%.2f m", m);
+    }
+
     /** m → "171" km (반올림). */
     static String km(Long meters) {
         return meters == null ? "—" : String.valueOf(Math.round(meters / 1000.0));

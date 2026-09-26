@@ -56,7 +56,8 @@ services:
       <<: *runner-env
       NODE_ID: sim-runner-gpu01       # host-orch 노드 목록과 같아야 한다
     volumes:
-      - ov-cache:/cache/ov            # Kit 셰이더 캐시 — 첫 기동 수 분, 이후 재사용
+      - ov-cache:/cache/ov            # ~/.cache/ov (OV 캐시) — 첫 기동 수 분, 이후 재사용
+      - kit-cache-1:/opt/venv/lib/python3.12/site-packages/isaacsim/kit/cache   # Kit 셰이더·DerivedData 캐시(-280)
       - ./data:/data                  # out(mp4·프레임) · state(bdSeq · 런 로그)
 
   # 두 번째 러너 (-244) — 같은 이미지, 다른 노드 이름 · 다른 상태 폴더(bdSeq·런 로그가 섞이면 안 된다).
@@ -68,9 +69,17 @@ services:
       <<: *runner-env
       NODE_ID: sim-runner-gpu02
     volumes:
-      - ov-cache:/cache/ov            # 셰이더 캐시는 같이 쓴다(읽기 위주)
+      - ov-cache:/cache/ov            # OV 캐시는 같이 쓴다(읽기 위주)
+      - kit-cache-2:/opt/venv/lib/python3.12/site-packages/isaacsim/kit/cache   # Kit 캐시는 따로 — 두 Kit 이 동시에 쓴다
       - ./data2:/data
 
 volumes:
+  # ★ Kit 캐시(-280) — 셰이더(shadercache · nv_shadercache)와 DerivedDataCache(약 3 GB)는 ~/.cache/ov 가 아니라
+  #   isaacsim/kit/cache 에 쌓인다. 볼륨이 없으면 컨테이너를 새로 띄울 때마다 비어, 첫 검증이 셰이더를 다시 굽는다
+  #   (2026-09-27 재배포 직후 첫 씬 빌드가 그 도중에 죽었다 — runners/build_amr_scene_v2.py 끝 주석).
+  kit-cache-1:
+    name: t3amr-kit-cache-1
+  kit-cache-2:
+    name: t3amr-kit-cache-2
   ov-cache:
     name: t3amr-ov-cache            # 고정 이름 — compose 프로젝트명(폴더명)에 안 묶여 단독 docker run(deploy/README §1)과 셰이더 캐시를 공유한다
