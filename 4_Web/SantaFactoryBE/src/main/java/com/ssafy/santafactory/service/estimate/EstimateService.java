@@ -8,26 +8,33 @@ import com.ssafy.santafactory.service.estimate.EstimateEvents.EstimateVerified;
 import com.ssafy.santafactory.service.estimate.EstimateEvents.RunUpdated;
 import com.ssafy.santafactory.service.estimate.EstimateEvents.RunsQueued;
 import com.ssafy.santafactory.dto.estimate.EstimateSummaryResponse;
+import com.ssafy.santafactory.dto.simulation.PhysicsMetrics;
 import com.ssafy.santafactory.dto.simulation.SimulationRequest;
 import com.ssafy.santafactory.dto.simulation.SimulationResponse;
 import com.ssafy.santafactory.dto.simulation.VerifyRequest;
 import com.ssafy.santafactory.dto.simulation.VerifyResultResponse;
+import com.ssafy.santafactory.dto.simulation.VerifySliceMeta;
 import com.ssafy.santafactory.dto.warehouse.WarehouseResponse;
 import com.ssafy.santafactory.service.estimate.quote.QuoteSource;
 import com.ssafy.santafactory.entity.estimate.Estimate;
+import com.ssafy.santafactory.entity.estimate.EstimateVerification;
 import com.ssafy.santafactory.entity.estimate.RunStatus;
+import com.ssafy.santafactory.entity.estimate.VerifyRunStatus;
 import com.ssafy.santafactory.entity.estimate.VerifySnapshot;
 import com.ssafy.santafactory.entity.simulation.RunKpiDetail;
 import com.ssafy.santafactory.entity.simulation.RunReplay;
 import com.ssafy.santafactory.entity.simulation.SimScenario;
+import com.ssafy.santafactory.entity.simulation.SimScenarioVerifySlice;
 import com.ssafy.santafactory.entity.warehouse.Warehouse;
 import com.ssafy.santafactory.global.auth.AuthenticatedMember;
 import com.ssafy.santafactory.global.auth.OwnershipGuard;
 import com.ssafy.santafactory.global.exception.ErrorCode;
 import com.ssafy.santafactory.global.exception.GlobalException;
 import com.ssafy.santafactory.repository.EstimateRepository;
+import com.ssafy.santafactory.repository.EstimateVerificationRepository;
 import com.ssafy.santafactory.repository.RunReplayRepository;
 import com.ssafy.santafactory.repository.SimScenarioRepository;
+import com.ssafy.santafactory.repository.SimScenarioVerifySliceRepository;
 import com.ssafy.santafactory.repository.WarehouseRepository;
 import com.ssafy.santafactory.service.SimulationService;
 import com.ssafy.santafactory.service.estimate.ordergen.OutboundOrderGenerator;
@@ -51,7 +58,9 @@ import java.io.IOException;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.IntStream;
 
@@ -79,6 +88,9 @@ public class EstimateService {
     /** 아직 결과를 기다리는 상태 — TIMEOUT 스윕 대상. */
     private static final List<RunStatus> PENDING = List.of(RunStatus.QUEUED, RunStatus.RUNNING);
 
+    /** 대수별 물리 검증 중 아직 끝나지 않은 상태 — 중복 요청 가드·verify.done 판단에 쓴다 (S15P21A106-244). */
+    private static final List<VerifyRunStatus> VERIFY_PENDING = List.of(VerifyRunStatus.PENDING, VerifyRunStatus.RUNNING);
+
     /** 워커가 run 을 집었을 때 결과 큐로 먼저 보내는 상태값 (명세 §1-2). */
     private static final String STATUS_RUNNING = "running";
 
@@ -96,6 +108,8 @@ public class EstimateService {
     private final ObjectMapper objectMapper;
     private final VerifyVideoPresigner videoPresigner;
     private final VerifyComparator verifyComparator;
+    private final SimScenarioVerifySliceRepository sliceRepository;
+    private final EstimateVerificationRepository verificationRepository;
 
     // ── 생성 ─────────────────────────────────────────────────────────────────
 
@@ -295,10 +309,64 @@ public class EstimateService {
 
     private EstimateDetailResponse toDetail(Estimate estimate) {
         List<SimScenario> runs = scenarioRepository.findByEstimateIdOrderByAmrCountAsc(estimate.getId());
+        List<EstimateDetailResponse.VerificationRun> verifications = verificationRuns(estimate.getId());
         return EstimateDetailResponse.of(estimate, runs,
                 videoPresigner.sign(estimate.getVerifyVideoUrl()),
                 videoPresigner.sign(fpvVideoKey(estimate)),
-                verifyComparator.compare(estimate.getVerify(), recommendedRun(estimate, runs)));
+                verifyComparator.compare(estimate.getVerify(), recommendedRun(estimate, runs)),
+                verifications, physicsLimit(verifications));
+    }
+
+    /**
+     * 물리 검증 SSE 스냅샷 (S15P21A106-244). {@link VerifyEventStream} 이 구독·verify.done 양쪽에
+     * 이걸로 보낸다 — 상세 조회와 같은 조립 로직을 두 번 쓰지 않으려고 여기 하나로 모은다.
+     */
+    @Transactional(readOnly = true)
+    public EstimateEvents.VerificationsSnapshot verifySnapshot(Long estimateId) {
+        Estimate estimate = estimateRepository.findById(estimateId)
+                .orElseThrow(() -> new GlobalException(ErrorCode.ESTIMATE_NOT_FOUND));
+        List<EstimateDetailResponse.VerificationRun> runs = verificationRuns(estimateId);
+        return new EstimateEvents.VerificationsSnapshot(estimateId, estimate.getRecommendedCount(),
+                physicsLimit(runs), runs);
+    }
+
+    /** 대수별 최신 시도 — 정렬이 대수 asc·시도 desc 라 각 대수의 첫 값이 최신 시도다. */
+    private List<EstimateDetailResponse.VerificationRun> verificationRuns(Long estimateId) {
+        List<EstimateVerification> all = verificationRepository.findByEstimateIdOrderByRobotCountAscAttemptDesc(estimateId);
+        Map<Integer, EstimateVerification> latestByCount = new LinkedHashMap<>();
+        for (EstimateVerification v : all) {
+            latestByCount.putIfAbsent(v.getRobotCount(), v);
+        }
+        return latestByCount.values().stream().map(this::toVerificationRun).toList();
+    }
+
+    /** 후보 중 물리 판정이 PASS 인 가장 큰 대수 (명세 §D "물리 상한"). 없으면 null. */
+    private Integer physicsLimit(List<EstimateDetailResponse.VerificationRun> runs) {
+        return runs.stream()
+                .filter(r -> PhysicsVerdict.Verdict.PASS.name().equals(r.verdict()))
+                .map(EstimateDetailResponse.VerificationRun::nRobots)
+                .max(Integer::compareTo)
+                .orElse(null);
+    }
+
+    private EstimateDetailResponse.VerificationRun toVerificationRun(EstimateVerification v) {
+        PhysicsMetrics physics = readPhysics(v.getPhysicsJson());
+        PhysicsVerdict.Verdict verdict = PhysicsVerdict.of(v.getStatus(), physics);
+        EstimateDetailResponse.VerificationRun.Slice slice = sliceView(v.getSliceMetaJson());
+        String videoFpvKey = videoPresigner.deriveFpvKey(v.getVideoKey());
+        return new EstimateDetailResponse.VerificationRun(
+                v.getRobotCount(), v.getAttempt(), v.getStatus().name(), verdict.name(),
+                v.getError(), v.getReason(),
+                videoPresigner.sign(v.getVideoKey()), videoPresigner.sign(videoFpvKey),
+                physics, slice, v.getRequestedAt(), v.getFinishedAt());
+    }
+
+    private EstimateDetailResponse.VerificationRun.Slice sliceView(String sliceMetaJson) {
+        if (sliceMetaJson == null) {
+            return null;
+        }
+        VerifySliceMeta meta = readSliceMeta(sliceMetaJson);
+        return new EstimateDetailResponse.VerificationRun.Slice(meta.t0S(), meta.windowS(), meta.tasksDone());
     }
 
     private static SimScenario recommendedRun(Estimate estimate, List<SimScenario> runs) {
@@ -407,16 +475,19 @@ public class EstimateService {
     }
 
     /**
-     * 물리 검증(Isaac) 요청을 발행한다. 권장 대수가 없으면(사유만 있는 판정) 검증할 대상이 없어 거부한다.
+     * 물리 검증(Isaac) 요청을 발행한다 (S15P21A106-244). 후보 대수는 {@code counts} 가 있으면 그대로,
+     * 없으면 권장 대수 기준 n*−1·n*·n*+1 이다. 그중 DONE 이고 DES 피크 구간(궤적)이 있는 대수만
+     * 실제로 검증한다 — 하나도 없으면(1단계 이전 옛 견적) 권장 대수 하나만 종전처럼 주문 목록으로
+     * 폴백한다(둘 다 없을 순 없다 — 권장 대수 run 자체가 없으면 애초에 검증 불가로 거부한다).
      *
-     * <p>{@code run_id}는 견적당 고정({@code verify_<estimateId>})으로 보낸다 — host-orch 는 같은
-     * run_id 를 "같은 작업"으로 보고 재전송을 멱등 처리하는데(SIM_VERIFY_CONTRACT.md §5), 검증은
-     * 견적당 정상적으로 한 번만 돌아서 인프라 문제로 재요청해도 이어서 처리되는 쪽이 자연스럽다.
-     * {@code source_run_id}는 반대로 host-orch 로직에 안 쓰이고 결과에 그대로 돌아오기만 하는
-     * 추적용이라, 권장 대수의 DES run_id({@code est_{id}_n{count}})를 그대로 싣는다.
+     * <p>{@code run_id} 는 이제 견적당 고정이 아니라 {@code verify_<estimateId>_n<K>_<attempt>} 다 —
+     * 대수마다 따로 검증하고, 같은 대수를 다시 검증하려면 attempt 를 올려 host-orch 의 멱등 처리를
+     * 비켜 간다(계약 §4·§5).
+     *
+     * @param counts 검증할 대수 목록. null 이면 권장 대수 기준 3개
      */
     @Transactional
-    public void requestVerification(Long estimateId, AuthenticatedMember me) {
+    public void requestVerification(Long estimateId, AuthenticatedMember me, List<Integer> counts) {
         Estimate estimate = estimateRepository.findById(estimateId)
                 .orElseThrow(() -> new GlobalException(ErrorCode.ESTIMATE_NOT_FOUND));
         ownershipGuard.checkEstimate(estimate, me);
@@ -424,42 +495,97 @@ public class EstimateService {
         if (recommendedCount == null) {
             throw new GlobalException(ErrorCode.ESTIMATE_NOT_VERIFIABLE);
         }
-        guardDuplicateVerify(estimate);
-        SimScenario run = scenarioRepository.findByEstimateIdAndAmrCount(estimateId, recommendedCount)
-                .orElseThrow(() -> new GlobalException(ErrorCode.ESTIMATE_NOT_VERIFIABLE));
+        guardNoVerificationInProgress(estimateId);
+
+        List<SliceCandidate> withTrajectory = candidateCounts(counts, recommendedCount).stream()
+                .map(n -> sliceCandidate(estimateId, n))
+                .filter(c -> c != null && c.slice().hasTrajectory())
+                .toList();
 
         estimate.markVerifyRequested(LocalDateTime.now());
-        simulationService.publishVerify(new VerifyRequest(
-                "verify_" + estimateId, recommendedCount, properties.verifyWindow().toSeconds(),
-                run.getRunId(), estimateId, FIXED_SEED, verifyScenario(estimate)));
+        if (withTrajectory.isEmpty()) {
+            requestFallback(estimate, recommendedCount);
+            return;
+        }
+        withTrajectory.forEach(candidate -> requestForCandidate(estimate, candidate));
     }
 
     /**
-     * 같은 견적을 두 번 검증하지 않는다.
-     *
-     * <p>Isaac 은 한 번에 한 건씩 약 10분을 문다. 화면에서 버튼을 잠가도 새로고침하면 상태가 풀려
-     * 다시 누를 수 있어서, 같은 검증이 큐에 두 번 쌓이고 뒤 요청이 그만큼 밀렸다.
-     *
-     * <p>정상 종료한 검증은 다시 돌리지 않는다. 실패했거나, 요청해 놓고 {@code verify-stale-after}
-     * 가 지나도록 결과가 안 온 건은 재요청을 연다 — 워커가 죽어 영영 결과가 없는 견적이 검증
-     * 불가로 굳는 것을 막는다.
+     * 진행 중인 회차가 있으면 새 요청을 거부한다. Isaac 은 노드당 한 건씩 약 10분을 문다 — 화면에서
+     * 버튼을 잠가도 새로고침하면 상태가 풀려 다시 누를 수 있어서, 같은 검증이 큐에 두 번 쌓이는 것을
+     * 여기서 막는다. 얼마나 오래됐는지는 보지 않는다 — 정리(TIMEOUT 스윕)는 후속 과제다.
      */
-    private void guardDuplicateVerify(Estimate estimate) {
-        VerifySnapshot verify = estimate.getVerify();
-        if (verify != null && verify.finishedNormally()) {
-            throw new GlobalException(ErrorCode.VERIFY_ALREADY_DONE);
-        }
-        LocalDateTime requestedAt = estimate.getVerifyRequestedAt();
-        boolean waitingForResult = requestedAt != null && verify == null
-                && requestedAt.isAfter(LocalDateTime.now().minus(properties.verifyStaleAfter()));
-        if (waitingForResult) {
+    private void guardNoVerificationInProgress(Long estimateId) {
+        if (verificationRepository.existsByEstimateIdAndStatusIn(estimateId, VERIFY_PENDING)) {
             throw new GlobalException(ErrorCode.VERIFY_IN_PROGRESS);
         }
     }
 
+    /** 후보 대수 목록 — override 가 있으면 그대로, 없으면 권장 대수 ±1. 0 이하·중복은 뺀다. */
+    private List<Integer> candidateCounts(List<Integer> override, int recommendedCount) {
+        List<Integer> base = override != null && !override.isEmpty()
+                ? override
+                : List.of(recommendedCount - 1, recommendedCount, recommendedCount + 1);
+        return base.stream().distinct().filter(n -> n > 0).toList();
+    }
+
+    /** 대수 하나의 DONE run + 저장된 구간. 둘 중 하나라도 없으면 null(그 대수는 후보에서 빠진다). */
+    private SliceCandidate sliceCandidate(Long estimateId, int amrCount) {
+        return scenarioRepository.findByEstimateIdAndAmrCount(estimateId, amrCount)
+                .filter(run -> run.getStatus() == RunStatus.DONE)
+                .flatMap(run -> sliceRepository.findById(run.getId()).map(slice -> new SliceCandidate(run, slice)))
+                .orElse(null);
+    }
+
+    private record SliceCandidate(SimScenario run, SimScenarioVerifySlice slice) {
+    }
+
+    /** 구간이 있는 대수 하나를 검증 큐에 발행 — 궤적을 싣는다(명세 §B). */
+    private void requestForCandidate(Estimate estimate, SliceCandidate candidate) {
+        int amrCount = candidate.run().getAmrCount();
+        int attempt = nextAttempt(estimate.getId(), amrCount);
+        String runId = verifyRunId(estimate.getId(), amrCount, attempt);
+        VerifySliceMeta meta = readSliceMeta(candidate.slice().getMetaJson());
+        long windowS = Math.round(meta.windowS());
+        VerifyRequest.Scenario scenario = VerifyRequest.Scenario.ofTrajectory(
+                FIXED_SEED, candidate.slice().getGzB64(), VerifyRequest.Slice.from(meta));
+
+        verificationRepository.save(EstimateVerification.requested(
+                estimate, amrCount, attempt, runId, candidate.slice().getMetaJson()));
+        simulationService.publishVerify(new VerifyRequest(runId, amrCount, windowS,
+                candidate.run().getRunId(), estimate.getId(), FIXED_SEED, scenario));
+    }
+
     /**
-     * 견적이 DES 스윕에 실제로 쓴 출고 주문 전체를 검증 시나리오로 싣는다. 1단계 이전에 만들어진(주문
-     * 저장 전) 견적은 {@code outboundOrdersJson} 이 없으므로 시나리오 없이 발행한다(하위 호환).
+     * 구간이 하나도 없는 견적(1단계 이전) 을 위한 폴백 — 권장 대수만, 종전처럼 견적 전체 주문 목록으로
+     * 검증한다. run_id 형식은 새 형식({@code verify_<id>_n<K>_<attempt>}) 그대로 쓴다 — 대수별 행
+     * 추적을 폴백에서도 그대로 누리기 위함이다.
+     */
+    private void requestFallback(Estimate estimate, int recommendedCount) {
+        SimScenario run = scenarioRepository.findByEstimateIdAndAmrCount(estimate.getId(), recommendedCount)
+                .orElseThrow(() -> new GlobalException(ErrorCode.ESTIMATE_NOT_VERIFIABLE));
+        int attempt = nextAttempt(estimate.getId(), recommendedCount);
+        String runId = verifyRunId(estimate.getId(), recommendedCount, attempt);
+
+        verificationRepository.save(EstimateVerification.requested(estimate, recommendedCount, attempt, runId, null));
+        simulationService.publishVerify(new VerifyRequest(runId, recommendedCount, properties.verifyWindow().toSeconds(),
+                run.getRunId(), estimate.getId(), FIXED_SEED, verifyScenario(estimate)));
+    }
+
+    private int nextAttempt(Long estimateId, int amrCount) {
+        return verificationRepository.findFirstByEstimateIdAndRobotCountOrderByAttemptDesc(estimateId, amrCount)
+                .map(v -> v.getAttempt() + 1)
+                .orElse(1);
+    }
+
+    private String verifyRunId(Long estimateId, int amrCount, int attempt) {
+        return "verify_%d_n%d_%d".formatted(estimateId, amrCount, attempt);
+    }
+
+    /**
+     * 견적이 DES 스윕에 실제로 쓴 출고 주문 전체를 검증 시나리오로 싣는다(구간이 없는 옛 견적의 폴백).
+     * 1단계 이전에 만들어진(주문 저장 전) 견적은 {@code outboundOrdersJson} 이 없으므로 시나리오 없이
+     * 발행한다(하위 호환).
      */
     private VerifyRequest.Scenario verifyScenario(Estimate estimate) {
         String json = estimate.getOutboundOrdersJson();
@@ -467,7 +593,7 @@ public class EstimateService {
             return null;
         }
         List<SimulationRequest.Outbound> orders = readOutboundOrders(json);
-        return orders.isEmpty() ? null : new VerifyRequest.Scenario(FIXED_SEED, new VerifyRequest.Orders(null, orders));
+        return orders.isEmpty() ? null : VerifyRequest.Scenario.ofOrders(FIXED_SEED, new VerifyRequest.Orders(null, orders));
     }
 
     /**
@@ -524,6 +650,7 @@ public class EstimateService {
         } else {
             applyKpi(run, response.kpi());
             applyReplay(run, response.replay());
+            applySlice(run, response.verifySlice());
         }
         eventPublisher.publishEvent(new RunUpdated(run.getEstimate().getId(), EstimateDetailResponse.Run.from(run)));
 
@@ -533,16 +660,50 @@ public class EstimateService {
     // ── 물리 검증 결과 반영 ──────────────────────────────────────────────────
 
     /**
-     * 물리 검증(Isaac) 결과를 반영한다. 영상 위치가 있으면 저장하고, 성패와 무관하게 SSE 로 알린다.
-     *
-     * <p>DB 에는 받은 값(과도기엔 공개 URL, 계약 정정 뒤엔 객체 키)을 그대로 두고, 브라우저로 나가는
-     * 이벤트에만 서명 URL 을 싣는다 — 서명 URL 은 만료가 있어 저장하면 안 된다.
-     *
-     * <p>모르는 견적 id 는 무시한다. 같은 결과가 두 번 와도(명세 §1-3과 동일한 중복 허용) 같은 값을
-     * 다시 쓸 뿐이라 별도 처리 없이 안전하다 — DES 의 run 처럼 상태를 갖는 하위 엔티티가 없어서다.
+     * 물리 검증(Isaac) 결과를 반영한다 (S15P21A106-244). {@code run_id} 로 대수별 회차를 찾을 수 있으면
+     * (새 형식 {@code verify_<id>_n<K>_<attempt>}) 그 행을 갱신하고, 못 찾으면(244 이전에 발행된 옛
+     * 형식 {@code verify_<id>}) 견적 단위 스냅샷만 갱신한다 — 두 경로 모두 성패와 무관하게 반영하고
+     * 알린다. 모르는 견적 id 는 무시한다.
      */
     @Transactional
     public void applyVerifyResult(VerifyResultResponse response) {
+        EstimateVerification verification = verificationRepository.findByRunId(response.runId()).orElse(null);
+        if (verification != null) {
+            applyVerificationResult(verification, response);
+        } else {
+            applyLegacyVerifyResult(response);
+        }
+    }
+
+    /**
+     * 대수별 회차 결과 반영. 그 대수가 견적의 권장 대수와 같으면 옛 화면·PDF 가 보는
+     * {@code Estimate.verify} 스냅샷·영상도 함께 갱신한다.
+     */
+    private void applyVerificationResult(EstimateVerification verification, VerifyResultResponse response) {
+        Estimate estimate = verification.getEstimate();
+        VerifyRunStatus status = mapVerifyStatus(response.status());
+        VerifyResultResponse.Artifacts artifacts = response.artifacts();
+        String videoKey = artifacts != null ? artifacts.video() : null;
+        String reason = response.verify() != null ? response.verify().reason() : null;
+        verification.applyResult(status, response.error(), reason, videoKey,
+                writeJsonOrNull(response.physics()), writeJsonOrNull(response.verify()));
+
+        if (verification.getRobotCount().equals(estimate.getRecommendedCount())) {
+            applyLegacySnapshot(estimate, response, videoKey, resolveFpv(videoKey, artifacts));
+        }
+
+        log.info("대수별 물리 검증 결과 반영: estimateId={}, nRobots={}, attempt={}, status={}",
+                estimate.getId(), verification.getRobotCount(), verification.getAttempt(), status);
+        Integer physicsLimit = physicsLimit(verificationRuns(estimate.getId()));
+        eventPublisher.publishEvent(new EstimateEvents.VerificationUpdated(
+                estimate.getId(), physicsLimit, toVerificationRun(verification)));
+        if (!verificationRepository.existsByEstimateIdAndStatusIn(estimate.getId(), VERIFY_PENDING)) {
+            eventPublisher.publishEvent(new EstimateEvents.VerificationsFinished(estimate.getId()));
+        }
+    }
+
+    /** 244 이전에 발행된 옛 형식({@code verify_<estimateId>}) 결과 — 견적 단위 스냅샷만 갱신한다. */
+    private void applyLegacyVerifyResult(VerifyResultResponse response) {
         if (response.estimateId() == null) {
             log.warn("estimate_id 없는 검증 결과 무시: runId={}", response.runId());
             return;
@@ -553,23 +714,43 @@ public class EstimateService {
                     response.estimateId(), response.runId());
             return;
         }
-        estimate.applyVerifyResult(toVerifySnapshot(response));
         VerifyResultResponse.Artifacts artifacts = response.artifacts();
         String video = artifacts != null ? artifacts.video() : null;
-        String videoFpv = artifacts != null ? artifacts.videoFpv() : null;
-        // 러너가 1인칭 키를 안 싣는 동안에는 상단 키에서 이름 규칙으로 찾아 본다 (S15P21A106-265)
-        if (videoFpv == null) {
-            videoFpv = videoPresigner.deriveFpvKey(video);
-        }
-        // 상단이 없으면 1인칭만 남기지 않는다 — 화면이 기본으로 보여줄 것이 없어진다
-        if (video != null) {
-            estimate.applyVerifyVideo(video, videoFpv);
-        }
+        String videoFpv = resolveFpv(video, artifacts);
+        applyLegacySnapshot(estimate, response, video, videoFpv);
         log.info("물리 검증 결과 반영: estimateId={}, status={}, video={}, videoFpv={}",
                 estimate.getId(), response.status(), video, videoFpv);
         eventPublisher.publishEvent(new EstimateVerified(
                 estimate.getId(), response.status(), videoPresigner.sign(video),
                 videoPresigner.sign(videoFpv), response.error()));
+    }
+
+    /**
+     * 견적 단위 검증 스냅샷·영상 반영 — 옛(단일 검증) 화면·PDF 호환용. DB 에는 받은 값(과도기엔 공개
+     * URL, 계약 정정 뒤엔 객체 키)을 그대로 두고, 서명은 조회·이벤트 시점에 한다.
+     */
+    private void applyLegacySnapshot(Estimate estimate, VerifyResultResponse response, String video, String videoFpv) {
+        estimate.applyVerifyResult(toVerifySnapshot(response));
+        // 상단이 없으면 1인칭만 남기지 않는다 — 화면이 기본으로 보여줄 것이 없어진다
+        if (video != null) {
+            estimate.applyVerifyVideo(video, videoFpv);
+        }
+    }
+
+    /** 러너가 1인칭 키를 안 싣는 동안에는 상단 키에서 이름 규칙으로 찾아 본다 (S15P21A106-265). */
+    private String resolveFpv(String video, VerifyResultResponse.Artifacts artifacts) {
+        String videoFpv = artifacts != null ? artifacts.videoFpv() : null;
+        return videoFpv != null ? videoFpv : videoPresigner.deriveFpvKey(video);
+    }
+
+    private VerifyRunStatus mapVerifyStatus(String status) {
+        if ("done".equals(status)) {
+            return VerifyRunStatus.DONE;
+        }
+        if ("running".equals(status)) {
+            return VerifyRunStatus.RUNNING;
+        }
+        return VerifyRunStatus.FAILED;
     }
 
     /** 계약 §3 페이로드에서 견적에 남길 것만 뽑는다. verify·kpi 가 없는 옛 페이로드는 성패만 남는다. */
@@ -598,6 +779,40 @@ public class EstimateService {
             return objectMapper.writeValueAsString(fms.warnings());
         } catch (JsonProcessingException e) {
             return fms.warnings().toString();
+        }
+    }
+
+    /** {@code physics_json}·{@code verify_json} 저장용 — 실패해도 회차 갱신 자체를 막지 않는다. */
+    private String writeJsonOrNull(Object value) {
+        if (value == null) {
+            return null;
+        }
+        try {
+            return objectMapper.writeValueAsString(value);
+        } catch (JsonProcessingException e) {
+            log.warn("검증 결과 직렬화 실패: {}", e.toString());
+            return null;
+        }
+    }
+
+    private PhysicsMetrics readPhysics(String json) {
+        if (json == null) {
+            return null;
+        }
+        try {
+            return objectMapper.readValue(json, PhysicsMetrics.class);
+        } catch (JsonProcessingException e) {
+            log.warn("물리 지표 역직렬화 실패: {}", e.toString());
+            return null;
+        }
+    }
+
+    /** 우리가 저장한 값이라 사실상 실패하지 않는다 — 나머지 objectMapper 역직렬화와 같은 스타일로 감싼다. */
+    private VerifySliceMeta readSliceMeta(String json) {
+        try {
+            return objectMapper.readValue(json, VerifySliceMeta.class);
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("구간 메타 역직렬화 실패", e);
         }
     }
 
@@ -671,6 +886,25 @@ public class EstimateService {
             replayRepository.save(new RunReplay(run.getId(), objectMapper.writeValueAsString(trajectory)));
         } catch (JsonProcessingException | ClassCastException e) {
             log.warn("리플레이 저장 실패 — run 은 그대로 둔다: runId={}, {}", run.getRunId(), e.toString());
+        }
+    }
+
+    /**
+     * DES 피크 구간(물리 검증용)을 저장한다 (S15P21A106-244). 구간을 못 만들었어도(gz_b64 없이 error
+     * 만 있음) 화면이 사유를 보일 수 있도록 meta 는 저장한다 — run·replay·SSE 로는 절대 내보내지 않는다
+     * (커도 300 KiB~440 KiB 라 브라우저로 새면 곤란하다).
+     *
+     * <p>실패해도 삼킨다. 구간은 곁다리라 이것 때문에 KPI 가 들어간 run 을 되돌릴 이유가 없다.
+     */
+    private void applySlice(SimScenario run, SimulationResponse.VerifySlice slice) {
+        if (slice == null) {
+            return;
+        }
+        try {
+            String metaJson = objectMapper.writeValueAsString(slice.meta());
+            sliceRepository.save(new SimScenarioVerifySlice(run.getId(), metaJson, slice.gzB64()));
+        } catch (JsonProcessingException e) {
+            log.warn("피크 구간 저장 실패 — run 은 그대로 둔다: runId={}, {}", run.getRunId(), e.toString());
         }
     }
 

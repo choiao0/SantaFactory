@@ -23,7 +23,12 @@ public record VerifyResultResponse(
         String sourceRunId,
         Artifacts artifacts,
         Verify verify,
-        SimulationResponse.Kpi kpi
+        SimulationResponse.Kpi kpi,
+        /**
+         * 러너 {@code Runner/Physics} 파싱 결과 (명세 §C, S15P21A106-244). 없거나 깨졌으면 null —
+         * 그때 물리 판정은 {@link com.ssafy.santafactory.service.estimate.PhysicsVerdict.Verdict#NA} 다.
+         */
+        PhysicsMetrics physics
 ) {
 
     @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)

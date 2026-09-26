@@ -97,6 +97,18 @@ numba ≥0.63 이 `coverage.types.Tracer`(7.5+)를 요구해 import 가 죽기 �
 
 영상 길이는 compose env `SHOT_STRIDE` 로 정한다(-241): 배속 = STRIDE × `SHOT_FPS`(30) / 60. 기본을 20(10배속, 창 600 s → 26 s)에서 **10(5배속, 약 53 s)** 으로 낮췄다. 프레임 PNG 는 2배(런당 약 3 GB)지만 업로드 뒤 지우므로 디스크에 안 쌓인다.
 
+**구간 재생 영상 (-244)** — DES 피크 구간(`scenario.trajectory_gz_b64`)을 돌리면 두 영상 모두 「주문을 처리하는 중」이 보이게 글씨를 얹는다(`path/demo_overlay.py`, 물리와 무관).
+
+| 영상 | 무엇이 보이나 | 끄기·바꾸기 |
+|---|---|---|
+| 상단(`demo_<run>.mp4`) | 로봇이 다닌 범위에 맞춘 천장 시점 · 로봇마다 단계 색 원(픽업 이동·적재·운반·하역·대기) · 번호 · 진행 방향 · 포장대 이름 · 창 시계 · 전체 완료 운행/토트 | `PIBT_TOP_MARK=0` · `PIBT_TOP_FIT=0`(씬 기본 120 m 전경) |
+| 추종(`demo_<run>_fpv.mp4`, 화면 「AMR 추종 시점」) | 창 안에서 운행을 가장 많이 끝내는 로봇을 **뒤·선반 위(4.5 m 뒤 · 5 m 높이)** 에서 따라간다 · 주문·토트 수 · 출발 → 도착 · 단계 · 그 로봇 실적 | `PIBT_FPV_VIEW=fpv`(1인칭 대시캠) · `PIBT_FPV_HUD=0` |
+
+- 1인칭(대시캠)을 기본에서 뺀 이유: 포장대가 흰 벽 앞이라 **하역하는 동안 화면이 하얗게** 찍혔다(주문 처리의 핵심 장면). 추종 시점은 로봇 선반의 상자와 포장대의 토트가 한 화면에 든다.
+- 한글 글꼴은 이미지의 `fonts-nanum`. 없으면 영어 글씨로 찍힌다(`PIBT_HUD_FONT`).
+- 상단을 뷰포트 대신 리플리케이터로 받고, 프레임 쓰기(글씨·PNG 인코딩)는 뒤 스레드가 한다 — PNG 레벨 1(`PIBT_PNG_LEVEL`). 10대 구간 두 시점 **12.3 ms/step(실시간 1.35배)**, 이전 뷰포트 경로 15~20 ms/step.
+- 회전 관문도 구간 재생 기본을 바꿨다: `PIBT_TURN_BODY_GEO=1` · `PIBT_TURN_BODY_MAX=20`(칸이 겹쳐도 차체 틈이 넉넉하면 돈다 · 대기 상한 20 s). 피크 10대 두 구간 실측 창 동작 시작 83.3→88.5 % · 54.7→76.3 %, 접촉 0.
+
 host-orch 쪽(-215 같이): `Runner/VideoUrl` → `sim.verify.result.artifacts.video`. **EC2 host-orch 는 `--fms-node` 없이 띄운다** — t3_amr 이 자체 계획으로 돌아 fms-core 가 RUNNING 이 될 일이 없다.
 **`--stop-timeout-s` 도 올려야 한다(기본 60 → 300 권장)** — Stop 뒤 Kit 정리(≤25 s) + ffmpeg 조립(프레임 수천 장이면 1 분 넘게) + MinIO 업로드가 STOPPING 안에서 일어난다. 업로드는 워커 스레드라 그동안 하트비트·NCMD 는 계속 처리된다.
 
@@ -124,6 +136,28 @@ cd 2_Simulation/t3_amr && python3 -m edge --env-file ../../3_FMS/infra/emqx/.env
 
 엣지가 `Runner/VideoUrl` 로 보내는 값은 버킷 없는 객체 키 `<run_id>/<파일>` 이고(버킷은 양쪽 `MINIO_BUCKET`), 화면용 서명 URL 은 백엔드 `VerifyVideoPresigner`(-89) 몫이다 —
 서명 방법과 nginx `/media/` 함정은 `3_FMS/contracts/SIM_VERIFY_CONTRACT.md` §7 에 적었다(2026-09-16 실측: 서명 있으면 200, 없으면 403).
+
+## 3-1. 러너 여러 대 — 후보 대수 동시 검증 (-244)
+
+백엔드가 권장 대수 −1 · 0 · +1 을 한 번에 검증 요청하고, host-orch 가 **비어 있는 노드**에 한 건씩 나눠 준다.
+노드 = 러너 컨테이너 하나(엣지 하나, `NODE_ID`). 같은 이미지를 노드 이름과 상태 폴더만 바꿔 띄운다.
+
+```bash
+docker compose -f compose.yml --profile multi up -d        # sim-runner-gpu01 + sim-runner-gpu02
+```
+
+| 필요한 것 | 어디 |
+|---|---|
+| 노드마다 다른 `NODE_ID` · `container_name` · 데이터 폴더(`./data`, `./data2`) | `compose.yml` 의 `t3amr-runner-2` (profile `multi`) |
+| EMQX 계정 `sim-runner-gpu02`(비밀번호는 gpu01 과 같은 `MQTT_PW_SIM_RUNNER`) · ACL | `3_FMS/infra/emqx` — 떠 있는 브로커에는 한 번 손으로 추가 |
+| host-orch 노드 목록 `HOST_ORCH_NODES=sim-runner-gpu01,sim-runner-gpu02` | `3_FMS/infra/compose.host-orch.yml` |
+
+용량 실측(2026-09-26, 이 박스 RTX 5080 16 GB · RAM 64 GB, 10대 피크 구간 재생): 한 대당 RAM 약 16 GB · VRAM 약 5 GB.
+**2대 동시**는 RAM 42 GB · VRAM 10.6 GB, 배속 0.83~0.86 으로 여유가 있다. 3대는 RAM 59/62 GB 에 스왑까지 쓰고
+VRAM 15.4/16.3 GB 라 쓰지 않는다.
+
+다른 GPU 서버로 옮길 때: **RT 코어가 있는 GPU**라야 한다(RTX · L4 · L40S 계열. A100 · H100 은 Isaac 렌더링 불가).
+MQTT · MinIO 는 지금 tailnet 주소라 그 서버에서는 공인 경로(TLS · 출발지 제한 · 전용 계정)가 따로 필요하다.
 
 ## 4. 아직 안 정한 것
 - 검증 런에서 fms-core 를 뺄지(권장, 영상이 목표) — 빼면 host-orch 를 `--fms-node` 없이 띄운다.

@@ -44,6 +44,12 @@ class TestRunSpec:
         assert spec.scenario_sha256 == S.scenario_sha256(sc)
         assert S.canonical_json({"b": 1, "a": [1, 2]}) == b'{"a":[1,2],"b":1}'
 
+    def test_scenario_size_cap_is_900_kib(self):
+        """host-orch · t3_amr 엣지와 같은 상한(-244) — DES 피크 구간 궤적을 인라인으로 실으면 커진다."""
+        assert S.MAX_SCENARIO_BYTES == 900 * 1024
+        with pytest.raises(ValueError, match="too large"):
+            S.RunSpec.from_json(start(scenario={"blob": "x" * (S.MAX_SCENARIO_BYTES + 1)}))
+
 
 class TestScenarioOrders:
     def test_generator_output_and_offset(self):

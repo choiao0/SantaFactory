@@ -61,8 +61,8 @@ class SimulationServiceTest {
     void applyResult_handles_done_and_failed() {
         SimulationResponse done = new SimulationResponse("est_77_n3", "done", null,
                 new SimulationResponse.Kpi(50, 50, 48, 48, 1740L, 210.5, 402.0, 87.3,
-                        96.4, 182.0, 0.63, 0.004, 12480L, 0L), null);
-        SimulationResponse failed = new SimulationResponse("est_77_n5", "failed", "stall", null, null);
+                        96.4, 182.0, 0.63, 0.004, 12480L, 0L), null, null);
+        SimulationResponse failed = new SimulationResponse("est_77_n5", "failed", "stall", null, null, null);
 
         assertThatCode(() -> {
             simulationService.applyResult(done);

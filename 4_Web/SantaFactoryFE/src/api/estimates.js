@@ -49,8 +49,9 @@ export function getEstimate(estimateId) {
   return api.get(`/estimates/${estimateId}`)
 }
 
-export function requestVerify(estimateId) {
-  return api.post(`/estimates/${estimateId}/verify`)
+/** 후보 대수를 직접 고르면 { counts } 본문을 보낸다 — 비우면 서버가 권장 대수 ±1 로 고른다 (S15P21A106-244). */
+export function requestVerify(estimateId, counts) {
+  return api.post(`/estimates/${estimateId}/verify`, counts ? { counts } : undefined)
 }
 
 /** 견적서 PDF 를 받아 저장한다. 계산이 끝난 견적만 가능(409), 변환기가 없으면 503. */
@@ -78,11 +79,17 @@ export function openEstimateStream(estimateId, { onSnapshot, onRun, onDone, onEr
   return () => source.close()
 }
 
-export function openVerifyStream(estimateId, { onSnapshot, onDone, onError }) {
+/**
+ * 대수별 물리 검증 스트림 (S15P21A106-244). snapshot/verify.done 은 대수별 최신 시도 전체를,
+ * verify.run 은 회차 하나가 바뀔 때마다 그 회차만 실어 온다 — 후보 하나가 끝나도 나머지가 진행
+ * 중일 수 있어 연결은 verify.done 까지 열려 있다.
+ */
+export function openVerifyStream(estimateId, { onSnapshot, onRun, onDone, onError }) {
   const source = new EventSource(streamUrl(`/estimates/${estimateId}/verify`))
   const parse = (event) => JSON.parse(event.data)
 
   source.addEventListener('snapshot', (e) => onSnapshot?.(parse(e)))
+  source.addEventListener('verify.run', (e) => onRun?.(parse(e)))
   source.addEventListener('verify.done', (e) => {
     onDone?.(parse(e))
     source.close()

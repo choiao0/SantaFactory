@@ -326,3 +326,57 @@ def test_replay_counts_outbound_orders_not_trips(monkeypatch):
 def test_replay_missing_export_is_not_an_error():
     """내보내기가 꺼졌거나 시뮬이 중간에 죽으면 None. 리플레이 때문에 견적을 실패시키지 않는다."""
     assert w._read_replay("no_such_run") is None
+
+
+# ------------------------------------------------------------
+# 물리 검증용 피크 구간 (S15P21A106-244) — 리플레이와 같은 내보내기에서 **솎기 전** 원본으로 자른다
+# ------------------------------------------------------------
+def _short_slice(monkeypatch):
+    monkeypatch.setattr(w, "VERIFY_WINDOW_S", 20.0)
+    monkeypatch.setattr(w, "VERIFY_WARMUP_S", 5.0)
+    monkeypatch.setattr(w, "VERIFY_TAIL_S", 5.0)
+
+
+def test_the_verify_slice_is_cut_from_the_full_export_before_thinning(monkeypatch):
+    import base64
+    import gzip
+    import os
+    monkeypatch.setattr(w, "REPLAY_STRIDE", 4)
+    _short_slice(monkeypatch)
+    d = _write_export("slice_case", ticks=200, dt_s=0.5)
+    replay, vs = w._read_outputs("slice_case", "est_1_n2")
+    assert len(replay["robots"]["0"]) == 50                   # 리플레이는 그대로 솎인다
+    assert vs["source"] == "est_1_n2" and vs["window_s"] == 20.0 and vs["gz_b64"]
+    doc = json.loads(gzip.decompress(base64.b64decode(vs["gz_b64"])))
+    assert len(doc["robots"]["0"]) == 61                      # (5 + 20 + 5) / 0.5 + 1 — 매 틱이 남는다
+    assert doc["slice"]["t0_s"] == vs["t0_s"]
+    assert not os.path.exists(d)                              # 둘 다 뽑은 뒤 지운다
+
+
+def test_a_run_too_short_for_the_window_carries_a_reason_not_a_failure(monkeypatch):
+    _write_export("short_case", ticks=40, dt_s=0.5)          # 20 s < 워밍업 60 + 창 600
+    replay, vs = w._read_outputs("short_case", "est_1_n2")
+    assert replay is not None
+    assert vs.get("gz_b64") is None and "짧다" in vs["error"]
+
+
+def test_no_export_gives_neither():
+    assert w._read_outputs("no_such_run", "est_1_n2") == (None, None)
+
+
+def test_handle_puts_the_slice_next_to_the_replay(monkeypatch):
+    """결과의 최상위 필드다 — replay 안에 넣으면 백엔드가 브라우저로 내보낸다."""
+    _short_slice(monkeypatch)
+
+    def fake_run_once(engine_dir, timeout_s=None, **kw):
+        _write_export(kw["tag"], ticks=200, dt_s=0.5)
+        return {}
+
+    monkeypatch.setattr(w, "run_once", fake_run_once)
+    monkeypatch.setattr(w, "to_kpi", lambda s: {})
+    r = w.handle(json.dumps({**REQ, "export_replay": True}))
+    assert r["status"] == "done", r["error"]
+    assert r["replay"] is not None and "verify_slice" not in r["replay"]
+    assert r["verify_slice"]["gz_b64"] and r["verify_slice"]["source"] == REQ["run_id"]
+    r = w.handle(json.dumps(REQ))                             # 내보내기를 안 부르면 둘 다 없다
+    assert "verify_slice" not in r and "replay" not in r

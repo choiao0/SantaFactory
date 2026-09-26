@@ -91,7 +91,7 @@ class SimulationDtoJsonTest {
     @Test
     void verify_request_scenario_snake_case_roundtrip() throws Exception {
         VerifyRequest req = new VerifyRequest("verify_77", 4, 600L, "est_77_n4", 77L, 101L,
-                new VerifyRequest.Scenario(101L, new VerifyRequest.Orders(null, java.util.List.of(
+                VerifyRequest.Scenario.ofOrders(101L, new VerifyRequest.Orders(null, java.util.List.of(
                         new SimulationRequest.Outbound(1L, 23659L, java.util.List.of(
                                 new SimulationRequest.Line(3L, "A3", 2)))))));
 
@@ -158,5 +158,94 @@ class SimulationDtoJsonTest {
         assertThat(res.status()).isEqualTo("failed");
         assertThat(res.verify()).isNull();
         assertThat(res.kpi()).isNull();
+    }
+
+    // ── DES 피크 구간 · 물리 지표 (명세 §A·§C, S15P21A106-244) ─────────────────
+
+    /** 명세 §A 예시 그대로 — 구간이 있으면 gz_b64 까지 온다. */
+    @Test
+    void sim_result_reads_verify_slice_with_trajectory() throws Exception {
+        String json = """
+                {
+                  "run_id": "est_18_n10", "status": "done", "error": null,
+                  "verify_slice": {
+                    "format": 1, "source": "est_18_n10",
+                    "t0_s": 4420.0, "t_start_s": 4360.0, "t_end_s": 5080.0, "warmup_s": 60.0, "window_s": 600.0,
+                    "n_robots": 10, "tasks_done": 162, "moves": 2970, "turns": 191, "reverses": 205,
+                    "b64_bytes": 303104, "gz_b64": "H4sIAAAA..."
+                  }
+                }
+                """;
+
+        SimulationResponse res = om.readValue(json, SimulationResponse.class);
+
+        assertThat(res.verifySlice()).isNotNull();
+        assertThat(res.verifySlice().hasTrajectory()).isTrue();
+        assertThat(res.verifySlice().tasksDone()).isEqualTo(162);
+        assertThat(res.verifySlice().gzB64()).isEqualTo("H4sIAAAA...");
+        // meta() 는 gz_b64 를 뺀 나머지만 — DB meta_json 저장에 이 모양을 쓴다
+        assertThat(om.writeValueAsString(res.verifySlice().meta())).doesNotContain("gz_b64");
+    }
+
+    /** 구간을 못 만들었으면 gz_b64 없이 error 만 온다 — 그래도 화면이 사유를 보일 수 있게 저장한다. */
+    @Test
+    void sim_result_reads_verify_slice_without_trajectory() throws Exception {
+        String json = """
+                {"run_id": "est_18_n15", "status": "done",
+                 "verify_slice": {"format": 1, "source": "est_18_n15", "error": "slice too large: 820000 bytes"}}
+                """;
+
+        SimulationResponse res = om.readValue(json, SimulationResponse.class);
+
+        assertThat(res.verifySlice().hasTrajectory()).isFalse();
+        assertThat(res.verifySlice().error()).isEqualTo("slice too large: 820000 bytes");
+    }
+
+    /** {@code scenario.slice} + {@code trajectory_gz_b64} 조합(궤적 있음) — orders 는 싣지 않는다. */
+    @Test
+    void verify_request_trajectory_scenario_roundtrip() throws Exception {
+        VerifyRequest.Slice slice = new VerifyRequest.Slice(4420.0, 60.0, 600.0, 162);
+        VerifyRequest req = new VerifyRequest("verify_18_n10_1", 10, 600L, "est_18_n10", 18L, 101L,
+                VerifyRequest.Scenario.ofTrajectory(101L, "H4sIAAAA...", slice));
+
+        JsonNode out = om.readTree(om.writeValueAsString(req));
+        assertThat(out.get("scenario").get("trajectory_gz_b64").asText()).isEqualTo("H4sIAAAA...");
+        assertThat(out.get("scenario").get("slice").get("tasks_done").asInt()).isEqualTo(162);
+        assertThat(out.get("scenario").get("orders").isNull()).isTrue();
+
+        VerifyRequest roundTripped = om.readValue(om.writeValueAsString(req), VerifyRequest.class);
+        assertThat(roundTripped).isEqualTo(req);
+    }
+
+    /** 명세 §C 예시 — 구간 재생 창의 지연·창 동작 비율·접촉 지표를 판정에 쓸 수 있게 읽는다. */
+    @Test
+    void verify_result_reads_physics_block() throws Exception {
+        String json = """
+                {
+                  "run_id": "verify_18_n10_1", "status": "done", "error": null, "estimate_id": 18,
+                  "physics": {
+                    "engine": "isaac-headless", "n_robots": 10,
+                    "sim_s": 660.0, "window_sim_s": 600.0, "warmup_s": 60.0, "window_s": 600.0, "wall_s": 701.3, "rtf": 0.94,
+                    "robot_contacts": 0, "robot_min_gap_m": 0.334, "rack_contacts": 0, "rack_worst_pen_mm": 0.0,
+                    "zone_intrusions": 284, "zone_worst_pen_mm": 46.6,
+                    "stall_steps": 0, "turn_gaveup": 1, "recover_events": 0, "cell_overlaps": 62,
+                    "actions_started": 3140, "actions_completed": 3134,
+                    "lag": {"n": 2804, "p50_s": 40.4, "p90_s": 91.9, "max_s": 157.6, "mean_s": 47.0, "late_ratio": 0.9},
+                    "window_actions": {"planned": 3365, "started": 2804, "ratio": 0.833, "overdue_s": 157.0},
+                    "blocked": {"robot_frames": 372000, "obstacle": 0, "release": 10406, "adg_self": 0, "adg_other": 89963, "ratio": 0.27},
+                    "des_window": {"tasks_done": 162, "moves": 2970, "turns": 191, "reverses": 205},
+                    "runner": "sim-runner-gpu01"
+                  }
+                }
+                """;
+
+        VerifyResultResponse res = om.readValue(json, VerifyResultResponse.class);
+
+        assertThat(res.physics()).isNotNull();
+        assertThat(res.physics().robotContacts()).isZero();
+        assertThat(res.physics().robotMinGapM()).isEqualTo(0.334);
+        assertThat(res.physics().windowActions().ratio()).isEqualTo(0.833);
+        assertThat(res.physics().lag().p50S()).isEqualTo(40.4);
+        assertThat(res.physics().desWindow().tasksDone()).isEqualTo(162);
     }
 }

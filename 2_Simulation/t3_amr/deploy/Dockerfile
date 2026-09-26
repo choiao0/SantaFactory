@@ -63,6 +63,11 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     && ffmpeg -version | head -1 \
     && python -c 'import psutil, numba, llvmlite, numpy; from numba import njit; print("psutil", psutil.__version__, "numba", numba.__version__, "llvmlite", llvmlite.__version__, "numpy", numpy.__version__)'
 
+# 1인칭 영상 글씨(-244, path/demo_overlay.py)의 한글 글꼴. 없으면 영어 글씨로 찍힌다(runners/headless_pibt.py HUD_FONT).
+RUN apt-get update && apt-get install -y --no-install-recommends fonts-nanum \
+    && apt-get clean && rm -r /var/lib/apt/lists \
+    && test -f /usr/share/fonts/truetype/nanum/NanumGothicBold.ttf
+
 # 계획기 원본 — 이름 있는 컨텍스트(--build-context sim_engine=3_FMS/sim_engine). 코드만 넣는다
 # (results/·tests/·sweeps/ 제외).
 #   ★ 최상위 모듈 전부와 kernel/ 까지 (-275). 예전에는 pibt_core.py·pibt/ 뿐이라 궤적 재생

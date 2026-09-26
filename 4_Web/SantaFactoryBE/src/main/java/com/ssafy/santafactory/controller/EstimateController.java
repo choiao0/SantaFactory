@@ -5,6 +5,7 @@ import com.ssafy.santafactory.dto.estimate.EstimateCreateRequest;
 import com.ssafy.santafactory.dto.estimate.EstimateCreateResponse;
 import com.ssafy.santafactory.dto.estimate.EstimateDetailResponse;
 import com.ssafy.santafactory.dto.estimate.EstimateSummaryResponse;
+import com.ssafy.santafactory.dto.estimate.VerifyCountsRequest;
 import com.ssafy.santafactory.global.auth.AuthenticatedMember;
 import com.ssafy.santafactory.global.common.ApiResponse;
 import com.ssafy.santafactory.service.estimate.EstimateEventStream;
@@ -144,13 +145,15 @@ public class EstimateController {
     }
 
     @Operation(summary = "물리 검증 요청",
-            description = "권장 대수로 sim.verify.request 를 발행한다. 권장 대수가 없는 견적(사유만 있는 "
-                    + "판정)은 검증할 대상이 없어 거부한다.")
+            description = "권장 대수 n* 기준 n*−1·n*·n*+1 대수로 sim.verify.request 를 발행한다(구간이 있는 "
+                    + "DONE run 만). 본문으로 {\"counts\":[9,10,11]} 을 보내면 그 대수들로 대신한다. "
+                    + "권장 대수가 없는 견적(사유만 있는 판정)은 검증할 대상이 없어 거부한다.")
     @PostMapping("/{estimateId}/verify")
     @ResponseStatus(HttpStatus.ACCEPTED)
     public ApiResponse<Void> requestVerification(@PathVariable Long estimateId,
+                                                 @RequestBody(required = false) VerifyCountsRequest body,
                                                  @AuthenticationPrincipal AuthenticatedMember me) {
-        estimateService.requestVerification(estimateId, me);
+        estimateService.requestVerification(estimateId, me, body == null ? null : body.counts());
         return ApiResponse.onSuccess();
     }
 

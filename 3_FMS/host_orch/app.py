@@ -42,6 +42,14 @@ def load_env_file(path: str) -> dict:
     return loaded
 
 
+def parse_node_list(raw: str) -> list:
+    """`--node` 값(쉼표로 여러 개, spec244 §E) → node_id 목록. 공백은 다듬는다, 빈 목록은 오류."""
+    nodes = [n.strip() for n in raw.split(",") if n.strip()]
+    if not nodes:
+        raise SystemExit("--node must name at least one sim-runner edge_node_id")
+    return nodes
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="host_orch", description="Sparkplug Primary Host + sim.verify consumer")
     p.add_argument("--env-file", action="append", help=".env (반복 가능: emqx/.env + infra/.env)")
@@ -49,9 +57,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--mqtt-port", type=int, help="기본 $MQTT_PORT 또는 1883")
     p.add_argument("--host-id", default="host-orch", help="host_id = username = clientId")
     p.add_argument("--group", default="santa")
-    p.add_argument("--node", default="sim-runner-gpu01", help="NCMD 를 보낼 sim-runner edge_node_id")
+    # 쉼표로 여러 노드(GPU 1대에 러너 컨테이너 N개, spec244 §E) — 노드당 잡 하나, prefetch 도 이 수만큼(amqp.py).
+    # 기존 단일 노드 배치는 손대지 않아도 되게 기본값은 그대로 sim-runner-gpu01 하나.
+    p.add_argument("--node", default=os.environ.get("HOST_ORCH_NODES", "sim-runner-gpu01"),
+                   help="NCMD 를 보낼 sim-runner edge_node_id, 쉼표로 여러 개 (기본 $HOST_ORCH_NODES 또는 sim-runner-gpu01)")
     p.add_argument("--fms-node", default=os.environ.get("HOST_ORCH_FMS_NODE", ""),
-                   help="fms-core edge_node_id (기본 $HOST_ORCH_FMS_NODE, 비면 fms-core 없이 sim-runner 만 굴린다)")
+                   help="fms-core edge_node_id (기본 $HOST_ORCH_FMS_NODE, 비면 fms-core 없이 sim-runner 만 굴린다). "
+                        "노드가 여럿이면 첫 --node 의 잡에만 묶인다(fms-core 는 브로커에 하나뿐)")
     p.add_argument("--amqp-url", help="기본 $RABBITMQ_URL 또는 RABBITMQ_HOST/USER/PASSWORD")
     p.add_argument("--request-queue", default=REQUEST_QUEUE)
     p.add_argument("--result-queue", default=RESULT_QUEUE)
@@ -70,13 +82,14 @@ class App:
         if not password:
             raise SystemExit("MQTT_PW_HOST_ORCH must be set (env or --env-file)")
         self.args = args
+        self.nodes = parse_node_list(args.node)
         self.mqtt_host = args.mqtt_host or os.environ.get("MQTT_HOST") or "localhost"
         self.mqtt_port = args.mqtt_port or int(os.environ.get("MQTT_PORT") or 1883)
         self.lock = threading.RLock()
         self.tracker = HostTracker(args.group)
         self.client = HostClient(args.host_id, password, args.group, self._on_mqtt, self.lock,
                                  extra_subscriptions=(("biz/v1/#", 1),))      # fms-core kpi_summary (acl: biz/v1/#)
-        self.coord = Coordinator(self.tracker, self.client.send_ncmd, args.node,
+        self.coord = Coordinator(self.tracker, self.client.send_ncmd, self.nodes,
                                  JobConfig(start_timeout_s=args.start_timeout_s, stop_timeout_s=args.stop_timeout_s),
                                  fms_node_id=args.fms_node or None)
         self.stop_event = threading.Event()
@@ -84,18 +97,19 @@ class App:
     def _on_mqtt(self, topic: str, payload: bytes) -> None:
         for ev in self.coord.on_mqtt(topic, payload):
             if ev.kind in ("nbirth", "ndeath", "seq_gap", "unknown_node", "stale_death"):
-                snap = self.coord.runner_snapshot() if ev.node == self.args.node else (
+                snap = self.coord.runner_snapshot(ev.node) if ev.node in self.nodes else (
                     self.coord.fms_snapshot() if ev.node == self.coord.fms_node_id else "")
                 log.info("%s %s %s", ev.kind, ev.node, snap)
 
     def serve(self) -> int:
         self.client.connect(self.mqtt_host, self.mqtt_port)
+        # prefetch = 노드 수 — 노드마다 한 건씩 동시에 pending 으로 들 수 있다(spec244 §E, amqp.py).
         consumer = Consumer(self.args.amqp_url or amqp_url(), self.coord, self.lock,
-                            self.args.request_queue, self.args.result_queue)
+                            self.args.request_queue, self.args.result_queue, prefetch_count=len(self.nodes))
         for sig in (signal.SIGINT, signal.SIGTERM):
             signal.signal(sig, lambda *_: (self.stop_event.set(), consumer.stop_event.set()))
-        log.info("host-orch up — MQTT %s:%d, runner %s, fms %s", self.mqtt_host, self.mqtt_port, self.args.node,
-                 self.coord.fms_node_id or "(none)")
+        log.info("host-orch up — MQTT %s:%d, runner(s) %s, fms %s", self.mqtt_host, self.mqtt_port,
+                 ", ".join(self.nodes), self.coord.fms_node_id or "(none)")
         try:
             consumer.run_forever()
         finally:

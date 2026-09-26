@@ -30,6 +30,7 @@ import tempfile
 import threading
 import time
 
+import peak_slice
 from objective import SimFailed, run_once, tick_seconds
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -56,6 +57,10 @@ SVC_PER_TOTE_S = 5.0       # 픽업·하역 각각 토트당 서비스 [초] (-1
 # 4 로 두면 run 당 0.67 MB(4대) 이고 샘플 간격이 4.4 초인데, 화면이 ×32 로 재생하므로
 # 한 프레임이 시뮬 0.5 초다 — 원본(1.1 초)도 이미 프레임보다 성기고, 사이는 보간이 메운다.
 REPLAY_STRIDE = max(1, int(os.environ.get("REPLAY_STRIDE", "4")))
+# 물리 검증 구간 (-244): 피크 창·워밍업·꼬리 [초]. 러너는 워밍업 뒤 창만 센다(275 physics_report)
+VERIFY_WINDOW_S = float(os.environ.get("VERIFY_WINDOW_S", peak_slice.DEFAULT_WINDOW_S))
+VERIFY_WARMUP_S = float(os.environ.get("VERIFY_WARMUP_S", peak_slice.DEFAULT_WARMUP_S))
+VERIFY_TAIL_S = float(os.environ.get("VERIFY_TAIL_S", peak_slice.DEFAULT_TAIL_S))
 
 
 WORKER_ID = os.environ.get("HOSTNAME", "")[:12]     # 컨테이너 id 앞 12자 — 병렬 5개(-182) 로그 구분용. 로컬은 빈 문자열
@@ -291,37 +296,64 @@ def _outbound_done_seconds(traj, dt_s):
     return sorted(round(at * dt_s, 1) for at in last.values())
 
 
-def _read_replay(tag):
-    """export_isaac 산출물 → 앞 REPLAY_SECONDS 구간만 남긴 재생 데이터. 읽고 나면 디렉터리를 지운다.
+def _read_export(tag):
+    """export_isaac 산출물 → (scene, traj). 읽고 나면 디렉터리를 지운다. 없거나 깨졌으면 (None, None).
 
-    상주 프로세스라 run 마다 20 MB 를 남기면 디스크가 찬다. 파일이 없거나 깨졌으면 None 을 준다 —
-    리플레이는 곁다리라 이것 때문에 견적을 실패로 만들지 않는다.
+    상주 프로세스라 run 마다 20 MB 를 남기면 디스크가 찬다. 리플레이·검증 구간은 곁다리라 이것 때문에
+    견적을 실패로 만들지 않는다.
     """
     exp_dir = _export_dir(tag)
     scene_path, traj_path = os.path.join(exp_dir, "scene.json"), os.path.join(exp_dir, "trajectories.json")
     try:
         if not (os.path.exists(scene_path) and os.path.exists(traj_path)):
             log(f"{tag}: 리플레이 산출물이 없습니다 (내보내기가 꺼졌거나 시뮬이 중간에 끝남)")
-            return None
+            return None, None
         with open(scene_path, encoding="utf-8") as f:
             scene = json.load(f)
         with open(traj_path, encoding="utf-8") as f:
             traj = json.load(f)
-        dt_s = float(traj.get("dt_s") or 0) or 1.0
-        robots = _thin(traj.get("robots") or {}, REPLAY_STRIDE)
-        # 솎은 뒤의 샘플 간격이 화면이 쓸 dt 다. 원본 dt 를 그대로 주면 재생이 stride 배 느려진다
-        sample_dt = dt_s * REPLAY_STRIDE
-        covered = max((len(v) for v in robots.values()), default=0) * sample_dt
-        return {"dt_s": sample_dt, "model": traj.get("model"), "seconds": round(covered, 1),
-                "stride": REPLAY_STRIDE,
-                "robots": robots, "headings": _changes(traj.get("headings") or {}),
-                "outbound_done": _outbound_done_seconds(traj, dt_s),
-                "scene": scene}
+        return scene, traj
     except (OSError, ValueError) as e:
         log(f"{tag}: 리플레이 산출물을 읽지 못했습니다 — {e}")
-        return None
+        return None, None
     finally:
         shutil.rmtree(exp_dir, ignore_errors=True)
+
+
+def _replay_of(scene, traj):
+    """전체 내보내기 → 화면 재생용(REPLAY_STRIDE 로 솎은 것)."""
+    dt_s = float(traj.get("dt_s") or 0) or 1.0
+    robots = _thin(traj.get("robots") or {}, REPLAY_STRIDE)
+    # 솎은 뒤의 샘플 간격이 화면이 쓸 dt 다. 원본 dt 를 그대로 주면 재생이 stride 배 느려진다
+    sample_dt = dt_s * REPLAY_STRIDE
+    covered = max((len(v) for v in robots.values()), default=0) * sample_dt
+    return {"dt_s": sample_dt, "model": traj.get("model"), "seconds": round(covered, 1),
+            "stride": REPLAY_STRIDE,
+            "robots": robots, "headings": _changes(traj.get("headings") or {}),
+            "outbound_done": _outbound_done_seconds(traj, dt_s),
+            "scene": scene}
+
+
+def _read_replay(tag):
+    """export_isaac 산출물 → 재생 데이터(솎은 것). 없으면 None. 읽고 나면 디렉터리를 지운다."""
+    scene, traj = _read_export(tag)
+    return None if traj is None else _replay_of(scene, traj)
+
+
+def _read_outputs(tag, run_id):
+    """내보내기 한 번으로 (리플레이, 물리 검증 구간) 둘 다 — 구간은 **솎기 전** 매 틱 원본에서 자른다 (-244).
+
+    구간은 `sim.result.verify_slice`(계약 SIM_VERIFY v0.5 §A). 못 만들면 `gz_b64` 없이 `error` 만 싣는다.
+    """
+    scene, traj = _read_export(tag)
+    if traj is None:
+        return None, None
+    speed = ((scene or {}).get("meta") or {}).get("speed_mps")
+    vs = peak_slice.peak_slice(traj, source=run_id, speed_mps=speed, window_s=VERIFY_WINDOW_S,
+                               warmup_s=VERIFY_WARMUP_S, tail_s=VERIFY_TAIL_S)
+    if vs.get("error"):
+        log(f"{run_id}: 검증 구간 없음 — {vs['error']}")
+    return _replay_of(scene, traj), vs
 
 
 def handle(body):
@@ -346,10 +378,14 @@ def handle(body):
             os.environ.pop("SIM_EXPORT_ISAAC", None)
         result = dict(run_id=run_id, status="done", error=None, kpi=to_kpi(summary))
         if want_replay:
-            result["replay"] = _read_replay(tag)
+            # 리플레이와 물리 검증 구간(-244)을 같은 내보내기에서. 구간은 replay 밖 최상위 필드다 —
+            # 백엔드가 replay 를 브라우저로 내보내므로 거기 넣으면 수백 KB 가 화면으로 샌다
+            result["replay"], result["verify_slice"] = _read_outputs(tag, run_id)
+        vs = result.get("verify_slice") or {}
         log(f"{run_id}: n={kw['n_robots']} 완료 {time.perf_counter() - t0:.1f}s"
             + (f" (명시 주문 {n_orders}건, 제외 {summary.get('orders_skipped', 0)})" if orders_path else "")
-            + (f", 리플레이 {result['replay']['seconds']:.0f}s" if want_replay and result.get("replay") else ""))
+            + (f", 리플레이 {result['replay']['seconds']:.0f}s" if want_replay and result.get("replay") else "")
+            + (f", 검증 구간 t0 {vs['t0_s']:.0f}s · {vs['b64_bytes'] / 1024:.0f} KiB" if vs.get("gz_b64") else ""))
         return result
     except (ValueError, KeyError, SimFailed, json.JSONDecodeError) as e:
         log(f"{run_id}: 실패 — {e}")
