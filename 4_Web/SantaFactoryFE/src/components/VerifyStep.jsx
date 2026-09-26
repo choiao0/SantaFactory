@@ -1,18 +1,23 @@
 import { useMemo, useRef, useState } from 'react'
 import { getEstimate } from '../api/estimates.js'
-import { keepSigned } from '../utils/signedUrl.js'
+import { isStale, keepSigned } from '../utils/signedUrl.js'
 import AmrRunning from './AmrRunning.jsx'
 import VerifyTrigger from './VerifyTrigger.jsx'
 import { useVerifyStream } from '../hooks/useVerifyStream.js'
 
 /**
- * 영상 URL 은 서명본이라 30분이면 만료된다. 만료 뒤 구간 이동은 새 Range 요청이 403 으로 거절되어
- * video 의 error 로 온다 — 그때 상세를 다시 불러 새 URL 을 받고, 보던 위치에서 이어 간다.
+ * 영상 URL 은 서명본이라 30분이면 만료된다. 페이지를 열 때 받아 둔 URL 이라, 오래 열어 둔 뒤 처음 재생하거나
+ * 구간을 옮기면 새 Range 요청이 403 으로 거절된다. 재생 · 구간 이동 직전에 남은 시간을 보고 먼저 새 URL 을 받고
+ * (S15P21A106-280), 그래도 video 가 error 를 내면 같은 길로 다시 받는다 — 둘 다 보던 위치에서 이어 간다.
  * 재요청은 이 간격 안에서 한 번만 — 영상 자체가 깨진 경우 무한 반복하지 않게.
  */
 const REFRESH_COOLDOWN_MS = 10_000
+/** error 직전 이 시간 안에 재생이 흐르고 있었으면 보던 중으로 본다 — error 가 나면 video.paused 가 이미 true 다. */
+const PLAYING_GRACE_MS = 3_000
 
 const STATUS_LABEL = { PENDING: '대기', RUNNING: '검증 중', DONE: '완료', FAILED: '미완료' }
+/** 결과가 아직 없는 회차 — 판정 대신 진행 상태를 보인다(판정할 지표가 없어 「판정 불가」로 보이면 실패와 헷갈린다). */
+const inProgress = (v) => v.status === 'PENDING' || v.status === 'RUNNING'
 const VERDICT_LABEL = { PASS: '적합', WARN: '주의', FAIL: '부적합', NA: '판정 불가' }
 
 const pct = (ratio) => (ratio == null ? '—' : `${Math.round(ratio * 100)}%`)
@@ -74,6 +79,9 @@ function VerifyPlayer({ estimateId, current }) {
   const videoRef = useRef(null)
   const resumeAt = useRef(null)
   const lastRefresh = useRef(0)
+  const lastTick = useRef(0)
+  // 방금 받은 URL 까지 만료로 보이면 이 PC 시계가 서버와 어긋난 것이다 — 사전 확인을 끄고 error 재발급에만 맡긴다
+  const trustClock = useRef(true)
 
   // (S15P21A106-279) 시점별로 재생 중인 URL 을 붙잡아 둔다. 스냅샷·verify.done 이 올 때마다 서명만 바뀐 URL 이
   // 오는데, 그대로 src 에 넣으면 영상이 처음으로 돌아가 다시 받는다. 객체(경로)가 바뀔 때만 갈아 끼운다.
@@ -91,20 +99,31 @@ function VerifyPlayer({ estimateId, current }) {
   const videoUrl = refreshed && refreshed.replaces === activeView?.url ? refreshed.url : activeView?.url
   const playable = current.status === 'DONE' && Boolean(videoUrl)
 
-  const refreshUrl = async () => {
+  /** @param {boolean} [playAfter] 새 URL 로 바꾼 뒤 재생할지. 안 주면 지금 재생 중인지를 따른다. */
+  const refreshUrl = async (playAfter) => {
     const now = Date.now()
     if (now - lastRefresh.current < REFRESH_COOLDOWN_MS) return
     lastRefresh.current = now
     const video = videoRef.current
-    resumeAt.current = { time: video?.currentTime ?? 0, playing: Boolean(video && !video.paused) }
+    resumeAt.current = { time: video?.currentTime ?? 0, playing: playAfter ?? Boolean(video && !video.paused) }
     try {
       const detail = await getEstimate(estimateId)
       const match = detail?.verifications?.find((v) => v.n_robots === current.n_robots)
       const fresh = view === 'fpv' ? match?.video_fpv_url : match?.video_url
+      if (fresh && isStale(fresh)) trustClock.current = false
       if (fresh) setRefreshed({ replaces: activeView?.url, url: fresh })
     } catch (e) {
       console.error(`[verify] estimateId=${estimateId} 영상 URL 재발급 실패`, e)
     }
+  }
+
+  // 재생 · 구간 이동 직전 — 받아 둔 서명이 끝났거나 곧 끝나면 멈추고 새 URL 로 바꾼 뒤 이어 간다
+  const refreshIfStale = (e) => {
+    if (!trustClock.current || !isStale(videoUrl)) return
+    const video = e.currentTarget
+    const wantPlay = e.type === 'play' || !video.paused
+    video.pause()
+    refreshUrl(wantPlay)
   }
 
   const resume = () => {
@@ -140,7 +159,10 @@ function VerifyPlayer({ estimateId, current }) {
           className="verify-video"
           src={videoUrl}
           controls
-          onError={refreshUrl}
+          onPlay={refreshIfStale}
+          onSeeking={refreshIfStale}
+          onTimeUpdate={(e) => { if (!e.currentTarget.paused) lastTick.current = Date.now() }}
+          onError={() => refreshUrl(Date.now() - lastTick.current < PLAYING_GRACE_MS)}
           onLoadedMetadata={resume}
         />
       ) : (
@@ -220,9 +242,11 @@ export default function VerifyStep({ estimateId, ready, recommendedCount }) {
                   <span className="vc-count">
                     {v.n_robots}대{v.n_robots === effectiveRecommended ? <em> · 권장</em> : null}
                   </span>
-                  <span className={`vc-verdict ${v.verdict ?? 'NA'}`}>{VERDICT_LABEL[v.verdict] ?? '판정 불가'}</span>
+                  {inProgress(v)
+                    ? <span className="vc-verdict PENDING">{STATUS_LABEL[v.status]}</span>
+                    : <span className={`vc-verdict ${v.verdict ?? 'NA'}`}>{VERDICT_LABEL[v.verdict] ?? '판정 불가'}</span>}
                 </div>
-                <div className="vc-status mono dim">{STATUS_LABEL[v.status] ?? v.status}</div>
+                {!inProgress(v) && <div className="vc-status mono dim">{STATUS_LABEL[v.status] ?? v.status}</div>}
                 {v.error && <div className="vc-error">검증을 완료하지 못했습니다.</div>}
               </button>
             ))}
@@ -231,7 +255,9 @@ export default function VerifyStep({ estimateId, ready, recommendedCount }) {
           <p className="verify-limit mono dim">
             {stream.physicsLimit != null
               ? `${stream.physicsLimit}대까지 3D 주행 검증을 통과했습니다.`
-              : '아직 3D 주행 검증을 통과한 대수가 없습니다.'}
+              : anyPending
+                ? '검증이 끝나면 통과한 대수를 알려 드립니다.'
+                : '아직 3D 주행 검증을 통과한 대수가 없습니다.'}
           </p>
 
           {failedCounts.length > 0 && !anyPending && (
@@ -280,7 +306,7 @@ export default function VerifyStep({ estimateId, ready, recommendedCount }) {
                   {verifications.map((v) => (
                     <tr key={v.n_robots} className={v.n_robots === current?.n_robots ? 'on' : ''}>
                       <td>{v.n_robots}대{v.n_robots === effectiveRecommended ? ' (권장)' : ''}</td>
-                      <td>{VERDICT_LABEL[v.verdict] ?? '판정 불가'}</td>
+                      <td>{inProgress(v) ? STATUS_LABEL[v.status] : VERDICT_LABEL[v.verdict] ?? '판정 불가'}</td>
                       <td>{pct(v.physics?.window_actions?.ratio)}</td>
                       <td>{secs(v.physics?.lag?.p50_s)}</td>
                       <td>{v.physics ? times(contactsOf(v.physics)) : '—'}</td>

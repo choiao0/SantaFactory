@@ -707,6 +707,8 @@ section.step > p.desc { font-size: 18px; line-height: 1.7; max-width: 760px; mar
 .vc-verdict.WARN { color: #ffc14d; border-color: #a5730e; background: rgba(224, 160, 30, .14); }
 .vc-verdict.FAIL { color: #ff6b6b; border-color: var(--red); background: rgba(231, 45, 45, .14); }
 .vc-verdict.NA { color: #888; border-color: #4a4a4a; }
+/* 진행 중(대기 · 검증 중) — 판정 전이라 점선으로 판정 불가(실선)와 구별한다 (S15P21A106-280) */
+.vc-verdict.PENDING { color: #c9d3de; border-color: #5d6b7a; border-style: dashed; }
 .vc-status { font-size: 12px; letter-spacing: .05em; }
 .vc-error { font: 400 12px/1.5 var(--font-sans); color: #ff8a8a; }
 
