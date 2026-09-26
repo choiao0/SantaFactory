@@ -305,6 +305,8 @@ class Job:
         self.last_send, self.stop_sent_at, self.stop_resent = None, None, False
         self.seen_ours = False
         self.seen_online = False
+        # RUNNING 으로 넘어갈 때 노드에 **이미 창 이상**으로 남아 있던 시뮬 시각 = 지난 런 값(-279). 바뀔 때까지 안 믿는다.
+        self.stale_sim: Optional[float] = None
         self.final = None                 # DONE | FAILED (STOPPING 이 끝나면 phase 가 이 값이 된다)
         self.reason, self.error = "", None
         self.stats = Stats()
@@ -369,6 +371,10 @@ class Job:
             self.seen_ours = True
             if st == RUNNING and self._fms_ready(now):
                 self.phase, self.started_at = RUNNING, now
+                # ★ 시작하자마자 창을 다 채운 시뮬 시각은 있을 수 없다 — 러너가 이번 런 값을 아직 안 보내 노드에 남은
+                #   지난 런 값이다(-279, verify_20_n11·n12 가 RUNNING 0.5 s 만에 Stop). 엣지도 시작 때 0 으로 되돌린다.
+                left = self.sim_time(node)
+                self.stale_sim = left if left is not None and left >= self.req.window_s else None
                 return
         elif self.seen_ours and st in (IDLE, ERROR):
             self._finish("FAILED", now, "run ended before RUNNING", node.get(LAST_ERROR) or "ended by runner")
@@ -448,6 +454,8 @@ class Job:
         v = node.get(SIM_TIME)
         if v is None or isinstance(v, bool) or not isinstance(v, (int, float)):
             return None
+        if self.stale_sim is not None and float(v) == self.stale_sim:
+            return None                   # 지난 런이 남긴 값 — 이번 런의 보고가 오기 전까지는 없는 것으로 본다
         return float(v) if v > 0 else None
 
     def _window_filled(self, node: Optional[Node]) -> bool:

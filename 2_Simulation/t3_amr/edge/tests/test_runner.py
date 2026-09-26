@@ -45,6 +45,15 @@ class TestStartToRunning:
         assert named[R.STATE] == "STARTING" and named[R.RUN_ID] == "verify_77_n3"
         assert named[R.SCENARIO_SHA] == h.rec.spec.scenario_sha256 and named[R.VIDEO_URL] == ""
 
+    def test_a_new_run_resets_sim_time_with_its_starting_report(self, h):
+        """(-279) 새 런은 첫 「[hl] sim」 줄 전까지 시뮬 시각을 안 보낸다 — 직전 런의 660 s 가 host-orch 에 남아
+        새 런이 RUNNING 이 되자마자 「창 다 돌았다」로 Stop 됐다(verify_20_n11·n12 가 0.5 s 만에 끝남)."""
+        h.connect()
+        h.runner.values[R.SIM_TIME] = 660.0                  # 지난 런이 마지막으로 보고한 값
+        h.start(1.0)
+        named = h.pub.named("NDATA")
+        assert named[R.STATE] == "STARTING" and named[R.SIM_TIME] == 0.0
+
     def test_capture_on_moves_to_running(self, h):
         h.connect()
         h.start(1.0)
