@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState } from 'react'
 import { getEstimate } from '../api/estimates.js'
+import { keepSigned } from '../utils/signedUrl.js'
 import AmrRunning from './AmrRunning.jsx'
 import VerifyTrigger from './VerifyTrigger.jsx'
 import { useVerifyStream } from '../hooks/useVerifyStream.js'
@@ -73,10 +74,18 @@ function VerifyPlayer({ estimateId, current }) {
   const resumeAt = useRef(null)
   const lastRefresh = useRef(0)
 
+  // (S15P21A106-279) 시점별로 재생 중인 URL 을 붙잡아 둔다. 스냅샷·verify.done 이 올 때마다 서명만 바뀐 URL 이
+  // 오는데, 그대로 src 에 넣으면 영상이 처음으로 돌아가 다시 받는다. 객체(경로)가 바뀔 때만 갈아 끼운다.
+  //   이전 렌더의 값에서 이어 가는 것이라 effect 가 아니라 렌더 중에 상태를 맞춘다(React 권장 패턴).
+  const [pinned, setPinned] = useState(() => ({ top: current.video_url, fpv: current.video_fpv_url }))
+  const topUrl = keepSigned(pinned.top, current.video_url)
+  const fpvUrl = keepSigned(pinned.fpv, current.video_fpv_url)
+  if (topUrl !== pinned.top || fpvUrl !== pinned.fpv) setPinned({ top: topUrl, fpv: fpvUrl })
+
   const views = useMemo(() => [
-    { key: 'top', label: '상단 시점', url: current.video_url },
-    { key: 'fpv', label: 'AMR 추종 시점', url: current.video_fpv_url },
-  ].filter((v) => v.url), [current.video_url, current.video_fpv_url])
+    { key: 'top', label: '상단 시점', url: topUrl },
+    { key: 'fpv', label: 'AMR 추종 시점', url: fpvUrl },
+  ].filter((v) => v.url), [topUrl, fpvUrl])
   const activeView = views.find((v) => v.key === view) ?? views[0]
   const videoUrl = refreshed && refreshed.replaces === activeView?.url ? refreshed.url : activeView?.url
   const playable = current.status === 'DONE' && Boolean(videoUrl)
