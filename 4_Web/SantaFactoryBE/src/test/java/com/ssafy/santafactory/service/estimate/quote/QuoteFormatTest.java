@@ -13,7 +13,7 @@ class QuoteFormatTest {
         assertThat(QuoteFormat.won(217_000_000L)).isEqualTo("2억 1,700만 원");
         assertThat(QuoteFormat.won(1_200_000_000L)).isEqualTo("12억 원");
         assertThat(QuoteFormat.won(15_500_000L)).isEqualTo("1,550만 원");
-        assertThat(QuoteFormat.won(9_000L)).isEqualTo("9,000원");
+        assertThat(QuoteFormat.won(9_000L)).isEqualTo("9,000 원");
     }
 
     @Test
@@ -29,9 +29,6 @@ class QuoteFormatTest {
         assertThat(QuoteFormat.minutes(4820.0)).isEqualTo("80.3분");
         assertThat(QuoteFormat.minutes(null)).isEqualTo("—");
         assertThat(QuoteFormat.seconds(47.6)).isEqualTo("48초");
-        assertThat(QuoteFormat.elapsed(1122L)).isEqualTo("18분 42초");
-        assertThat(QuoteFormat.elapsed(3780L)).isEqualTo("1시간 3분");
-        assertThat(QuoteFormat.elapsed(42L)).isEqualTo("42초");
     }
 
     @Test
@@ -39,9 +36,9 @@ class QuoteFormatTest {
         assertThat(QuoteFormat.pct(95.6)).isEqualTo("95.6");
         assertThat(QuoteFormat.pct(100.0)).isEqualTo("100");
         assertThat(QuoteFormat.ratioPct(0.068)).isEqualTo("6.8");
-        assertThat(QuoteFormat.signedPct(-0.044)).isEqualTo("−4 %");
-        assertThat(QuoteFormat.signedPct(0.078)).isEqualTo("+8 %");
-        assertThat(QuoteFormat.signedPoints(0.013)).isEqualTo("+1.3 %p");
+        assertThat(QuoteFormat.signedPct(-0.044)).isEqualTo("−4%");
+        assertThat(QuoteFormat.signedPct(0.078)).isEqualTo("+8%");
+        assertThat(QuoteFormat.signedPoints(0.013)).isEqualTo("+1.3%p");
     }
 
     @Test

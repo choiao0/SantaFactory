@@ -47,10 +47,15 @@ class QuoteTemplateTest {
 
         assertThat(html).contains("EST-20260917-0142").contains("id=\"p1\"").contains("id=\"p2\"");
         for (String block : new String[]{"발행 정보", "권장 구성", "목표 달성 여부 (14대 기준)", "예상 구축 비용",
-                "권장 구성 물리 검증 결과 (3D 시뮬레이션)", "로봇 대수별 비교", "효율과 구축 비용 그래프", "주문 처리율과 구축 비용 그래프", "권장 구성(14대)의 운영 예상", "유의 사항"}) {
+                "권장 구성 3D 주행 검증 결과", "로봇 대수별 비교", "운영 효율과 구축 비용 그래프", "주문 처리율과 구축 비용 그래프", "권장 구성(14대)의 운영 예상", "유의 사항"}) {
             assertThat(html).contains(block);
         }
         assertThat(html).contains(">06</span>").contains(">10</span>");
+        // 고객 문서에는 내부 용어·소요 시간을 싣지 않는다
+        assertThat(html).doesNotContain("계산 소요 시간").doesNotContain("물리 검증").doesNotContain("웹 리포트")
+                .doesNotContain("효율 점수").doesNotContain(" %");
+        assertThat(html).doesNotContain("Isaac");
+        assertThat(html.split("유지보수 · 소프트웨어 · 자재 관리 · 부가세", -1)).hasSize(3);
         assertThat(html).doesNotContain(" th:").doesNotContain("${");
         assertThat(html).contains("data:image/png;base64,");
     }
@@ -65,6 +70,6 @@ class QuoteTemplateTest {
 
         String html = service.html(factory.build(new QuoteSource(noRec, QuoteFixtures.warehouse())));
 
-        assertThat(html).contains("목표 주문 처리율에 닿지 않습니다").doesNotContain("금액 (원)").doesNotContain("목표 달성 여부").contains(">03</span>").contains(">07</span>");
+        assertThat(html).contains("목표 주문 처리율을 달성할 수 없습니다").doesNotContain("금액 (원)").doesNotContain("목표 달성 여부").contains(">03</span>").contains(">07</span>");
     }
 }

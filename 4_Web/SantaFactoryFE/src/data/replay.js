@@ -4,14 +4,14 @@ export const RUN_STATUS_LABEL = {
   QUEUED: '대기',
   RUNNING: '계산 중',
   DONE: '완료',
-  FAILED: '실패',
+  FAILED: '미완료',
   TIMEOUT: '시간 초과',
 }
 
 export const ESTIMATE_STATUS_LABEL = {
   RUNNING: '진행 중',
   DONE: '완료',
-  PARTIAL: '일부 실패',
+  PARTIAL: '일부 완료',
   CANCELLED: '취소됨',
 }
 

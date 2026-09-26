@@ -14,17 +14,17 @@ export default function Hero() {
         <span>Before you buy.</span>
       </h1>
       <p>
-        운영 조건과 예산을 입력하면 AMR 대수를 바꿔가며 시뮬레이션합니다.
+        운영 조건과 예산을 입력하면 AMR 대수별로 시뮬레이션합니다.
         <br/>
-        목표 처리량을 만족하는 최소 대수와 예상 구축비용을 제시합니다.
+        목표를 달성하는 구성 중 운영 효율이 가장 높은 대수와 예상 구축 비용을 제시합니다.
       </p>
-      <span className="badge">요청 → 대기 → 시뮬레이션 → 검증 → 견적</span>
+      <span className="badge">운영 조건 → 대수 범위 → 시뮬레이션 → 3D 주행 검증 → 견적</span>
       <div className="philos">
-        <b>선택은 고객이, 근거는 시스템이</b>
+        <b>모든 대수의 결과를 비교해 직접 결정할 수 있습니다.</b>
       </div>
       {/* 다섯 단계 안내는 아래 제 구역이 맡는다 — 같은 내용을 두 번 늘어놓지 않는다 */}
       <div className="herocta">
-        <Link className="button" to={FIRST_STEP_PATH}>견적 시작하기 ↗</Link>
+        <Link className="button" to={FIRST_STEP_PATH}>견적 시작하기</Link>
         <Link className="ghost" to="/estimates">지난 견적 보기</Link>
       </div>
     </section>

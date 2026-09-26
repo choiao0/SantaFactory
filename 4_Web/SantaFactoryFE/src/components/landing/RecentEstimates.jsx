@@ -18,7 +18,7 @@ export default function RecentEstimates({ recent }) {
         <Link className="ghost sm" to="/estimates">전체 보기 →</Link>
       </h3>
 
-      {recent.error && <p className="form-error">견적 목록을 불러오지 못했습니다. {recent.error}</p>}
+      {recent.error && <p className="form-error">견적 목록을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.</p>}
 
       <div className="admin-grid">
         {items.map((e) => (
@@ -34,11 +34,11 @@ export default function RecentEstimates({ recent }) {
             <dl>
               <dt>요청</dt>
               <dd className="admin-plain">{formatDateTime(e.created_at)}</dd>
-              <dt>{e.recommended_count != null ? '권장' : '판정'}</dt>
+              <dt>권장 대수</dt>
               <dd>
                 {e.recommended_count != null
                   ? <>{e.recommended_count}<span>대</span></>
-                  : <span className="admin-plain">{e.reason_code ? '조건 미달' : '진행 중'}</span>}
+                  : <span className="admin-plain">{e.reason_code ? '조건 미달' : '계산 중'}</span>}
               </dd>
             </dl>
           </button>

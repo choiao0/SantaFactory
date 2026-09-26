@@ -33,7 +33,7 @@ public class EmailVerificationService {
     private static final String COOLDOWN_KEY = "email:code:cooldown:%s";
     private static final String VERIFIED_KEY = "email:verified:%s";
 
-    private static final String SUBJECT = "[Santa Factory] 이메일 인증 코드";
+    private static final String SUBJECT = "[SANTA FACTORY] 이메일 인증 코드";
 
     private final StringRedisTemplate redis;
     private final PasswordEncoder passwordEncoder;
@@ -56,11 +56,11 @@ public class EmailVerificationService {
 
         long minutes = properties.codeTtl().toMinutes();
         emailSender.send(email, SUBJECT, """
-                Santa Factory 가입 인증 코드입니다.
+                SANTA FACTORY 회원가입 인증 코드입니다.
 
                     %s
 
-                %d분 안에 가입 화면에 입력해 주세요. 요청한 적이 없다면 이 메일은 무시하셔도 됩니다.
+                %d분 안에 가입 화면에 입력해 주세요. 요청하지 않으셨다면 이 메일은 무시하셔도 됩니다.
                 """.formatted(code, minutes));
         log.info("이메일 인증 코드 발급: email={}", key);
     }

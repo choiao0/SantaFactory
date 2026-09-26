@@ -21,7 +21,11 @@ function upsert(list, run) {
  * 대수별 물리 검증 진행 상황 (S15P21A106-244). 후보 여러 대수를 동시에 검증하므로 결과는
  * `verifications` 배열로 온다 — 화면은 대수마다 카드 하나씩 그린다.
  */
-export function useVerifyStream(estimateId) {
+/**
+ * `epoch` 를 올리면 다시 연결한다 — 다 끝난 검증은 verify.done 뒤 스트림이 닫혀 있어서, 다시 검증을 요청한 뒤
+ * 새 회차(PENDING)를 받으려면 새로 열어야 한다 (S15P21A106-279).
+ */
+export function useVerifyStream(estimateId, epoch = 0) {
   const [state, setState] = useState(IDLE)
 
   useEffect(() => {
@@ -47,7 +51,7 @@ export function useVerifyStream(estimateId) {
       onError: () => console.error(`[verify] estimateId=${estimateId} 스트림 연결 실패`),
     })
     return close
-  }, [estimateId])
+  }, [estimateId, epoch])
 
   return state.id === estimateId ? state : IDLE
 }

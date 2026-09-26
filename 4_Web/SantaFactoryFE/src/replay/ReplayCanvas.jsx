@@ -156,5 +156,5 @@ export default function ReplayCanvas({ replay, tick, showTrails = true }) {
     }
   }, [model, tick, showTrails])
 
-  return <canvas ref={canvasRef} className="rp-canvas" aria-label="창고 격자 위 AMR 주행 리플레이" />
+  return <canvas ref={canvasRef} className="rp-canvas" aria-label="창고 배치도 위 로봇 주행 재생" />
 }

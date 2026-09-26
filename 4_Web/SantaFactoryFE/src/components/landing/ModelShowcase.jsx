@@ -18,7 +18,7 @@ export default function ModelShowcase({ robots }) {
       </div>
       <h2>고를 수 있는 로봇</h2>
 
-      {robots.error && <p className="form-error">모델 목록을 불러오지 못했습니다. {robots.error}</p>}
+      {robots.error && <p className="form-error">모델 목록을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.</p>}
       {robots.loading && <p className="mono dim">모델 목록을 불러오는 중…</p>}
 
       <div className="mdl-grid">
@@ -43,7 +43,7 @@ export default function ModelShowcase({ robots }) {
       </div>
 
       <div className="herocta">
-        <Link className="button" to={FIRST_STEP_PATH}>견적 시작하기 ↗</Link>
+        <Link className="button" to={FIRST_STEP_PATH}>견적 시작하기</Link>
       </div>
     </section>
   )

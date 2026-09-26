@@ -5,7 +5,7 @@ import ReplayCanvas from '../replay/ReplayCanvas.jsx'
 import { useReplay } from '../hooks/useReplay.js'
 import AmrRunning from './AmrRunning.jsx'
 
-const FAIL_LABEL = { FAILED: '실패', TIMEOUT: '시간 초과' }
+const FAIL_LABEL = { FAILED: '미완료', TIMEOUT: '시간 초과' }
 
 const isPending = (run) => run.status === 'QUEUED' || run.status === 'RUNNING'
 
@@ -33,8 +33,8 @@ function RunCard({ run, selected, onSelect }) {
       )}
       {failed && (
         <>
-          <span className="fail" title={run.error ?? ''}>{FAIL_LABEL[run.status]}</span>
-          <button type="button" className="ghost sm" disabled title="재실행 API 연동 예정">재실행</button>
+          <span className="fail" title="계산을 완료하지 못했습니다.">{FAIL_LABEL[run.status]}</span>
+          <button type="button" className="ghost sm" disabled title="준비 중인 기능입니다.">다시 계산</button>
         </>
       )}
       {isPending(run) && (
@@ -82,7 +82,7 @@ function OutboundPanel({ replay, seconds }) {
     return (
       <aside className="rp-side">
         <h5>출고 주문</h5>
-        <p className="mono dim">이 run 에는 출고 기록이 없습니다.</p>
+        <p className="mono dim">이 대수에는 출고 기록이 없습니다.</p>
       </aside>
     )
   }
@@ -118,7 +118,7 @@ function OutboundPanel({ replay, seconds }) {
       <div className="rp-progress" role="img" aria-label={`처리 ${total}건 중 ${now}건 완료`}>
         <i style={{ width: `${pct}%` }} />
       </div>
-      <p className="mono dim">처리 {total.toLocaleString()}건 중 {pct}% 완료</p>
+      <p className="mono dim">전체 {total.toLocaleString()}건 중 {pct}% 완료</p>
     </aside>
   )
 }
@@ -206,7 +206,7 @@ function ReplayBoard({ estimateId, amrCount }) {
 
       <div className="sim-board">
         <div className="board-head">
-          <span>SimPy 엔진</span>
+          <span>대수별 시뮬레이션</span>
           <span>1칸 = 1 m</span>
         </div>
         <div className="hud tl"><b>{amrCount ?? '—'}</b> AMR</div>
@@ -218,11 +218,11 @@ function ReplayBoard({ estimateId, amrCount }) {
         {!replay && (
           <div className="rp-placeholder">
             {loading && <span className="mono dim">주행 데이터를 불러오는 중…</span>}
-            {!loading && error && <span className="form-error">{error}</span>}
+            {!loading && error && <span className="form-error">주행 기록을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.</span>}
             {!loading && !error && (
               <span className="mono dim">
                 {amrCount == null
-                  ? '완료된 대수를 선택하면 그 구성의 주행이 재생됩니다.'
+                  ? '완료된 대수를 선택하면 해당 구성의 주행을 재생합니다.'
                   : '이 대수의 주행 기록이 없습니다.'}
               </span>
             )}
@@ -235,8 +235,8 @@ function ReplayBoard({ estimateId, amrCount }) {
         {/* 화면에 실제로 칠해지는 것만 적는다. 로봇 상태(주행·대기 등)는 데이터에 없어서 색이 하나다 */}
         <div className="legend">
           <span><i style={{ background: 'var(--rp-amr)' }} />AMR</span>
-          <span><i style={{ background: 'var(--rp-pack)' }} />출고(패킹)</span>
-          <span><i style={{ background: 'var(--rp-pick)' }} />통로 집하</span>
+          <span><i style={{ background: 'var(--rp-pack)' }} />출고(포장)</span>
+          <span><i style={{ background: 'var(--rp-pick)' }} />피킹 지점</span>
           <span><i style={{ background: 'var(--rp-in)' }} />입고</span>
           <span><i style={{ background: 'var(--rp-charge)' }} />충전</span>
           <span><i style={{ background: 'var(--rp-wall)' }} />랙</span>
@@ -261,17 +261,17 @@ export default function RunsStep({ estimateId, estimate, connected, error }) {
     <section className="step section-dark reveal" id="s3">
       <div className="eyebrow red">
         <span className="live-dot" />
-        03 — 시뮬레이션
+        03 · 시뮬레이션
       </div>
       <h2>Watch the sweep.</h2>
-      <p className="desc">대수마다 시뮬레이션 하나가 큐에 들어가 순서대로 계산됩니다. 결과가 도착하는 대로 카드가 갱신됩니다.</p>
+      <p className="desc">대수마다 하루치 주문을 시뮬레이션합니다. 결과가 나오는 대로 카드가 갱신됩니다.</p>
 
       {estimateId == null && (
         <div className="runs-empty">견적을 요청하면 시뮬레이션 진행 상황이 여기에 표시됩니다.</div>
       )}
 
       {estimateId != null && !estimate && !error && (
-        <div className="runs-empty"><span className="live-dot pulse" /> 진행 상황 연결 중…</div>
+        <div className="runs-empty"><span className="live-dot pulse" /> 진행 상황을 불러오는 중…</div>
       )}
 
       {error && <div className="runs-empty form-error">{error}</div>}
@@ -286,11 +286,11 @@ export default function RunsStep({ estimateId, estimate, connected, error }) {
             <div className="runs-legend">
               <span><i className="DONE" />완료</span>
               <span><i className="RUNNING" />계산 중</span>
-              <span><i className="FAILED" />실패</span>
+              <span><i className="FAILED" />미완료</span>
               <span><i className="QUEUED" />대기</span>
               <span className={`status ${estimate.status}`}>
                 {ESTIMATE_STATUS_LABEL[estimate.status]}
-                {connected && estimate.status === 'RUNNING' && ' · LIVE'}
+                {connected && estimate.status === 'RUNNING' && ' · 실시간'}
               </span>
             </div>
           </div>

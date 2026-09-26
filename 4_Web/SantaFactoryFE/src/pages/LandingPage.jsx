@@ -59,9 +59,9 @@ export default function LandingPage() {
             </div>
             <h2>전체 현황</h2>
             {/* 관리자 계정에는 회원 전체가 내려와 "내 조건"을 가릴 수 없다 — 그 화면으로 보낸다 */}
-            <p className="mono dim lhint">회원별 창고와 견적은 전체 현황 화면에서 봅니다.</p>
+            <p className="mono dim lhint">회원별 창고와 견적은 전체 견적 화면에서 확인할 수 있습니다.</p>
             <div className="herocta">
-              <Link className="button" to="/admin">전체 견적 보기 ↗</Link>
+              <Link className="button" to="/admin">전체 견적 보기</Link>
             </div>
           </section>
         )}

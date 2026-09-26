@@ -50,15 +50,23 @@ public class VerifyEventStream {
      * 회차가 있으면 연결을 열어 둔다. 전부 끝난 상태(재구독·새로고침)면 스냅샷만 보내고 바로 닫는다.
      */
     public SseEmitter subscribe(Long estimateId) {
-        SseEmitter emitter = new SseEmitter(EMITTER_TIMEOUT_MS);
+        SseEmitter emitter = newEmitter();
         register(estimateId, emitter);
         VerificationsSnapshot snapshot = estimateService.verifySnapshot(estimateId);
         send(estimateId, emitter, EVENT_SNAPSHOT, snapshot);
         if (allFinished(snapshot)) {
+            // (S15P21A106-279) 닫기 전에 verify.done 을 꼭 보낸다 — 화면은 그 이벤트에서만 EventSource 를 닫는다.
+            // 없이 닫으면 브라우저가 3초마다 재접속하고, 매번 새로 서명한 영상 URL 이 와서 재생 중인 영상이 처음으로 돌아간다.
+            send(estimateId, emitter, EVENT_DONE, snapshot);
             drop(estimateId, emitter);
             emitter.complete();
         }
         return emitter;
+    }
+
+    /** 테스트가 보낸 이벤트를 볼 수 있게 생성만 떼어 둔다. */
+    SseEmitter newEmitter() {
+        return new SseEmitter(EMITTER_TIMEOUT_MS);
     }
 
     /** 검증한 적이 없으면(빈 리스트) 아직 열어 둘 이유가 있다 — 사람이 버튼을 누르길 기다리는 중이다. */

@@ -87,8 +87,16 @@ export function openEstimateStream(estimateId, { onSnapshot, onRun, onDone, onEr
 export function openVerifyStream(estimateId, { onSnapshot, onRun, onDone, onError }) {
   const source = new EventSource(streamUrl(`/estimates/${estimateId}/verify`))
   const parse = (event) => JSON.parse(event.data)
+  // (S15P21A106-279) 스냅샷이 이미 다 끝난 상태면 여기서도 닫는다 — 서버가 verify.done 없이 닫으면
+  // 브라우저가 3초마다 재접속해 영상 URL 을 계속 새로 받는다.
+  const finished = (p) => (p?.verifications?.length ?? 0) > 0
+    && p.verifications.every((v) => v.status !== 'PENDING' && v.status !== 'RUNNING')
 
-  source.addEventListener('snapshot', (e) => onSnapshot?.(parse(e)))
+  source.addEventListener('snapshot', (e) => {
+    const payload = parse(e)
+    onSnapshot?.(payload)
+    if (finished(payload)) source.close()
+  })
   source.addEventListener('verify.run', (e) => onRun?.(parse(e)))
   source.addEventListener('verify.done', (e) => {
     onDone?.(parse(e))

@@ -98,13 +98,13 @@ export default function FleetStep({ fleet, onChange, model, requesting, error, m
     <section className="step section-dark reveal" id="s2">
       <div className="eyebrow red">
         <span className="live-dot" />
-        02 — 대수 범위
+        02 · 대수 범위
       </div>
       <h2>Pick the range.</h2>
       <p className="desc">비교할 AMR 대수 범위를 정합니다.</p>
 
       <div className="fleetbox">
-        <div className="mono dim">대수 스윕 · 최대 {MAX}대</div>
+        <div className="mono dim">비교 대수 · 최대 {MAX}대</div>
         <div
           className="range"
           ref={trackRef}
@@ -175,14 +175,14 @@ export default function FleetStep({ fleet, onChange, model, requesting, error, m
         </div>
 
         <p className="fleetnote">
-          시뮬레이션 <b>{counts.length}회</b> — {fleet.min}대 ~ {fleet.max}대
+          {fleet.min}대 ~ {fleet.max}대 · 대수별 시뮬레이션 <b>{counts.length}회</b>
           <br />
           {model ? (
             <>
-              구축비용 <b>{formatWon(cost(fleet.min))}</b> ~ <b>{formatWon(cost(fleet.max))}</b>
+              구축 비용 <b>{formatWon(cost(fleet.min))}</b> ~ <b>{formatWon(cost(fleet.max))}</b>
             </>
           ) : (
-            '01 단계에서 AMR 모델을 먼저 선택하세요'
+            '01 단계에서 AMR 모델을 먼저 선택해 주세요.'
           )}
         </p>
 
@@ -194,12 +194,12 @@ export default function FleetStep({ fleet, onChange, model, requesting, error, m
             disabled={requesting}
             onClick={handleRequest}
           >
-            {requesting ? '요청 중…' : `견적 요청 — ${counts.length}회 ↗`}
+            {requesting ? '요청 중…' : `${counts.length}개 구성으로 견적 요청`}
           </button>
           {blockedNotice && blocked && (
-            <span className="form-hint">운영 조건에 미입력한 사항들이 있습니다.</span>
+            <span className="form-hint">운영 조건에 입력하지 않은 항목이 있습니다. 01 단계에서 모두 입력해 주세요.</span>
           )}
-          {error && <span className="form-error">요청 실패: {error}</span>}
+          {error && <span className="form-error">견적을 요청하지 못했습니다. 잠시 후 다시 시도해 주세요.</span>}
         </div>
       </div>
     </section>

@@ -174,8 +174,11 @@ class Runner:
             return
         log.info("run %s: recording %d robots, window %.0fs (scenario %s)", spec.run_id, spec.n_robots, spec.window_s,
                  (spec.scenario_sha256 or "none")[:12])
+        # ★ 시뮬 시각을 0 으로 되돌려 **같은 NDATA 로** 보낸다 (-279). 새 런은 첫 「[hl] sim」 줄(시뮬 10 s) 전까지
+        #   시뮬 시각을 안 보내서, 지난 런의 660 s 가 host-orch 에 남아 이 런이 RUNNING 이 되자마자 「창 다 돌았다」로
+        #   Stop 됐다(verify_20_n11·n12). host-orch 는 0 을 「아직 보고 없음」으로 읽는다(orchestrator.sim_time).
         self._set_state(STARTING, {RUN_ID: spec.run_id, LAST_ERROR: "", VIDEO_URL: "", PHYSICS: "",
-                                   SCENARIO_SHA: spec.scenario_sha256 or ""})
+                                   SCENARIO_SHA: spec.scenario_sha256 or "", SIM_TIME: 0.0})
 
     def handle_stop(self, now: float) -> None:
         if self.state in (STARTING, RUNNING):

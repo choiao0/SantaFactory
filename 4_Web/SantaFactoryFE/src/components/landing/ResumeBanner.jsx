@@ -12,7 +12,7 @@ export default function ResumeBanner({ estimate }) {
     <div className="resume">
       <span className="live-dot pulse" />
       <span>
-        견적 <b>#{estimate.estimate_id}</b> 계산이 진행 중입니다
+        견적 <b>#{estimate.estimate_id}</b>의 계산이 진행 중입니다.
       </span>
       <Link className="ghost sm" to={`/estimate/${estimate.estimate_id}/runs`}>
         진행 상황 보기 →
