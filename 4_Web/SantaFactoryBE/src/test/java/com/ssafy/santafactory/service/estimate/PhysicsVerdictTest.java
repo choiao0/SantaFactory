@@ -38,10 +38,11 @@ class PhysicsVerdictTest {
     }
 
     @Test
-    void fails_when_the_verification_itself_failed_regardless_of_physics() {
+    void is_not_judged_when_the_verification_itself_failed_regardless_of_physics() {
         PhysicsMetrics physics = physics(0, 0, 0.99);
 
-        assertThat(PhysicsVerdict.of(VerifyRunStatus.FAILED, physics)).isEqualTo(PhysicsVerdict.Verdict.FAIL);
+        // 끝내지 못한 회차는 로봇이 부적합하다는 뜻이 아니다 — 판정 불가 (S15P21A106-280)
+        assertThat(PhysicsVerdict.of(VerifyRunStatus.FAILED, physics)).isEqualTo(PhysicsVerdict.Verdict.NA);
     }
 
     @Test
