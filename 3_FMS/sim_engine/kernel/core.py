@@ -20,7 +20,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from map_loader import ROBOT_DIMS, front_swing, zone_cells
+from map_loader import ROBOT_DIMS, front_swing, park_slots, zone_cells
 from pibt.geometry import configure as configure_footprint
 from pibt.geometry import ban_on, footprint_flags, front_cells, front_swing_on
 from pibt.liveness import WAIT_ESC_GRACE
@@ -41,6 +41,24 @@ MAX_TOTES_PER_TRIP = 6        # 선반형 AMR 3단 × 2 토트 (-177). 이 수�
 SECTION_RELEASE = 16          # 이 틱 넘게 정체한 로봇은 구간 정원에서 면제 (-193). 재계획
                               # -194 에서 1칸이 MOVE_TICKS 틱이 되며 틱이 잘아져 8 → 16.
                               # 문턱(REPLAN_AFTER)과 같은 값 — 그 시점이면 이미 우회를 시도했다
+SLOT_ENTRY_COST = 1.5         # 주차 칸으로 들어가는 이동 1칸에 더하는 비용 (-281). 칸 두 개만 지나도 옆 통로로 도는 회전 2번
+                              # (2 × 1.25)보다 비싸져, 안쪽 칸으로 가는 로봇이 주차 칸 줄을 통로 삼아 서 있는 로봇을 밀지 않는다.
+                              # 3.0 은 후진(× REVERSE_FACTOR)으로 제 칸에 들어가는 값이 12 가 되어, 등을 돌린 로봇이 앞으로
+                              # 나갔다 되돌아오기를 한 시간 반복했다(15대). est_20 12·15대 × 시드 4개: 존 복귀 대기 −50 %·−75 %,
+                              # 처리량·리드타임은 시드 흔들림 안
+
+
+def slot_entry_cost(edge_cost, slots, extra=SLOT_ENTRY_COST):
+    """주차 칸으로 들어가는 간선에 extra 를 더한 사본. 전진은 edge_cost[이웃, 칸 쪽 방향], 후진은 같은 값 × REVERSE_FACTOR
+    를 읽으므로 한 자리에 더하면 둘 다 비싸진다. 칸에서 나가는 간선은 그대로 — 주차한 로봇은 제값에 나간다."""
+    out = np.array(edge_cost, dtype=np.float64, copy=True)
+    H, W = out.shape[:2]
+    for r, c in slots:
+        for h, (dr, dc) in enumerate(DIRS):
+            nr, nc = r - dr, c - dc
+            if 0 <= nr < H and 0 <= nc < W:
+                out[nr, nc, h] += extra
+    return out
 
 
 @dataclass
@@ -111,12 +129,13 @@ class FmsKernel(BatteryMixin, MetricsMixin):
         self.zone = bool(cfg.zone and zone_mask is not None)
         self.zone_mask = zone_mask if self.zone else None
         self.zone_cells = zone_cells(free, zone_mask) if self.zone else []
+        self.park_slots = park_slots(free, zone_mask) if self.zone else []      # 안쪽부터 (-281)
         self.lane_dir = lane_dir
         # 구간 대수 제한 (-193). 맵이 안 주면(sec_map None) 또는 정원 0 이면 장치가 꺼진다.
         self.sec_map = sec_map if cfg.section_limit > 0 else None
         self.section_blocks = self.section_releases = 0
         self.ban_releases = 0        # 금지 조합표에서 풀린 (로봇 × 틱) — 교착 탈출 안전판이 쓰인 양 (-277)
-        self.zone_stats = dict(wait=0, retargets=0, degraded=0, occ=[])   # 구현 설계 §4. occ = 틱별 존 안 로봇 수
+        self.zone_stats = dict(wait=0, retargets=0, degraded=0, slots_full=0, swaps=0, occ=[])   # 구현 설계 §4. occ = 틱별 존 안 로봇 수
         self.on_task_completed = on_task_completed
         self.station_cells = frozenset(st_cell.values())
         # 거리장 가중은 틱 수가 아니라 전진 1칸 대비 배율이다 — edge_cost 기준이 1.0 이라
@@ -126,6 +145,8 @@ class FmsKernel(BatteryMixin, MetricsMixin):
         self.turn_cost = cfg.turn_ticks / cfg.move_ticks
         self.warnings = []                      # 초기화 중 경고 문구 (셸이 출력)
         self._init_battery(free, n_robots)
+        if self.heading and self.park_slots:
+            self.edge_cost = edge_cost = slot_entry_cost(edge_cost, self.park_slots)
         # 거리장 캐시 (θ 는 실행 중 고정이라 무효화 불필요)
         self._dist_cache, self._dist_cache_h, self._stay_cache = {}, {}, {}
         self._stag = Stagnation()               # 헤딩: 거리 개선 없는 연속 틱 (우선순위·대기 상승·재계획)
@@ -168,6 +189,9 @@ class FmsKernel(BatteryMixin, MetricsMixin):
             assert len(cfg.soc_init) == n_robots, f"soc_init {len(cfg.soc_init)} != 로봇 {n_robots}"
             dock_set = set(self.docks)
             self.zone_cells = [rc for rc in self.zone_cells if rc not in dock_set]
+            # 주차 칸도 도크와 그 이웃은 뺀다 — 주차한 로봇이 도킹 자세를 막지 않게 (-145 §2-5 와 같은 이유)
+            self.park_slots = [rc for rc in self.park_slots
+                               if all(max(abs(rc[0] - d[0]), abs(rc[1] - d[1])) > 1 for d in self.docks)]
         self.bat_stats = dict(events=0, charging=0, dock_wait=0, evictions=0, soc_min=1.0, empty=0)
 
     def _init_robots(self, homes, n_robots):
@@ -256,11 +280,17 @@ class FmsKernel(BatteryMixin, MetricsMixin):
         return (rb["pos"],)
 
     def zone_goal(self, rid):
-        """충전 존 복귀 목표 (구현 설계 §3): 존 free 칸 − 예약 칸 중 맨해튼 최근접.
-        예약 = 타 로봇의 존 안 목표(TO_HOME·IDLE)와 그 체비쇼프<2 이웃 + 존 안 타 로봇 몸.
-        후보 없음 → 예약 무시(degraded) → 그래도 없으면 고정 홈."""
+        """충전 존 복귀 목표. 주차 칸(park_slots)이 있으면 안쪽부터 첫 빈 칸 (S15P21A106-281) — 예약 칸(타 로봇의
+        존 안 목표와 그 체비쇼프<2 이웃)이나 타 로봇 몸이 걸친 칸은 건너뛴다. 칸이 다 차면(slots_full) 예전 규칙
+        (구현 설계 §3): 존 free 칸 − 예약 칸 중 맨해튼 최근접 → 후보 없음 → 예약 무시(degraded) → 그래도 없으면 고정 홈.
+        예전 규칙만 쓰면 모두 입구 쪽 모서리에 1칸 간격으로 붙어 뒤에 온 로봇이 그 사이를 비집고 들어갔다."""
         rb = self.robots[rid]
         reserved, bodies = self._zone_reservations(rid)
+        if self.park_slots:
+            for rc in self.park_slots:
+                if rc not in reserved and rc not in bodies:
+                    return rc
+            self.zone_stats["slots_full"] += 1
         pr, pc = rb["pos"]
         key = lambda rc: (abs(rc[0] - pr) + abs(rc[1] - pc), rc[1], rc[0])
         cand = [rc for rc in self.zone_cells if rc not in reserved and rc not in bodies]
@@ -395,8 +425,17 @@ class FmsKernel(BatteryMixin, MetricsMixin):
         zs["occ"].append(sum(1 for rb in robots.values() if zone_mask[rb["pos"]]))
 
     def _zone_retarget(self):
-        """재선택 (구현 설계 §3): 목표 칸에 다른 로봇이 IDLE로 주차했으면 다시 고른다."""
+        """재선택 (구현 설계 §3): 목표 칸에 다른 로봇이 IDLE로 주차했으면 다시 고른다. 밀려난 주차 로봇 둘이 서로의
+        칸에 서 있으면 칸을 맞바꾼다 (-281) — 막다른 줄에서는 서로 비켜 지나갈 수 없어 한 시간 내내 오갔다(15대 시드 2)."""
         robots = self.robots
+        off = {robots[rid]["pos"]: rid for rid in self.rids
+               if robots[rid]["state"] == IDLE and robots[rid]["pos"] != robots[rid]["goal"]}
+        for cell, a in off.items():
+            b = off.get(robots[a]["goal"])
+            if b is not None and b != a and robots[b]["goal"] == cell:
+                for rid in (a, b):
+                    robots[rid]["goal"] = robots[rid]["home"] = robots[rid]["pos"]
+                self.zone_stats["swaps"] += 1
         parked = {}
         for o, ob in robots.items():
             if ob["state"] == IDLE:

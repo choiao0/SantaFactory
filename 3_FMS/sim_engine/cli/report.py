@@ -90,6 +90,7 @@ def _zone_section(a, kernel, tot):
           f"예약 무시 {zs['degraded']}회 / 존 체류 평균 {zone_occ_mean:.1f}대 (p90 {zone_occ_p90:.0f}) / "
           f"비임무 밀림 이동 {tot['idle_moves']}칸")
     return dict(zone=1, zone_wait_steps=int(zs["wait"]), zone_retargets=int(zs["retargets"]),
+                zone_slots=len(kernel.park_slots), zone_slots_full=int(zs["slots_full"]), zone_swaps=int(zs["swaps"]),
                 zone_degraded=int(zs["degraded"]), zone_occ_mean=round(zone_occ_mean, 2),
                 zone_occ_p90=round(zone_occ_p90, 1), idle_moves=int(tot["idle_moves"]))
 
