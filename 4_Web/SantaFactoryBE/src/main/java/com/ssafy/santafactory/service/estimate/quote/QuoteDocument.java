@@ -27,12 +27,12 @@ public record QuoteDocument(
         String logoDataUri,
         /** 대수별 물리 검증 (S15P21A106-244). 한 번도 검증하지 않았으면 빈 리스트. */
         List<PhysicsRow> physicsRows,
-        /** "물리 상한: N대" 한 줄. 후보 중 PASS 가 없으면 null. */
+        /** "N대까지 3D 주행 검증을 통과했습니다." 한 줄. 통과한 대수가 없으면 그 안내, 검증한 대수가 없으면 null. */
         String physicsLimitLine
 ) {
 
     /** 01 발행 정보. */
-    public record Issue(String statusLine, String elapsed, String model,
+    public record Issue(String statusLine, String model,
                         String warehouseName, String sizeLine, String workers, String windowLine,
                         String dailyOrders, String ordersNote) {
     }

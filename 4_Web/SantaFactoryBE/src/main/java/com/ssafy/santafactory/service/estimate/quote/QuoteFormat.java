@@ -3,7 +3,6 @@ package com.ssafy.santafactory.service.estimate.quote;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.text.NumberFormat;
-import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
@@ -34,10 +33,10 @@ final class QuoteFormat {
         return value == null ? "—" : value.format(HH_MM);
     }
 
-    /** 원 → "2억 1,700만 원" / "1,550만 원" / "9,000원". 화면 {@code formatWon} 과 같은 만원 반올림. */
+    /** 원 → "2억 1,700만 원" / "1,550만 원" / "9,000 원". 화면 {@code formatWon} 과 같은 만원 반올림. */
     static String won(long value) {
         if (value < MAN) {
-            return comma(value) + "원";
+            return comma(value) + " 원";
         }
         long man = Math.round(value / (double) MAN);
         long eok = man / MAN;
@@ -90,30 +89,15 @@ final class QuoteFormat {
         return BigDecimal.valueOf(value).setScale(1, RoundingMode.HALF_UP).stripTrailingZeros().toPlainString();
     }
 
-    /** 초 → "18분 42초" / "42초" / "1시간 3분". */
-    static String elapsed(Long totalSeconds) {
-        if (totalSeconds == null) {
-            return "—";
-        }
-        Duration d = Duration.ofSeconds(totalSeconds);
-        if (d.toHours() > 0) {
-            return d.toHours() + "시간 " + d.toMinutesPart() + "분";
-        }
-        if (d.toMinutes() > 0) {
-            return d.toMinutes() + "분 " + d.toSecondsPart() + "초";
-        }
-        return d.toSeconds() + "초";
-    }
-
-    /** 부호 붙은 퍼센트 변화 "+8 %" / "−4 %". */
+    /** 부호 붙은 퍼센트 변화 "+8%" / "−4%". */
     static String signedPct(double ratio) {
         long v = Math.round(ratio * 100.0);
-        return (v < 0 ? "−" : "+") + Math.abs(v) + " %";
+        return (v < 0 ? "−" : "+") + Math.abs(v) + "%";
     }
 
-    /** 부호 붙은 퍼센트포인트 변화 "+1.3 %p". */
+    /** 부호 붙은 퍼센트포인트 변화 "+1.3%p". */
     static String signedPoints(double ratioDiff) {
         double v = ratioDiff * 100.0;
-        return (v < 0 ? "−" : "+") + oneDecimal(Math.abs(v)) + " %p";
+        return (v < 0 ? "−" : "+") + oneDecimal(Math.abs(v)) + "%p";
     }
 }
