@@ -61,7 +61,7 @@ pip 핀은 Isaac 이 못박은 것을 따른다 — llvmlite 0.46(→ numba 0.64
 numba ≥0.63 이 `coverage.types.Tracer`(7.5+)를 요구해 import 가 죽기 때문이고, Kit 테스트 도구용 패키지라 런타임엔 무관하다. `pip check` 가 그 하나를 보고하는 건 의도한 것.
 
 개발 중 코드 수정은 재빌드 없이도 된다 — compose 에서 작업 트리를 `/app/2_Simulation/t3_amr` 에 bind mount 하면 그대로 보인다(`out/`·`stage/`·`logs/` 심링크가 가려지니 그 셋은 따로 마운트).
-첫 실행은 셰이더 캐시(볼륨 `ov-cache`)를 만드느라 몇 분 더 걸린다.
+첫 실행은 캐시를 만드느라 몇 분 더 걸린다. 캐시는 볼륨 둘이다 — `ov-cache`(`~/.cache/ov`)와 러너별 `kit-cache-N`(`isaacsim/kit/cache`: 셰이더 · DerivedDataCache 약 3 GB, -280). `kit-cache` 가 없던 때는 러너를 다시 띄울 때마다 셰이더를 새로 구웠고, 2026-09-27 재배포 직후 첫 검증의 씬 빌드가 그 도중 Kit 종료 assert 로 죽었다(`runners/build_amr_scene_v2.py` 끝 주석).
 **GPU capability 에 `ngx` 가 있어야 한다**(-237). compose 는 `deploy.resources.reservations.devices.capabilities` 목록이 곧 마운트 범위라
 `ngx` 를 빼면 DLSS 디노이저 라이브러리가 안 들어와 프레임이 노이즈로 덮이고 mp4 가 100 Mbps 가 된다(2026-09-16 verify_4: 366 MB/30 s,
 `ngx` 넣은 뒤 같은 조건 2~3 MB). 확인: 컨테이너 안 `ls /usr/lib/x86_64-linux-gnu | grep -c ngx` → 2. `docker run --gpus all` 과 k8s(env `all`)는 해당 없음.
