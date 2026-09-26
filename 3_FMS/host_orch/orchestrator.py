@@ -4,19 +4,26 @@ Job: STARTING(NCMD Start → Runner/State RUNNING · RunId 일치 대기) → RU
 → DONE | FAILED. sim-runner 가 스스로 ERROR 로 접거나 NDEATH 면 FAILED. Start 는 QoS0 이라 반영이 없으면 재전송(멱등).
 fms_node_id 를 주면 같은 Start/Stop 을 fms-core 에도 보내고, 창은 두 노드가 모두 RUNNING 일 때 시작한다(결정 11).
 kpi 는 fms-core 가 Stop 뒤 `biz/v1/event` kpi_summary 로 내는 것을 그대로 싣는다. 순수 파이썬 — 발행은 콜백.
+
+Coordinator 는 러너 노드를 **여러 개**(sim-runner-gpu01..0N) 들고 있다가 비어 있는 노드에 한 건씩 배정한다
+(GPU 1대에서 컨테이너 N개, spec244 §E). fms-core 는 브로커에 하나뿐이라 여러 노드 중 **첫 노드의 잡에만** 묶는다(§3).
 """
 from __future__ import annotations
 
 import hashlib
 import json
+import logging
+import math
 import re
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, Sequence, Union
 
 from . import spb
 from .tracker import HostTracker, Node
+
+log = logging.getLogger("host_orch.orchestrator")
 
 STATE, RUN_ID, HEARTBEAT, RTF = "Runner/State", "Runner/RunId", "Runner/Heartbeat", "Runner/RTF"
 RAM, VRAM, LAST_ERROR = "Runner/RamMB", "Runner/VramMB", "Runner/LastError"
@@ -33,6 +40,9 @@ VIDEO_URL = "Runner/VideoUrl"          # t3_amr 엣지(-215)가 런 종료 NDATA
 #   러너가 이 값을 안 보내면(Kit `--exec` 경로는 시뮬 시각을 로그에 안 찍는다)
 #   예전처럼 벽시계로 끊는다. 보내는 판에서는 벽시계가 백스톱이다.
 SIM_TIME = "Runner/SimTime"
+# ★★ 물리 지표 JSON 문자열(-275 엣지가 씀) — 구간(피크) 재생이 끝나면 접촉·간격·지연률·대기·완료 태스크를
+#   담아 한 줄로 싣는다. host-orch 는 파싱만 해서 result() 의 physics 로 옮긴다 (2026-09-26, -244).
+PHYSICS = "Runner/Physics"
 FMS_STATE, FMS_RUN_ID, FMS_LAST_ERROR, FMS_TICK = "Fms/State", "Fms/RunId", "Fms/LastError", "Fms/Tick"
 KPI_EVENT = "kpi_summary"
 CMD_START, CMD_STOP, REBIRTH = "Run Control/Start", "Run Control/Stop", "Node Control/Rebirth"
@@ -42,8 +52,13 @@ SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 MAX_ROBOTS = 64
 DEFAULT_WINDOW_S = 600.0
 START_MARGIN_S = 300.0          # sim-runner 쪽 timeout_s = window + 여유(기동 + 정지)
-MAX_SCENARIO_BYTES = 512 * 1024   # sim-runner 와 같은 상한 (MQTT 패킷 1 MB 아래). 창으로 자른 뒤에 잰다(-235)
+# 900 KiB — sim-runner 엣지(t3_amr/edge/spec.py)와 같은 상한. 512 KiB 였는데 DES 피크 구간 궤적을
+# 인라인(scenario.trajectory_gz_b64)으로 실으면 10대 ≈ 300 KiB · 15대 ≈ 440 KiB 로 차서 올렸다(-244).
+MAX_SCENARIO_BYTES = 900 * 1024
 ORDER_WINDOW_MARGIN_S = 60.0      # 창 뒤 여유 — 러너의 계획 여유(t3_amr edge/recorder HORIZON_MARGIN_S)와 같다
+WARMUP_DEFAULT_S = 60.0           # scenario.slice.warmup_s 기본값 — verify_slice 워밍업(t3_amr edge/recorder)과 같다
+# 궤적 재생 기본 timeout_s 의 배속 하한. 동시 3대 실측 배속 0.8(spec244 §E)보다 낮춰 여유를 둔다.
+TRAJ_TIMEOUT_RTF_FLOOR = 0.5
 
 
 def iso(ts: float) -> str:
@@ -97,7 +112,21 @@ class VerifyRequest:
     priority: int = 0
     scenario: Optional[dict] = None
     scenario_sha256: Optional[str] = None
+    is_trajectory: bool = False      # scenario.trajectory_gz_b64 가 있었나 — 있으면 주문 자르기를 생략했다(-244)
+    warmup_s: float = WARMUP_DEFAULT_S    # scenario.slice.warmup_s (궤적일 때만 뜻이 있다)
     raw: dict = field(default_factory=dict, compare=False)
+
+    def effective_timeout_s(self) -> float:
+        """NCMD Start 에 실을 timeout_s — 명시 값이 있으면 그대로, 없으면 궤적/주문별 기본값 (SIM_VERIFY_CONTRACT §2, -244).
+
+        궤적 재생은 창 앞에 warmup_s 만큼 예열이 붙고, 배속이 느릴 때를 버틸 여유가 필요하다 —
+        배속 하한 TRAJ_TIMEOUT_RTF_FLOOR 로 계산한 벽시계 위에 시작/정지 여유(START_MARGIN_S)를 얹는다.
+        주문 기반(폴백) 요청은 종전처럼 window_s + START_MARGIN_S."""
+        if self.timeout_s is not None:
+            return self.timeout_s
+        if self.is_trajectory:
+            return math.ceil((self.warmup_s + self.window_s) / TRAJ_TIMEOUT_RTF_FLOOR) + START_MARGIN_S
+        return self.window_s + START_MARGIN_S
 
     @staticmethod
     def from_json(text: Any) -> "VerifyRequest":
@@ -134,10 +163,15 @@ class VerifyRequest:
                 raise ValueError("each models[] entry needs a safe serial")
         scenario = d.get("scenario")
         sha = None
+        is_trajectory, warmup_s = False, WARMUP_DEFAULT_S
         if scenario is not None:
             if not isinstance(scenario, dict):
                 raise ValueError("scenario must be a JSON object")
-            scenario = slice_orders_to_window(scenario, float(window))
+            is_trajectory, warmup_s = _trajectory_meta(scenario)
+            if not is_trajectory:
+                # 궤적이 없는 요청(구 견적 등)은 종전처럼 주문을 창으로 자른다(B §1 폴백) — 궤적이 있으면
+                # 배정 결과가 이미 담겨 있어 자를 이유가 없다. sha 는 실제로 보내는 scenario 그대로에 낸다.
+                scenario = slice_orders_to_window(scenario, float(window))
             size = len(canonical_json(scenario))
             if size > MAX_SCENARIO_BYTES:
                 raise ValueError(f"scenario too large: {size} B > {MAX_SCENARIO_BYTES}")
@@ -145,16 +179,35 @@ class VerifyRequest:
         return VerifyRequest(run_id, n, str(d.get("scenario_pkg") or ""), tuple(models), domain, float(window),
                              float(timeout) if timeout is not None else None,
                              _opt_str(d.get("source_run_id")), _opt_int(d.get("estimate_id")),
-                             _opt_int(d.get("seed")), _opt_int(d.get("priority")) or 0, scenario, sha, dict(d))
+                             _opt_int(d.get("seed")), _opt_int(d.get("priority")) or 0, scenario, sha,
+                             is_trajectory, warmup_s, dict(d))
 
     def start_command(self) -> dict:
         """NCMD Run Control/Start JSON (MQTT_CONTRACT §5.3). scenario 는 sha 와 함께 실어 sim-runner 가 대조한다."""
         cmd = {"run_id": self.run_id, "scenario_pkg": self.scenario_pkg, "n_robots": self.n_robots,
                "models": [dict(m) for m in self.models], "ros_domain_id": self.ros_domain_id,
-               "timeout_s": self.timeout_s if self.timeout_s is not None else self.window_s + START_MARGIN_S}
+               "timeout_s": self.effective_timeout_s()}
         if self.scenario is not None:
             cmd["scenario"], cmd["scenario_sha256"] = self.scenario, self.scenario_sha256
         return cmd
+
+
+def _trajectory_meta(scenario: dict) -> tuple:
+    """scenario.trajectory_gz_b64 가 있으면 (True, warmup_s), 없으면 (False, WARMUP_DEFAULT_S) (B §1, -244).
+
+    값은 존재·비어있지 않은 문자열인지만 본다 — **디코드하지 않는다**(gzip 여부·궤적 형식 검사는 러너 몫,
+    host-orch 가 풀면 900 KiB 상한을 우회하는 폭탄까지 떠안는다). warmup_s 는 scenario.slice.warmup_s,
+    없으면 기본값(엣지 verify_slice 기본값과 같다)."""
+    traj = scenario.get("trajectory_gz_b64")
+    if traj is None:
+        return False, WARMUP_DEFAULT_S
+    if not isinstance(traj, str) or not traj:
+        raise ValueError("scenario.trajectory_gz_b64 must be a non-empty string")
+    warmup = WARMUP_DEFAULT_S
+    sl = scenario.get("slice")
+    if isinstance(sl, dict) and _is_num(sl.get("warmup_s")):
+        warmup = float(sl["warmup_s"])
+    return True, warmup
 
 
 def _is_int(v: Any) -> bool:
@@ -191,12 +244,20 @@ class Stats:
     isaac_max: int = 0
     runner_scenario_sha: str = ""
     video_url: str = ""
+    physics_raw: str = ""       # Runner/Physics 원문(JSON 문자열) — 파싱은 Job.result() 에서 한 번만
 
-    def observe(self, node: Node) -> None:
+    def observe(self, node: Node, accept_run_scoped: bool) -> None:
+        """accept_run_scoped 가 False 면 VideoUrl·Physics 는 무시한다 — 노드가 아직 **이전 런**의 값을
+        들고 있을 수 있어서다(우리 run_id 를 아직 못 봄). 노드는 런이 끝나야 이 메트릭을 새로 쓰므로,
+        먼저 이 잡의 run_id 를 한 번이라도 본 뒤에만 받으면 이전 런 값이 새 결과로 새지 않는다 (-244)."""
         self.robots_online = max(self.robots_online, len(node.alive_devices()))
-        url = node.get(VIDEO_URL)
-        if isinstance(url, str) and url:
-            self.video_url = url
+        if accept_run_scoped:
+            url = node.get(VIDEO_URL)
+            if isinstance(url, str) and url:
+                self.video_url = url
+            physics = node.get(PHYSICS)
+            if isinstance(physics, str) and physics:
+                self.physics_raw = physics
         sha = node.get(SCENARIO_SHA)
         if isinstance(sha, str) and sha:
             self.runner_scenario_sha = sha
@@ -273,7 +334,7 @@ class Job:
         if self.done:
             return
         if node is not None and node.online:
-            self.stats.observe(node)
+            self.stats.observe(node, self._run_scoped(node))
         if self.fms is not None:
             self._fms_node, self._fms_cmd = fms_node, fms_cmd
             self.fms.note(fms_node)
@@ -397,8 +458,15 @@ class Job:
     def _wall_backstop(self) -> float:
         """시뮬 시각으로 끊는 판의 벽시계 한계. 러너 자신의 `timeout_s` **뒤**다 —
         러너가 스스로 접을 기회를 먼저 주고, 그래도 안 끝나면 여기서 잡는다."""
-        return float(self.req.timeout_s if self.req.timeout_s is not None
-                     else self.req.window_s + START_MARGIN_S) + self.cfg.stop_timeout_s
+        return self.req.effective_timeout_s() + self.cfg.stop_timeout_s
+
+    def _run_scoped(self, node: Node) -> bool:
+        """이 잡의 run_id 를 확인한 뒤에만 True — VideoUrl·Physics 는 이때부터만 받는다.
+
+        노드가 아직 **이전 런**의 값을 들고 있는 채로 STARTING 을 도는 동안 무심코 읽으면, 이번 런이
+        실패해서 자기 값을 못 남겨도 지난 런의 값이 결과에 새는 버그가 된다(-244). `seen_ours` 는 한
+        번 True 가 되면 계속 True 라 STOPPING 의 마지막 NDATA(run_id 가 이미 비워진)에서도 받는다."""
+        return self.seen_ours or (node.get(STATE) == RUNNING and node.get(RUN_ID) == self.req.run_id)
 
     def _fms_running_fault(self, now: float, cmd: Any) -> bool:
         """RUNNING 중 fms-core 가 접었거나(ERROR·IDLE·NDEATH) 조용하면 잡을 접는다. 접었으면 True."""
@@ -445,7 +513,8 @@ class Job:
     # ---- 결과 -------------------------------------------------------------------
     def result(self) -> dict:
         """sim.verify.result 본문 (SIM_VERIFY_CONTRACT §3). kpi 는 fms-core 의 kpi_summary, 없으면 null.
-        artifacts.video 는 러너가 Runner/VideoUrl 로 준 mp4 URL(-215), 없으면 artifacts 는 null."""
+        artifacts.video 는 러너가 Runner/VideoUrl 로 준 mp4 URL(-215), 없으면 artifacts 는 null.
+        physics 는 Runner/Physics 를 파싱한 객체, 없거나 깨졌으면 null(-244, C)."""
         s = self.stats
         elapsed = (self.ended_at - self.started_at) if self.started_at is not None and self.ended_at is not None else 0.0
         return {"run_id": self.req.run_id, "status": "done" if self.phase == "DONE" else "failed",
@@ -462,6 +531,7 @@ class Job:
                                             and s.runner_scenario_sha == self.req.scenario_sha256),
                            "reason": self.reason, "fms": self._fms_block()},
                 "kpi": self.kpi, "artifacts": {"video": s.video_url} if s.video_url else None,
+                "physics": self._physics(),
                 "source_run_id": self.req.source_run_id, "estimate_id": self.req.estimate_id}
 
     def _fms_block(self) -> Optional[dict]:
@@ -472,6 +542,22 @@ class Job:
                 "error": sm.get("error"), "planner": sm.get("planner"), "counters": sm.get("counters"),
                 # 견적과 다른 조건으로 돌았다는 신호 (예: θ 파일 없음 → 중립 θ). null 이 아니면 이 KPI 는 견적과 비교하면 안 된다.
                 "warnings": sm.get("warnings")}
+
+    def _physics(self) -> Optional[dict]:
+        """Runner/Physics(JSON 문자열) → 객체. 없으면 null, 파싱에 실패하거나 객체가 아니면 경고만 남기고 null (-244)."""
+        raw = self.stats.physics_raw
+        if not raw:
+            return None
+        try:
+            obj = json.loads(raw)
+        except (ValueError, TypeError):
+            log.warning("run %s: Runner/Physics is not valid JSON (%d chars) — reporting physics=null",
+                       self.req.run_id, len(raw))
+            return None
+        if not isinstance(obj, dict):
+            log.warning("run %s: Runner/Physics is not a JSON object — reporting physics=null", self.req.run_id)
+            return None
+        return obj
 
 
 class FailedRequest:
@@ -488,7 +574,8 @@ class FailedRequest:
 
     def result(self) -> dict:
         return {"run_id": self.run_id, "status": "failed", "error": self.error, "verify": None,
-                "kpi": None, "artifacts": None, "source_run_id": self.source_run_id, "estimate_id": self.estimate_id}
+                "kpi": None, "artifacts": None, "physics": None,
+                "source_run_id": self.source_run_id, "estimate_id": self.estimate_id}
 
 
 class Commands:
@@ -529,10 +616,17 @@ def failed_request(body: Any, error: str) -> "FailedRequest":
 
 
 class Coordinator:
-    """tracker + 현재 잡 하나 (prefetch 1). MQTT 스레드와 AMQP 루프가 같은 락으로 부른다.
+    """tracker + 러너 노드마다 잡 한 개(spec244 §E: GPU 1대 · 컨테이너 N개, 노드당 한 건).
+    MQTT 스레드와 AMQP 루프가 같은 락으로 부른다.
 
-    재전달(채널 단절 뒤 RabbitMQ 가 unacked 를 다시 줌)에 멱등: 진행 중인 같은 run_id 는 그 잡을, **done 으로 끝난** run_id(최근 50개)는
-    끝난 잡을 돌려줘 결과만 다시 발행한다 — GPU 런을 두 번 돌리지 않는다.
+    노드는 `node_ids` 로 여러 개 줄 수 있다(문자열 하나도 받는다 — 노드 1개인 기존 배치는 그대로 동작).
+    비어 있는(온라인 · IDLE/ERROR · 활성 잡 없음 · 대기 중인 Rebirth 없음) 노드를 목록 순서대로 찾아 배정한다.
+    fms-core 는 브로커에 하나뿐이라 **첫 노드의 잡에만** 묶는다(-244) — 노드가 여럿이면 나머지 잡은 fms-core
+    없이 sim-runner 만으로 돈다(§4 kpi 는 null).
+
+    재전달(채널 단절 뒤 RabbitMQ 가 unacked 를 다시 줌)에 멱등: 진행 중인 같은 run_id 는(어느 노드든) 그 잡을,
+    **done 으로 끝난** run_id(최근 50개, 노드 불문 전역)는 끝난 잡을 돌려줘 결과만 다시 발행한다 — GPU 런을
+    두 번 돌리지 않는다.
 
     failed 로 끝난 run_id 는 다시 돌린다(-241). BE 는 run_id 를 견적 id 로 고정하므로, 실패한 견적의 재검증 요청이 여기서
     옛 실패 결과로 되돌아오면 host-orch 를 재시작하는 것 말고는 길이 없었다 (2026-09-17 verify_7 09:08 실측). 재전달로
@@ -540,39 +634,78 @@ class Coordinator:
     """
     RECENT_MAX = 50
 
-    def __init__(self, tracker: HostTracker, send_ncmd: Callable[[str, list], None], node_id: str,
-                 cfg: JobConfig = JobConfig(), clock: Callable[[], float] = time.time, fms_node_id: Optional[str] = None):
-        self.tracker, self.send_ncmd, self.node_id, self.cfg, self.clock = tracker, send_ncmd, node_id, cfg, clock
-        self.cmd = Commands(send_ncmd, node_id)
+    def __init__(self, tracker: HostTracker, send_ncmd: Callable[[str, list], None],
+                 node_id: Union[str, Sequence[str]], cfg: JobConfig = JobConfig(),
+                 clock: Callable[[], float] = time.time, fms_node_id: Optional[str] = None):
+        self.tracker, self.send_ncmd, self.cfg, self.clock = tracker, send_ncmd, cfg, clock
+        self.node_ids = (node_id,) if isinstance(node_id, str) else tuple(node_id)
+        if not self.node_ids:
+            raise ValueError("Coordinator needs at least one runner node_id")
+        self.cmds = {nid: Commands(send_ncmd, nid) for nid in self.node_ids}
         self.fms_node_id = fms_node_id or None
+        if self.fms_node_id and len(self.node_ids) > 1:
+            log.info("fms-core(%s) is linked only to %s — the other %d runner node(s) run without it",
+                     self.fms_node_id, self.node_ids[0], len(self.node_ids) - 1)
         self.fms_cmd = Commands(send_ncmd, self.fms_node_id) if self.fms_node_id else None
-        self.job: Optional[Job] = None
-        self.recent: dict = {}
+        self.jobs: dict = {}         # node_id -> Job (활성 또는 막 끝난 마지막 잡)
+        self.recent: dict = {}       # run_id -> Job, 노드 불문 전역 (멱등·재전달용)
 
-    def _step_job(self, now: float) -> None:
-        if self.job is not None:
-            self.job.step(self.tracker.node(self.node_id), now, self.cmd,
-                          self.tracker.node(self.fms_node_id) if self.fms_node_id else None, self.fms_cmd)
+    def _fms_args(self, node_id: str) -> tuple:
+        """이 노드의 잡에 fms-core 를 묶을지 — 첫 노드일 때만(-244)."""
+        if self.fms_node_id and node_id == self.node_ids[0]:
+            return self.fms_node_id, self.tracker.node(self.fms_node_id), self.fms_cmd
+        return None, None, None
+
+    def _step_node(self, node_id: str, now: float) -> None:
+        job = self.jobs.get(node_id)
+        if job is None:
+            return
+        _, fms_node, fms_cmd = self._fms_args(node_id)
+        job.step(self.tracker.node(node_id), now, self.cmds[node_id], fms_node, fms_cmd)
+
+    def _step_all(self, now: float) -> None:
+        for node_id in self.node_ids:
+            self._step_node(node_id, now)
+
+    def _pick_node(self) -> Optional[str]:
+        """비어 있는 노드 하나 — 온라인 · IDLE/ERROR · 활성 잡 없음 · 대기 중인 Rebirth 없음(spec244 §E).
+        없으면 None(호출자가 Busy)."""
+        for node_id in self.node_ids:
+            job = self.jobs.get(node_id)
+            if job is not None and not job.done:
+                continue
+            node = self.tracker.node(node_id)
+            if node is None or not node.online or node.needs_rebirth:
+                continue
+            if node.get(STATE) not in (IDLE, ERROR):
+                continue
+            return node_id
+        return None
 
     def submit(self, body: Any) -> Any:
-        """요청 본문 → Job (또는 FailedRequest). 다른 run_id 가 진행 중이면 Busy."""
+        """요청 본문 → Job (또는 FailedRequest). 비어 있는 노드가 없으면 Busy."""
         try:
             req = VerifyRequest.from_json(body)
         except ValueError as e:
             return failed_request(body, f"bad request: {e}")
-        if self.job is not None and not self.job.done:
-            if self.job.req.run_id == req.run_id:
-                return self.job
-            raise Busy(f"busy with {self.job.req.run_id}")
+        for job in self.jobs.values():
+            if job is not None and not job.done and job.req.run_id == req.run_id:
+                return job                                 # 어느 노드든 같은 run_id 가 진행 중이면 그 잡
         prior = self.recent.get(req.run_id)
         if prior is not None and prior.phase == "DONE":
             return prior                                   # 결과만 재발행. FAILED 는 아래로 — 새 런 (-241)
-        self.job = Job(req, self.node_id, self.cfg, self.clock(), self.fms_node_id)
-        self.recent[req.run_id] = self.job
+        node_id = self._pick_node()
+        if node_id is None:
+            raise Busy(f"no idle runner node among {', '.join(self.node_ids)}")
+        fms_node_id, _, _ = self._fms_args(node_id)
+        now = self.clock()
+        job = Job(req, node_id, self.cfg, now, fms_node_id)
+        self.jobs[node_id] = job
+        self.recent[req.run_id] = job
         while len(self.recent) > self.RECENT_MAX:
             del self.recent[next(iter(self.recent))]
-        self._step_job(self.clock())
-        return self.job
+        self._step_node(node_id, now)
+        return job
 
     def on_mqtt(self, topic: str, payload: bytes, now: Optional[float] = None) -> list:
         now = self.clock() if now is None else now
@@ -581,12 +714,12 @@ class Coordinator:
             return []
         events = self.tracker.handle(topic, payload, now)
         for ev in events:
-            if ev.node == self.node_id and self.tracker.rebirth_due(self.node_id, now):
-                self.cmd.rebirth()
+            if ev.node in self.cmds and self.tracker.rebirth_due(ev.node, now):
+                self.cmds[ev.node].rebirth()
             elif self.fms_cmd is not None and ev.node == self.fms_node_id and self.tracker.rebirth_due(self.fms_node_id, now):
                 self.fms_cmd.rebirth()
         if events:
-            self._step_job(now)
+            self._step_all(now)
         return events
 
     def _on_biz_event(self, payload: bytes) -> None:
@@ -594,8 +727,9 @@ class Coordinator:
             body = json.loads(payload)
         except (ValueError, UnicodeDecodeError):
             return
-        if self.job is not None and self.job.on_biz_event(body):
-            return
+        for job in self.jobs.values():
+            if job is not None and job.on_biz_event(body):
+                return
         run_id = body.get("runId") if isinstance(body, dict) else None
         job = self.recent.get(run_id) if isinstance(run_id, str) else None
         if job is not None:                       # 결과를 이미 냈어도 늦게 온 kpi 는 잡에 남긴다 (재전달 시 결과에 실린다)
@@ -603,14 +737,16 @@ class Coordinator:
 
     def tick(self, now: Optional[float] = None) -> None:
         now = self.clock() if now is None else now
-        if self.tracker.rebirth_due(self.node_id, now):
-            self.cmd.rebirth()
+        for node_id in self.node_ids:
+            if self.tracker.rebirth_due(node_id, now):
+                self.cmds[node_id].rebirth()
         if self.fms_cmd is not None and self.tracker.rebirth_due(self.fms_node_id, now):
             self.fms_cmd.rebirth()
-        self._step_job(now)
+        self._step_all(now)
 
-    def runner_snapshot(self) -> dict:
-        n = self.tracker.node(self.node_id)
+    def runner_snapshot(self, node_id: Optional[str] = None) -> dict:
+        """노드 하나의 스냅샷 — 생략하면 첫 노드(단일 노드 배치와 호환)."""
+        n = self.tracker.node(node_id or self.node_ids[0])
         if n is None:
             return {"online": False}
         return {"online": n.online, "state": n.get(STATE), "run_id": n.get(RUN_ID), "bd_seq": n.bd_seq,

@@ -11,6 +11,7 @@ run_record.sh(t3_amr) 의 규약:
 from __future__ import annotations
 
 import glob
+import json
 import logging
 import math
 import os
@@ -22,7 +23,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from .spec import RunSpec, canonical_json
+from .spec import RunSpec, canonical_json, decode_trajectory
 
 RUN_ENV_MARK = "SIM_RUN_ID"                  # 자식 환경 표식 — 데몬 재시작 때 남은 런 프로세스를 찾는다
 log = logging.getLogger(__name__)
@@ -79,6 +80,9 @@ READY_MARKERS = ("캡처 ON", "촬영 ON")
 FINISHED_MARKERS = ("post_quit", "전원 완주", "주행 종료")
 # 시뮬 시각 보고 줄 — `headless_pibt.py:343` 의 형식. 뒤에서 이만큼만 읽는다.
 SIM_TIME_RE = re.compile(r"\[hl\]\s+sim\s+([0-9]+(?:\.[0-9]+)?)s")
+# 구간 재생(-275)이면 같은 줄 끝에 `| 창 <초>s`(워밍업을 뺀 시각)가 붙는다. 있으면 그걸 쓴다 —
+# host-orch 가 끊는 창은 워밍업 뒤 10분이다.
+WINDOW_TIME_RE = re.compile(r"\|\s*창\s+([0-9]+(?:\.[0-9]+)?)s")
 SIM_TIME_TAIL_BYTES = 64 * 1024
 INT_GRACE_S = 240.0                          # SIGINT 뒤 조립(ffmpeg) 대기 — 프레임 수천 장이면 1 분 넘게 걸린다
 TERM_GRACE_S = 5.0
@@ -117,10 +121,21 @@ def command(cfg: RecorderConfig) -> list:
     return ["bash", os.path.join(cfg.t3amr_dir, "run_record.sh"), "--planner", cfg.planner]
 
 
+def physics_path(cfg: RecorderConfig, run_id: str) -> str:
+    """러너가 물리 지표를 쓰는 자리 (`headless_pibt.py` 의 `PIBT_PHYSICS_OUT`)."""
+    return os.path.join(cfg.out_dir, f"physics_{run_id}.json")
+
+
 def environment(cfg: RecorderConfig, spec: RunSpec, base: dict | None = None,
-                scenario_path: str | None = None, plan_exists: bool | None = None) -> dict:
-    """자식 환경. base 는 기본 os.environ. 계획 폴더가 없으면 REPLAN=1 로 run_record.sh 가 먼저 계획을 만든다."""
+                scenario_path: str | None = None, plan_exists: bool | None = None,
+                traj_path: str | None = None, slice_meta: dict | None = None) -> dict:
+    """자식 환경. base 는 기본 os.environ. 계획 폴더가 없으면 REPLAN=1 로 run_record.sh 가 먼저 계획을 만든다.
+
+    `traj_path` 는 인라인 궤적(`scenario.trajectory_gz_b64`)을 푼 파일, `slice_meta` 는 그 `slice`
+    블록이다 (-275). 경로 궤적(`scenario.trajectory`)보다 이쪽이 이긴다.
+    """
     e = dict(os.environ if base is None else base)
+    traj = traj_path or spec.trajectory
     if plan_exists is None:
         plan_exists = os.path.isdir(plan_dir(cfg.t3amr_dir, spec.n_robots, cfg.planner))
     e.update({
@@ -130,7 +145,7 @@ def environment(cfg: RecorderConfig, spec: RunSpec, base: dict | None = None,
         "PIBT_MODE": "lifelong",
         "PIBT_HORIZON": str(horizon_ticks(spec.window_s, cfg.tick_s)),
         # ★ 궤적을 주면 계획을 **안 한다** — 그러면 계획 폴더도 필요 없다.
-        "REPLAN": "0" if (plan_exists or spec.trajectory) else "1",
+        "REPLAN": "0" if (plan_exists or traj) else "1",
         "STRICT": "1",
         "WATCH_SEC": str(int(cfg.watch_s)),
         "VIDEO": "1",
@@ -160,7 +175,13 @@ def environment(cfg: RecorderConfig, spec: RunSpec, base: dict | None = None,
         #   제어 허용 오차(50 mm)가 설계 여유(41.3 mm)보다 크므로 접촉은
         #   확률 문제이고, 죽이면 그 뒤 구간을 영영 못 본다.
         "PIBT_CONTACT_ABORT": "0",
+        # ★★ 물리 지표 파일 (-275) — 러너가 10초마다·끝날 때 쓰고, 엣지가 업로드 뒤 읽어
+        #   `Runner/Physics` 로 host-orch 에 넘긴다.
+        "PIBT_PHYSICS_OUT": physics_path(cfg, spec.run_id),
     })
+    # ★★ 창을 끊는 것은 host-orch 다 — 동작이 먼저 다 끝나도 Stop 까지 서서 기다린다 (-275).
+    #   안 그러면 「전원 완주」로 스스로 내려가 host-orch 가 FAILED(창 미달)로 적는다.
+    e.setdefault("PIBT_HOLD_UNTIL_STOP", "1")
     if spec.seed is not None:
         e["PIBT_SEED"] = str(spec.seed)
     # 주문 — 계약 §2 의 `scenario.outbound_gap_s`(초)를 계획 틱으로 옮긴다.
@@ -175,8 +196,8 @@ def environment(cfg: RecorderConfig, spec: RunSpec, base: dict | None = None,
     # ★ 궤적이 오면 계획 단계를 통째로 건너뛴다 (`live_pibt.py:1084`).
     #   주문(`SIM_SCENARIO_PATH`)보다 **이쪽이 이긴다** — 궤적에는 배정 결과가
     #   이미 들어 있어 주문 스트림을 쓸 자리가 없다.
-    if spec.trajectory:
-        e["PIBT_TRAJ"] = spec.trajectory
+    if traj:
+        e["PIBT_TRAJ"] = traj
         # ★ 궤적만 넘기면 안 돈다. 셋이 세트다 (2026-09-22 실측).
         #   ① 궤적의 칸 번호는 **FMS 격자(107x116)** 기준이다. 안 주면 우리
         #      격자(106x115)로 읽어 칸이 딴 자리를 가리킨다 — live_pibt 가
@@ -186,6 +207,30 @@ def environment(cfg: RecorderConfig, spec: RunSpec, base: dict | None = None,
         #   호출자가 준 값이 있으면 그쪽이 이긴다 — 실험용 구멍을 남긴다.
         e.setdefault("PIBT_FMS_GRID", "1")
         e.setdefault("PIBT_ADG_RANK", "1")
+        # ★ 씬·계획 폴더를 **런마다 따로** (-275). run_record.sh 가 궤적 첫 틱으로 계획 폴더를
+        #   만들고 씬을 짓는데, 공용 plan/·stage/ 에 남으면 다음 자체 계획 판이 그 스폰 자리를
+        #   재사용한다(paths.sh 주석). `start()` 가 비우고 시작한다.
+        run_dir = os.path.join(cfg.runs_dir, spec.run_id)
+        e.setdefault("T3AMR_PLAN", os.path.join(run_dir, "plan"))
+        e.setdefault("T3AMR_STAGE", os.path.join(run_dir, "stage"))
+    if slice_meta:
+        # ★★ DES 피크 구간 (-275) — **DES 와 같은 발자국(앞 2칸)** 으로 몬다. 4칸은 DES 가
+        #   안 잡은 칸을 더 잡아 없던 대기를 만든다(`fms_traj.build` 독스트링). 검증은 DES 의
+        #   판을 그대로 물리에 올려 접촉·지연을 드러내는 것이라 2칸이 뜻에 맞다.
+        #   엣지 환경에 PIBT_FRONT_RULE 이 있으면 그쪽이 이긴다(4칸 비교 실험용).
+        e.setdefault("PIBT_FRONT_RULE", "2")
+        # ★ 회전 관문 (-244) — 칸이 겹쳐도 **차체 틈**이 넉넉하면 돌고(GEO), 막혀도 20 s 만 기다린다.
+        #   기본(칸만 보고 90 s)은 인계 회전 한 건이 90 s 서면 뒤가 줄줄이 밀렸다. 피크 10대 두 구간 실측:
+        #   창 동작 시작 83.3→88.5 % · 54.7→76.3 %, 지연 p50 40→32 s · 253→107 s, 접촉 0 · 최소 간격 0.31 m.
+        e.setdefault("PIBT_TURN_BODY_GEO", "1")
+        e.setdefault("PIBT_TURN_BODY_MAX", "20")
+        # ★ 두 번째 영상은 **드론 추종** (-244) — 1인칭은 포장대에서 흰 벽만 찍혀 하역 장면(주문 처리의 핵심)이
+        #   사라진다. 뒤·선반 위에서 보면 로봇 선반의 상자와 포장대의 토트가 한 화면에 든다(headless_pibt 주석).
+        e.setdefault("PIBT_FPV_VIEW", "drone")
+        # 실행 속도를 DES 순항 속도에 맞춘다. DES 는 적재 무게로 속도를 바꿀 수 있다.
+        sp = slice_meta.get("speed_mps")
+        if isinstance(sp, (int, float)) and not isinstance(sp, bool) and sp > 0:
+            e.setdefault("PIBT_V_EXEC", f"{float(sp):g}")
     return e
 
 
@@ -214,21 +259,21 @@ class Recorder:
         p = os.path.join(self.cfg.out_dir, f"demo_{self.tag()}.mp4")
         return p if self.spec and os.path.isfile(p) and os.path.getsize(p) > 0 else None
 
-    def side_video_path(self) -> str | None:
-        """두 번째 시점 (-264). **이름만** 다르다 — `demo_<run_id>_side.mp4`.
+    def fpv_video_path(self) -> str | None:
+        """두 번째 시점 (-264). **이름만** 다르다 — `demo_<run_id>_fpv.mp4`.
 
-        백엔드는 상단 객체 키에서 `_side` 를 계산해 MinIO 에 실제로 있는지
+        백엔드는 상단 객체 키에서 `_fpv` 를 계산해 MinIO 에 실제로 있는지
         확인한 뒤 화면에 버튼을 띄운다. 그래서 결과 페이로드(artifacts)도
         NDATA 메트릭도 안 바뀐다. **이름이 어긋나면 오류 없이 버튼만 안 생긴다.**
 
         없으면 None 이다 — 측면은 **선택**이고, 없다고 런을 실패로 보지 않는다.
         """
-        p = os.path.join(self.cfg.out_dir, f"demo_{self.tag()}_side.mp4")
+        p = os.path.join(self.cfg.out_dir, f"demo_{self.tag()}_fpv.mp4")
         return p if self.spec and os.path.isfile(p) and os.path.getsize(p) > 0 else None
 
-    def side_shots_dir(self) -> str:
-        """두 번째 시점의 프레임 폴더 — `run_record.sh:116` 의 `shots_<TAG>_side`."""
-        return os.path.join(self.cfg.out_dir, f"shots_{self.tag()}_side")
+    def fpv_shots_dir(self) -> str:
+        """두 번째 시점의 프레임 폴더 — `run_record.sh:116` 의 `shots_<TAG>_fpv`."""
+        return os.path.join(self.cfg.out_dir, f"shots_{self.tag()}_fpv")
 
     def remove_frames(self) -> int:
         """프레임 폴더를 통째로 지운다 — mp4 가 **올라간 뒤에만** 부른다(-241).
@@ -242,7 +287,7 @@ class Recorder:
         if not self.spec:
             return 0
         n = 0
-        for d in (self.shots_dir(), self.side_shots_dir()):
+        for d in (self.shots_dir(), self.fpv_shots_dir()):
             if not os.path.isdir(d):
                 continue
             n += sum(len(files) for _, _, files in os.walk(d))
@@ -259,18 +304,77 @@ class Recorder:
             f.write(canonical_json(spec.scenario))
         return path
 
+    def write_trajectory(self, spec: RunSpec) -> tuple:
+        """인라인 궤적을 `runs/<run_id>/traj.json` 으로 푼다 (-275). (경로, slice) · 없으면 (None, None).
+
+        형식이 틀리면 ValueError — 런을 띄우기 전에 실패로 돌려보낸다.
+        """
+        if not spec.trajectory_b64:
+            return None, None
+        body, sl = decode_trajectory(spec.trajectory_b64)
+        d = os.path.join(self.cfg.runs_dir, spec.run_id)
+        os.makedirs(d, exist_ok=True)
+        path = os.path.join(d, "traj.json")
+        with open(path, "wb") as f:
+            f.write(body)
+        return path, sl
+
+    def physics_path(self) -> str:
+        return physics_path(self.cfg, self.tag())
+
+    def physics(self) -> dict | None:
+        """러너가 쓴 물리 지표(`physics_report.summarize`). 없거나 못 읽으면 None."""
+        if not self.spec:
+            return None
+        try:
+            with open(self.physics_path(), encoding="utf-8") as f:
+                doc = json.load(f)
+        except (OSError, ValueError):
+            return None
+        return doc if isinstance(doc, dict) else None
+
+    def _rotate_logs(self, spec: RunSpec) -> None:
+        """같은 run_id 의 **지난 로그를 밀어낸다** (-275).
+
+        ☹ run_id 는 다시 쓰인다(DB 를 새로 만들면 verify_18 이 또 온다, 재검증도 같은 id).
+          로그를 이어 쓰면 지난 판의 「촬영 ON」·`[hl] sim` 줄이 새 판의 판정에 섞인다 —
+          09-24 verify_18 이 시작 0.2 초 만에 RUNNING 이 된 것이 그것이다. 지난 판의
+          시뮬 시각이 읽히면 host-orch 가 창을 엉뚱하게 끊을 수도 있다.
+        지난 것은 `.prev` 한 벌만 남긴다(진단용). 지난 물리 지표 파일은 지운다.
+        """
+        for p in (self.record_log(), os.path.join(self.cfg.logs_dir, f"edge_{spec.run_id}.log")):
+            if os.path.exists(p):
+                os.replace(p, p + ".prev")
+        try:
+            os.remove(self.physics_path())
+        except FileNotFoundError:
+            pass
+
     # ---- 수명 -----------------------------------------------------------------
     def start(self, spec: RunSpec, now: float) -> None:
         self.spec = spec
-        if spec.orders is not None:
-            # 조용히 버리지 않는다 — 백엔드가 목록을 보냈는데 우리가 간격으로만
-            # 재생하면 **다른 판**이 돈다. 결과를 견적과 맞대기 전에 알아야 한다.
-            n = len(spec.orders.get("outbound") or []) if isinstance(spec.orders, dict) else 0
-            log.warning("run %s: scenario.orders(출고 %d건) 를 **쓰지 않는다** — "
-                        "rack_id→스테이션 이름 규칙이 없다. outbound_gap_s 간격으로만 재생한다",
-                        spec.run_id, n)
-        env = environment(self.cfg, spec, scenario_path=self.write_scenario(spec))
         os.makedirs(self.cfg.logs_dir, exist_ok=True)
+        self._rotate_logs(spec)
+        traj_path, sl = self.write_trajectory(spec)
+        if traj_path:
+            log.info("run %s: DES 구간 재생 — t0 %s s · 워밍업 %s s + 창 %s s -> %s", spec.run_id,
+                     (sl or {}).get("t0_s"), (sl or {}).get("warmup_s"), (sl or {}).get("window_s"),
+                     traj_path)
+        elif spec.trajectory:
+            log.info("run %s: 궤적 재생 (경로) — %s", spec.run_id, spec.trajectory)
+        elif spec.orders is not None:
+            n = len(spec.orders.get("outbound") or []) if isinstance(spec.orders, dict) else 0
+            log.info("run %s: 백엔드 주문 %d건 — 러너가 JsonOrderStream 으로 읽어 스스로 계획한다 "
+                     "(포장대는 러너 난수, DES 와 같은 판은 아니다)", spec.run_id, n)
+        env = environment(self.cfg, spec, scenario_path=self.write_scenario(spec),
+                          traj_path=traj_path, slice_meta=sl)
+        if env.get("PIBT_TRAJ"):
+            # 같은 run_id 의 지난 구간이 지은 계획·씬을 비운다 — 폴더가 있으면 run_record 가 재사용한다
+            for key in ("T3AMR_PLAN", "T3AMR_STAGE"):
+                d = env.get(key)
+                if d and os.path.abspath(d).startswith(os.path.abspath(self.cfg.runs_dir) + os.sep):
+                    shutil.rmtree(d, ignore_errors=True)
+                    os.makedirs(d, exist_ok=True)
         with open(os.path.join(self.cfg.logs_dir, f"edge_{spec.run_id}.log"), "ab") as out:   # 자식이 fd 를 물려받는다
             self.proc = self.spawn(command(self.cfg), cwd=self.cfg.t3amr_dir, env=env, start_new_session=True,
                                    stdout=out, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
@@ -315,8 +419,13 @@ class Recorder:
                 tail = f.read().decode("utf-8", "replace")
         except OSError:
             return None
-        hits = SIM_TIME_RE.findall(tail)
-        return float(hits[-1]) if hits else None
+        lines = [ln for ln in tail.splitlines() if SIM_TIME_RE.search(ln)]
+        if not lines:
+            return None
+        last = lines[-1]
+        # 구간 재생이면 워밍업을 뺀 **창 시각**을 쓴다 (-275) — host-orch 는 창 10분을 센다.
+        w = WINDOW_TIME_RE.search(last)
+        return float(w.group(1)) if w else float(SIM_TIME_RE.search(last).group(1))
 
     def ready(self) -> bool:
         """촬영이 실제로 켜졌나 = RUNNING 조건."""

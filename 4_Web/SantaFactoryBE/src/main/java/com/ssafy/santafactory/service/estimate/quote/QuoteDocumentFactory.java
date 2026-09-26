@@ -3,6 +3,7 @@ package com.ssafy.santafactory.service.estimate.quote;
 import com.ssafy.santafactory.dto.estimate.EstimateDetailResponse;
 import com.ssafy.santafactory.dto.estimate.EstimateDetailResponse.Run;
 import com.ssafy.santafactory.dto.estimate.VerifyNoticeCode;
+import com.ssafy.santafactory.dto.simulation.PhysicsMetrics;
 import com.ssafy.santafactory.dto.warehouse.WarehouseResponse;
 import com.ssafy.santafactory.entity.estimate.EstimateStatus;
 import com.ssafy.santafactory.entity.estimate.ReasonCode;
@@ -99,7 +100,48 @@ public class QuoteDocumentFactory {
                 done.size() >= 2 ? curve(d, done) : null,
                 rec == null || rec.kpi() == null ? null : ops(rec),
                 pdfProperties.siteUrl() + "/estimates",
-                logoDataUri);
+                logoDataUri,
+                physicsRows(d),
+                physicsLimitLine(d));
+    }
+
+    // ── 05 부록 — 대수별 물리 검증 (S15P21A106-244) ──────────────────────────
+
+    private List<QuoteDocument.PhysicsRow> physicsRows(EstimateDetailResponse d) {
+        return d.verifications().stream()
+                .sorted(Comparator.comparingInt(EstimateDetailResponse.VerificationRun::nRobots))
+                .map(v -> physicsRow(v, d.recommendedCount()))
+                .toList();
+    }
+
+    private QuoteDocument.PhysicsRow physicsRow(EstimateDetailResponse.VerificationRun v, Integer recommended) {
+        var p = v.physics();
+        var windowActions = p == null ? null : p.windowActions();
+        var lag = p == null ? null : p.lag();
+        String ratio = windowActions == null || windowActions.ratio() == null ? "—" : ratioPct(windowActions.ratio()) + " %";
+        String lagP50 = lag == null || lag.p50S() == null ? "—" : oneDecimal(lag.p50S()) + "초";
+        String contacts = p == null ? "—" : comma(contactCount(p)) + "회";
+        String minGap = p == null || p.robotMinGapM() == null ? "—" : oneDecimal(p.robotMinGapM()) + " m";
+        return new QuoteDocument.PhysicsRow(v.nRobots(), v.nRobots().equals(recommended),
+                verdictLabel(v.verdict()), ratio, lagP50, contacts, minGap);
+    }
+
+    private static long contactCount(PhysicsMetrics p) {
+        return (p.robotContacts() == null ? 0 : p.robotContacts()) + (p.rackContacts() == null ? 0 : p.rackContacts());
+    }
+
+    /** 명세 §D 한글 라벨 — 화면과 같은 말을 쓴다. */
+    private static String verdictLabel(String verdict) {
+        return switch (verdict) {
+            case "PASS" -> "통과";
+            case "WARN" -> "주의";
+            case "FAIL" -> "실패";
+            default -> "해당없음";
+        };
+    }
+
+    private String physicsLimitLine(EstimateDetailResponse d) {
+        return d.physicsLimit() == null ? null : "물리 상한 " + d.physicsLimit() + "대 — 후보 중 물리 판정이 통과인 가장 큰 대수";
     }
 
     // ── 01 ─────────────────────────────────────────────────────────────────

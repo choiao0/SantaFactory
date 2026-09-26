@@ -138,20 +138,20 @@ class TestLifecycle:
             f.write(b"\x00" * 16)
         assert r.video_path() == p
 
-    def test_side_video_path_is_the_top_name_plus_side(self, tmp_path):
-        """백엔드가 상단 키에서 `_side` 를 계산한다 — 이름이 어긋나면 버튼만 안 생긴다 (-264)."""
+    def test_fpv_video_path_is_the_top_name_plus_fpv(self, tmp_path):
+        """백엔드가 상단 키에서 `_fpv` 를 계산한다 — 이름이 어긋나면 버튼만 안 생긴다 (-264)."""
         c, r = self.make(tmp_path)
         r.start(spec(), 0.0)
-        assert r.side_video_path() is None                      # 없으면 None
-        p = os.path.join(c.out_dir, "demo_verify_77_n3_side.mp4")
+        assert r.fpv_video_path() is None                      # 없으면 None
+        p = os.path.join(c.out_dir, "demo_verify_77_n3_fpv.mp4")
         open(p, "wb").close()
-        assert r.side_video_path() is None                      # 0바이트는 없는 것
+        assert r.fpv_video_path() is None                      # 0바이트는 없는 것
         with open(p, "wb") as f:
-            f.write(b"side-mp4-bytes")
-        assert r.side_video_path() == p
+            f.write(b"fpv-mp4-bytes")
+        assert r.fpv_video_path() == p
         # 상단과 **이름만** 다르다
         top = os.path.join(c.out_dir, "demo_verify_77_n3.mp4")
-        assert r.side_video_path() == top.replace(".mp4", "_side.mp4")
+        assert r.fpv_video_path() == top.replace(".mp4", "_fpv.mp4")
 
     def test_remove_frames_deletes_the_shots_dir_and_is_a_noop_afterwards(self, tmp_path):
         r = REC.Recorder(cfg(tmp_path), spawn=FakePopen)
@@ -254,7 +254,7 @@ class TestHeadlessLogMarkers:
 class TestTwoVideosToMinIO:
     """두 시점이 **같은 버킷·같은 폴더**에 이름만 다르게 올라간다 (-264).
 
-    백엔드는 상단 객체 키에서 `_side` 를 계산해 MinIO 에 실제로 있는지 보고
+    백엔드는 상단 객체 키에서 `_fpv` 를 계산해 MinIO 에 실제로 있는지 보고
     버튼을 띄운다 (`4_Web` -931500f). 그래서 결과 페이로드(artifacts)도 NDATA
     메트릭도 안 바뀐다 — 대신 **이름이 어긋나면 오류 없이 버튼만 안 생긴다.**
     그 침묵이 이 테스트가 있는 이유다.
@@ -270,24 +270,24 @@ class TestTwoVideosToMinIO:
         up = Uploader("h:9000", "a", "s", "verify-videos", False)
         rid = spec().run_id
         top = up.object_key(rid, f"/out/demo_{rid}.mp4")
-        side = up.object_key(rid, f"/out/demo_{rid}_side.mp4")
+        fpv = up.object_key(rid, f"/out/demo_{rid}_fpv.mp4")
 
         assert top == f"{rid}/demo_{rid}.mp4"
-        # 백엔드의 계산: 상단 키의 ".mp4" 앞에 "_side" 를 끼운다
-        assert side == top[:-len(".mp4")] + "_side.mp4"
+        # 백엔드의 계산: 상단 키의 ".mp4" 앞에 "_fpv" 를 끼운다
+        assert fpv == top[:-len(".mp4")] + "_fpv.mp4"
         # 같은 버킷·같은 폴더 (접두가 run_id 하나)
-        assert top.split("/")[0] == side.split("/")[0] == rid
+        assert top.split("/")[0] == fpv.split("/")[0] == rid
 
-    def test_side_video_is_found_only_when_it_is_a_real_file(self, tmp_path):
+    def test_fpv_video_is_found_only_when_it_is_a_real_file(self, tmp_path):
         r = self.rec(tmp_path)
         os.makedirs(r.cfg.out_dir, exist_ok=True)
-        assert r.side_video_path() is None                 # 없으면 None — 측면은 선택이다
-        p = os.path.join(r.cfg.out_dir, f"demo_{r.tag()}_side.mp4")
+        assert r.fpv_video_path() is None                 # 없으면 None — 측면은 선택이다
+        p = os.path.join(r.cfg.out_dir, f"demo_{r.tag()}_fpv.mp4")
         open(p, "wb").close()
-        assert r.side_video_path() is None                 # 0 바이트는 없는 것으로 본다
+        assert r.fpv_video_path() is None                 # 0 바이트는 없는 것으로 본다
         with open(p, "wb") as f:
             f.write(b"x")
-        assert r.side_video_path() == p
+        assert r.fpv_video_path() == p
 
     def test_both_uploads_finish_before_the_run_reports(self, tmp_path):
         """러너가 이 future 를 기다렸다가 상태를 넘긴다 — 둘 다 끝난 뒤여야 한다.
@@ -297,20 +297,20 @@ class TestTwoVideosToMinIO:
         from edge import runner as RUN
         src = inspect.getsource(RUN.Runner._upload_then_tidy)
         top_at = src.index("self.uploader.upload(path, run_id)")
-        side_at = src.index("self.uploader.upload(side, run_id)")
+        fpv_at = src.index("self.uploader.upload(fpv, run_id)")
         ret_at = src.rindex("return url")
-        assert top_at < side_at < ret_at, "측면 업로드가 return 앞에 있어야 한다"
+        assert top_at < fpv_at < ret_at, "1인칭 업로드가 return 앞에 있어야 한다"
 
     def test_frames_of_both_views_are_removed_after_upload(self, tmp_path):
         """측면이 생기며 한 런의 프레임이 두 배가 됐다 (상단만 14 GB).
         청소가 상단에만 걸려 있으면 판마다 그만큼 샌다."""
         r = self.rec(tmp_path)
-        for d in (r.shots_dir(), r.side_shots_dir()):
+        for d in (r.shots_dir(), r.fpv_shots_dir()):
             os.makedirs(d)
             for name in ("f_000001.png", "f_000002.png"):
                 open(os.path.join(d, name), "wb").close()
 
         assert r.remove_frames() == 4
         assert not os.path.exists(r.shots_dir())
-        assert not os.path.exists(r.side_shots_dir())
+        assert not os.path.exists(r.fpv_shots_dir())
         assert r.remove_frames() == 0

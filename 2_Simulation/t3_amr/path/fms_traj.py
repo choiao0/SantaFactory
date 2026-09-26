@@ -42,6 +42,9 @@
 자체 점검:
     source paths.sh
     python path/fms_traj.py <trajectories.json>
+
+씬 빌더용 계획 폴더를 궤적 첫 틱으로 만들기 (-275, `run_record.sh` 가 궤적 재생에서 부른다):
+    python path/fms_traj.py --plan-folder <trajectories.json> <plan/traj_pibt_h/fleet_NN>
 """
 import json
 import math
@@ -84,15 +87,52 @@ def _read_traj(path):
     return raw
 
 
-def _states_by_robot(raw, dt, cell_m, off_m):
-    """`{rid: {틱: (r,c,h)}}` 와 마지막 틱. 좌표·헤딩 변환이 여기 한 곳에만 있다."""
+#: ★★ **구간 파일** (S15P21A106-275). DES 6시간 중 피크 10분만 잘라 물리로 본다.
+#
+#   내보내기 형식에 `slice` 블록 하나가 더 붙는다. 시각(`t_s`)은 **DES 원래 시각
+#   그대로**이고, 여기서 `t_start_s` 를 빼 틱 0 부터 다시 센다 — 틱 0 이 곧 스폰이다.
+#
+#       slice.t_start_s   구간 시작 = t0 − 워밍업. 모든 로봇이 이 시각에 한 줄씩 있다
+#       slice.t0_s        검증 창 시작 (피크 10분의 첫 초)
+#       slice.warmup_s    t0 전에 미리 굴리는 시간 — 지표에서 뺀다
+#       slice.window_s    검증 창 길이 (실제 시간 초 = 시뮬 초)
+#       slice.speed_mps   DES 가 쓴 순항 속도 — 실행 속도를 여기에 맞춘다
+#
+#   ☹ 워밍업을 두는 이유 — FMS 는 여러 틱짜리 동작을 **첫 틱에** 끝난 자리로
+#     적는다. t0 에 딱 잘라 스폰하면 움직이던 로봇이 최대 3.3 s 앞선 자리에 멈춘
+#     채로 선다. 워밍업 동안 계획대로 굴려 두면 t0 에는 이미 제 속도로 달리고 있다.
+SLICE_KEYS = ("t_start_s", "t0_s", "warmup_s", "window_s")
+
+
+def _slice_block(raw):
+    """구간 파일이면 `slice` 블록, 아니면 None. 필수 키가 빠졌으면 바로 멈춘다."""
+    s = raw.get("slice")
+    if s is None:
+        return None
+    missing = [k for k in SLICE_KEYS if s.get(k) is None]
+    if missing:
+        raise ValueError(f"slice 블록에 {missing} 가 없다")
+    t_start, t0, warm = float(s["t_start_s"]), float(s["t0_s"]), float(s["warmup_s"])
+    if abs((t0 - t_start) - warm) > 1e-6 * max(1.0, t0):
+        raise ValueError(f"slice: t0_s − t_start_s ({t0 - t_start:g}) != warmup_s ({warm:g})")
+    return s
+
+
+def _states_by_robot(raw, dt, cell_m, off_m, t_start_s=0.0):
+    """`{rid: {틱: (r,c,h)}}` 와 마지막 틱. 좌표·헤딩 변환이 여기 한 곳에만 있다.
+
+    `t_start_s` 를 빼고 센다 — 구간 파일이면 구간 시작이 틱 0 이다. 그 앞 줄은 버린다.
+    """
     per, tmax = {}, 0
+    k0 = round(float(t_start_s) / dt)
     for k in sorted(raw["robots"], key=int):
         rid = int(k)
-        hh = {round(float(t) / dt): yaw for t, yaw in raw["headings"][k]}
+        hh = {round(float(t) / dt) - k0: yaw for t, yaw in raw["headings"][k]}
         per[rid] = {}
         for t_s, x, y in raw["robots"][k]:
-            t = int(round(float(t_s) / dt))
+            t = int(round(float(t_s) / dt)) - k0
+            if t < 0:
+                continue
             r, c = _cellof(float(x), float(y), cell_m, off_m)
             per[rid][t] = (r, c, _headof(hh.get(t, 0.0)))
             tmax = max(tmax, t)
@@ -136,17 +176,28 @@ def load_history(path, cell_m=None, off_m=None, verbose=True):
 
     raw = _read_traj(path)
     dt = float(raw["dt_s"])
-    per, tmax = _states_by_robot(raw, dt, cell_m, off_m)
+    sl = _slice_block(raw)
+    per, tmax = _states_by_robot(raw, dt, cell_m, off_m,
+                                 t_start_s=float(sl["t_start_s"]) if sl else 0.0)
+    if sl:
+        late = [rid for rid, log in per.items() if 0 not in log]
+        if late:
+            raise ValueError(f"slice: 로봇 {late[:5]} 가 구간 시작(틱 0)에 없다 — "
+                             "스폰 자리를 모른다")
     history, filled = _fill_gaps(per, tmax)
 
     meta = dict(dt=dt, model=raw.get("model"), n_robots=len(per),
                 ticks=len(history), filled=filled,
                 tasks=len(raw.get("tasks") or []),
-                cell_m=cell_m, off_m=off_m)
+                cell_m=cell_m, off_m=off_m, slice=dict(sl) if sl else None)
     if verbose:
         print(f"[fms_traj] {os.path.basename(path)} · 모델 {meta['model']} · dt {dt}s")
         print(f"[fms_traj]   로봇 {meta['n_robots']}대 · 틱 {meta['ticks']:,} "
               f"(= {meta['ticks'] * dt:,.0f}s) · 태스크 {meta['tasks']:,}")
+        if sl:
+            print(f"[fms_traj]   ★★ 구간 — DES {float(sl['t_start_s']):,.0f}s 부터 "
+                  f"(워밍업 {float(sl['warmup_s']):g}s + 창 {float(sl['window_s']):g}s, "
+                  f"t0 = {float(sl['t0_s']):,.0f}s)")
         if filled:
             print(f"[fms_traj]   ☹ 빈 틱을 앞 값으로 채움 {filled:,}칸")
     return history, meta
@@ -291,7 +342,43 @@ def find_cycle(adg, limit=3):
     return out
 
 
+def write_plan_folder(path, fleet_dir, verbose=True):
+    """궤적 **첫 틱**으로 씬 빌더용 계획 폴더를 만든다 (-275). 만든 대수를 돌려준다.
+
+    씬 빌더(`amr/main.py run` → `build_amr_scene_v2.py --traj --starts`)는 대수별 계획
+    폴더의 `trajectories.json`·`starts.json` 을 읽어 로봇을 세운다. 궤적 재생은 계획을
+    안 하므로 그 폴더가 없다 — 로컬에서는 손으로 둔 `plan/` 이 있었지만 컨테이너에는 없다.
+
+    스폰 좌표는 러너와 **같은 기하**로 낸다 — `pibt_scene.setup_lifelong` 이 `PIBT_FMS_GRID`
+    를 보고 FMS 격자 원점을 쓴다. 따로 계산하면 원점이 어긋나 live_pibt 가 「스폰이 궤적
+    첫 틱과 다르다」로 다시 세운다.
+    """
+    import pibt_scene as PS
+    history, meta = load_history(path, verbose=False)
+    n = meta["n_robots"]
+    pitch = float(os.environ.get("PIBT_PITCH", "") or 1.0)
+    seed = int(os.environ.get("PIBT_SEED", "") or 104)
+    geom, _free, _st, _goals = PS.setup_lifelong(os.environ["MAP"], n, pitch, seed, verbose=False)
+    starts = {a: tuple(s) for a, s in history[0].items()}
+    os.makedirs(fleet_dir, exist_ok=True)
+    files = {
+        "starts.json": PS.starts_json(geom, starts),
+        "trajectories.json": PS.traj_json(geom, history, pitch),
+        "scene.json": dict(n=n, pitch=pitch, seed=seed, mode="traj",
+                           source=os.path.abspath(path), slice=meta.get("slice")),
+    }
+    for name, doc in files.items():
+        with open(os.path.join(fleet_dir, name), "w", encoding="utf-8") as f:
+            json.dump(doc, f, ensure_ascii=False)
+    if verbose:
+        print(f"[fms_traj] 계획 폴더 <- 궤적 첫 틱: {n}대 · {fleet_dir}")
+    return n
+
+
 def _main():
+    if len(sys.argv) >= 4 and sys.argv[1] == "--plan-folder":
+        write_plan_folder(sys.argv[2], sys.argv[3])
+        return 0
     if len(sys.argv) < 2:
         print(__doc__)
         return 2

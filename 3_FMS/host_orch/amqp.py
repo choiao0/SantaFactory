@@ -1,8 +1,11 @@
-"""RabbitMQ `sim.verify.request` 소비 · `sim.verify.result` 발행 — pika BlockingConnection, prefetch 1, 결과 발행 뒤 ack.
+"""RabbitMQ `sim.verify.request` 소비 · `sim.verify.result` 발행 — pika BlockingConnection, prefetch = 노드 수, 결과 발행 뒤 ack.
 
 잡은 분 단위로 돌므로 소비 루프 안에서 기다린다: consume(inactivity_timeout) 이 0.5 s 마다 None 을 내면
 coordinator.tick() 을 돌리고, 잡이 끝나면 결과를 발행하고 그제야 ack 한다 (명세 §1-3 과 같은 규칙).
-prefetch 1 이라 unacked 동안 다음 요청은 오지 않는다. RabbitMQ consumer_timeout(기본 30 분) 안에 창을 끝내야 한다.
+prefetch = 러너 노드 수(spec244 §E) — 노드 수만큼 요청을 동시에 들고 있을 수 있다. delivery_tag 로 pending 을
+여러 개 들고, 각자 끝나는 대로 결과를 발행하고 그 태그만 ack 한다. RabbitMQ consumer_timeout(기본 30 분) 안에
+창을 끝내야 한다 — Busy(빈 노드 없음)로 오래 보류된 메시지는 requeue 해서(ack/nack 이 그 타이머를 초기화한다)
+계속 들고만 있다가 걸리는 일을 막는다(-244, §3).
 """
 from __future__ import annotations
 
@@ -21,6 +24,12 @@ REQUEST_QUEUE = "sim.verify.request"
 RESULT_QUEUE = "sim.verify.result"
 POLL_S = 0.5
 RECONNECT_S = 5.0
+# Busy(빈 노드 없음)로 보류된 메시지를 이만큼만 들고 있다가 requeue 한다. RabbitMQ 는 nack 을 받으면
+# "배달됨" 타이머를 초기화하므로, 계속 들고 있다가 consumer_timeout(기본 30 분, 위 docstring)에 걸려
+# 채널이 끊기는 것보다 짧은 간격으로 스스로 requeue 하는 편이 안전하다. 소비자가 host-orch 하나뿐이라
+# 곧 같은 프로세스로 되돌아온다 — 그사이 다른 pending 요청이 노드를 차지했으면 이번엔 그쪽이 배정된다
+# (머리 막힘 완화). 30 분보다 훨씬 짧게 잡아 실제로 값이 있는 것은 requeue 반복 수뿐이다.
+BUSY_REQUEUE_S = 10.0
 
 
 def amqp_url() -> str:
@@ -40,13 +49,16 @@ def result_properties(pika_module: Any) -> Any:
 
 
 class Consumer:
-    """coordinator: submit(body) → job(.done, .result()), tick(now). lock 은 MQTT 스레드와 공유."""
+    """coordinator: submit(body) → job(.done, .result()), tick(now). lock 은 MQTT 스레드와 공유.
+
+    prefetch_count 는 러너 노드 수와 맞춘다(app.py) — 노드 수만큼 요청을 동시에 pending 으로 든다."""
 
     def __init__(self, url: str, coordinator: Any, lock: threading.RLock, request_queue: str = REQUEST_QUEUE,
-                 result_queue: str = RESULT_QUEUE, pika_module: Any = None):
+                 result_queue: str = RESULT_QUEUE, pika_module: Any = None, prefetch_count: int = 1):
         self.url, self.coord, self.lock = url, coordinator, lock
         self.request_queue, self.result_queue = request_queue, result_queue
         self.pika = pika_module
+        self.prefetch_count = max(1, prefetch_count)
         self.stop_event = threading.Event()
         self.handled = 0
 
@@ -67,8 +79,8 @@ class Consumer:
             ch = conn.channel()
             for q in (self.request_queue, self.result_queue):
                 ch.queue_declare(queue=q, durable=True)
-            ch.basic_qos(prefetch_count=1)
-            log.info("consuming %s (prefetch 1) → %s", self.request_queue, self.result_queue)
+            ch.basic_qos(prefetch_count=self.prefetch_count)
+            log.info("consuming %s (prefetch %d) → %s", self.request_queue, self.prefetch_count, self.result_queue)
             self._loop(ch)
         finally:
             try:
@@ -77,27 +89,36 @@ class Consumer:
                 pass
 
     def _loop(self, ch: Any) -> None:
-        pending = None      # [delivery_tag, body, job|None] — job 이 None 이면 Busy 라 다음 poll 에 다시 submit
+        # delivery_tag -> [body, job|None, delivered_at] — job 이 None 이면 Busy 라 다음 poll 에 다시 submit.
+        # prefetch_count 개까지 동시에 들 수 있다(노드 수만큼, -244).
+        pending: dict = {}
         for method, _props, body in ch.consume(self.request_queue, inactivity_timeout=POLL_S):
+            now = time.time()
             if self.stop_event.is_set():
-                if pending is not None:
-                    ch.basic_nack(delivery_tag=pending[0], requeue=True)
+                for tag in pending:
+                    ch.basic_nack(delivery_tag=tag, requeue=True)
                 ch.cancel()
                 return
             if method is not None:
-                pending = [method.delivery_tag, body, None]
+                pending[method.delivery_tag] = [body, None, now]
             with self.lock:
-                self.coord.tick(time.time())
-                if pending is not None and pending[2] is None:
-                    pending[2] = self._accept(pending[1])
-                job = pending[2] if pending else None
-                finished = job is not None and job.done
-                result = job.result() if finished else None
-            if finished:
-                self._publish_result(ch, result)
-                ch.basic_ack(delivery_tag=pending[0])
+                self.coord.tick(now)
+                for entry in pending.values():
+                    if entry[1] is None:
+                        entry[1] = self._accept(entry[0])
+                done_tags = [tag for tag, e in pending.items() if e[1] is not None and e[1].done]
+                results = {tag: pending[tag][1].result() for tag in done_tags}
+                stale_busy = [tag for tag, e in pending.items()
+                             if e[1] is None and now - e[2] > BUSY_REQUEUE_S]
+            for tag in done_tags:
+                self._publish_result(ch, results[tag])
+                ch.basic_ack(delivery_tag=tag)
                 self.handled += 1
-                pending = None
+                del pending[tag]
+            for tag in stale_busy:
+                ch.basic_nack(delivery_tag=tag, requeue=True)
+                del pending[tag]
+                log.info("request re-queued after %.0fs with no idle runner node", BUSY_REQUEUE_S)
 
     def _accept(self, body: bytes) -> Any:
         """submit 을 격리한다: Busy → None(보류), 그 밖의 예외 → failed 결과로 바꿔 큐를 막지 않는다. 락 안에서 호출."""

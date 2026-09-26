@@ -48,9 +48,11 @@ spec:
                 name: sim-worker-broker          # RABBITMQ_URL
           # ★ 비밀이 아닌 환경변수는 EC2 compose.estimate.yml 과 같아야 한다(-253) — 거기만 바꾸면 k3s 워커가 조용히 다른 설정으로 돈다.
           env:
-            # θ 예측 (S15P21A106-206). 대수마다 맵을 보고 θ 를 뽑는다. 지우면 고정 θ. 모델은 이미지 안(estimate.Dockerfile COPY ai_theta/)
+            # θ 는 중립으로 고정한다 (S15P21A106-277) — 대수별 예측(-206)을 끄고 파일도 주지 않는다. compose 두 파일과 같은 값
             - name: THETA_MODEL
-              value: /app/ai_theta/model/theta_model.joblib
+              value: ""
+            - name: THETA_PATH
+              value: ""
           resources:
             # 워커 1개 = 코어 1개(OMP 1). 메모리 3Gi 는 GCP 실측(로봇 12·13대가 2Gi 한도, +70MB/로봇, gcp/README.md)
             # 디스크: run 마다 isaac_export 약 20 MB 를 쓰고 읽은 뒤 지운다(estimate_worker._read_replay). 상한을 두어 지우기 실패가 노드 디스크를 채우지 않게

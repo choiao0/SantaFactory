@@ -166,7 +166,7 @@ new EstimateCreateRequest(warehouseId, null, null, null, null, null, null), ADMI
                 new VerifyResultResponse.Verify(13, 13, 600, "window elapsed",
                         new VerifyResultResponse.Fms("done", null, null)),
                 new SimulationResponse.Kpi(30, 28, 0, 0, 600L, 500.0, 1035.0, 40.0,
-                        126.0, 140.0, 0.7, 0.055, 20_000L, 0L)));
+                        126.0, 140.0, 0.7, 0.055, 20_000L, 0L), null));
 
         EstimateDetailResponse detail = estimateService.detail(created.estimateId(), ADMIN);
         EstimateDetailResponse.Verification verification = detail.verification();
@@ -190,7 +190,7 @@ new EstimateCreateRequest(warehouseId, null, null, null, null, null, null), ADMI
             }
         }
         estimateService.applyResult(new SimulationResponse(
-                "est_%d_n12".formatted(created.estimateId()), "failed", "시뮬 정체 감지", null, null));
+                "est_%d_n12".formatted(created.estimateId()), "failed", "시뮬 정체 감지", null, null, null));
 
         EstimateDetailResponse detail = estimateService.detail(created.estimateId(), ADMIN);
         assertThat(detail.status()).isEqualTo(EstimateStatus.PARTIAL);
@@ -209,7 +209,7 @@ new EstimateCreateRequest(warehouseId, null, null, null, null, null, null), ADMI
         estimateService.applyResult(done(created.estimateId(), 3));
         estimateService.applyResult(new SimulationResponse(runId, "done", null,
                 new SimulationResponse.Kpi(100, 1, null, null, null, null, null, null,
-                        null, null, 0.01, null, null, null), null));
+                        null, null, 0.01, null, null, null), null, null));
 
         SimScenario run = scenarioRepository.findByRunId(runId).orElseThrow();
         assertThat(run.getThroughput()).isEqualTo(24.0);   // 3대 첫 결과가 유지된다
@@ -245,6 +245,6 @@ new EstimateCreateRequest(warehouseId, null, null, null, null, null, null), ADMI
                 21_600L, 300.0, Math.max(60.0, 12_600.0 - amrCount * 900.0), 30.0,
                 amrCount * 10.0, null,
                 (100 - amrCount * 1.5) / 100.0, 0.05, 1_000L * amrCount, 0L);
-        return new SimulationResponse("est_%d_n%d".formatted(estimateId, amrCount), "done", null, kpi, null);
+        return new SimulationResponse("est_%d_n%d".formatted(estimateId, amrCount), "done", null, kpi, null, null);
     }
 }

@@ -53,4 +53,23 @@ public final class EstimateEvents {
     public record EstimateVerified(Long estimateId, String status, String videoUrl,
                                    String videoFpvUrl, String error) {
     }
+
+    /**
+     * 대수별 물리 검증 회차 하나가 새 상태로 바뀌었다 (S15P21A106-244). {@code verify.run} SSE 이벤트로
+     * 그대로 나간다 — 화면은 {@code run.n_robots} 로 어느 후보 카드를 갱신할지 고른다.
+     */
+    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
+    public record VerificationUpdated(Long estimateId, Integer physicsLimit,
+                                      EstimateDetailResponse.VerificationRun run) {
+    }
+
+    /** 발행한 회차 전체가 끝났다(PENDING/RUNNING 없음) — {@code verify.done} 이 이 스냅샷을 싣는다. */
+    public record VerificationsFinished(Long estimateId) {
+    }
+
+    /** 구독 스냅샷·verify.done 공용 — 대수별 최신 시도 목록 + 물리 상한. */
+    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
+    public record VerificationsSnapshot(Long estimateId, Integer recommendedCount, Integer physicsLimit,
+                                        List<EstimateDetailResponse.VerificationRun> verifications) {
+    }
 }

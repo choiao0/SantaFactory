@@ -43,12 +43,18 @@ def _load_env() -> dict:
 CFG = _load_env()
 HOST, PORT = CFG.get("MQTT_HOST", "localhost"), int(CFG.get("MQTT_PORT", "1883"))
 PW = {"amr": CFG.get("MQTT_PW_AMR"), "fms-core": CFG.get("MQTT_PW_FMS_CORE"),
-      "sim-runner-gpu01": CFG.get("MQTT_PW_SIM_RUNNER"), "host-orch": CFG.get("MQTT_PW_HOST_ORCH"),
+      # sim-runner-gpu01..0N 은 계정군 전체가 같은 비밀번호(bootstrap_users.sh, -244) — acl.conf 의
+      # sim-runner-gpu\d+ 정규식이 ${username} 으로 토픽만 서로 가른다.
+      "sim-runner": CFG.get("MQTT_PW_SIM_RUNNER"), "host-orch": CFG.get("MQTT_PW_HOST_ORCH"),
       "sim-wms": CFG.get("MQTT_PW_SIM_WMS")}
 
 
 def pw_of(user: str) -> str:
-    return PW["amr"] if user.startswith("amr") else PW[user]
+    if user.startswith("amr"):
+        return PW["amr"]
+    if user.startswith("sim-runner-gpu"):
+        return PW["sim-runner"]
+    return PW[user]
 
 
 def _broker_reachable() -> bool:
@@ -205,7 +211,7 @@ MATRIX = [
     ("fms-core", "sub", "biz/v1/order", None, True),
     ("fms-core", "sub", "spBv1.0/santa/NCMD/fms-core", None, True),
     ("fms-core", "sub", "spBv1.0/#", None, False),
-    # sim-runner
+    # sim-runner-gpu01 — 노드 하나일 때와 같은 칸
     ("sim-runner-gpu01", "pub", "spBv1.0/santa/NBIRTH/sim-runner-gpu01", False, True),
     ("sim-runner-gpu01", "pub", "spBv1.0/santa/DDATA/sim-runner-gpu01/amr01", False, True),
     ("sim-runner-gpu01", "pub", f"{A}/order", False, False),
@@ -213,6 +219,13 @@ MATRIX = [
     ("sim-runner-gpu01", "sub", "spBv1.0/santa/NCMD/sim-runner-gpu01", None, True),
     ("sim-runner-gpu01", "sub", "uagv/v2/+/+/state", None, True),
     ("sim-runner-gpu01", "sub", "biz/v1/#", None, False),
+    # sim-runner-gpu02 — 일반화한 정규식(sim-runner-gpu\d+)이 두 번째 노드도 자기 이름 아래서 열고,
+    # 서로의 NBIRTH/NCMD 는 막는지 확인한다(spec244 §E, -244)
+    ("sim-runner-gpu02", "pub", "spBv1.0/santa/NBIRTH/sim-runner-gpu02", False, True),
+    ("sim-runner-gpu02", "pub", "spBv1.0/santa/DDATA/sim-runner-gpu02/amr01", False, True),
+    ("sim-runner-gpu02", "pub", "spBv1.0/santa/NBIRTH/sim-runner-gpu01", False, False),   # 남의 노드 이름
+    ("sim-runner-gpu02", "sub", "spBv1.0/santa/NCMD/sim-runner-gpu02", None, True),
+    ("sim-runner-gpu02", "sub", "spBv1.0/santa/NCMD/sim-runner-gpu01", None, False),      # 남의 NCMD 는 못 듣는다
     # host-orch
     ("host-orch", "pub", "spBv1.0/STATE/host-orch", True, True),
     ("host-orch", "pub", "spBv1.0/santa/NCMD/sim-runner-gpu01", False, True),

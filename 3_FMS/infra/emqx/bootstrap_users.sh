@@ -15,14 +15,18 @@ for v in MQTT_PW_AMR MQTT_PW_FMS_CORE MQTT_PW_SIM_RUNNER MQTT_PW_HOST_ORCH MQTT_
   case "${!v}" in *,*) echo "$v 에 쉼표는 쓸 수 없다 (CSV)" >&2; exit 1;; esac
 done
 N=${AMR_POOL_SIZE:-6}
+# GPU 1대에서 러너 컨테이너 여러 개(spec244 §E, 실측 3개 동시가 빠듯) — 계정군 전체가 acl.conf 의
+# sim-runner-gpu\d+ 정규식에 걸리는 같은 비밀번호를 쓴다(-244). 컨테이너를 안 띄우는 노드가 있어도
+# 계정만 미리 있는 건 무해하다 — ${username} 스코핑이 서로를 막는다.
+R=${SIM_RUNNER_POOL_SIZE:-3}
 OUT="$HERE/users.csv"
 {
   echo "user_id,password,is_superuser"
   for i in $(seq -f "%02g" 1 "$N"); do echo "amr$i,$MQTT_PW_AMR,false"; done
   echo "fms-core,$MQTT_PW_FMS_CORE,false"
-  echo "sim-runner-gpu01,$MQTT_PW_SIM_RUNNER,false"
+  for i in $(seq -f "%02g" 1 "$R"); do echo "sim-runner-gpu$i,$MQTT_PW_SIM_RUNNER,false"; done
   echo "host-orch,$MQTT_PW_HOST_ORCH,false"
   echo "sim-wms,$MQTT_PW_SIM_WMS,false"
 } > "$OUT"
 chmod 644 "$OUT"      # 컨테이너의 emqx 사용자(uid 1000)가 읽어야 한다 — 600 이면 부트스트랩이 조용히 건너뛰어진다 (EC2 2026-09-08 실측)
-echo "$OUT: amr01..amr$(printf %02d "$N") + fms-core, sim-runner-gpu01, host-orch, sim-wms"
+echo "$OUT: amr01..amr$(printf %02d "$N") + fms-core, sim-runner-gpu01..$(printf %02d "$R"), host-orch, sim-wms"

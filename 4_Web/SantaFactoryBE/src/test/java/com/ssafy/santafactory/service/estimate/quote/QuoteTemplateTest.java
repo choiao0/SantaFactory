@@ -61,7 +61,7 @@ class QuoteTemplateTest {
         var noRec = new com.ssafy.santafactory.dto.estimate.EstimateDetailResponse(d.estimateId(), d.status(), d.amrModel(),
                 d.targetThroughput(), d.targetUtilization(), d.budgetLimit(), null, null, null,
                 com.ssafy.santafactory.entity.estimate.ReasonCode.THROUGHPUT_SHORT, d.createdAt(), d.completedAt(), d.elapsedSeconds(),
-                null, null, d.runs(), null);
+                null, null, d.runs(), null, java.util.List.of(), null);
 
         String html = service.html(factory.build(new QuoteSource(noRec, QuoteFixtures.warehouse())));
 

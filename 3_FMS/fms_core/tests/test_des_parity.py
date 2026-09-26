@@ -109,7 +109,7 @@ def test_worker_defaults(worker):
     from objective import run_once
     assert inspect.signature(run_once).parameters["aisle_block"].default == int(DES_AISLE_BLOCK), \
         "견적은 통로차단 ON 으로 돈다 — fms-core 도 같은 맵이어야 한다"
-    assert theta_path() == worker.THETA_PATH, "견적과 다른 θ 로 달리면 경로가 달라진다"
+    assert theta_path() == (worker.THETA_PATH or None), "견적과 다른 θ 로 달리면 경로가 달라진다 (\"\" = 중립 = None)"
 
 
 # ---- 커널 자체가 같은가 -----------------------------------------------------------------

@@ -68,7 +68,8 @@ class EstimateControllerTest {
 
     private static final EstimateDetailResponse DETAIL = new EstimateDetailResponse(
             77L, EstimateStatus.RUNNING, "iw.hub", 95.0, 80.0, 300_000_000L,
-            null, null, null, null, LocalDateTime.of(2026, 9, 8, 10, 0), null, null, null, null, List.of(), null);
+            null, null, null, null, LocalDateTime.of(2026, 9, 8, 10, 0), null, null, null, null, List.of(), null,
+            List.of(), null);
 
     // ── 견적서 PDF (S15P21A106-236) ──────────────────────────────────────────
 
@@ -174,12 +175,24 @@ class EstimateControllerTest {
                 .andExpect(status().isAccepted())
                 .andExpect(jsonPath("$.isSuccess").value(true));
 
-        verify(estimateService).requestVerification(77L, ADMIN);
+        verify(estimateService).requestVerification(77L, ADMIN, null);
+    }
+
+    /** 본문으로 후보 대수를 직접 고르면 그 목록이 그대로 서비스에 전달된다 (S15P21A106-244). */
+    @Test
+    void verification_request_with_a_counts_body_passes_them_through() throws Exception {
+        mvc.perform(post("/api/estimates/77/verify")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"counts\":[9,10,11]}"))
+                .andExpect(status().isAccepted());
+
+        verify(estimateService).requestVerification(77L, ADMIN, List.of(9, 10, 11));
     }
 
     @Test
     void verification_request_is_rejected_without_a_recommended_count() throws Exception {
-        doThrow(new GlobalException(ErrorCode.ESTIMATE_NOT_VERIFIABLE)).when(estimateService).requestVerification(77L, ADMIN);
+        doThrow(new GlobalException(ErrorCode.ESTIMATE_NOT_VERIFIABLE))
+                .when(estimateService).requestVerification(77L, ADMIN, null);
 
         mvc.perform(post("/api/estimates/77/verify"))
                 .andExpect(status().isConflict())

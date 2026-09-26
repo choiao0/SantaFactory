@@ -1,4 +1,6 @@
 import { useState } from 'react'
+import { Link } from 'react-router-dom'
+import { FIRST_STEP_PATH } from '../data/steps.js'
 import { downloadQuotePdf, emailQuote } from '../api/estimates.js'
 import { formatDateTime, formatEok, formatPercent, formatWon } from '../utils/format.js'
 
@@ -430,7 +432,7 @@ function UtilChart({ runs, target, recommended }) {
 
 function Placeholder({ estimateId, estimate }) {
   if (estimateId == null) {
-    return <div className="q-empty">02 단계에서 견적을 요청하면 리포트가 여기에 표시됩니다.</div>
+    return <div className="q-empty">견적을 요청하면 리포트가 여기에 표시됩니다.</div>
   }
   const runs = estimate?.runs ?? []
   const finished = runs.filter((r) => r.status !== 'QUEUED' && r.status !== 'RUNNING').length
@@ -482,7 +484,7 @@ function QuoteActions({ estimateId, finished }) {
       >
         {busy === 'mail' ? '보내는 중…' : '메일로 받기'}
       </button>
-      <a className="ghost" href="#s1">조건 바꿔 다시 요청</a>
+      <Link className="ghost" to={FIRST_STEP_PATH}>조건 바꿔 다시 요청</Link>
       {message && (
         <span className="mono" style={{ fontSize: 13, color: message.ok ? '#1c7c4f' : '#b51616' }}>{message.text}</span>
       )}
