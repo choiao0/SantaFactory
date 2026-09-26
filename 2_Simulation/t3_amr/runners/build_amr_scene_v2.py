@@ -313,4 +313,9 @@ print(f"[s] 카메라 4개 (Cam_Follow, Cam_Overview, Cam_Top, "
 st.GetRootLayer().Export(args.out)
 print(f"[s] 저장: {args.out}", flush=True)
 print("[s] DONE", flush=True)
-simulation_app.close()
+# ★ 정리 없이 끝낸다 (-280). 기본 close() 는 Replicator 를 기다리며 앱을 한 번 업데이트하는데, 이 스크립트는
+#   그때까지 업데이트를 한 번도 안 해서 **그 순간 RTX 렌더러가 처음 켜진다**(뷰포트 생성 · 셰이더 컴파일).
+#   끝나기 전에 Kit 이 내려가면 carb "Destroying busy TaskGroup!" 로 코드 1 — est_21 10대(2026-09-27 00:59)가
+#   이렇게 죽었다(같은 밤 11대는 이 단계에서 67 초를 기다려 살았다). 저장은 위에서 끝났으니 정리할 것이 없다.
+#   실측(캐시 참): 기존 DONE 6.9 s → 종료 16.1 s, 이 방식 DONE = 종료 6.5 s · 출력 USD 는 md5 까지 같다.
+simulation_app.close(skip_cleanup=True)
