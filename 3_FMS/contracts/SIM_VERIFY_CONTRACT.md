@@ -117,7 +117,8 @@ DES 요청의 `horizon_s · shifts · inbound_gap_s · outbound_gap_s · warehou
 물리 판정(PASS/WARN/FAIL/N/A)은 **백엔드 한 곳**에서 `physics` 필드로 계산한다(화면·견적서 공통) — host-orch 는 파싱만 하고
 판정하지 않는다. 판정 규칙과 화면 문구는 상위 설계 문서(DES 피크 구간 → 물리 검증, spec244 §D)를 따른다: 대략
 `robot_contacts == 0 && rack_contacts == 0 && window_actions.ratio ≥ 0.80` 이면 PASS, 접촉 0 이지만 ratio 미달이면
-WARN(지연), 접촉 > 0 또는 `status: failed` 면 FAIL, `window_actions` 가 null(구간 재생이 아님)이면 N/A.
+WARN(지연), 접촉 > 0 이면 FAIL, `status: failed`(검증을 끝내지 못함)이거나 `window_actions` 가 null(구간 재생이 아님)이면
+N/A — 끝내지 못한 회차는 로봇이 부적합하다는 뜻이 아니라 판정하지 않는다(S15P21A106-280, 화면 · 견적서 「판정 불가」).
 
 요청 자체가 깨졌으면(`bad request: …`) `run_id` 를 읽을 수 있는 만큼 채워 `failed` 로 발행하고 ack 한다 (DES 명세 §1-2 와 같이 실패도 정상 발행). 이때 `physics` 도 `null`.
 
