@@ -404,7 +404,7 @@ _fpv_home = None           # 각 로봇의 시작 자리 — 움직인 거리를
 #       PIBT_FPV_HUD=0         1인칭 글씨 끈다
 #       PIBT_TOP_MARK=0        천장 표시 끈다
 #       PIBT_TOP_FIT=0         천장 카메라를 로봇이 다닌 범위에 맞추지 않는다 (씬 기본 120 m 전경)
-#       PIBT_HUD_FONT=<ttf>    한글 글꼴 (이미지에 fonts-nanum). 없으면 영어 글씨 + PIL 기본 글꼴
+#       PIBT_HUD_FONT=<ttf>    한글 글꼴 (이미지에 fonts-noto-cjk). 없으면 영어 글씨 + PIL 기본 글꼴
 #   ★ auto 추종은 **창 안에서 운행을 가장 많이 끝내는 로봇**을 첫 프레임부터 따라간다. 초반 10초를
 #     지켜보고 고르는 방식(`FPV_AUTO_AFTER`)은 구간표가 없을 때만 쓴다.
 HUD_ON = (os.environ.get("PIBT_FPV_HUD", "") or "1") not in ("0", "no", "off")
