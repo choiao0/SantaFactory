@@ -9,7 +9,7 @@ const BUTTON_LABEL = { idle: '물리 검증 시작', loading: '요청 중…', d
  * <p>자동 발행을 안 하는 이유 — Isaac 은 한 번에 한 건씩 약 10분을 문다. 견적이 끝날 때마다
  * 자동으로 걸면 큐가 그대로 쌓여 뒤 요청이 몇십 분씩 밀린다. 언제 돌릴지는 사람이 정한다.
  */
-export default function VerifyTrigger({ estimateId, recommendedCount, onStarted }) {
+export default function VerifyTrigger({ estimateId, recommendedCount, onStarted, counts, idleLabel }) {
   const [state, setState] = useState('idle') // idle | loading | done | error
   const [error, setError] = useState(null)
 
@@ -19,7 +19,7 @@ export default function VerifyTrigger({ estimateId, recommendedCount, onStarted 
     setState('loading')
     setError(null)
     try {
-      await requestVerify(estimateId)
+      await requestVerify(estimateId, counts)
       setState('done')
       onStarted?.()
     } catch (e) {
@@ -31,7 +31,7 @@ export default function VerifyTrigger({ estimateId, recommendedCount, onStarted 
   return (
     <>
       <button type="button" className="button" onClick={onClick} disabled={state === 'loading' || state === 'done'}>
-        {BUTTON_LABEL[state]}
+        {state === 'idle' && idleLabel ? idleLabel : BUTTON_LABEL[state]}
       </button>
       {state === 'error' && <p className="form-error">{error}</p>}
     </>

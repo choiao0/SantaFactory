@@ -158,7 +158,9 @@ function VerifyPlayer({ estimateId, current }) {
 }
 
 export default function VerifyStep({ estimateId, ready, recommendedCount }) {
-  const stream = useVerifyStream(ready ? estimateId : null)
+  // 다시 검증을 요청하면 올린다 — 닫힌 스트림을 새로 열어 새 회차를 받는다
+  const [epoch, setEpoch] = useState(0)
+  const stream = useVerifyStream(ready ? estimateId : null, epoch)
   // 서버는 '요청 전'과 '검증 중'을 구분해 주지 않는다 — 눌렀다는 사실은 화면이 기억한다
   const [started, setStarted] = useState(false)
   const [selected, setSelected] = useState(null)
@@ -167,6 +169,10 @@ export default function VerifyStep({ estimateId, ready, recommendedCount }) {
   const effectiveRecommended = stream.recommendedCount ?? recommendedCount
   const current = verifications.find((v) => v.n_robots === selected) ?? verifications[0] ?? null
   const placeholder = idlePlaceholder({ estimateId, ready, recommendedCount, started })
+  // (S15P21A106-279) 실패한 대수는 화면에서 다시 검증할 수 있어야 한다. 서버가 진행 중인 회차가 있으면 새 요청을
+  // 거부하므로 대수마다 따로가 아니라 실패한 대수를 한 번에 보낸다.
+  const failedCounts = verifications.filter((v) => v.status === 'FAILED').map((v) => v.n_robots)
+  const anyPending = verifications.some((v) => v.status === 'PENDING' || v.status === 'RUNNING')
 
   return (
     <section className="step section-dark" id="verify">
@@ -226,6 +232,19 @@ export default function VerifyStep({ estimateId, ready, recommendedCount }) {
               ? `물리 상한 ${stream.physicsLimit}대 — 후보 중 물리 판정이 통과인 가장 큰 대수`
               : '물리 상한 없음 — 후보 중 통과한 대수가 아직 없습니다'}
           </p>
+
+          {failedCounts.length > 0 && !anyPending && (
+            <div className="verify-retry">
+              <VerifyTrigger
+                key={failedCounts.join(',')}
+                estimateId={estimateId}
+                recommendedCount={effectiveRecommended}
+                counts={failedCounts}
+                idleLabel={`실패한 ${failedCounts.join('·')}대 다시 검증`}
+                onStarted={() => setEpoch((e) => e + 1)}
+              />
+            </div>
+          )}
 
           {current && (
             <div className="sim-board">
