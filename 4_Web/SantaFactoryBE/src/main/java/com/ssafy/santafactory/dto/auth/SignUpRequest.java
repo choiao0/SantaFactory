@@ -23,7 +23,7 @@ public record SignUpRequest(
         @NotBlank @Size(min = 8, max = 64) String password,
         @NotBlank @Size(max = 50) String name,
         @NotBlank @Size(max = 100) String company,
-        @NotBlank @Pattern(regexp = "[0-9-]{9,20}", message = "숫자와 하이픈만 입력해 주세요") String phone,
+        @NotBlank @Pattern(regexp = "[0-9-]{9,20}", message = "숫자와 하이픈만 입력해 주세요.") String phone,
         @NotBlank String emailToken
 ) {
 

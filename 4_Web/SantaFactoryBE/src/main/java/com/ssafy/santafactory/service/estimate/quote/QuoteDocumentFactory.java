@@ -63,12 +63,12 @@ public class QuoteDocumentFactory {
     private static final double FULL_THROUGHPUT = 99.95;
 
     private static final Map<ReasonCode, String> REASON_TEXT = new EnumMap<>(Map.of(
-            ReasonCode.BUDGET_EXCEEDED, "예산 안에 드는 로봇 대수가 없습니다. 예산을 올리거나 목표를 낮춰 다시 요청해 주세요.",
-            ReasonCode.THROUGHPUT_SHORT, "예산 안의 대수로는 목표 주문 처리율에 닿지 않습니다. 목표를 낮추거나 예산을 올려야 합니다.",
-            ReasonCode.UTILIZATION_SHORT, "목표 처리율은 채우지만 그 대수의 로봇 가동률이 목표에 못 미칩니다. 가동률 목표를 조정해 보세요.",
-            ReasonCode.LEAD_TIME_LONG, "주문은 목표만큼 처리되지만 한 건이 끝나기까지 걸리는 시간이 상한을 넘습니다. 대수를 늘리거나 상한을 완화해야 합니다.",
-            ReasonCode.ALL_FAILED, "모든 대수의 시뮬레이션이 실패해 판정할 결과가 없습니다. 조건을 확인한 뒤 다시 요청해 주세요.",
-            ReasonCode.LOAD_TOO_LOW, "모든 대수가 처리율 100 %를 기록해 대수를 구분할 수 없습니다. 주문량이 너무 적습니다."));
+            ReasonCode.BUDGET_EXCEEDED, "예산 안에서 도입할 수 있는 로봇 대수가 없습니다. 예산을 늘리거나 목표를 낮춰 다시 요청해 주세요.",
+            ReasonCode.THROUGHPUT_SHORT, "예산 안의 대수로는 목표 주문 처리율을 달성할 수 없습니다. 목표를 낮추거나 예산을 늘려 다시 요청해 주세요.",
+            ReasonCode.UTILIZATION_SHORT, "목표 주문 처리율을 달성하는 대수에서는 로봇 가동률이 목표에 미치지 못합니다. 로봇 가동률 목표를 조정해 다시 요청해 주세요.",
+            ReasonCode.LEAD_TIME_LONG, "목표 주문 처리율은 달성하지만 주문 처리 시간이 기준을 넘습니다. 로봇 대수를 늘리거나 주문 처리 시간 기준을 조정해 주세요.",
+            ReasonCode.ALL_FAILED, "대수별 시뮬레이션을 완료하지 못해 권장 대수를 산정하지 못했습니다. 조건을 확인한 뒤 다시 요청해 주세요.",
+            ReasonCode.LOAD_TOO_LOW, "주문량이 적어 모든 대수의 주문 처리율이 100%입니다. 대수 간 차이가 없어 권장 대수를 산정하지 않았습니다."));
 
     private final EstimateProperties estimateProperties;
     private final QuotePdfProperties pdfProperties;
@@ -118,7 +118,7 @@ public class QuoteDocumentFactory {
         var p = v.physics();
         var windowActions = p == null ? null : p.windowActions();
         var lag = p == null ? null : p.lag();
-        String ratio = windowActions == null || windowActions.ratio() == null ? "—" : ratioPct(windowActions.ratio()) + " %";
+        String ratio = windowActions == null || windowActions.ratio() == null ? "—" : ratioPct(windowActions.ratio()) + "%";
         String lagP50 = lag == null || lag.p50S() == null ? "—" : oneDecimal(lag.p50S()) + "초";
         String contacts = p == null ? "—" : comma(contactCount(p)) + "회";
         String minGap = p == null || p.robotMinGapM() == null ? "—" : oneDecimal(p.robotMinGapM()) + " m";
@@ -133,24 +133,28 @@ public class QuoteDocumentFactory {
     /** 명세 §D 한글 라벨 — 화면과 같은 말을 쓴다. */
     private static String verdictLabel(String verdict) {
         return switch (verdict) {
-            case "PASS" -> "통과";
+            case "PASS" -> "적합";
             case "WARN" -> "주의";
-            case "FAIL" -> "실패";
-            default -> "해당없음";
+            case "FAIL" -> "부적합";
+            default -> "판정 불가";
         };
     }
 
+    /** 검증한 대수가 있을 때만 한 줄을 낸다 — 통과한 대수가 없으면 그 사실을 적는다. */
     private String physicsLimitLine(EstimateDetailResponse d) {
-        return d.physicsLimit() == null ? null : "물리 상한 " + d.physicsLimit() + "대 — 후보 중 물리 판정이 통과인 가장 큰 대수";
+        if (d.physicsLimit() != null) {
+            return d.physicsLimit() + "대까지 3D 주행 검증을 통과했습니다.";
+        }
+        return d.verifications().isEmpty() ? null : "아직 3D 주행 검증을 통과한 대수가 없습니다.";
     }
 
     // ── 01 ─────────────────────────────────────────────────────────────────
 
     private Issue issue(EstimateDetailResponse d, WarehouseResponse w, String model) {
-        StringBuilder status = new StringBuilder(d.status() == EstimateStatus.PARTIAL ? "일부 실패" : "완료");
-        status.append(" · ").append(d.runs().size()).append("회 시뮬레이션");
+        StringBuilder status = new StringBuilder(d.status() == EstimateStatus.PARTIAL ? "일부 완료" : "완료");
+        status.append(" · 대수별 시뮬레이션 ").append(d.runs().size()).append("회");
         if (d.verification() != null && d.verification().notice() != VerifyNoticeCode.NOT_FINISHED) {
-            status.append(" · 물리 검증 완료");
+            status.append(" · 3D 주행 검증 완료");
         }
         String window = "—";
         if (w.outboundStart() != null && w.outboundEnd() != null) {
@@ -160,37 +164,37 @@ public class QuoteDocumentFactory {
         }
         String size = w.width() == null || w.length() == null ? "—"
                 : oneDecimal(w.width()) + " m × " + oneDecimal(w.length()) + " m · " + comma(Math.round(w.area())) + " m²";
-        return new Issue(status.toString(), QuoteFormat.elapsed(d.elapsedSeconds()), model,
+        return new Issue(status.toString(), model,
                 w.name(), size, w.workerCount() == null ? "—" : w.workerCount() + "명", window,
-                w.outboundAvg() == null ? "—" : comma(w.outboundAvg()) + "건", "표준 주문 패턴으로 계산");
+                w.outboundAvg() == null ? "—" : comma(w.outboundAvg()) + "건", "일반적인 시간대별 주문 분포를 적용했습니다.");
     }
 
     // ── 02 ─────────────────────────────────────────────────────────────────
 
     private Verdict verdict(EstimateDetailResponse d, Run rec, String model) {
         if (rec == null) {
-            String reason = d.reasonCode() == null ? "권장 대수를 내지 못했습니다." : REASON_TEXT.get(d.reasonCode());
+            String reason = d.reasonCode() == null ? "권장 대수를 산정하지 못했습니다." : REASON_TEXT.get(d.reasonCode());
             return new Verdict(false, model, null, null, null, reason, null, null, null, null, null, null, null, null);
         }
         long budget = d.budgetLimit();
         long cost = rec.totalCost() == null ? 0 : rec.totalCost();
         StringBuilder lead = new StringBuilder();
-        lead.append("목표 주문 처리율 ").append(pct(d.targetThroughput())).append(" %를 달성하는 대수 가운데 효율(주문 처리율 × 로봇 가동률)이 가장 높은 구성입니다. ");
+        lead.append("목표 주문 처리율 ").append(pct(d.targetThroughput())).append("%를 달성하는 대수 가운데 운영 효율이 가장 높은 구성입니다. ");
         lead.append("예상 구축 비용은 ").append(won(cost)).append("으로 예산 ").append(won(budget)).append(" ")
-                .append(cost <= budget ? "이내" : "초과").append("이며");
+                .append(cost <= budget ? "이내" : "초과").append("입니다.");
         if (d.kneeCount() != null && !d.kneeCount().equals(rec.amrCount())) {
-            lead.append(", ").append(d.kneeCount()).append("대부터는 로봇을 늘려도 처리량이 거의 늘지 않습니다.");
+            lead.append(" ").append(d.kneeCount()).append("대부터는 로봇을 늘려도 주문 처리량이 거의 늘지 않습니다.");
         } else {
-            lead.append(" 이 대수가 효율의 정점입니다.");
+            lead.append(" 비교한 모든 대수 가운데 이 대수에서 운영 효율이 가장 높습니다.");
         }
         double diff = rec.throughput() - d.targetThroughput();
-        String throughputNote = "목표 " + pct(d.targetThroughput()) + " % 대비 " + (diff >= 0 ? "+" : "−") + oneDecimal(Math.abs(diff)) + "p";
-        String utilizationNote = "목표 " + pct(d.targetUtilization()) + " % 이상";
+        String throughputNote = "목표 " + pct(d.targetThroughput()) + "% 대비 " + (diff >= 0 ? "+" : "−") + oneDecimal(Math.abs(diff)) + "%p";
+        String utilizationNote = "목표 " + pct(d.targetUtilization()) + "% 이상";
         long usedPct = Math.round(cost * 100.0 / budget);
-        String costNote = "예산 " + won(budget) + "의 " + usedPct + " %<br>잔여 " + won(Math.max(0, budget - cost));
-        String leadTimeNote = rec.kpi() == null || rec.kpi().leadTimeMeanS() == null ? "주문의 90 %가 이 시간 안에 완료"
-                : "주문의 90 %가 이 시간 안에 완료<br>평균은 " + minutes(rec.kpi().leadTimeMeanS());
-        return new Verdict(true, model, rec.amrCount(), "● 목표 달성 · 예산 이내 · 효율 최고", lead.toString(), null,
+        String costNote = "예산 " + won(budget) + "의 " + usedPct + "%<br>잔여 " + won(Math.max(0, budget - cost));
+        String leadTimeNote = rec.kpi() == null || rec.kpi().leadTimeMeanS() == null ? "주문의 90%가 이 시간 안에 완료"
+                : "주문의 90%가 이 시간 안에 완료<br>평균 " + minutes(rec.kpi().leadTimeMeanS());
+        return new Verdict(true, model, rec.amrCount(), "● 목표 달성 · 예산 이내 · 운영 효율 최고", lead.toString(), null,
                 pct(rec.throughput()), throughputNote, pct(rec.utilization()), utilizationNote,
                 eok(cost), costNote, rec.leadTimeP90() == null ? "—" : oneDecimal(rec.leadTimeP90() / 60.0), leadTimeNote);
     }
@@ -202,10 +206,10 @@ public class QuoteDocumentFactory {
         boolean thrOk = rec.throughput() >= d.targetThroughput();
         String thrNote = w.outboundAvg() != null && rec.outbound() != null
                 ? "하루 " + comma(w.outboundAvg()) + "건 중 " + comma(rec.outbound()) + "건 처리" : "접수한 주문 중 처리 완료 비율";
-        rows.add(new TargetRow("주문 처리율", pct(d.targetThroughput()) + " % 이상", pct(rec.throughput()) + " %",
+        rows.add(new TargetRow("주문 처리율", pct(d.targetThroughput()) + "% 이상", pct(rec.throughput()) + "%",
                 thrOk, thrOk ? "달성" : "미달", thrNote));
         boolean utlOk = rec.utilization() >= d.targetUtilization();
-        rows.add(new TargetRow("로봇 가동률", pct(d.targetUtilization()) + " % 이상", pct(rec.utilization()) + " %",
+        rows.add(new TargetRow("로봇 가동률", pct(d.targetUtilization()) + "% 이상", pct(rec.utilization()) + "%",
                 utlOk, utlOk ? "달성" : "미달", "이동 · 대기 · 상하차로 일한 시간의 비율"));
         long cost = rec.totalCost() == null ? 0 : rec.totalCost();
         boolean costOk = cost <= d.budgetLimit();
@@ -214,15 +218,15 @@ public class QuoteDocumentFactory {
                 costOk ? "잔여 " + comma(d.budgetLimit() - cost) + " 원" : "초과 " + comma(cost - d.budgetLimit()) + " 원"));
         if (rec.leadTimeP90() != null) {
             Double limit = estimateProperties.leadTimeP90LimitSeconds();
-            String note = "접수 주문의 90 %가 " + minutes(rec.leadTimeP90()) + " 안에 처리 완료";
+            String note = "접수 주문의 90%가 " + minutes(rec.leadTimeP90()) + " 안에 처리 완료";
             if (rec.kpi() != null && rec.kpi().leadTimeMeanS() != null) {
                 note += " · 평균 " + minutes(rec.kpi().leadTimeMeanS());
             }
             if (limit == null) {
-                rows.add(new TargetRow("주문 처리 시간 (90 % 기준)", "판정에 미포함", minutes(rec.leadTimeP90()), null, "— 참고", note));
+                rows.add(new TargetRow("주문 처리 시간 (90% 기준)", "판정에 미포함", minutes(rec.leadTimeP90()), null, "참고", note));
             } else {
                 boolean ok = rec.leadTimeP90() <= limit;
-                rows.add(new TargetRow("주문 처리 시간 (90 % 기준)", minutes(limit) + " 이하", minutes(rec.leadTimeP90()),
+                rows.add(new TargetRow("주문 처리 시간 (90% 기준)", minutes(limit) + " 이하", minutes(rec.leadTimeP90()),
                         ok, ok ? "달성" : "초과", note));
             }
         }
@@ -238,7 +242,7 @@ public class QuoteDocumentFactory {
         long total = rec.totalCost() == null ? (unit + install) * n : rec.totalCost();
         long extra = total - (unit + install) * n;
         double used = d.budgetLimit() == 0 ? 0 : total * 100.0 / d.budgetLimit();
-        return new Cost(comma(unit), comma(install), n + " 대", comma(unit * n), comma(install * n),
+        return new Cost(comma(unit), comma(install), n + "대", comma(unit * n), comma(install * n),
                 extra > 0 ? "기타 설비" : null, extra > 0 ? comma(extra) : null,
                 comma(total), comma(d.budgetLimit()), Math.min(100.0, Math.round(used * 10) / 10.0), oneDecimal(used),
                 comma(Math.max(0, d.budgetLimit() - total)));
@@ -252,16 +256,17 @@ public class QuoteDocumentFactory {
             return null;
         }
         int robots = v.nRobots() == null ? rec.amrCount() : v.nRobots();
-        String method = "로봇 " + robots + "대를 3D 물리 시뮬레이션(Isaac Sim)에서 실제 크기와 속도로 재현";
-        String window = v.windowS() == null ? "주문이 가장 몰리는 구간" : "주문이 가장 몰리는 " + Math.round(v.windowS() / 60.0) + "분";
+        String method = "로봇 " + robots + "대를 실제 크기와 속도로 3D 창고에서 주행";
+        String window = v.windowS() == null ? "주문 집중 구간" : "주문 집중 " + Math.round(v.windowS() / 60.0) + "분";
         boolean finished = v.notice() != VerifyNoticeCode.NOT_FINISHED;
         String result;
         if (!finished) {
-            result = "정상 종료되지 않음" + (v.error() == null ? "" : " · " + v.error());
+            // 원인(v.error)은 DB·로그에 남아 있다 — 문서에는 내부 오류 문구를 싣지 않는다
+            result = "검증을 완료하지 못했습니다.";
         } else if (v.notice() == VerifyNoticeCode.PARTIAL_FLEET) {
-            result = "정상 완료 · 로봇 " + robots + "대 중 " + v.robotsOnline() + "대 가동";
+            result = "완료 · 로봇 " + robots + "대 중 " + v.robotsOnline() + "대 가동";
         } else {
-            result = "정상 완료 · 로봇 " + robots + "대 모두 가동";
+            result = "완료 · 로봇 " + robots + "대 모두 가동";
         }
         List<CompareRow> rows = new ArrayList<>();
         Double leadRatio = null;
@@ -273,27 +278,28 @@ public class QuoteDocumentFactory {
                     c.throughputOrdersPerH().verified() == null ? "—" : Math.round(c.throughputOrdersPerH().verified()) + "건",
                     ratioText(c.throughputOrdersPerH().diff(), c.throughputOrdersPerH().expected()), false));
             leadRatio = ratio(c.leadTimeP90S().diff(), c.leadTimeP90S().expected());
-            rows.add(new CompareRow("주문 처리 시간 (90 % 기준)", minutes(c.leadTimeP90S().expected()), minutes(c.leadTimeP90S().verified()),
+            rows.add(new CompareRow("주문 처리 시간 (90% 기준)", minutes(c.leadTimeP90S().expected()), minutes(c.leadTimeP90S().verified()),
                     ratioText(c.leadTimeP90S().diff(), c.leadTimeP90S().expected()), leadRatio != null && leadRatio > 0));
             conflictDiff = c.conflictWaitRatio().diff();
-            rows.add(new CompareRow("통로 혼잡으로 멈춘 시간", pctOrDash(c.conflictWaitRatio().expected()), pctOrDash(c.conflictWaitRatio().verified()),
+            rows.add(new CompareRow("혼잡 대기 비율", pctOrDash(c.conflictWaitRatio().expected()), pctOrDash(c.conflictWaitRatio().verified()),
                     conflictDiff == null ? "—" : QuoteFormat.signedPoints(conflictDiff), conflictDiff != null && conflictDiff > 0));
         }
         return new Verification(method, window, finished, result, v.comparison() != null, rows,
                 noticeText(v, robots, leadRatio));
     }
 
+    /** 주문이 몰릴 때 느려진다는 안내는 그 자체로 끝낸다 — 산정 근거 문장을 덧붙이면 경고가 흐려진다. */
     private static String noticeText(EstimateDetailResponse.Verification v, int robots, Double leadRatio) {
         String text = switch (v.notice()) {
-            case NOT_FINISHED -> "물리 검증이 정상 종료되지 않아 비교 수치가 없습니다.";
-            case DIFFERENT_CONDITIONS -> "물리 검증이 계산과 다른 조건에서 돌아 수치를 비교하지 않습니다.";
-            case NO_BASELINE -> "비교할 계산 값이 없습니다.";
-            case PARTIAL_FLEET -> "로봇 " + robots + "대 중 " + v.robotsOnline() + "대만 가동되었습니다. 검증 결과를 참고용으로만 보세요.";
-            case SLOWER_AT_PEAK -> "주문이 몰리는 시간대에는 통로 혼잡이 계산보다 높아 주문 처리 시간이 "
-                    + (leadRatio == null || leadRatio <= 0 ? "" : "약 " + Math.round(leadRatio * 100) + " % ") + "길어질 수 있습니다.";
-            case MATCHES -> "계산과 물리 검증 결과가 일치합니다.";
+            case NOT_FINISHED -> "3D 주행 검증을 완료하지 못해 비교할 수치가 없습니다.";
+            case DIFFERENT_CONDITIONS -> "3D 주행 검증이 시뮬레이션과 다른 조건에서 진행되어 수치를 비교하지 않았습니다.";
+            case NO_BASELINE -> "비교할 시뮬레이션 결과가 없습니다.";
+            case PARTIAL_FLEET -> "로봇 " + robots + "대 중 " + v.robotsOnline() + "대만 가동되어 검증 결과는 참고용입니다.";
+            case SLOWER_AT_PEAK -> "주문이 몰리는 시간에는 혼잡 대기가 시뮬레이션보다 많아 주문 처리 시간이 "
+                    + (leadRatio == null || leadRatio <= 0 ? "" : "약 " + Math.round(leadRatio * 100) + "% ") + "길어질 수 있습니다.";
+            case MATCHES -> "시뮬레이션과 3D 주행 검증 결과가 일치합니다.";
         };
-        return text + " 권장 대수 판정에는 영향이 없습니다.";
+        return v.notice() == VerifyNoticeCode.SLOWER_AT_PEAK ? text : text + " 권장 대수는 대수별 시뮬레이션 결과로 산정했습니다.";
     }
 
     private static Double ratio(Double diff, Double expected) {
@@ -306,7 +312,7 @@ public class QuoteDocumentFactory {
     }
 
     private static String pctOrDash(Double ratio) {
-        return ratio == null ? "—" : ratioPct(ratio) + " %";
+        return ratio == null ? "—" : ratioPct(ratio) + "%";
     }
 
     // ── 06 ─────────────────────────────────────────────────────────────────
@@ -359,11 +365,11 @@ public class QuoteDocumentFactory {
                 r.amrCount().equals(d.minimalCount()) && !r.amrCount().equals(d.recommendedCount()),
                 r.amrCount().equals(fullCount) && !r.amrCount().equals(d.recommendedCount()),
                 r.amrCount().equals(d.kneeCount()) && !r.amrCount().equals(d.recommendedCount()),
-                pct(r.throughput()) + " %",
-                pct(r.utilization()) + " %",
+                pct(r.throughput()) + "%",
+                pct(r.utilization()) + "%",
                 targetMet(r, d),
                 targetText(r, d),
-                r.utilization() == null ? "—" : oneDecimal(efficiency(r)),
+                r.utilization() == null ? "—" : oneDecimal(efficiency(r)) + "%",
                 r.outbound() == null ? "—" : comma(r.outbound()) + "건",
                 r.totalCost() == null ? "—" : won(r.totalCost()),
                 r.totalCost() != null && r.totalCost() > d.budgetLimit())).toList();
@@ -374,7 +380,7 @@ public class QuoteDocumentFactory {
         return r.throughput() >= d.targetThroughput() && r.utilization() >= d.targetUtilization();
     }
 
-    /** 못 넘은 쪽을 이름으로 적는다 — 웹 리포트의 표와 같은 말을 쓴다. */
+    /** 못 넘은 쪽을 이름으로 적는다 — 견적 결과 화면의 표와 같은 말을 쓴다. */
     private static String targetText(Run r, EstimateDetailResponse d) {
         if (targetMet(r, d)) {
             return "달성";
@@ -398,34 +404,33 @@ public class QuoteDocumentFactory {
             return "";
         }
         if (d.minimalCount().equals(d.recommendedCount())) {
-            return "권장이 곧 목표를 만족하는 가장 적은 대수입니다. ";
+            return "권장 대수가 목표를 만족하는 가장 적은 대수입니다. ";
         }
         Run min = done.stream().filter(r -> d.minimalCount().equals(r.amrCount())).findFirst().orElse(null);
         if (min == null || min.totalCost() == null || rec.totalCost() == null || min.utilization() == null) {
             return "";
         }
-        return "최소 구성은 목표를 만족하는 가장 적은 대수로, " + min.amrCount() + "대(" + won(min.totalCost()) + ")는 "
-                + "권장보다 " + won(rec.totalCost() - min.totalCost()) + " 적지만 효율 " + oneDecimal(efficiency(min))
-                + " %로 권장보다 " + oneDecimal(efficiency(rec) - efficiency(min)) + " %p 안 좋습니다. ";
+        return "목표를 만족하는 가장 적은 대수인 " + min.amrCount() + "대(최소 구성)는 " + won(min.totalCost()) + "으로 "
+                + "권장 대수보다 " + won(rec.totalCost() - min.totalCost()) + " 적지만, 운영 효율이 "
+                + oneDecimal(efficiency(rec) - efficiency(min)) + "%p 낮습니다. ";
     }
 
     private String fleetNote(EstimateDetailResponse d, Run rec, List<Run> done) {
         StringBuilder note = new StringBuilder(
-                "효율 점수 = 주문 처리율 × 로봇 가동률 ÷ 100, 주문을 많이 처리하면서 로봇이 놀지 않을수록 높습니다. ");
+                "운영 효율은 주문 처리율과 로봇 가동률을 곱한 값으로, 로봇이 쉬는 시간이 적을수록 높습니다. ");
         if (rec != null) {
-            note.append("권장은 목표와 예산을 만족하는 대수 중 효율 점수가 가장 높은 대수입니다");
+            note.append("권장 대수는 목표와 예산을 만족하는 대수 가운데 운영 효율이 가장 높은 대수입니다. ");
             List<String> excluded = done.stream()
                     .filter(r -> r.utilization() != null && efficiency(r) > efficiency(rec) && r.throughput() < d.targetThroughput())
                     .map(r -> r.amrCount() + "대").toList();
             if (!excluded.isEmpty()) {
-                note.append("(").append(String.join(" · ", excluded)).append("는 처리율 미달로 제외)");
+                note.append(String.join(" · ", excluded)).append("는 운영 효율이 더 높지만 주문 처리율이 목표에 미달해 제외했습니다. ");
             }
-            note.append(". ");
             note.append(minimalNote(d, rec, done));
         }
-        note.append("빨간 비용은 예산 초과.");
+        note.append("빨간색 금액은 예산을 초과한 구성입니다.");
         if (done.size() > FLEET_ROWS) {
-            note.append(" 표에 없는 대수는 웹 리포트에서 볼 수 있습니다.");
+            note.append(" 표에 없는 대수는 견적 결과 화면에서 확인할 수 있습니다.");
         }
         return note.toString();
     }
@@ -519,7 +524,7 @@ public class QuoteDocumentFactory {
                 xLabels, xLabelsThr, yLeft, yRight,
                 PAD_T + ih - d.budgetLimit() / (double) costMax * ih, "예산 " + won(d.budgetLimit()),
                 recX, recY,
-                rec == null ? null : "권장 " + rec.amrCount() + "대 · 효율 " + oneDecimal(efficiency(rec)),
+                rec == null ? null : "권장 " + rec.amrCount() + "대 · 운영 효율 " + oneDecimal(efficiency(rec)) + "%",
                 minimal, minimalThr, thrPeak);
     }
 

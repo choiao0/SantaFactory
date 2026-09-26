@@ -38,9 +38,11 @@ public class QuoteMailService {
                     안녕하세요, %s님.
 
                     요청하신 AMR 도입 견적서를 첨부합니다.
-                    권장 로봇 대수와 근거는 첨부 문서에서 확인하실 수 있습니다.
+                    권장 로봇 대수와 산정 근거는 첨부 문서에서 확인하실 수 있습니다.
 
                     이 문서는 시뮬레이션 결과를 바탕으로 한 참고 자료이며 확정 견적이 아닙니다.
+
+                    SANTA FACTORY 드림
                     """.formatted(member.getName());
             emailSender.sendWithAttachment(member.getEmail(), subject, text, pdf.fileName(), pdf.bytes(), "application/pdf");
         } catch (RuntimeException e) {

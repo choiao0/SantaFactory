@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""1인칭 영상 위의 글씨 — 「이 AMR 이 지금 무슨 주문을 어디서 어디로 나르나」 (S15P21A106-244).
+"""검증 영상 위의 표시 — 「이 AMR 이 지금 무슨 주문을 어디서 어디로 나르나」 (S15P21A106-244 · 279).
 
 영상만 봐서는 AMR 이 **주문을 처리하는 중**인지 그냥 돌아다니는지 알 수 없다. DES 피크 구간(slice format 1)에는
 태스크마다 출발지·목적지·배정·완료 틱이 있고 로봇마다 매 틱 자리가 있으니, 로봇별 **운행**(픽업 → 적재 → 운반 → 하역)을
@@ -9,15 +9,20 @@
   시각으로 고르면 화면과 글씨가 어긋난다. 실행기의 동작마다 DES 계획 틱(`Action.tick`, 구간 시작 = 0)이 붙어 있어,
   「지금 수행 중인 동작의 계획 틱」을 넘기면 그 순간 DES 계획상의 단계가 나온다.
 
-Isaac 이 없어도 도는 순수 함수다(`path/test_demo_overlay.py`). 그리기(`draw`)만 PIL 을 쓴다.
+화면 디자인(v2, -279): 반투명 검정 **각진** 카드에 왼쪽 색 띠(제목 = 빨강, 로봇 카드 = 지금 단계 색), 위쪽 밝은 1 px 선.
+Noto Sans CJK KR 세 굵기, 2배로 그려 줄여 가장자리를 매끈하게. 천장 영상은 로봇을 **고리로 비워 두고** 가는 선으로
+상태 말풍선을 잇는다(겹치지 않는 자리를 찾아 둔다). 고객에게 보이는 말은 확정 용어만 쓴다 —
+3D 주행 검증 · 주문 집중 10분 · 피킹 지점 · 포장대 · 상자 · 배송.
+
+Isaac 이 없어도 도는 순수 함수다(`path/test_demo_overlay.py`). 그리기(`draw` · `draw_top`)만 PIL 을 쓴다.
 """
 import json
 import re
 from dataclasses import dataclass
 
 _NAME_RE = re.compile(r"^([a-z_]+)\[(\d+)\]$")
-_NAMES = {   # 스테이션 이름 → (한국어, 영어). 번호는 사람이 읽게 1부터
-    "aisle_buf": ("통로 버퍼", "Aisle buffer"),
+_NAMES = {   # 지점 이름 → (한국어, 영어). 번호는 1부터
+    "aisle_buf": ("피킹 지점", "Picking point"),
     "packing": ("포장대", "Packing"),
     "charger": ("충전소", "Charger"),
     "handoff": ("인계 지점", "Handoff"),
@@ -25,22 +30,23 @@ _NAMES = {   # 스테이션 이름 → (한국어, 영어). 번호는 사람이 
     "receiving": ("입고장", "Receiving"),
     "dock": ("도크", "Dock"),
 }
-_PHASES = {  # 단계 → (한국어, 영어). {frm}·{to} 는 운행의 출발지·목적지
-    "to_pick": ("픽업하러 이동 · {frm}", "Heading to pick-up · {frm}"),
-    "loading": ("토트 적재 중 · {frm}", "Loading totes · {frm}"),
-    "carrying": ("운반 중 → {to}", "Carrying -> {to}"),
-    "unloading": ("하역 중 · {to}", "Unloading · {to}"),
-    "idle": ("다음 주문 대기", "Waiting for next order"),
+_PHASES = {  # 단계 → (한국어, 영어) — 추종 영상의 상태 칩
+    "to_pick": ("피킹 지점으로 이동", "To picking point"),
+    "loading": ("상자 싣는 중", "Loading"),
+    "carrying": ("포장대로 운반 중", "To packing"),
+    "unloading": ("상자 내리는 중", "Unloading"),
+    "idle": ("대기 중", "Idle"),
 }
-_PHASE_SHORT = {  # 천장 영상 범례
-    "to_pick": ("픽업 이동", "To pick-up"),
-    "loading": ("적재", "Loading"),
-    "carrying": ("운반", "Carrying"),
-    "unloading": ("하역", "Unloading"),
+_PHASE_SHORT = {  # 천장 영상 말풍선 · 범례
+    "to_pick": ("이동", "Move"),
+    "loading": ("싣기", "Load"),
+    "carrying": ("운반", "Carry"),
+    "unloading": ("내리기", "Unload"),
     "idle": ("대기", "Idle"),
 }
-PHASE_RGB = {"to_pick": (80, 170, 255), "loading": (255, 170, 60), "carrying": (90, 220, 120),
-             "unloading": (255, 120, 90), "idle": (170, 170, 170)}
+STEPS = ("to_pick", "loading", "carrying", "unloading")
+PHASE_RGB = {"to_pick": (59, 130, 246), "loading": (245, 158, 11), "carrying": (16, 185, 129),
+             "unloading": (139, 92, 246), "idle": (148, 163, 184)}
 
 
 def label(name, lang="ko"):
@@ -187,42 +193,33 @@ class Timeline:
             return None
         return min(score, key=lambda r: (-score[r][0], -score[r][1], int(r) if str(r).isdigit() else 0))
 
-    def lines(self, rid, des_k, window_clock_s):
-        """(윗줄, 운행 줄, 큰 단계 글씨, 실적) — 영상에 그대로 쓴다. window_clock_s 가 None 이면 워밍업."""
+    def lines(self, rid, des_k, window_clock_s, waiting=False):
+        """추종 영상에 얹을 값. window_clock_s 가 None 이면 시작 준비 중.
+        waiting — 이동해야 할 단계인데 서 있다(앞 로봇이 지나가길 기다린다). 화면에 「통행 대기」로 붙인다."""
         ko = self.lang == "ko"
-        n = int(rid) + 1 if str(rid).isdigit() else rid
-        head = f"AMR {n} · " + ("DES 피크 구간 물리 재현" if ko else "DES peak replay (physics)")
-        if window_clock_s is None:
-            head += "   " + ("준비 중" if ko else "warming up")
-        else:
-            clock = f"{_mmss(window_clock_s)} / {_mmss(self.window_s)}"
-            head += "   " + (f"창 {clock}" if ko else f"window {clock}")
         ph = self.phase(rid, des_k)
         t = ph.trip
-        if t is None:
-            sub = ""
-        elif ko:
-            sub = f"주문 {t.orders}건 · 토트 {t.totes}개   {t.frm_label} → {t.to_label}"
-        else:
-            sub = f"Orders {t.orders} · Totes {t.totes}   {t.frm_label} -> {t.to_label}"
         trips, totes = self.done(rid, des_k)
-        right = (f"완료 운행 {trips}회 · 토트 {totes}개" if ko else f"Trips done {trips} · Totes {totes}")
-        return head, sub, ph.text, right
+        step = STEPS.index(ph.key) if ph.key in STEPS else -1
+        if t is not None and t.pick_arrive_k is None and step < 2:
+            step = 2                                        # 구간 전에 이미 실었다
+        return dict(robot=int(rid) + 1 if str(rid).isdigit() else rid, lang=self.lang,
+                    title="3D 주행 검증 · 주문 집중 10분" if ko else "3D drive check · busiest 10 min",
+                    clock=window_clock_s, window=self.window_s, phase=ph.key,
+                    waiting=bool(waiting) and ph.key in ("to_pick", "carrying"),
+                    phase_label=_PHASES[ph.key][0 if ko else 1], step=step,
+                    frm=t.frm_label if t else None, to=t.to_label if t else None,
+                    orders=t.orders if t else 0, totes=t.totes if t else 0,
+                    done_trips=trips, done_totes=totes)
 
     def top_lines(self, ks, window_clock_s, n_robots):
-        """천장 영상의 (윗줄, 오른쪽 아래 실적). ks = {로봇: 그 로봇의 계획 틱} — 실적은 로봇마다 제 틱까지 합한다."""
+        """천장 영상에 얹을 값. ks = {로봇: 그 로봇의 계획 틱} — 실적은 로봇마다 제 틱까지 합한다."""
         ko = self.lang == "ko"
-        head = (f"DES 피크 구간 물리 재현 · AMR {n_robots}대" if ko
-                else f"DES peak replay (physics) · {n_robots} AMRs")
-        if window_clock_s is None:
-            head += "   " + ("준비 중" if ko else "warming up")
-        else:
-            clock = f"{_mmss(window_clock_s)} / {_mmss(self.window_s)}"
-            head += "   " + (f"창 {clock}" if ko else f"window {clock}")
         done = [self.done(rid, k) for rid, k in ks.items()]
-        trips, totes = sum(d[0] for d in done), sum(d[1] for d in done)
-        right = (f"완료 운행 {trips}회 · 토트 {totes}개" if ko else f"Trips done {trips} · Totes {totes}")
-        return head, right
+        return dict(lang=self.lang, title="3D 주행 검증" if ko else "3D drive check",
+                    sub=(f"AMR {n_robots}대 · 주문 집중 10분" if ko else f"{n_robots} AMRs · busiest 10 min"),
+                    clock=window_clock_s, window=self.window_s,
+                    trips=sum(d[0] for d in done), totes=sum(d[1] for d in done))
 
     def _phase_text(self, key, trip):
         ko, en = _PHASES[key]
@@ -284,51 +281,198 @@ def _trip(rid, p, g, to, d_k, lang):
 
 
 # ── 그리기 (PIL) ─────────────────────────────────────────────────────────
-def _font(font_path, px):
-    """글꼴 파일이 없거나 못 읽으면 PIL 기본 글꼴 — 글씨가 작아질 뿐 프레임은 잃지 않는다.
-    기본 글꼴에는 한글이 없으니 한글 글꼴이 없을 때는 `Timeline(lang="en")` 과 짝지어 쓴다."""
+# ── 그리기 (v2, -279) — 상업용 오버레이 ─────────────────────────────────
+#   어두운 유리 카드 · Noto Sans CJK KR 세 굵기 · 2배 슈퍼샘플링. 상태색은 색상(hue)으로만 가른다.
+import os
+import threading
+
+SS = 2                                   # 슈퍼샘플링 배율 — 도형 가장자리를 매끈하게
+GLASS = (12, 14, 18, 204)
+GLASS2 = (12, 14, 18, 150)
+EDGE = (255, 255, 255, 22)
+TOPLINE = (255, 255, 255, 34)            # 카드 위쪽 가장자리 — 유리판 모서리처럼 또렷하게
+NEUTRAL = (255, 255, 255, 110)
+TXT = (245, 247, 250, 255)
+TXT2 = (170, 178, 190, 255)
+ACCENT = (231, 45, 45, 255)
+_tls = threading.local()                 # 글꼴은 쓰기 스레드마다 따로 연다(FreeType 면은 스레드 공유 불가)
+
+
+def _face(font_path, weight):
+    """굵기별 글꼴 파일. 'NotoSansCJK-Bold.ttc' 를 주면 같은 폴더의 Regular·Medium 을 찾는다."""
+    if font_path and "Bold" in os.path.basename(font_path):
+        cand = font_path.replace("Bold", weight)
+        if os.path.isfile(cand):
+            return cand
+    return font_path
+
+
+def _font(font_path, px, weight="Bold"):
     from PIL import ImageFont
-    if font_path:
+    cache = getattr(_tls, "fonts", None)
+    if cache is None:
+        cache = _tls.fonts = {}
+    key = (font_path, weight, px)
+    if key in cache:
+        return cache[key]
+    path = _face(font_path, weight)
+    f = None
+    if path:
         try:
-            return ImageFont.truetype(font_path, px)
+            f = ImageFont.truetype(path, px, index=1 if path.lower().endswith(".ttc") else 0)
         except OSError:
-            pass
-    try:
-        return ImageFont.load_default(size=px)          # Pillow ≥ 10.1
-    except TypeError:
-        return ImageFont.load_default()
+            f = None
+    if f is None:
+        try:
+            f = ImageFont.load_default(size=px)          # Pillow ≥ 10.1
+        except TypeError:
+            f = ImageFont.load_default()
+    cache[key] = f
+    return f
 
 
-def draw(img, lines, font_path, phase_key="idle"):
-    """PIL Image 위에 글씨를 얹어 돌려준다. 위: 반투명 띠 두 줄 · 아래 왼쪽: 단계(크게) · 아래 오른쪽: 실적."""
-    from PIL import Image, ImageDraw
-    head, sub, big, right = lines
-    w, h = img.size
-    s = h / 540.0                                       # 960x540 기준 크기를 해상도에 맞춘다
-    f_head, f_sub, f_big, f_right = (_font(font_path, max(10, int(px * s))) for px in (22, 20, 30, 20))
-    base = img.convert("RGBA")
-    layer = Image.new("RGBA", base.size, (0, 0, 0, 0))
-    d = ImageDraw.Draw(layer)
-    d.rectangle([0, 0, w, int(76 * s)], fill=(10, 20, 35, 170))
-    d.text((int(16 * s), int(10 * s)), head, font=f_head, fill=(255, 255, 255, 255))
-    if sub:
-        d.text((int(16 * s), int(42 * s)), sub, font=f_sub, fill=(255, 214, 102, 255))
-    color = PHASE_RGB.get(phase_key, (200, 200, 200))
-    bx, by = int(16 * s), h - int(64 * s)
-    tw = d.textlength(big, font=f_big)
-    d.rounded_rectangle([bx - int(8 * s), by - int(6 * s), bx + tw + int(12 * s), by + int(44 * s)],
-                        radius=int(10 * s), fill=(*color, 215))
-    d.text((bx + int(2 * s), by), big, font=f_big, fill=(15, 15, 15, 255))
-    rw = d.textlength(right, font=f_right)
-    d.rectangle([w - rw - int(28 * s), h - int(44 * s), w, h], fill=(10, 20, 35, 170))
-    d.text((w - rw - int(14 * s), h - int(36 * s)), right, font=f_right, fill=(255, 255, 255, 255))
-    return Image.alpha_composite(base, layer).convert("RGB")
+class _Canvas:
+    """기준 해상도 좌표로 그리고, 2배로 그려 줄여서 얹는다."""
+
+    def __init__(self, img, base_h, font_path):
+        from PIL import Image, ImageDraw
+        self.img = img
+        self.W, self.H = img.size
+        self.s = self.H / base_h                    # 기준 → 실제
+        self.k = self.s * SS                        # 기준 → 그림판
+        self.bw, self.bh = self.W / self.s, self.H / self.s     # 기준 좌표계의 폭·높이
+        self.fp = font_path
+        self.layer = Image.new("RGBA", (self.W * SS, self.H * SS), (0, 0, 0, 0))
+        self.d = ImageDraw.Draw(self.layer)
+
+    def f(self, weight, px):
+        return _font(self.fp, max(8, round(px * self.k)), weight)
+
+    def tw(self, text, weight, px):
+        return self.d.textlength(text, font=self.f(weight, px)) / self.k
+
+    def text(self, x, y, text, weight, px, fill, anchor="ls"):
+        self.d.text((x * self.k, y * self.k), text, font=self.f(weight, px), fill=fill, anchor=anchor)
+
+    def card(self, x0, y0, x1, y1, r=2, fill=GLASS, outline=EDGE, width=1.0, accent=None, bar=3):
+        """각진 카드. accent 가 있으면 왼쪽 가장자리에 색 띠(bar px), 위쪽에는 밝은 1 px 선."""
+        k = self.k
+        self.d.rounded_rectangle([x0 * k, y0 * k, x1 * k, y1 * k], radius=r * k, fill=fill,
+                                 outline=outline, width=max(1, round(width * k)))
+        self.d.line([(x0 + r) * k, y0 * k + k * .5, (x1 - r) * k, y0 * k + k * .5], fill=TOPLINE,
+                    width=max(1, round(k)))
+        if accent is not None:
+            self.d.rectangle([x0 * k, y0 * k, (x0 + bar) * k, y1 * k], fill=accent)
+
+    def bar(self, x0, y0, x1, y1, fill):
+        k = self.k
+        self.d.rectangle([x0 * k, y0 * k, x1 * k, y1 * k], fill=fill)
+
+    def dot(self, x, y, r, fill):
+        k = self.k
+        self.d.ellipse([(x - r) * k, (y - r) * k, (x + r) * k, (y + r) * k], fill=fill)
+
+    def finish(self):
+        from PIL import Image
+        small = self.layer.resize((self.W, self.H), Image.LANCZOS)
+        return Image.alpha_composite(self.img.convert("RGBA"), small).convert("RGB")
 
 
-# ── 천장 영상 (-244) ──────────────────────────────────────────────────────
-#   120 m 상공 광각에서 1.5 m AMR 은 흰 점 18 px 이라 바닥과 구분이 안 된다. USD 에 표시 prim 을 달면
-#   물리 링크 밑이라 판이 달라질 위험이 있어, **프레임 위에 그린다** — 로봇 자세를 카메라로 투영해
-#   단계 색 원 · 진행 방향 · 번호를 얹는다. 물리와 무관하다.
+def _tint(rgb, t=0.55):
+    """상태색을 흰색 쪽으로 — 어두운 카드 위 글자색."""
+    return tuple(round(c + (255 - c) * t) for c in rgb) + (255,)
+
+
+def _clock_block(c, x, y, info, big=15):
+    """「04:50 / 10:00」 — 준비 중이면 그 말."""
+    ko = info.get("lang", "ko") == "ko"
+    if info["clock"] is None:
+        c.text(x, y, "시작 준비" if ko else "Starting", "Medium", big - 2, TXT2)
+        return c.tw("시작 준비" if ko else "Starting", "Medium", big - 2)
+    now, total = _mmss(info["clock"]), _mmss(info["window"])
+    c.text(x, y, now, "Bold", big, TXT)
+    w = c.tw(now, "Bold", big)
+    c.text(x + w + 4, y, f"/ {total}", "Regular", big - 3, TXT2)
+    return w + 4 + c.tw(f"/ {total}", "Regular", big - 3)
+
+
+def _progress(c, x0, x1, y, info):
+    c.bar(x0, y, x1, y + 3, (255, 255, 255, 40))
+    if info["clock"] is not None and info["window"]:
+        frac = max(0.0, min(1.0, info["clock"] / info["window"]))
+        if frac > 0:
+            c.bar(x0, y, x0 + (x1 - x0) * frac, y + 3, ACCENT)
+
+
+def _chip(c, x, cy, label, key=None, px=12.5, rgb=None):
+    """상태 태그 — 각진 바탕에 왼쪽 색 띠, 흰 글자. 너비를 돌려준다."""
+    rgb = rgb or PHASE_RGB.get(key, (148, 163, 184))
+    w = c.tw(label, "Medium", px) + 22
+    c.card(x, cy - 12, x + w, cy + 12, r=1.5, fill=rgb + (52,), outline=rgb + (120,), width=1,
+           accent=rgb + (255,), bar=3)
+    c.text(x + 12, cy, label, "Medium", px, TXT, anchor="lm")
+    return w
+
+
+def draw(img, info, font_path, phase_key="idle"):
+    """추종 영상(960×540 기준) — 왼쪽 위 진행 캡슐 · 왼쪽 아래 정보 카드 · 오른쪽 아래 실적."""
+    c = _Canvas(img, 540, font_path)
+    ko = info.get("lang", "ko") == "ko"
+    # 진행 캡슐
+    x, y = 20, 18
+    wt = c.tw(info["title"], "Medium", 13)
+    w = max(wt, 150) + 30
+    c.card(x, y, x + w, y + 60, accent=ACCENT)
+    c.text(x + 16, y + 23, info["title"], "Medium", 13, TXT)
+    _clock_block(c, x + 16, y + 44, info, big=15)
+    _progress(c, x + 16, x + w - 14, y + 50, info)
+    # 정보 카드
+    W0, H0 = 344, 124
+    x0, y1 = 20, c.bh - 20
+    y0 = y1 - H0
+    rgb = PHASE_RGB.get(info["phase"], (148, 163, 184))
+    c.card(x0, y0, x0 + W0, y1, accent=rgb + (255,), bar=4)
+    robot = f"AMR {info['robot']:02d}" if isinstance(info["robot"], int) else f"AMR {info['robot']}"
+    c.text(x0 + 18, y0 + 33, robot, "Bold", 20, TXT)
+    cx = x0 + 18 + c.tw(robot, "Bold", 20) + 12
+    cx += _chip(c, cx, y0 + 26, info["phase_label"], info["phase"]) + 6
+    if info.get("waiting"):
+        _chip(c, cx, y0 + 26, "통행 대기" if ko else "Waiting to pass", rgb=(226, 232, 240), px=12)
+    if info["frm"]:
+        xx = x0 + 18
+        c.text(xx, y0 + 60, info["frm"], "Regular", 14, TXT)
+        xx += c.tw(info["frm"], "Regular", 14) + 8
+        arrow = "→" if ko else "->"
+        c.text(xx, y0 + 60, arrow, "Regular", 14, TXT2)
+        xx += c.tw(arrow, "Regular", 14) + 8
+        c.text(xx, y0 + 60, info["to"], "Medium", 14, TXT)
+        c.text(x0 + 18, y0 + 80, (f"주문 {info['orders']}건 · 상자 {info['totes']}개" if ko
+                                  else f"{info['orders']} orders · {info['totes']} totes"), "Regular", 12, TXT2)
+    else:
+        c.text(x0 + 18, y0 + 60, "다음 주문을 기다리고 있습니다" if ko else "Waiting for the next order", "Regular", 14, TXT2)
+    # 단계 막대 — 이동 · 싣기 · 운반 · 내리기
+    sx0, sx1, gap = x0 + 18, x0 + W0 - 16, 4
+    seg = (sx1 - sx0 - gap * 3) / 4
+    for i, key in enumerate(STEPS):
+        a = sx0 + i * (seg + gap)
+        cur, done = i == info["step"], 0 <= i < info["step"]
+        col = rgb + (255,) if cur else ((255, 255, 255, 150) if done else (255, 255, 255, 38))
+        c.bar(a, y0 + 94, a + seg, y0 + 97, col)
+        c.text(a, y0 + 112, _PHASE_SHORT[key][0 if ko else 1], "Medium" if cur else "Regular", 10.5,
+               TXT if cur else TXT2)
+    # 실적
+    lab1, lab2 = ("배송 완료", "옮긴 상자") if ko else ("Deliveries", "Totes")
+    v1, v2 = (f"{info['done_trips']}건", f"{info['done_totes']}개") if ko else (str(info["done_trips"]), str(info["done_totes"]))
+    cw = 96
+    x1 = c.bw - 20
+    c.card(x1 - cw * 2, y1 - 64, x1, y1, accent=NEUTRAL)
+    for i, (lab, val) in enumerate(((lab1, v1), (lab2, v2))):
+        cx = x1 - cw * 2 + i * cw + 18
+        c.text(cx, y1 - 40, lab, "Regular", 11, TXT2)
+        c.text(cx, y1 - 16, val, "Bold", 20, TXT)
+    return c.finish()
+
+
 def top_down(cx, cy, height):
     """(cx, cy) 를 바로 위 height m 에서 내려다보는 카메라의 카메라→월드 변환 (USD 행벡터 4x4).
     화면 오른쪽 = +x, 위 = +y — `build_amr_scene_v2.look_at` 이 Cam_Top 에 만드는 것과 같은 축."""
@@ -363,48 +507,141 @@ def project(pts, cam_to_world, focal_mm, h_aperture_mm, size):
     return out
 
 
-def draw_top(img, marks, lines, font_path, stations=(), lang="ko"):
-    """천장 프레임 위에 로봇(단계 색 원 · 진행 방향 · 번호) · 포장대 이름 · 윗줄 · 범례 · 실적을 얹는다."""
+def _rect_hits(r, rects, pad=3):
+    return any(r[0] < b[2] + pad and r[2] + pad > b[0] and r[1] < b[3] + pad and r[3] + pad > b[1] for b in rects)
+
+
+def _circle_hits(r, circles):
+    for cx, cy, rad in circles:
+        nx, ny = min(max(cx, r[0]), r[2]), min(max(cy, r[1]), r[3])
+        if (nx - cx) ** 2 + (ny - cy) ** 2 < rad * rad:
+            return True
+    return False
+
+
+def draw_top(img, marks, info, font_path, stations=(), lang="ko"):
+    """천장 영상(1280×720 기준) — 로봇은 고리로 비워 두고, 선으로 상태 말풍선을 잇는다."""
     import math
-    from PIL import Image, ImageDraw
-    head, right = lines
-    w, h = img.size
-    s = h / 720.0                                       # 1280x720 기준
-    f_head, f_small, f_num = (_font(font_path, max(10, int(px * s))) for px in (24, 18, 15))
-    base = img.convert("RGBA")
-    layer = Image.new("RGBA", base.size, (0, 0, 0, 0))
-    d = ImageDraw.Draw(layer)
-    for name, u, v in stations:                         # 포장대 — 토트가 가는 곳
-        tw = d.textlength(name, font=f_small)
-        d.rectangle([u - tw / 2 - 4 * s, v - 12 * s, u + tw / 2 + 4 * s, v + 12 * s], fill=(10, 20, 35, 150))
-        d.text((u - tw / 2, v - 10 * s), name, font=f_small, fill=(255, 214, 102, 255))
-    for m in marks:
-        hl = math.hypot(m.hu, m.hv) or 1.0
-        r = max(10.0 * s, 1.2 * hl)
-        if m.follow:                                    # 1인칭 영상의 그 로봇
-            d.ellipse([m.u - r - 6 * s, m.v - r - 6 * s, m.u + r + 6 * s, m.v + r + 6 * s],
-                      outline=(255, 60, 200, 255), width=max(2, int(4 * s)))
-        d.ellipse([m.u - r, m.v - r, m.u + r, m.v + r], fill=(*PHASE_RGB.get(m.key, (200, 200, 200)), 255),
-                  outline=(15, 15, 15, 255), width=max(1, int(2 * s)))
-        d.line([m.u, m.v, m.u + m.hu / hl * r * 1.4, m.v + m.hv / hl * r * 1.4],
-               fill=(15, 15, 15, 255), width=max(2, int(3 * s)))
-        tag = str(m.num)
-        tx, ty = m.u + r * 0.8, m.v - r * 0.8 - 16 * s
-        tw = d.textlength(tag, font=f_num)
-        d.rectangle([tx - 3 * s, ty, tx + tw + 3 * s, ty + 17 * s], fill=(10, 20, 35, 200))
-        d.text((tx, ty), tag, font=f_num, fill=(255, 255, 255, 255))
-    d.rectangle([0, 0, w, int(44 * s)], fill=(10, 20, 35, 170))
-    d.text((int(16 * s), int(9 * s)), head, font=f_head, fill=(255, 255, 255, 255))
-    x = int(16 * s)                                     # 범례 — 아래 왼쪽
-    y = h - int(36 * s)
-    items = [(k, _PHASE_SHORT[k][0 if lang == "ko" else 1]) for k in _PHASE_SHORT]
-    tot = sum(d.textlength(t, font=f_small) + 40 * s for _, t in items)
-    d.rectangle([0, y - 8 * s, x + tot + 8 * s, h], fill=(10, 20, 35, 170))
+    c = _Canvas(img, 720, font_path)
+    ko = lang == "ko"
+    s = c.s
+    R = 14                                          # 고리 반지름(기준 px) — 차체(≈20 px)를 가리지 않게
+    # 머리 카드 · 실적 카드 · 범례 — 말풍선이 피할 자리
+    tw_ = max(c.tw(info["title"], "Medium", 15), c.tw(info["sub"], "Regular", 12))
+    hw = tw_ + 150
+    head = (20, 18, 20 + hw, 18 + 66)
+    c.card(*head, accent=ACCENT, bar=4)
+    c.text(38, 44, info["title"], "Medium", 15, TXT)
+    c.text(38, 64, info["sub"], "Regular", 12, TXT2)
+    # 시계는 머리 카드 오른쪽 안
+    now = "시작 준비" if info["clock"] is None else _mmss(info["clock"])
+    if info["clock"] is None:
+        c.text(head[2] - 16, 50, now, "Medium", 13, TXT2, anchor="rs")
+    else:
+        tot = f"/ {_mmss(info['window'])}"
+        c.text(head[2] - 16, 50, tot, "Regular", 12, TXT2, anchor="rs")
+        c.text(head[2] - 16 - c.tw(tot, "Regular", 12) - 4, 50, now, "Bold", 20, TXT, anchor="rs")
+    _progress(c, head[0] + 18, head[2] - 16, head[3] - 11, info)
+    lab1, lab2 = ("배송 완료", "옮긴 상자") if ko else ("Deliveries", "Totes")
+    v1, v2 = (f"{info['trips']}건", f"{info['totes']}개") if ko else (str(info["trips"]), str(info["totes"]))
+    stat = (c.bw - 20 - 220, 18, c.bw - 20, 18 + 66)
+    c.card(*stat, accent=NEUTRAL)
+    for i, (lab, val) in enumerate(((lab1, v1), (lab2, v2))):
+        x = stat[0] + 18 + i * 110
+        c.text(x, 42, lab, "Regular", 12, TXT2)
+        c.text(x, 70, val, "Bold", 22, TXT)
+    items = [(k, _PHASE_SHORT[k][0 if ko else 1]) for k in ("to_pick", "loading", "carrying", "unloading", "idle")]
+    lw = sum(c.tw(t, "Regular", 12) + 30 for _, t in items) + 14
+    legend = (20, c.bh - 20 - 32, 20 + lw, c.bh - 20)
+    c.card(*legend, fill=GLASS2)
+    x = legend[0] + 14
     for k, t in items:
-        d.ellipse([x, y + 2 * s, x + 16 * s, y + 18 * s], fill=(*PHASE_RGB[k], 255))
-        d.text((x + 22 * s, y), t, font=f_small, fill=(255, 255, 255, 255))
-        x += int(d.textlength(t, font=f_small) + 40 * s)
-    rw = d.textlength(right, font=f_small)
-    d.rectangle([w - rw - int(28 * s), y - 8 * s, w, h], fill=(10, 20, 35, 170))
-    d.text((w - rw - int(14 * s), y), right, font=f_small, fill=(255, 255, 255, 255))
-    return Image.alpha_composite(base, layer).convert("RGB")
+        c.bar(x, legend[1] + 11, x + 10, legend[1] + 21, PHASE_RGB[k] + (255,))
+        c.text(x + 15, legend[1] + 16, t, "Regular", 12, TXT, anchor="lm")
+        x += c.tw(t, "Regular", 12) + 30
+    rects = [head, stat, legend]
+    for name, u, v in stations:                      # 포장대 이름 — 작고 조용하게
+        bu, bv = u / s, v / s
+        w = c.tw(name, "Medium", 11) + 12
+        r = (bu - w / 2, bv - 9, bu + w / 2, bv + 9)
+        c.card(*r, r=1.5, fill=GLASS2, outline=(0, 0, 0, 0))
+        c.text(bu, bv, name, "Medium", 11, TXT, anchor="mm")
+        rects.append(r)
+    circles = [(m.u / s, m.v / s, R + 4) for m in marks]
+    placed = []
+    order = sorted(marks, key=lambda m: (not m.follow, m.v))
+    angles = [-45, -135, 45, 135, -90, 90, 0, 180]
+    for m in order:
+        bu, bv = m.u / s, m.v / s
+        key = m.key
+        rgb = PHASE_RGB.get(key, (148, 163, 184))
+        num = f"{m.num:02d}"
+        lab = _PHASE_SHORT.get(key, ("", ""))[0 if ko else 1]
+        w = 3 + 9 + c.tw(num, "Bold", 12) + 5 + c.tw(lab, "Regular", 12) + 10
+        h = 22
+        best = None
+        near = [(o.u / s, o.v / s) for o in marks if o is not m and math.hypot(o.u / s - bu, o.v / s - bv) < 90]
+        if near:
+            ox = sum(p[0] for p in near) / len(near) - bu
+            oy = sum(p[1] for p in near) / len(near) - bv
+            away = math.degrees(math.atan2(-oy, -ox))
+            cand = sorted(angles, key=lambda a: abs((a - away + 180) % 360 - 180))
+        else:
+            cand = angles
+        for dist in (30, 46, 64):
+            for a in cand:
+                ca, sa = math.cos(math.radians(a)), math.sin(math.radians(a))
+                ax, ay = bu + ca * dist, bv + sa * dist
+                x0 = ax if ca > 0.3 else (ax - w if ca < -0.3 else ax - w / 2)
+                y0 = ay - h if sa < -0.3 else (ay if sa > 0.3 else ay - h / 2)
+                r = (x0, y0, x0 + w, y0 + h)
+                if r[0] < 4 or r[1] < 4 or r[2] > c.bw - 4 or r[3] > c.bh - 4:
+                    continue
+                if _rect_hits(r, rects + placed) or _circle_hits(r, circles):
+                    continue
+                best = (r, ca, sa)
+                break
+            if best:
+                break
+        if best is None:                             # 자리가 없으면 오른쪽 위에 그냥 둔다
+            r = (bu + 22, bv - 22 - h, bu + 22 + w, bv - 22)
+            best = (r, 0.7, -0.7)
+        r, ca, sa = best
+        placed.append(r)
+        m.callout = (r, rgb, num, lab)
+    # 선 → 고리 → 말풍선 순서로 그린다
+    for m in marks:
+        r, rgb, _, _ = m.callout
+        bu, bv = m.u / s, m.v / s
+        nx, ny = min(max(bu, r[0]), r[2]), min(max(bv, r[1]), r[3])
+        dx, dy = nx - bu, ny - bv
+        dd = math.hypot(dx, dy) or 1.0
+        sx, sy = bu + dx / dd * (R + 1), bv + dy / dd * (R + 1)
+        k = c.k
+        c.d.line([sx * k, sy * k, nx * k, ny * k], fill=(15, 17, 21, 170), width=max(1, round(3.2 * k)))
+        c.d.line([sx * k, sy * k, nx * k, ny * k], fill=rgb + (255,), width=max(1, round(1.6 * k)))
+    for m in marks:
+        _, rgb, _, _ = m.callout
+        bu, bv = m.u / s, m.v / s
+        k = c.k
+        if m.follow:
+            c.d.ellipse([(bu - R - 5) * k, (bv - R - 5) * k, (bu + R + 5) * k, (bv + R + 5) * k],
+                        outline=ACCENT, width=max(1, round(2.2 * k)))
+        c.d.ellipse([(bu - R - 1) * k, (bv - R - 1) * k, (bu + R + 1) * k, (bv + R + 1) * k],
+                    outline=(15, 17, 21, 170), width=max(1, round(4.6 * k)))
+        c.d.ellipse([(bu - R) * k, (bv - R) * k, (bu + R) * k, (bv + R) * k],
+                    outline=rgb + (255,), width=max(1, round(2.6 * k)))
+        hl = math.hypot(m.hu, m.hv) or 1.0
+        hx, hy = m.hu / hl, m.hv / hl
+        tip = (bu + hx * (R + 7), bv + hy * (R + 7))
+        b1 = (bu + hx * (R + 1) - hy * 4.5, bv + hy * (R + 1) + hx * 4.5)
+        b2 = (bu + hx * (R + 1) + hy * 4.5, bv + hy * (R + 1) - hx * 4.5)
+        c.d.polygon([(tip[0] * k, tip[1] * k), (b1[0] * k, b1[1] * k), (b2[0] * k, b2[1] * k)], fill=rgb + (255,))
+    for m in marks:
+        r, rgb, num, lab = m.callout
+        c.card(*r, r=1.5, fill=GLASS, outline=(ACCENT if m.follow else EDGE), width=1.4 if m.follow else 1,
+               accent=rgb + (255,), bar=3)
+        cy = (r[1] + r[3]) / 2
+        c.text(r[0] + 12, cy, num, "Bold", 12, TXT, anchor="lm")
+        c.text(r[0] + 12 + c.tw(num, "Bold", 12) + 5, cy, lab, "Regular", 12, _tint(rgb, .45), anchor="lm")
+    return c.finish()

@@ -17,6 +17,22 @@ export class ApiError extends Error {
  */
 const NO_REFRESH = ['/auth/login', '/auth/signup', '/auth/refresh', '/auth/logout', '/auth/email']
 
+/**
+ * 서버가 문구를 주지 않은 실패(프록시의 HTML 오류 페이지, 네트워크 단절 등)에 띄울 말.
+ * statusText·파서 오류 같은 날것의 영문 메시지를 화면에 올리지 않는다.
+ */
+const FALLBACK_MESSAGE = '요청을 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.'
+const NETWORK_MESSAGE = '서버에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요.'
+
+function parseJson(text) {
+  if (!text) return null
+  try {
+    return JSON.parse(text)
+  } catch {
+    return null
+  }
+}
+
 let refreshing = null
 let onSessionLost = () => {}
 
@@ -26,18 +42,24 @@ export function setSessionLostHandler(handler) {
 }
 
 async function send(path, { method = 'GET', body } = {}) {
-  const response = await fetch(`${BASE_URL}${path}`, {
-    method,
-    // 인증 토큰이 HttpOnly 쿠키라 이 옵션이 없으면 쿠키가 아예 실리지 않는다
-    credentials: 'same-origin',
-    headers: body
-      ? { 'Content-Type': 'application/json', Accept: 'application/json' }
-      : { Accept: 'application/json' },
-    body: body ? JSON.stringify(body) : undefined,
-  })
+  let response
+  try {
+    response = await fetch(`${BASE_URL}${path}`, {
+      method,
+      // 인증 토큰이 HttpOnly 쿠키라 이 옵션이 없으면 쿠키가 아예 실리지 않는다
+      credentials: 'same-origin',
+      headers: body
+        ? { 'Content-Type': 'application/json', Accept: 'application/json' }
+        : { Accept: 'application/json' },
+      body: body ? JSON.stringify(body) : undefined,
+    })
+  } catch (e) {
+    console.error(`[api] ${method} ${path} 연결 실패`, e)
+    throw new ApiError('NETWORK', NETWORK_MESSAGE, 0, null)
+  }
 
   const text = await response.text()
-  return { response, payload: text ? JSON.parse(text) : null }
+  return { response, payload: parseJson(text) }
 }
 
 /**
@@ -60,7 +82,7 @@ async function request(path, options = {}, allowRefresh = true) {
   if (!response.ok || (payload && payload.isSuccess === false)) {
     throw new ApiError(
       payload?.code ?? `HTTP${response.status}`,
-      payload?.message ?? response.statusText,
+      payload?.message ?? FALLBACK_MESSAGE,
       response.status,
       payload?.result,
     )
@@ -110,7 +132,7 @@ async function download(path, allowRefresh = true) {
       payload = null
     }
     if (response.status === 401) onSessionLost()
-    throw new ApiError(payload?.code ?? `HTTP${response.status}`, payload?.message ?? response.statusText, response.status, payload?.result)
+    throw new ApiError(payload?.code ?? `HTTP${response.status}`, payload?.message ?? FALLBACK_MESSAGE, response.status, payload?.result)
   }
 
   const blob = await response.blob()

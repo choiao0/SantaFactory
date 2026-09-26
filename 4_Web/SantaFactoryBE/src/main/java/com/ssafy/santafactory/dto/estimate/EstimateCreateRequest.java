@@ -50,7 +50,7 @@ public record EstimateCreateRequest(
     }
 
     /** min ≤ max 이어야 한다. 한쪽만 오면 범위로 보지 않으므로 검사하지 않는다. */
-    @AssertTrue(message = "fleet_min 은 fleet_max 보다 클 수 없습니다.")
+    @AssertTrue(message = "최소 대수는 최대 대수보다 클 수 없습니다.")
     @JsonIgnore
     public boolean isFleetRangeOrdered() {
         return !hasFleetRange() || fleetMin <= fleetMax;

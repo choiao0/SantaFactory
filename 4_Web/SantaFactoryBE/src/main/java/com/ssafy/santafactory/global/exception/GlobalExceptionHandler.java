@@ -67,14 +67,18 @@ public class GlobalExceptionHandler {
     public void handleUnreadableBody(HttpMessageNotReadableException e, HttpServletResponse response) throws IOException {
         log.warn("읽을 수 없는 요청 본문: {}", e.getMostSpecificCause().getMessage());
         ErrorCode ec = ErrorCode.VALIDATION_ERROR;
-        writeError(response, ec.getHttpStatus(), ApiResponse.onFailure(ec.getCode(), "요청 본문을 읽을 수 없습니다.", null));
+        writeError(response, ec.getHttpStatus(), ApiResponse.onFailure(ec.getCode(), "잘못된 요청입니다.", null));
     }
 
-    /** @Validated 파라미터/경로변수 검증 실패 */
+    /**
+     * @Validated 파라미터/경로변수 검증 실패. 예외 메시지는 "메서드.인자: 제약" 꼴이라 화면에 내보내지 않고
+     * 로그로만 남긴다.
+     */
     @ExceptionHandler(ConstraintViolationException.class)
     public void handleConstraintViolation(ConstraintViolationException e, HttpServletResponse response) throws IOException {
+        log.warn("요청 파라미터 검증 실패: {}", e.getMessage());
         ErrorCode ec = ErrorCode.VALIDATION_ERROR;
-        writeError(response, ec.getHttpStatus(), ApiResponse.onFailure(ec.getCode(), e.getMessage(), null));
+        writeError(response, ec.getHttpStatus(), ApiResponse.onFailure(ec, null));
     }
 
     /** 매핑되지 않은 경로 → 404 */

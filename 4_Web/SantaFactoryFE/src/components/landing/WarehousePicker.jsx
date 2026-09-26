@@ -27,10 +27,10 @@ export default function WarehousePicker({ warehouses, robots }) {
   return (
     <>
       <h3 className="admin-subhead">
-        저장된 조건으로 다시
+        저장된 조건으로 견적 요청
         <span className="admin-count">{warehouses.items.length}개</span>
       </h3>
-      <p className="mono dim lhint">고르면 그 조건으로 바로 견적을 냅니다.</p>
+      <p className="mono dim lhint">조건을 선택하면 해당 조건으로 바로 견적을 시작합니다.</p>
 
       {robots.items.length > 0 && (
         <div className="mdlpick" role="group" aria-label="AMR 모델">
@@ -47,11 +47,11 @@ export default function WarehousePicker({ warehouses, robots }) {
             </button>
           ))}
           {/* 안 고르면 01 로 간다는 사실을 미리 알린다 — 눌러 봐야 아는 것보다 낫다 */}
-          {model == null && <span className="mono dim">안 고르면 01 단계에서 고릅니다</span>}
+          {model == null && <span className="mono dim">선택하지 않으면 01 단계에서 선택합니다.</span>}
         </div>
       )}
 
-      {warehouses.error && <p className="form-error">저장된 조건을 불러오지 못했습니다. {warehouses.error}</p>}
+      {warehouses.error && <p className="form-error">저장된 조건을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.</p>}
 
       <div className="admin-grid">
         {warehouses.items.map((w) => (

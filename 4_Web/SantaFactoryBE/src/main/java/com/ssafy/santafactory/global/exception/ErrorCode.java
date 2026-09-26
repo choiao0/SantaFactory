@@ -7,23 +7,23 @@ import org.springframework.http.HttpStatus;
 public enum ErrorCode {
 
     // Common
-    VALIDATION_ERROR(HttpStatus.BAD_REQUEST, "COMMON400", "요청 값이 올바르지 않습니다."),
-    METHOD_NOT_ALLOWED(HttpStatus.METHOD_NOT_ALLOWED, "COMMON405", "허용되지 않은 HTTP 메서드입니다."),
-    ACCESS_DENIED(HttpStatus.FORBIDDEN, "COMMON403", "접근이 거부되었습니다."),
-    ENTITY_NOT_FOUND(HttpStatus.NOT_FOUND, "COMMON404", "요청한 리소스를 찾을 수 없습니다."),
-    INTERNAL_SERVER_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "COMMON500", "서버 내부 오류가 발생했습니다."),
+    VALIDATION_ERROR(HttpStatus.BAD_REQUEST, "COMMON400", "입력한 내용을 확인해 주세요."),
+    METHOD_NOT_ALLOWED(HttpStatus.METHOD_NOT_ALLOWED, "COMMON405", "잘못된 요청입니다."),
+    ACCESS_DENIED(HttpStatus.FORBIDDEN, "COMMON403", "접근 권한이 없습니다."),
+    ENTITY_NOT_FOUND(HttpStatus.NOT_FOUND, "COMMON404", "요청하신 정보를 찾을 수 없습니다."),
+    INTERNAL_SERVER_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "COMMON500", "일시적인 오류가 발생했습니다. 잠시 후 다시 시도해 주세요."),
 
     // Sim
-    SIM_QUEUE_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "SIM503", "시뮬레이션 요청 큐에 연결할 수 없습니다."),
+    SIM_QUEUE_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "SIM503", "지금은 요청을 처리할 수 없습니다. 잠시 후 다시 시도해 주세요."),
 
     // Estimate
-    WAREHOUSE_NOT_FOUND(HttpStatus.NOT_FOUND, "EST404_1", "요청한 창고를 찾을 수 없습니다."),
-    ESTIMATE_NOT_FOUND(HttpStatus.NOT_FOUND, "EST404_2", "요청한 견적을 찾을 수 없습니다."),
-    ESTIMATE_NOT_VERIFIABLE(HttpStatus.CONFLICT, "EST409_1", "권장 대수가 없어 물리 검증을 시작할 수 없습니다."),
-    ESTIMATE_NOT_FINISHED(HttpStatus.CONFLICT, "EST409_2", "견적 계산이 끝난 뒤에 견적서를 만들 수 있습니다."),
-    VERIFY_IN_PROGRESS(HttpStatus.CONFLICT, "EST409_3", "물리 검증이 이미 진행 중입니다. 끝날 때까지 기다려 주세요."),
-    VERIFY_ALREADY_DONE(HttpStatus.CONFLICT, "EST409_4", "이미 물리 검증을 마친 견적입니다."),
-    QUOTE_PDF_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "PDF503", "견적서 변환기에 연결할 수 없습니다. 잠시 후 다시 시도해 주세요."),
+    WAREHOUSE_NOT_FOUND(HttpStatus.NOT_FOUND, "EST404_1", "창고 정보를 찾을 수 없습니다."),
+    ESTIMATE_NOT_FOUND(HttpStatus.NOT_FOUND, "EST404_2", "견적을 찾을 수 없습니다."),
+    ESTIMATE_NOT_VERIFIABLE(HttpStatus.CONFLICT, "EST409_1", "권장 대수가 없어 3D 주행 검증을 시작할 수 없습니다."),
+    ESTIMATE_NOT_FINISHED(HttpStatus.CONFLICT, "EST409_2", "대수별 시뮬레이션이 끝난 뒤에 견적서를 만들 수 있습니다."),
+    VERIFY_IN_PROGRESS(HttpStatus.CONFLICT, "EST409_3", "3D 주행 검증이 이미 진행 중입니다. 완료될 때까지 기다려 주세요."),
+    VERIFY_ALREADY_DONE(HttpStatus.CONFLICT, "EST409_4", "이미 3D 주행 검증을 마친 견적입니다."),
+    QUOTE_PDF_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "PDF503", "견적서를 만들지 못했습니다. 잠시 후 다시 시도해 주세요."),
 
     // Auth
     UNAUTHORIZED(HttpStatus.UNAUTHORIZED, "AUTH401_1", "로그인이 필요합니다."),

@@ -38,13 +38,13 @@ function markRadius(gap) {
 const EOK = 100_000_000
 
 const REASON_TEXT = {
-  BUDGET_EXCEEDED: '예산 안에 드는 대수가 없습니다. 예산을 올리거나 목표를 낮춰 다시 요청해 보세요.',
-  THROUGHPUT_SHORT: '예산 안의 대수로는 목표 출고 처리율에 닿지 않습니다. 목표를 낮추거나 예산을 올려야 합니다.',
-  UTILIZATION_SHORT: '목표 처리율은 채우지만 그 대수의 AMR 가동률이 목표에 못 미칩니다. 가동률 목표를 조정해 보세요.',
-  LEAD_TIME_LONG: '주문은 목표만큼 나가지만 한 건이 끝나기까지 걸리는 시간이 상한을 넘습니다. 대수를 늘리거나 리드타임 상한을 완화해야 합니다.',
-  ALL_FAILED: '모든 대수의 시뮬레이션이 실패해 판정할 결과가 없습니다. 조건을 확인한 뒤 다시 요청해 주세요.',
+  BUDGET_EXCEEDED: '예산 안에서 구축할 수 있는 대수가 없습니다. 예산을 늘리거나 목표를 조정해 다시 요청해 주세요.',
+  THROUGHPUT_SHORT: '예산 안의 대수로는 목표 주문 처리율에 도달하지 못합니다. 목표를 낮추거나 예산을 늘려 다시 요청해 주세요.',
+  UTILIZATION_SHORT: '목표 주문 처리율은 달성하지만 로봇 가동률이 목표에 미치지 못합니다. 목표 가동률을 조정해 다시 요청해 주세요.',
+  LEAD_TIME_LONG: '주문은 목표만큼 처리하지만 주문 처리 시간이 기준을 넘습니다. 최대 대수를 늘려 다시 요청해 주세요.',
+  ALL_FAILED: '대수별 시뮬레이션을 완료하지 못해 결과를 판정할 수 없습니다. 조건을 확인한 뒤 다시 요청해 주세요.',
   // 더 이상 만들어지지 않는 사유 — 예전에 판정한 견적을 열었을 때를 위해 남겨 둔다
-  LOAD_TOO_LOW: '모든 대수가 처리율 100%를 기록해 대수를 구분할 수 없습니다. 주문량이 너무 적거나 시뮬 실행 조건을 확인해야 합니다.',
+  LOAD_TOO_LOW: '모든 대수의 주문 처리율이 100%여서 대수 간 차이를 구분할 수 없습니다. 주문량을 확인한 뒤 다시 요청해 주세요.',
 }
 
 function isDone(run) {
@@ -135,7 +135,7 @@ function CurveChart({ runs, estimate, budget, recommended, minimal, knee }) {
   const visible = new Set(tickIndexes(runs, recIndex))
 
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label="AMR 대수별 효율 점수와 구축비용 곡선">
+    <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label="AMR 대수별 운영 효율과 구축 비용 곡선">
       {[0, 25, 50, 75, 100].map((v) => (
         <g key={v}>
           <line x1={pad.l} x2={W - pad.r} y1={y(v)} y2={y(v)} stroke={GRID_LINE} />
@@ -153,8 +153,8 @@ function CurveChart({ runs, estimate, budget, recommended, minimal, knee }) {
         </text>
       ))}
       <text x={pad.l} y={H - 4} fontSize="7.5" fill={MUTED} fontFamily={MONO}>AMR 대수 →</text>
-      <text x={pad.l - 40} y={pad.t - 6} fontSize="7.5" fill={MUTED} fontFamily={MONO}>효율</text>
-      <text x={W - pad.r + 8} y={pad.t - 6} fontSize="7.5" fill={MUTED} fontFamily={MONO}>구축비</text>
+      <text x={pad.l - 40} y={pad.t - 6} fontSize="7.5" fill={MUTED} fontFamily={MONO}>운영 효율</text>
+      <text x={W - pad.r + 8} y={pad.t - 6} fontSize="7.5" fill={MUTED} fontFamily={MONO}>구축 비용</text>
 
       {budget <= costMax && (
         <>
@@ -206,7 +206,7 @@ function CurveChart({ runs, estimate, budget, recommended, minimal, knee }) {
       {knee != null && knee !== recommended && (
         <>
           <line x1={x(knee)} x2={x(knee)} y1={pad.t} y2={pad.t + ih} stroke={MUTED} strokeDasharray="3 3" />
-          <text x={x(knee) + 6} y={pad.t + ih - 20} fontSize="7.5" fill={MUTED} fontFamily={MONO}>변곡 {knee}대</text>
+          <text x={x(knee) + 6} y={pad.t + ih - 20} fontSize="7.5" fill={MUTED} fontFamily={MONO}>효과 둔화 {knee}대</text>
         </>
       )}
       {showMin && (
@@ -306,7 +306,7 @@ function ThroughputChart({ runs, estimate, budget, minimal, recommended }) {
       ))}
       <text x={pad.l} y={H - 4} fontSize="7.5" fill={MUTED} fontFamily={MONO}>AMR 대수 →</text>
       <text x={pad.l - 40} y={pad.t - 6} fontSize="7.5" fill={MUTED} fontFamily={MONO}>처리율</text>
-      <text x={W - pad.r + 8} y={pad.t - 6} fontSize="7.5" fill={MUTED} fontFamily={MONO}>구축비</text>
+      <text x={W - pad.r + 8} y={pad.t - 6} fontSize="7.5" fill={MUTED} fontFamily={MONO}>구축 비용</text>
 
       {/* 효율 곡선과 같은 비용 축·예산선을 쓴다 — 두 화면을 오가며 같은 금액을 읽게 된다 */}
       {[0, 0.25, 0.5, 0.75, 1].map((f) => (
@@ -386,7 +386,7 @@ function UtilChart({ runs, target, recommended }) {
   const visible = new Set(tickIndexes(runs, recIndex))
 
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label="AMR 대수별 가동률">
+    <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label="AMR 대수별 로봇 가동률">
       {[0, 25, 50, 75, 100].map((v) => (
         <g key={v}>
           <line x1={pad.l} x2={W - pad.r} y1={pad.t + ih - (v / 100) * ih} y2={pad.t + ih - (v / 100) * ih} stroke={GRID_LINE} />
@@ -432,15 +432,15 @@ function UtilChart({ runs, target, recommended }) {
 
 function Placeholder({ estimateId, estimate }) {
   if (estimateId == null) {
-    return <div className="q-empty">견적을 요청하면 리포트가 여기에 표시됩니다.</div>
+    return <div className="q-empty">견적을 요청하면 견적 결과가 여기에 표시됩니다.</div>
   }
   const runs = estimate?.runs ?? []
   const finished = runs.filter((r) => r.status !== 'QUEUED' && r.status !== 'RUNNING').length
   return (
     <div className="q-empty">
-      <span className="live-dot pulse" /> 시뮬레이션 진행 중 · {finished} / {runs.length} 완료
+      <span className="live-dot pulse" /> 대수별 시뮬레이션 진행 중 · {finished} / {runs.length} 완료
       <br />
-      마지막 run 이 끝나면 권장 대수와 비용 곡선이 자동으로 표시됩니다.
+      모든 대수의 시뮬레이션이 끝나면 권장 대수와 비용 곡선이 표시됩니다.
     </div>
   )
 }
@@ -453,14 +453,15 @@ function QuoteActions({ estimateId, finished }) {
   const [busy, setBusy] = useState(null) // null | 'pdf' | 'mail'
   const [message, setMessage] = useState(null)
 
-  const run = async (kind, action, doneText) => {
+  const run = async (kind, action, doneText, failText) => {
     setBusy(kind)
     setMessage(null)
     try {
       await action()
       setMessage({ ok: true, text: doneText })
     } catch (e) {
-      setMessage({ ok: false, text: e.message ?? '요청에 실패했습니다.' })
+      console.error(`[quote] estimateId=${estimateId} ${kind} 실패`, e)
+      setMessage({ ok: false, text: failText })
     } finally {
       setBusy(null)
     }
@@ -472,19 +473,21 @@ function QuoteActions({ estimateId, finished }) {
         type="button"
         className="button"
         disabled={!finished || busy !== null}
-        onClick={() => run('pdf', () => downloadQuotePdf(estimateId), '견적서를 저장했습니다.')}
+        onClick={() => run('pdf', () => downloadQuotePdf(estimateId), '견적서를 저장했습니다.',
+          '견적서를 만들지 못했습니다. 잠시 후 다시 시도해 주세요.')}
       >
-        {busy === 'pdf' ? '견적서 만드는 중…' : '견적서 PDF 저장 ↗'}
+        {busy === 'pdf' ? '견적서 만드는 중…' : '견적서 PDF 저장'}
       </button>
       <button
         type="button"
         className="ghost"
         disabled={!finished || busy !== null}
-        onClick={() => run('mail', () => emailQuote(estimateId), '가입한 이메일로 견적서를 보냈습니다. 잠시 후 메일함을 확인하세요.')}
+        onClick={() => run('mail', () => emailQuote(estimateId), '가입한 이메일로 견적서를 보냈습니다. 잠시 후 메일함을 확인해 주세요.',
+          '견적서를 메일로 보내지 못했습니다. 잠시 후 다시 시도해 주세요.')}
       >
         {busy === 'mail' ? '보내는 중…' : '메일로 받기'}
       </button>
-      <Link className="ghost" to={FIRST_STEP_PATH}>조건 바꿔 다시 요청</Link>
+      <Link className="ghost" to={FIRST_STEP_PATH}>조건 변경 후 재요청</Link>
       {message && (
         <span className="mono" style={{ fontSize: 13, color: message.ok ? '#1c7c4f' : '#b51616' }}>{message.text}</span>
       )}
@@ -531,7 +534,7 @@ export default function QuoteStep({ estimateId, estimate, verdict }) {
     <section className="step paper" id="quote">
       <div className="eyebrow red">
         <span className="live-dot" />
-        05 — 견적
+        05 · 견적
       </div>
       {!ready && <Placeholder estimateId={estimateId} estimate={estimate} />}
 
@@ -540,7 +543,7 @@ export default function QuoteStep({ estimateId, estimate, verdict }) {
           <div className="q-head">
             <h3>SANTA FACTORY · 견적서</h3>
             <span className="mono">
-              {formatDateTime(estimate.created_at)} · AMR : {estimate.amr_model}
+              {formatDateTime(estimate.created_at)} · AMR 모델 {estimate.amr_model}
             </span>
           </div>
 
@@ -549,12 +552,13 @@ export default function QuoteStep({ estimateId, estimate, verdict }) {
           {!cancelled && rec && (
             <>
               <p className="q-sum">
-                목표 출고 처리율 <b>{estimate.target_throughput}%</b>를 만족하면서 효율(처리율 × 가동률)이
-                가장 높은 구성은 <b className="rd">{estimate.amr_model} {rec.amr_count}대</b>입니다.
-                예상 구축비용은 <b>{formatWon(rec.total_cost)}</b>으로 예산{' '}
+                목표 주문 처리율 <b>{estimate.target_throughput}%</b>와 목표 가동률 {estimate.target_utilization}%를
+                달성하는 구성 중 운영 효율(주문 처리율 × 로봇 가동률)이 가장 높은 구성은{' '}
+                <b className="rd">{estimate.amr_model} {rec.amr_count}대</b>입니다.
+                예상 구축 비용은 <b>{formatWon(rec.total_cost)}</b>으로 예산{' '}
                 {formatWon(estimate.budget_limit)} 이내입니다.
                 {verdict.knee_count != null && verdict.knee_count !== rec.amr_count && (
-                  <> {verdict.knee_count}대부터는 대수를 늘려도 처리율이 거의 오르지 않습니다.</>
+                  <> {verdict.knee_count}대부터는 대수를 늘려도 주문 처리율이 거의 오르지 않습니다.</>
                 )}
               </p>
 
@@ -562,20 +566,20 @@ export default function QuoteStep({ estimateId, estimate, verdict }) {
                 <div>
                   <span className="k-label">권장 대수</span>
                   <strong>{rec.amr_count}<span>대</span></strong>
-                  <em className="ok">목표 달성 · 예산 이내 · 효율 최고</em>
+                  <em className="ok">목표 달성 · 예산 이내 · 운영 효율 최고</em>
                 </div>
                 <div>
-                  <span className="k-label">처리율</span>
+                  <span className="k-label">주문 처리율</span>
                   <strong>{formatPercent(rec.throughput)}<span>%</span></strong>
-                  <em>목표 {estimate.target_throughput}% 대비 +{formatPercent(rec.throughput - estimate.target_throughput)}p</em>
+                  <em>목표 {estimate.target_throughput}% 대비 +{formatPercent(rec.throughput - estimate.target_throughput)}%p</em>
                 </div>
                 <div>
-                  <span className="k-label">구축비용</span>
+                  <span className="k-label">구축 비용</span>
                   <strong>{formatWon(rec.total_cost)}</strong>
                   <em>예산 {formatWon(estimate.budget_limit)} 중 {Math.round((rec.total_cost / estimate.budget_limit) * 100)}%</em>
                 </div>
                 <div>
-                  <span className="k-label">가동률</span>
+                  <span className="k-label">로봇 가동률</span>
                   <strong>{formatPercent(rec.utilization)}<span>%</span></strong>
                   <em>목표 가동률 {estimate.target_utilization}%</em>
                 </div>
@@ -585,9 +589,9 @@ export default function QuoteStep({ estimateId, estimate, verdict }) {
 
           {!cancelled && !rec && (
             <div className="notice">
-              <b>권장 대수를 내지 못했습니다.</b>
+              <b>권장 대수를 찾지 못했습니다.</b>
               <br />
-              {REASON_TEXT[verdict.reason_code] ?? `사유 코드 ${verdict.reason_code}`}
+              {REASON_TEXT[verdict.reason_code] ?? '조건을 만족하는 권장 대수를 찾지 못했습니다. 목표나 예산을 조정해 다시 요청해 주세요.'}
             </div>
           )}
 
@@ -598,9 +602,9 @@ export default function QuoteStep({ estimateId, estimate, verdict }) {
                   {/* 두 그림이 각자 다른 표식을 설명한다 — 효율 곡선의 봉우리가 권장, 처리율
                       곡선에서 목표선을 처음 넘는(색이 찬) 점이 최소 구성이다 */}
                   <div className="chart-head">
-                    <h5>{curveView === 'eff' ? '효율–비용 곡선' : '처리율 곡선'}</h5>
+                    <h5>{curveView === 'eff' ? '운영 효율 곡선' : '주문 처리율 곡선'}</h5>
                     <div className="chart-toggle" role="group" aria-label="곡선 기준">
-                      {[['eff', '효율'], ['thr', '처리율']].map(([key, text]) => (
+                      {[['eff', '운영 효율'], ['thr', '주문 처리율']].map(([key, text]) => (
                         <button key={key} type="button" className={curveView === key ? 'on' : ''}
                                 aria-pressed={curveView === key} onClick={() => setCurveView(key)}>
                           {text}
@@ -625,35 +629,35 @@ export default function QuoteStep({ estimateId, estimate, verdict }) {
                     {/* 선 색을 말로 적으면 어느 선인지 짚기 어렵다 — 실제 칠하는 색을 그대로 보여준다 */}
                     {curveView === 'eff' ? (
                       <>
-                        <i style={{ background: RED }} />효율 (처리율 × 가동률)
-                        <i style={{ background: MUTED }} />구축비용
+                        <i style={{ background: RED }} />운영 효율(처리율 × 가동률)
+                        <i style={{ background: MUTED }} />구축 비용
                         <i style={{ background: '#b7b5b0' }} />목표 미달
                         <br />
-                        효율이 가장 높은 대수를 권장 구성으로{minimal != null && minimal !== recommended
-                          ? ', 목표를 만족하는 가장 적은 대수를 최소 구성으로' : ''} 표시합니다
+                        운영 효율이 가장 높은 대수를 권장 구성으로{minimal != null && minimal !== recommended
+                          ? ', 목표를 만족하는 가장 적은 대수를 최소 구성으로' : ''} 표시합니다.
                       </>
                     ) : (
                       <>
                         <i style={{ background: RED }} />주문 처리율
-                        <i style={{ background: MUTED }} />구축비용
+                        <i style={{ background: MUTED }} />구축 비용
                         <i style={{ background: '#b7b5b0' }} />목표 미달
                         <br />
-                        목표를 만족하는 가장 적은 대수를 최소 구성으로 표시합니다. 회색 점은 처리율·가동률·예산 중
-                        하나라도 못 넘은 대수입니다
+                        목표를 만족하는 가장 적은 대수를 최소 구성으로 표시합니다. 회색 점은 주문 처리율, 로봇 가동률,
+                        예산 중 하나라도 충족하지 못한 대수입니다.
                       </>
                     )}
                   </p>
                 </div>
                 <div>
-                  <h5>가동률</h5>
+                  <h5>로봇 가동률</h5>
                   <UtilChart runs={runs} target={estimate.target_utilization} recommended={recommended} />
                   <p className="chart-cap">
                     {/* 막대 색을 말로 적으면 어느 막대인지 짚기 어렵다 — 실제 칠하는 색을 그대로 보여준다 */}
-                    <i style={{ background: BAR }} />가동률
+                    <i style={{ background: BAR }} />로봇 가동률
                     <i style={{ background: RED }} />권장 구성
                     <i style={{ background: GRID_LINE, border: '1px solid #c9c7c2' }} />측정값 없음
                     <br />
-                    대수가 많으면 x축 라벨은 일부만 표시됩니다
+                    대수가 많으면 가로축에는 일부 대수만 표시됩니다.
                   </p>
                 </div>
               </div>
@@ -663,12 +667,12 @@ export default function QuoteStep({ estimateId, estimate, verdict }) {
                   <thead>
                     <tr>
                       <th>구성</th>
-                      <th>처리율</th>
-                      <th>가동률</th>
+                      <th>주문 처리율</th>
+                      <th>로봇 가동률</th>
                       <th className="goal">목표</th>
-                      <th>효율 <span>처리율 × 가동률</span></th>
+                      <th>운영 효율 <span>처리율 × 가동률</span></th>
                       <th>처리 완료 <span>건/일</span></th>
-                      <th>구축비용</th>
+                      <th>구축 비용</th>
                       <th>예산</th>
                     </tr>
                   </thead>
@@ -679,7 +683,7 @@ export default function QuoteStep({ estimateId, estimate, verdict }) {
                         return (
                           <tr key={r.run_id} className="fail">
                             <td>{r.amr_count}대</td>
-                            <td colSpan={5}>{r.status} · 결과 없음{r.error ? ` · ${r.error}` : ''}</td>
+                            <td colSpan={5}>계산을 완료하지 못했습니다.</td>
                             <td>{formatWon(r.total_cost)}</td>
                             <td>{inBudget ? '이내' : '초과'}</td>
                           </tr>
@@ -716,14 +720,14 @@ export default function QuoteStep({ estimateId, estimate, verdict }) {
               {/* 표에 대수를 두 개 표시했으면, 그 둘을 왜 나눠 놓았는지 한 줄로 말한다 */}
               {saving != null && (
                 <p className="table-note">
-                  <b>최소 구성</b>은 목표를 만족하는 가장 적은 대수로, {minimal}대({formatWon(min.total_cost)})는
-                  권장보다 {formatWon(saving)} 적지만 효율 {formatPercent(efficiency(min))}%로
-                  권장보다 {formatPercent(effLoss)}%p 안 좋습니다.
+                  <b>최소 구성</b>은 목표를 만족하는 가장 적은 대수입니다. {minimal}대 구성({formatWon(min.total_cost)})은
+                  권장보다 구축 비용이 {formatWon(saving)} 적지만, 운영 효율은 {formatPercent(efficiency(min))}%로
+                  권장보다 {formatPercent(effLoss)}%p 낮습니다.
                 </p>
               )}
               {saving == null && minimal != null && (
                 <p className="table-note">
-                  목표를 만족하는 가장 적은 대수가 권장 구성과 같습니다 — 더 줄일 여지가 없습니다.
+                  권장 구성이 목표를 만족하는 가장 적은 대수입니다.
                 </p>
               )}
             </>
@@ -731,10 +735,10 @@ export default function QuoteStep({ estimateId, estimate, verdict }) {
 
           <div className="q-two">
             <div>
-              <h4>구축비용</h4>
+              <h4>구축 비용</h4>
               <div className="notice">
-                (단가 + 설치비) × 대수 + 충전기(4대당 1기)로 계산합니다.
-                유지보수비와 자재 관리비는 포함되지 않습니다.
+                (대당 단가 + 설치비) × 대수 + 충전기(4대당 1기)로 산정합니다.
+                유지보수 · 소프트웨어 · 자재 관리 · 부가세는 포함되지 않습니다.
               </div>
             </div>
           </div>

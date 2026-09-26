@@ -24,7 +24,7 @@ const DEFAULT_FLEET = { min: 3, max: 15 }
 /** 견적을 내려면 사용자가 채워야 하는 값. 기본값이 0 이라 빈 채로 요청하면 서버 검증에서 막힌다. */
 const REQUIRED_FIELDS = [
   ['outboundAvg', '일 평균 출고 주문'],
-  ['targetThroughput', '목표 출고 처리율'],
+  ['targetThroughput', '목표 주문 처리율'],
   ['targetUtilization', '목표 가동률'],
   ['budgetMan', '최대 구축 예산'],
 ]

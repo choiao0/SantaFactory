@@ -29,7 +29,7 @@ export default function QuotePage() {
           <RunsStep estimateId={estimateId} estimate={estimate} connected={connected} error={error} />
         </details>
         <details className="fold">
-          <summary>물리 검증 영상 보기</summary>
+          <summary>3D 주행 검증 보기</summary>
           <VerifyStep
             estimateId={estimateId}
             ready={Boolean(verdict)}

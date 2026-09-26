@@ -717,6 +717,19 @@ class TestSimTimeWindow:
         assert job.phase == O.STOPPING and job.final == "FAILED"
         assert "backstop" in job.reason and "5.0s of 60s" in job.error
 
+    def test_a_sim_time_left_over_from_the_last_run_does_not_close_the_window(self):
+        """(-279) 러너가 새 런의 시뮬 시각을 아직 안 보냈을 때 노드에 남은 지난 런의 660 s 로 창을 끊지 않는다 —
+        verify_20_n11·n12 가 RUNNING 0.5 s 만에 Stop 된 원인. 이번 런의 보고가 오면 그때부터 그 값으로 끊는다."""
+        job, cmd = make_job()
+        job.step(node("IDLE", sim_s=660.0), 0.0, cmd)
+        self.running(job, cmd, 1.0, sim_s=660.0)             # RUNNING 인데 값은 지난 런 것
+        self.running(job, cmd, 2.0, sim_s=660.0)
+        assert job.phase == O.RUNNING and cmd.stops == 0
+        self.running(job, cmd, 30.0, sim_s=10.0)             # 이번 런의 첫 보고
+        assert job.phase == O.RUNNING and cmd.stops == 0
+        self.running(job, cmd, 90.0, sim_s=60.0)
+        assert job.phase == O.STOPPING and job.reason == "window elapsed"
+
     def test_zero_sim_time_counts_as_not_reported(self):
         """NBIRTH 기본값 0.0 을 「시뮬 0초를 돌았다」로 읽으면 벽시계 후퇴가 막힌다."""
         job, _ = make_job()

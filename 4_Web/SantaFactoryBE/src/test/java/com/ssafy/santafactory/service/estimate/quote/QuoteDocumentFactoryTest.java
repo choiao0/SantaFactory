@@ -24,8 +24,7 @@ class QuoteDocumentFactoryTest {
 
         assertThat(q.docNo()).isEqualTo("EST-20260917-0142");
         assertThat(q.fileName()).isEqualTo("견적서_EST-20260917-0142.pdf");
-        assertThat(q.issue().statusLine()).isEqualTo("완료 · 28회 시뮬레이션 · 물리 검증 완료");
-        assertThat(q.issue().elapsed()).isEqualTo("18분 42초");
+        assertThat(q.issue().statusLine()).isEqualTo("완료 · 대수별 시뮬레이션 28회 · 3D 주행 검증 완료");
         assertThat(q.issue().sizeLine()).isEqualTo("60 m × 40 m · 2,400 m²");
         assertThat(q.issue().windowLine()).isEqualTo("13:00 – 18:00 (5시간)");
         assertThat(q.issue().dailyOrders()).isEqualTo("1,000건");
@@ -34,14 +33,14 @@ class QuoteDocumentFactoryTest {
         assertThat(q.verdict().count()).isEqualTo(14);
         assertThat(q.verdict().lead()).contains("15대부터는 로봇을 늘려도").contains("2억 1,700만 원");
         assertThat(q.verdict().throughput()).isEqualTo("95.6");
-        assertThat(q.verdict().throughputNote()).isEqualTo("목표 95 % 대비 +0.6p");
+        assertThat(q.verdict().throughputNote()).isEqualTo("목표 95% 대비 +0.6%p");
         assertThat(q.verdict().costEok()).isEqualTo("2.17");
-        assertThat(q.verdict().costNote()).contains("72 %").contains("8,300만 원");
+        assertThat(q.verdict().costNote()).contains("72%").contains("8,300만 원");
         assertThat(q.verdict().leadTimeMin()).isEqualTo("6.4");
-        assertThat(q.verdict().leadTimeNote()).contains("평균은 3.5분");
+        assertThat(q.verdict().leadTimeNote()).contains("평균 3.5분");
 
         assertThat(q.targets()).extracting(QuoteDocument.TargetRow::label)
-                .containsExactly("주문 처리율", "로봇 가동률", "구축 비용", "주문 처리 시간 (90 % 기준)");
+                .containsExactly("주문 처리율", "로봇 가동률", "구축 비용", "주문 처리 시간 (90% 기준)");
         assertThat(q.targets().get(0).ok()).isTrue();
         assertThat(q.targets().get(0).note()).isEqualTo("하루 1,000건 중 956건 처리");
         assertThat(q.targets().get(3).ok()).isNull();
@@ -62,27 +61,60 @@ class QuoteDocumentFactoryTest {
                 QuoteFixtures.warehouse()));
 
         QuoteDocument.Verification v = q.verification();
-        assertThat(v.methodLine()).startsWith("로봇 14대를 3D 물리 시뮬레이션");
-        assertThat(v.windowLine()).isEqualTo("주문이 가장 몰리는 10분");
+        assertThat(v.methodLine()).startsWith("로봇 14대를 실제 크기와 속도로");
+        assertThat(v.windowLine()).isEqualTo("주문 집중 10분");
         assertThat(v.resultOk()).isTrue();
-        assertThat(v.resultLine()).isEqualTo("정상 완료 · 로봇 14대 모두 가동");
+        assertThat(v.resultLine()).isEqualTo("완료 · 로봇 14대 모두 가동");
         assertThat(v.hasComparison()).isTrue();
-        assertThat(v.rows()).extracting(QuoteDocument.CompareRow::diff).containsExactly("−5 %", "+8 %", "+1.3 %p");
+        assertThat(v.rows()).extracting(QuoteDocument.CompareRow::diff).containsExactly("−5%", "+8%", "+1.3%p");
         assertThat(v.rows().get(1).warn()).isTrue();
         assertThat(v.rows().get(0).warn()).isFalse();
-        assertThat(v.noticeText()).contains("약 8 % 길어질 수 있습니다").endsWith("권장 대수 판정에는 영향이 없습니다.");
+        // 느려질 수 있다는 안내에는 산정 근거 문장을 붙이지 않는다
+        assertThat(v.noticeText()).endsWith("약 8% 길어질 수 있습니다.").doesNotContain("권장 대수");
     }
 
     @Test
-    void unfinished_verification_hides_the_comparison() {
-        QuoteDocument q = factory.build(new QuoteSource(
-                QuoteFixtures.detail(142L, 14, 15, QuoteFixtures.verification(VerifyNoticeCode.NOT_FINISHED, null)),
-                QuoteFixtures.warehouse()));
+    void unfinished_verification_hides_the_comparison_and_the_raw_error() {
+        var failed = new EstimateDetailResponse.Verification("failed", VerifyNoticeCode.NOT_FINISHED, 14, 0, 600,
+                "runner exited with code 137", LocalDateTime.of(2026, 9, 17, 15, 0), null);
+        QuoteDocument q = factory.build(new QuoteSource(QuoteFixtures.detail(142L, 14, 15, failed), QuoteFixtures.warehouse()));
 
         assertThat(q.verification().hasComparison()).isFalse();
         assertThat(q.verification().resultOk()).isFalse();
-        assertThat(q.verification().noticeText()).startsWith("물리 검증이 정상 종료되지 않아");
-        assertThat(q.issue().statusLine()).doesNotContain("물리 검증 완료");
+        // 내부 오류 문구는 DB·로그에만 남고 견적서에는 고정 문장만 나간다
+        assertThat(q.verification().resultLine()).isEqualTo("검증을 완료하지 못했습니다.");
+        assertThat(q.verification().noticeText()).startsWith("3D 주행 검증을 완료하지 못해")
+                .endsWith("권장 대수는 대수별 시뮬레이션 결과로 산정했습니다.").doesNotContain("137");
+        assertThat(q.issue().statusLine()).doesNotContain("3D 주행 검증 완료");
+    }
+
+    @Test
+    void physics_rows_use_customer_verdict_labels_and_state_the_pass_limit() {
+        var d = QuoteFixtures.detail(142L, 14, 15, null);
+        List<EstimateDetailResponse.VerificationRun> runs = List.of(
+                physicsRun(13, "PASS"), physicsRun(14, "WARN"), physicsRun(15, "FAIL"), physicsRun(16, "NA"));
+
+        QuoteDocument passed = factory.build(new QuoteSource(withPhysics(d, runs, 13), QuoteFixtures.warehouse()));
+        QuoteDocument none = factory.build(new QuoteSource(withPhysics(d, runs, null), QuoteFixtures.warehouse()));
+        QuoteDocument notRun = factory.build(new QuoteSource(d, QuoteFixtures.warehouse()));
+
+        assertThat(passed.physicsRows()).extracting(QuoteDocument.PhysicsRow::verdictLabel)
+                .containsExactly("적합", "주의", "부적합", "판정 불가");
+        assertThat(passed.physicsLimitLine()).isEqualTo("13대까지 3D 주행 검증을 통과했습니다.");
+        assertThat(none.physicsLimitLine()).isEqualTo("아직 3D 주행 검증을 통과한 대수가 없습니다.");
+        assertThat(notRun.physicsLimitLine()).isNull();
+    }
+
+    private static EstimateDetailResponse.VerificationRun physicsRun(int n, String verdict) {
+        return new EstimateDetailResponse.VerificationRun(n, 1, "DONE", verdict, null, null, null, null, null, null,
+                LocalDateTime.of(2026, 9, 17, 15, 0), LocalDateTime.of(2026, 9, 17, 15, 20));
+    }
+
+    private static EstimateDetailResponse withPhysics(EstimateDetailResponse d, List<EstimateDetailResponse.VerificationRun> runs,
+                                                      Integer limit) {
+        return new EstimateDetailResponse(d.estimateId(), d.status(), d.amrModel(), d.targetThroughput(), d.targetUtilization(),
+                d.budgetLimit(), d.recommendedCount(), d.minimalCount(), d.kneeCount(), d.reasonCode(), d.createdAt(),
+                d.completedAt(), d.elapsedSeconds(), null, null, d.runs(), d.verification(), runs, limit);
     }
 
     @Test
@@ -94,10 +126,10 @@ class QuoteDocumentFactoryTest {
         QuoteDocument.FleetRow rec = q.fleet().stream().filter(QuoteDocument.FleetRow::recommended).findFirst().orElseThrow();
         assertThat(rec.count()).isEqualTo(14);
         assertThat(rec.cost()).isEqualTo("2억 1,700만 원");
-        assertThat(rec.efficiency()).isEqualTo("67.1");
+        assertThat(rec.efficiency()).isEqualTo("67.1%");
         assertThat(q.fleet().stream().filter(QuoteDocument.FleetRow::knee).map(QuoteDocument.FleetRow::count)).containsExactly(15);
         assertThat(q.fleet().stream().filter(f -> f.count() == 20).findFirst().orElseThrow().overBudget()).isTrue();
-        assertThat(q.fleetNote()).contains("12대 · 13대는 처리율 미달로 제외").contains("웹 리포트에서");
+        assertThat(q.fleetNote()).contains("12대 · 13대는 운영 효율이 더 높지만 주문 처리율이 목표에 미달해 제외했습니다.").contains("견적 결과 화면에서");
     }
 
     @Test
@@ -113,7 +145,7 @@ class QuoteDocumentFactoryTest {
         QuoteDocument.Curve c = q.curve();
         assertThat(c.effPath()).startsWith("M36.0 ").contains(" L");
         assertThat(c.costPath()).startsWith("M36.0 ");
-        assertThat(c.recLabel()).isEqualTo("권장 14대 · 효율 67.1");
+        assertThat(c.recLabel()).isEqualTo("권장 14대 · 운영 효율 67.1%");
         assertThat(c.budgetLabel()).isEqualTo("예산 3억 원");
         assertThat(c.xLabels()).extracting(QuoteDocument.AxisLabel::text).contains("1대", "14대", "28대");
         assertThat(c.yRight()).extracting(QuoteDocument.AxisLabel::text).containsExactly("0억", "1.5억", "3억", "4.5억", "6억");   // 28대 4.34억이 예산 3억보다 커서 축은 6억까지
@@ -157,7 +189,7 @@ class QuoteDocumentFactoryTest {
         QuoteDocument q = factory.build(new QuoteSource(d, QuoteFixtures.warehouse()));
 
         assertThat(q.verdict().recommended()).isFalse();
-        assertThat(q.verdict().reasonText()).startsWith("예산 안에 드는 로봇 대수가 없습니다");
+        assertThat(q.verdict().reasonText()).startsWith("예산 안에서 도입할 수 있는 로봇 대수가 없습니다");
         assertThat(q.targets()).isEmpty();
         assertThat(q.cost()).isNull();
         assertThat(q.verification()).isNull();

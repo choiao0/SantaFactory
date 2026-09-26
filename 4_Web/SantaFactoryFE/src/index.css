@@ -711,6 +711,7 @@ section.step > p.desc { font-size: 18px; line-height: 1.7; max-width: 760px; mar
 .vc-error { font: 400 12px/1.5 var(--font-sans); color: #ff8a8a; }
 
 .verify-limit { max-width: 920px; margin: 0 0 16px; font-size: 13px; }
+.verify-retry { margin: -4px 0 16px; }
 
 /* 고른 대수의 지표 — 명세 §D 문구 그대로, 두 칸씩 흐르게 */
 .verify-metrics {

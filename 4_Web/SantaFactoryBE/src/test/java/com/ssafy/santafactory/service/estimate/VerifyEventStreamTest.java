@@ -1,6 +1,12 @@
 package com.ssafy.santafactory.service.estimate;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.ssafy.santafactory.dto.estimate.EstimateDetailResponse.VerificationRun;
@@ -9,8 +15,10 @@ import com.ssafy.santafactory.service.estimate.EstimateEvents.VerificationsFinis
 import com.ssafy.santafactory.service.estimate.EstimateEvents.VerificationsSnapshot;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.stream.Collectors;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -47,6 +55,38 @@ class VerifyEventStreamTest {
         stream.subscribe(78L);
 
         assertThat(stream.subscriberCount(78L)).isZero();
+    }
+
+    /**
+     * (S15P21A106-279) 다 끝난 견적을 다시 열면 snapshot 만 보내고 닫았다 — 화면은 verify.done 에서만 닫으므로
+     * 브라우저 EventSource 가 3초마다 재접속했고, 매번 새로 서명한 영상 URL 이 와서 재생 중인 영상이 처음으로 돌아갔다.
+     */
+    @Test
+    void reopening_a_finished_estimate_sends_done_so_the_browser_does_not_reconnect() throws Exception {
+        SseEmitter emitter = mock(SseEmitter.class);
+        VerifyEventStream spied = spy(stream);
+        doReturn(emitter).when(spied).newEmitter();
+        when(estimateService.verifySnapshot(78L)).thenReturn(
+                snapshot(78L, List.of(run(10, "DONE", "WARN"), run(11, "FAILED", "FAIL"))));
+
+        spied.subscribe(78L);
+
+        assertThat(sentEventNames(emitter)).containsExactly("snapshot", "verify.done");
+        verify(emitter).complete();
+    }
+
+    @Test
+    void a_subscription_still_waiting_for_results_gets_only_the_snapshot() throws Exception {
+        SseEmitter emitter = mock(SseEmitter.class);
+        VerifyEventStream spied = spy(stream);
+        doReturn(emitter).when(spied).newEmitter();
+        when(estimateService.verifySnapshot(79L)).thenReturn(
+                snapshot(79L, List.of(run(9, "DONE", "PASS"), run(10, "RUNNING", "NA"))));
+
+        spied.subscribe(79L);
+
+        assertThat(sentEventNames(emitter)).containsExactly("snapshot");
+        verify(emitter, never()).complete();
     }
 
     @Test
@@ -100,6 +140,16 @@ class VerifyEventStreamTest {
         stream.onVerificationsFinished(new VerificationsFinished(80L));
 
         assertThat(stream.subscriberCount(79L)).isEqualTo(1);
+    }
+
+    /** 보낸 SSE 이벤트 이름 순서 — 빌더가 만드는 {@code event:<이름>} 줄에서 읽는다. */
+    private List<String> sentEventNames(SseEmitter emitter) throws Exception {
+        ArgumentCaptor<SseEmitter.SseEventBuilder> sent = ArgumentCaptor.forClass(SseEmitter.SseEventBuilder.class);
+        verify(emitter, atLeastOnce()).send(sent.capture());
+        return sent.getAllValues().stream()
+                .map(b -> b.build().stream().map(d -> String.valueOf(d.getData())).collect(Collectors.joining()))
+                .map(text -> text.lines().filter(l -> l.startsWith("event:")).findFirst().orElse("event:?").substring(6))
+                .toList();
     }
 
     private VerificationsSnapshot snapshot(Long estimateId, List<VerificationRun> runs) {
