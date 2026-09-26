@@ -57,7 +57,7 @@ function idlePlaceholder({ estimateId, ready, recommendedCount, started }) {
     return {
       tag: 'QUEUED', label: '대기', action: true,
       text: `권장 ${recommendedCount}대와 앞뒤 대수의 3D 주행 검증을 시작할 수 있습니다.`,
-      hint: ['주문 집중 10분을 대수별로 3D 환경에서 재현해 로봇이 막힘없이 움직이는지 확인합니다.'],
+      hint: ['대수마다 작업이 가장 많은 10분(피크 작업 10분)을 3D 환경에서 재현해 로봇이 막힘없이 움직이는지 확인합니다.'],
     }
   }
   return {
@@ -85,7 +85,7 @@ function VerifyPlayer({ estimateId, current }) {
 
   const views = useMemo(() => [
     { key: 'top', label: '전체 보기', url: topUrl },
-    { key: 'fpv', label: '로봇 따라가기', url: fpvUrl },
+    { key: 'fpv', label: 'AMR 따라가기', url: fpvUrl },
   ].filter((v) => v.url), [topUrl, fpvUrl])
   const activeView = views.find((v) => v.key === view) ?? views[0]
   const videoUrl = refreshed && refreshed.replaces === activeView?.url ? refreshed.url : activeView?.url
@@ -182,7 +182,7 @@ export default function VerifyStep({ estimateId, ready, recommendedCount }) {
         04 · 3D 주행 검증
       </div>
       <h2>Confirm it physically.</h2>
-      <p className="desc">권장 대수와 앞뒤 대수로 주문 집중 10분을 3D로 재현해 로봇이 문제없이 움직이는지 확인합니다.</p>
+      <p className="desc">권장 대수와 앞뒤 대수로 피크 작업 10분을 3D로 재현해 로봇이 문제없이 움직이는지 확인합니다.</p>
 
       {verifications.length === 0 ? (
         <div className="sim-board">
