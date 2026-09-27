@@ -37,14 +37,15 @@ def make(n=2, sc=None, **opts):
 
 
 def test_des_homes_match_spawn_contract_example():
-    assert des_homes(3) == [(48, 103), (50, 103), (52, 103)]
-    assert W.spawn_string(des_homes(2)) == "103.1,48.5;103.1,50.5"
+    # 존 주차 칸을 입구에서 먼 안쪽부터 (-281) — 첫 칸은 동쪽 열 기둥 뒤, 다음은 그 열 북쪽 끝
+    assert des_homes(3) == [(57, 108), (66, 108), (63, 108)]
+    assert W.spawn_string(des_homes(2)) == "108.1,57.5;108.1,66.5"
 
 
 def test_build_and_initial_views():
     p = make()
     views = p.robots()
-    assert [v.cell for v in views] == [(48, 103), (50, 103)] and all(v.status == "IDLE" for v in views)
+    assert [v.cell for v in views] == [(57, 108), (66, 108)] and all(v.status == "IDLE" for v in views)
     assert all(v.h in (0, 1, 2, 3) for v in views) and p.counters() == {"open_tasks": 0, "done_tasks": 0, "orders_done": 0, "orders_total": 3}
 
 

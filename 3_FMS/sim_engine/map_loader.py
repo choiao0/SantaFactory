@@ -232,11 +232,97 @@ def zone_cells(free, zone_mask):
     return sorted(zip(rs.tolist(), cs.tolist()), key=lambda rc: (rc[1], rc[0]))
 
 
-def make_homes_zone(free, zone_mask, n_robots, spacing=2):
-    """충전 존 초기 배치 (충전존_결정 §2 '통로 쪽부터, 몸 겹침 없이').
-    zone_cells 순서로 훑으며 기존 홈과 체비쇼프 거리 ≥ spacing 인 칸을 채택.
-    spacing=2: 2칸 차체가 어느 방향으로 서도 앞축 칸이 겹치지 않고 뒤 칸은 헤딩
+#: 이보다 작은 존 밖 빈칸 영역은 벽 사이 막힌 틈이다 — 로봇이 오는 곳이 아니라 입구로 치지 않는다 (-281).
+#: 1 m 격자는 선반 · 벽으로 여러 영역으로 쪼개진다(wallA 64개) — 존 옆 통로는 2,521칸, 동쪽 틈은 3~4칸.
+MIN_ENTRY_REGION = 20
+
+
+def _open_cells(mask):
+    """mask 의 4-연결 영역 중 MIN_ENTRY_REGION 칸 이상인 영역들의 칸 집합."""
+    H, W = mask.shape
+    seen = np.zeros_like(mask, dtype=bool)
+    keep = set()
+    for r0, c0 in zip(*np.nonzero(mask)):
+        if seen[r0, c0]:
+            continue
+        region, stack = [], [(int(r0), int(c0))]
+        seen[r0, c0] = True
+        while stack:
+            r, c = stack.pop()
+            region.append((r, c))
+            for rr, cc in ((r + 1, c), (r - 1, c), (r, c + 1), (r, c - 1)):
+                if 0 <= rr < H and 0 <= cc < W and mask[rr, cc] and not seen[rr, cc]:
+                    seen[rr, cc] = True
+                    stack.append((rr, cc))
+        if len(region) >= MIN_ENTRY_REGION:
+            keep.update(region)
+    return keep
+
+
+def park_slots(free, zone_mask, row_gap=3, col_gap=2):
+    """충전 존 주차 칸 — 입구에서 먼 안쪽부터 (S15P21A106-281).
+
+    존 칸 중 존 밖 통행 영역(MIN_ENTRY_REGION 칸 이상)과 4-이웃으로 맞닿은 칸이 입구다 — 벽 사이 막힌 틈(wallA 존
+    동쪽 c109 의 3~4칸)은 존 밖이어도 로봇이 오는 곳이 아니라 뺀다. 입구에서 존 안으로 BFS 한 거리가 깊이이고,
+    가장 깊은 칸을 기준으로 줄 간격 `row_gap` · 열 간격 `col_gap` 격자 위의 칸을 고른다. 입구 칸(깊이 0)은
+    비운다 — 드나드는 로봇이 주차한 로봇에 막히지 않게. 차체(2칸)가 존 밖으로 삐져나오지 않도록 위아래 중
+    한 칸은 존 안이어야 한다. 순서: 깊이 내림차순 → 행 · 열 내림차순(결정론).
+
+    예전에는 "지금 위치에서 가장 가까운 빈 칸(체비쇼프 <2 예약)"으로 돌아가 모두 입구 쪽 모서리에 1칸 간격으로
+    붙었고, 뒤에 온 로봇이 그 사이를 비집고 들어가며 밀어냈다. 안쪽부터 채우면 줄이 뒤에서 앞으로 차고,
+    배차(작업에 가장 가까운 로봇)는 앞줄부터 데려가므로 주차한 로봇 사이를 지나갈 일이 없다.
+    입구가 없는 존(통행 칸과 맞닿지 않음)은 빈 리스트.
+    """
+    zone = zone_mask & free
+    H, W = free.shape
+    nbrs = ((1, 0), (-1, 0), (0, 1), (0, -1))
+    network = _open_cells(free & ~zone)
+    depth = {}
+    frontier = []
+    for r, c in zip(*np.nonzero(zone)):
+        r, c = int(r), int(c)
+        for dr, dc in nbrs:
+            if (r + dr, c + dc) in network:
+                depth[(r, c)] = 0
+                frontier.append((r, c))
+                break
+    while frontier:
+        nxt = []
+        for r, c in frontier:
+            for dr, dc in nbrs:
+                rc = (r + dr, c + dc)
+                if 0 <= rc[0] < H and 0 <= rc[1] < W and zone[rc] and rc not in depth:
+                    depth[rc] = depth[(r, c)] + 1
+                    nxt.append(rc)
+        frontier = nxt
+    if not depth:
+        return []
+    ar, ac = max(depth, key=lambda rc: (depth[rc], rc[0], rc[1]))          # 격자 기준 = 가장 깊은 칸
+
+    def body_fits(rc):
+        r, c = rc
+        return any(0 <= r + dr < H and zone[r + dr, c] for dr in (1, -1))
+
+    slots = [rc for rc, d in depth.items()
+             if d >= 1 and (rc[0] - ar) % row_gap == 0 and (rc[1] - ac) % col_gap == 0 and body_fits(rc)]
+    return sorted(slots, key=lambda rc: (-depth[rc], -rc[0], -rc[1]))
+
+
+def clear_of_docks(slots, docks):
+    """도크와 그 이웃(체비쇼프 ≤ 1)을 뺀 주차 칸 — 주차한 로봇이 도킹 자세를 막지 않게 (-145 §2-5).
+    초기 배치(make_homes_zone)와 커널 복귀 목표가 같은 규칙을 쓴다."""
+    return [rc for rc in slots if all(max(abs(rc[0] - d[0]), abs(rc[1] - d[1])) > 1 for d in docks)]
+
+
+def make_homes_zone(free, zone_mask, n_robots, spacing=2, docks=()):
+    """충전 존 초기 배치. 대수가 주차 칸(park_slots, 배터리 모드면 도크 이웃을 뺀 것) 이하면 그 칸을 안쪽부터
+    쓴다 — 운행 중 복귀와 같은 자리 (S15P21A106-281). 칸보다 많으면 예전 배치 그대로(존 수용량을 줄이지 않는다 — 견적은 최대 28대):
+    충전존_결정 §2 '통로 쪽부터, 몸 겹침 없이'. zone_cells 순서로 훑으며 기존 홈과 체비쇼프 거리 ≥ spacing 인
+    칸을 채택. spacing=2: 2칸 차체가 어느 방향으로 서도 앞축 칸이 겹치지 않고 뒤 칸은 헤딩
     초기화가 골라 피한다 (간격 3은 용량 1/9 — 구현 설계 §3). 부족하면 assert."""
+    slots = clear_of_docks(park_slots(free, zone_mask), docks)
+    if n_robots <= len(slots):
+        return slots[:n_robots]
     homes = []
     for rc in zone_cells(free, zone_mask):
         if len(homes) >= n_robots:

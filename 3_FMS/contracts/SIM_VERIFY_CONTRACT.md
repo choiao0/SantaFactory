@@ -50,7 +50,7 @@
     "slice": {"t0_s": 4420.0, "warmup_s": 60.0, "window_s": 600.0, "tasks_done": 162},  // 궤적일 때만. warmup_s 기본 60(없으면 이 기본값)
     "orders": { "meta": {…}, "outbound": [ {"order_id": 1, "ordered_at_s": 23659, "store_id": 1,
                                             "lines": [{"product_id": 3, "qty": 2, "rack_id": "A3"}]} ] },   // trajectory_gz_b64 가 없는 run(구 견적 등)의 폴백. 백엔드가 견적 생성 시 저장한 목록 그대로 (-197). 둘 다 싣지 않는다 — 둘 다 있으면 궤적이 이긴다
-    "spawn": "103.1,48.5;103.1,50.5",   // 선택. 로봇 초기 위치(m) → Isaac WSIM_SPAWN. DES 와 같은 배치는 `python3 -m fms_core --spawn N` 이 준다
+    "spawn": "108.1,57.5;108.1,66.5",   // 선택. 로봇 초기 위치(m) → Isaac WSIM_SPAWN. DES 와 같은 배치는 `python3 -m fms_core --spawn N` 이 준다
     "window_start_s": 5400,             // 선택. 주문 시각을 이만큼 앞당겨 재생(창 오프셋, §6 ①). 음수가 되는 주문은 버린다. orders 폴백에서만 뜻이 있다
     "amr": {"capacity": 3, "tote_units": 8, "speed_empty": 1.2, …},   // 선택. DES 요청 amr 블록 pass-through: capacity = 왕복당 토트 수 1~6, tote_units = 토트당 상품 수(기본 10 — 2026-09-15 개인 주문 상한 10개·토트 10개들이). sim-runner 가 이 블록을 에이전트 `profile_overrides` 로 그대로 넘겨 속도·배터리·적재가 로봇 동작에 반영된다 (1_Robot/amr_agent README "파라미터")
     "outbound_gap_s": 50.0, "inbound_gap_s": 48.0, "shifts": "in,out,out"   // 선택. 없으면 **출고 전용** — 검증 런은 견적 지평선 안의 출고 창 한 조각만 재생한다 (§6 ①)
@@ -117,7 +117,8 @@ DES 요청의 `horizon_s · shifts · inbound_gap_s · outbound_gap_s · warehou
 물리 판정(PASS/WARN/FAIL/N/A)은 **백엔드 한 곳**에서 `physics` 필드로 계산한다(화면·견적서 공통) — host-orch 는 파싱만 하고
 판정하지 않는다. 판정 규칙과 화면 문구는 상위 설계 문서(DES 피크 구간 → 물리 검증, spec244 §D)를 따른다: 대략
 `robot_contacts == 0 && rack_contacts == 0 && window_actions.ratio ≥ 0.80` 이면 PASS, 접촉 0 이지만 ratio 미달이면
-WARN(지연), 접촉 > 0 또는 `status: failed` 면 FAIL, `window_actions` 가 null(구간 재생이 아님)이면 N/A.
+WARN(지연), 접촉 > 0 이면 FAIL, `status: failed`(검증을 끝내지 못함)이거나 `window_actions` 가 null(구간 재생이 아님)이면
+N/A — 끝내지 못한 회차는 로봇이 부적합하다는 뜻이 아니라 판정하지 않는다(S15P21A106-280, 화면 · 견적서 「판정 불가」).
 
 요청 자체가 깨졌으면(`bad request: …`) `run_id` 를 읽을 수 있는 만큼 채워 `failed` 로 발행하고 ack 한다 (DES 명세 §1-2 와 같이 실패도 정상 발행). 이때 `physics` 도 `null`.
 
