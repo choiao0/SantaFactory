@@ -41,6 +41,8 @@
 #              도착한 유휴 로봇이 대기보다 싼 회전을 영원히 골랐다(6h 24대 비임무 회전 57,691회). 중립 θ 기준값은 불변.
 #   --no-turn-floor: 진전 없는 회전의 점수 하한(대기 점수)을 끔(v3.12 경로). v3.13 부터 θ wait_cost − TURN_COST 차(1.49)를 회전에도
 #              더해 d′ − d < 1.49 인 헛회전(포장대 앞 왕복 31 %)을 대기로 바꾼다. 중립 θ 기준값은 불변.
+#   --no-station-calm: 목표 칸이 서비스·충전 중일 때도 대기 상승을 붙임(v3.18 경로). v3.19 부터 붙이지 않아, 포장대가 빌 때까지
+#              한 칸 물러났다 돌아오는 헛왕복(12대 6h 포장대 앞 왕복 −35 %)을 대기로 바꾼다.
 #   기본 = 헤딩 모델 (상태 (r,c,h), 자기+뒤 칸 2칸 점유, 90° 회전 = TURN_TICKS 틱, 회전 중 스윙 칸
 #              예약, 라이브니스 장치 5종). docs/이동계층_PIBT.md#라이브니스-장치-5종
 #   --cell:    칸 모델(점로봇) opt-in — 기준선 CSV 재현·A/B 비교축. (--heading 은 호환용, 무시)
@@ -187,6 +189,8 @@ def _parse_model(a, argv):
     a.goal_wait_free = "--no-goal-wait-free" not in argv and a.heading
     # 진전 없는 회전 점수 하한 = 대기 점수 (-160, 계약 v3.13 기본): θ wait_cost − TURN_COST 차(1.49)를 회전에도. --no-turn-floor 로 v3.12 경로.
     a.turn_floor = ("--no-turn-floor" not in argv and a.heading and a.flow != "v1compat" and a.footprint != "legacy")
+    # 목표 칸이 서비스·충전 중이면 대기 상승 없이 기다린다 (-281, 계약 v3.19 기본): 포장대 앞 물러났다 돌아오기를 끊는다. --no-station-calm 로 v3.18 경로.
+    a.station_calm = ("--no-station-calm" not in argv and a.heading and a.flow != "v1compat" and a.footprint != "legacy")
     a.order_gap_arg = next((float(f.split("=", 1)[1]) for f in argv if f.startswith("--order-gap=")), None)
     if a.order_gap_arg is not None and a.flow == "v1compat":
         a.warnings.append("[WARN] --order-gap 은 v1compat 에서 무시 (패리티)")
@@ -384,7 +388,7 @@ def build(a):
                        dock_prio=a.dock_prio, export=a.export,
                        service_steps=round(SERVICE_TIME_S / a.dt) if a.service_steps is None else a.service_steps,
                        capacity=a.capacity, svc_per_tote=a.svc_per_tote,
-                       yield_rule=a.yield_rule, section_limit=a.section_limit, standoff=a.standoff,
+                       yield_rule=a.yield_rule, section_limit=a.section_limit, standoff=a.standoff, station_calm=a.station_calm,
                        turn_ticks=TURN_TICKS, move_ticks=MOVE_TICKS,
                        rev_ticks=REV_TICKS if a.rev_ticks is None else a.rev_ticks,
                        replan_max_extra=a.replan_max_extra, ban_release=a.ban_release,

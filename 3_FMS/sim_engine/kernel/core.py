@@ -88,6 +88,8 @@ class KernelConfig:
                                   # stag 는 평소 거리장으로 재이므로 그 내내 안 풀린다 (liveness.REPLAN_MAX_EXTRA)
     hd_after: int = 16            # -79 대치(standoff) 감지: 같은 칸을 다투는 두 로봇이 둘 다 이 틱 이상 무진전 (v3.9 부터 헤딩 기본; -194 다틱 후 4 → 16)
     hd_timeout: int = 80          # -79 대치 상한(틱): 넘으면 역할 교대 1회, 그래도 넘으면 해제. V2: 240 → 80 (교대 전엔 매 틱 재판정, R5)
+    station_calm: bool = False    # 목표 칸을 서비스·충전 중인 로봇이 차지하면 대기 상승 없이 기다린다 (-281, 계약 v3.19 헤딩 main 기본 True —
+                                  # 호출자가 켠다: sim_v2 --no-station-calm, fms_core). legacy 는 False(v3.3 비트 동일)
     standoff: bool = False        # 대치 상태기계 V2 (-79). 계약 v3.9 부터 헤딩 main exact·exact,front 기본 True(호출자가 켠다: sim_v2 --no-standoff, fms_core). legacy 는 False(양보 v1, v3.3 비트 동일)
     # 회전 발자국 (-203, 계약 v3.4). footprint: "legacy"(v3.3 비트 동일) / "exact"(0.1 m 지도 정적 회전 마스크)
     # / "exact,front"(+ 앞 2칸 축 규칙·양보 v2 — 소싸움 미해결, 인자로만). 마스크 배열은 FmsKernel(turn_mask=) 로 따로 받는다.
@@ -532,6 +534,8 @@ class FmsKernel(BatteryMixin, MetricsMixin):
             forbid, forbid_axle = self._standoff_forbid(states, dists)
         else:
             calm = {rid for rid in rids if robots[rid]["yield_peer"] is not None}        # legacy: 비켜 주는 쪽만 상승 없음
+        if cfg.station_calm:
+            calm = set(calm) | self._goal_held()
         bias = {rid: 0.0 if rid in calm else wait_bias(self._stag.get(rid)) for rid in rids}
         # 정체가 SECTION_RELEASE 틱을 넘은 로봇은 정원에서 푼다. 전면 분할처럼 우회로가
         # 구간 밖에 없을 때 순환 대기를 깨는 마지막 안전판이다 (-193).
@@ -867,6 +871,20 @@ class FmsKernel(BatteryMixin, MetricsMixin):
             if rb["hd_role"] == "L":
                 forbid[rid], forbid_axle[rid] = self._constraints_from(rb["hd_peer"], states, dists)
         return forbid, forbid_axle
+
+    def _goal_held(self):
+        """목표 칸을 서비스·충전 중인(HOLD) 다른 로봇이 차지한 로봇 집합 → 이번 틱 대기 상승 0 (-281).
+        상승이 붙으면 약 4초 뒤 후진(3 + d+1)이 대기보다 싸져, 포장대가 빌 때까지 한 칸 물러났다 돌아오기를 되풀이했다
+        (est_20 12대 6h: 포장대 앞 한 대가 71초에 30번 · 후진 11,292회 중 19 % 가 이 경우). 물러나도 아무도 못 지나가는 헛동작이다."""
+        held = {}
+        for o, ob in self.robots.items():
+            if ob["state"] in HOLD:
+                for cell in self._body_cells(ob):
+                    held[cell] = o
+        if not held:
+            return set()
+        return {rid for rid, rb in self.robots.items()
+                if rb["state"] not in HOLD and held.get(rb["goal"], rid) != rid}
 
     def _patient(self, states, dists, extra, soft_hold):
         """R1 인내: 대기 아닌 최선 후보가 **회전 중 로봇의 임시 예약**(hard 스윙 extra·soft_hold)에만 막힌 로봇 집합 → 이번 틱
