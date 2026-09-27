@@ -949,13 +949,14 @@ class FmsKernel(BatteryMixin, MetricsMixin):
             dm = self.dmap_h(rb["goal"])
             if dm[rb["pos"][0], rb["pos"][1], h] < dm[r, c, h]:
                 continue                                            # 계획된 후진(빠져나오기)
-            rb["backoff"] = dict(cell=(r, c), want=want, blockers=blockers,
+            rb["backoff"] = dict(cell=(r, c), want=want, blockers=blockers, goal=rb["goal"],
                                  min_t=t + BACKOFF_HOLD_MIN, max_t=t + self.cfg.backoff_hold)
             self.backoff_holds += 1
 
     def _backoff_holds(self, t):
         """물러남 기록이 살아 있는 로봇 {rid: 비운 칸} — 이번 틱 그 칸에 축을 못 들이고 대기 상승 없이 기다린다 (-281).
-        막던 로봇들이 원하던 칸을 다 비웠거나(최소 BACKOFF_HOLD_MIN 틱 뒤) 상한이 지나면 푼다."""
+        막던 로봇들이 원하던 칸을 다 비웠거나(최소 BACKOFF_HOLD_MIN 틱 뒤) 상한이 지나면 푼다. 목표가 바뀌면(충전 존 칸 재선택·
+        충전 가기 — NAV 인 채로 바뀐다) 원하던 칸과 막던 로봇이 새 길과 무관하므로 곧바로 푼다."""
         robots = self.robots
         body = None
         out = {}
@@ -963,9 +964,12 @@ class FmsKernel(BatteryMixin, MetricsMixin):
             b = rb["backoff"]
             if b is None:
                 continue
-            if rb["state"] not in NAV or t >= b["max_t"]:
+            if rb["state"] not in NAV or rb["goal"] != b["goal"]:
                 rb["backoff"] = None
-                self.backoff_timeouts += t >= b["max_t"]
+                continue
+            if t >= b["max_t"]:
+                rb["backoff"] = None
+                self.backoff_timeouts += 1
                 continue
             if t >= b["min_t"]:
                 if body is None:

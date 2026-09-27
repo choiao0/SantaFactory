@@ -75,6 +75,22 @@ def test_it_is_released_at_the_cap_even_if_still_blocked():
     assert k.backoff_timeouts == 1
 
 
+def test_a_new_goal_releases_the_hold_at_once():
+    k = kernel()
+    back_off(k)
+    k.robots[0]["goal"] = (3, 11)                               # 충전 존 칸 재선택처럼 NAV 인 채로 목표가 바뀌었다
+    assert k._backoff_holds(101) == {}
+    assert k.backoff_timeouts == 0                              # 상한으로 푼 것이 아니다
+
+
+def test_leaving_nav_is_not_counted_as_a_timeout():
+    k = kernel()
+    back_off(k)
+    k.robots[0]["state"] = "SVC_DROP"
+    assert k._backoff_holds(100 + HOLD) == {}
+    assert k.backoff_timeouts == 0
+
+
 def test_a_robot_pushed_back_is_not_held():
     k = kernel()
     before = states_of(k)
