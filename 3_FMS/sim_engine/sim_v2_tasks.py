@@ -41,6 +41,8 @@
 #              도착한 유휴 로봇이 대기보다 싼 회전을 영원히 골랐다(6h 24대 비임무 회전 57,691회). 중립 θ 기준값은 불변.
 #   --no-turn-floor: 진전 없는 회전의 점수 하한(대기 점수)을 끔(v3.12 경로). v3.13 부터 θ wait_cost − TURN_COST 차(1.49)를 회전에도
 #              더해 d′ − d < 1.49 인 헛회전(포장대 앞 왕복 31 %)을 대기로 바꾼다. 중립 θ 기준값은 불변.
+#   --backoff-hold=<틱>: 스스로 물러난(뒤로 한 칸, 목표에서 멀어짐, 비운 칸에 아무도 안 들어옴) 로봇은 막던 로봇이 비킬 때까지
+#              (최소 24틱, 상한 이 값) 비운 칸에 안 돌아간다. 기본 80(v3.20), 0 = 끔(v3.19 경로). 12대 6h 왕복 −46 %.
 #   --no-station-calm: 서비스·충전 중인 로봇 몸에 막혀도(목표 칸·최선 수) 대기 상승을 붙임(v3.18 경로). v3.19 부터 붙이지 않아,
 #              그 로봇이 떠날 때까지 한 칸 물러났다 돌아오는 헛왕복(12대 6h 포장대 앞 왕복 −64 %)을 대기로 바꾼다.
 #   기본 = 헤딩 모델 (상태 (r,c,h), 자기+뒤 칸 2칸 점유, 90° 회전 = TURN_TICKS 틱, 회전 중 스윙 칸
@@ -191,6 +193,10 @@ def _parse_model(a, argv):
     a.turn_floor = ("--no-turn-floor" not in argv and a.heading and a.flow != "v1compat" and a.footprint != "legacy")
     # 서비스·충전 중인 로봇 몸에 막히면(목표 칸·최선 수) 대기 상승 없이 기다린다 (-281, 계약 v3.19 기본): 포장대 앞 물러났다 돌아오기를 끊는다. --no-station-calm 로 v3.18 경로.
     a.station_calm = ("--no-station-calm" not in argv and a.heading and a.flow != "v1compat" and a.footprint != "legacy")
+    # 스스로 물러난 로봇은 막던 로봇이 비킬 때까지(상한 80틱) 비운 칸에 안 돌아간다 (-281, 계약 v3.20 기본). --backoff-hold=0 으로 v3.19 경로.
+    a.backoff_hold = (_opt(argv, "backoff-hold", int, 80)
+                      if (a.heading and a.flow != "v1compat" and a.footprint != "legacy") else 0)
+    assert a.backoff_hold >= 0, f"--backoff-hold 는 0 이상: {a.backoff_hold}"
     a.order_gap_arg = next((float(f.split("=", 1)[1]) for f in argv if f.startswith("--order-gap=")), None)
     if a.order_gap_arg is not None and a.flow == "v1compat":
         a.warnings.append("[WARN] --order-gap 은 v1compat 에서 무시 (패리티)")
@@ -388,7 +394,7 @@ def build(a):
                        dock_prio=a.dock_prio, export=a.export,
                        service_steps=round(SERVICE_TIME_S / a.dt) if a.service_steps is None else a.service_steps,
                        capacity=a.capacity, svc_per_tote=a.svc_per_tote,
-                       yield_rule=a.yield_rule, section_limit=a.section_limit, standoff=a.standoff, station_calm=a.station_calm,
+                       yield_rule=a.yield_rule, section_limit=a.section_limit, standoff=a.standoff, station_calm=a.station_calm, backoff_hold=a.backoff_hold,
                        turn_ticks=TURN_TICKS, move_ticks=MOVE_TICKS,
                        rev_ticks=REV_TICKS if a.rev_ticks is None else a.rev_ticks,
                        replan_max_extra=a.replan_max_extra, ban_release=a.ban_release,

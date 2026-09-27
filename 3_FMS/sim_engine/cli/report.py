@@ -226,6 +226,9 @@ def report(a, kernel, stream, ctx):
         # 값은 커널 설정에서 읽는다 — fms_core 처럼 인자 객체 없이 report() 를 부르는 쪽도 있다
         **(dict(ban_release=int(kernel.cfg.ban_release), ban_releases=int(kernel.ban_releases))
            if "ban" in str(kernel.cfg.footprint).split(",") else {}),
+        # 물러난 로봇 붙잡기 (-281, v3.20). 켠 런만: 붙잡은 횟수 · 상한으로 푼 횟수
+        **(dict(backoff_holds=int(kernel.backoff_holds), backoff_timeouts=int(kernel.backoff_timeouts))
+           if kernel.cfg.backoff_hold else {}),
         **(dict(order_gap=a.order_gap) if a.order_gap_arg is not None else {}),   # v1compat SUMMARY 불변
         **(dict(inbound_gap=a.inbound_gap_arg) if a.inbound_gap_arg is not None else {}),
         **lifelong_extra, **bat_extra,

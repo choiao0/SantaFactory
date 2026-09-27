@@ -41,6 +41,9 @@ MAX_TOTES_PER_TRIP = 6        # 선반형 AMR 3단 × 2 토트 (-177). 이 수�
 SECTION_RELEASE = 16          # 이 틱 넘게 정체한 로봇은 구간 정원에서 면제 (-193). 재계획
                               # -194 에서 1칸이 MOVE_TICKS 틱이 되며 틱이 잘아져 8 → 16.
                               # 문턱(REPLAN_AFTER)과 같은 값 — 그 시점이면 이미 우회를 시도했다
+BACKOFF_HOLD_MIN = 24         # 스스로 물러난 로봇은 막던 로봇이 비켜도 최소 이만큼(틱, ≈ 6.7 s)은 비운 칸에 안 돌아간다 (-281).
+                              # est_20 12·15대 × 시드 4: 8 → 왕복 −20 %, 16 → −29~37 %, 24 → −46·−33 %(처리량 +1.2·+0.5 %),
+                              # 48 → −49·−51 % 지만 처리량 −0.2·−1.2 %(오래 서 있어 정체 +6 %)
 SLOT_ENTRY_COST = 1.5         # 주차 칸으로 들어가는 이동 1칸에 더하는 비용 (-281). 칸 두 개만 지나도 옆 통로로 도는 회전 2번
                               # (2 × 1.25)보다 비싸져, 안쪽 칸으로 가는 로봇이 주차 칸 줄을 통로 삼아 서 있는 로봇을 밀지 않는다.
                               # 3.0 은 후진(× REVERSE_FACTOR)으로 제 칸에 들어가는 값이 12 가 되어, 등을 돌린 로봇이 앞으로
@@ -88,6 +91,8 @@ class KernelConfig:
                                   # stag 는 평소 거리장으로 재이므로 그 내내 안 풀린다 (liveness.REPLAN_MAX_EXTRA)
     hd_after: int = 16            # -79 대치(standoff) 감지: 같은 칸을 다투는 두 로봇이 둘 다 이 틱 이상 무진전 (v3.9 부터 헤딩 기본; -194 다틱 후 4 → 16)
     hd_timeout: int = 80          # -79 대치 상한(틱): 넘으면 역할 교대 1회, 그래도 넘으면 해제. V2: 240 → 80 (교대 전엔 매 틱 재판정, R5)
+    backoff_hold: int = 0         # 스스로 물러난 로봇은 막던 로봇이 비킬 때까지(상한 이 틱) 비운 칸에 안 돌아간다. 0 = 끔 (-281, 계약 v3.20
+                                  # 헤딩 main 기본 80 — 호출자가 켠다: sim_v2 --backoff-hold=<틱>, fms_core). legacy 는 0(v3.3 비트 동일)
     station_calm: bool = False    # 서비스·충전 중인 로봇 몸에 막히면(목표 칸·최선 수) 대기 상승 없이 기다린다 (-281, 계약 v3.19 헤딩 main 기본 True —
                                   # 호출자가 켠다: sim_v2 --no-station-calm, fms_core). legacy 는 False(v3.3 비트 동일)
     standoff: bool = False        # 대치 상태기계 V2 (-79). 계약 v3.9 부터 헤딩 main exact·exact,front 기본 True(호출자가 켠다: sim_v2 --no-standoff, fms_core). legacy 는 False(양보 v1, v3.3 비트 동일)
@@ -137,6 +142,7 @@ class FmsKernel(BatteryMixin, MetricsMixin):
         self.sec_map = sec_map if cfg.section_limit > 0 else None
         self.section_blocks = self.section_releases = 0
         self.ban_releases = 0        # 금지 조합표에서 풀린 (로봇 × 틱) — 교착 탈출 안전판이 쓰인 양 (-277)
+        self.backoff_holds = self.backoff_timeouts = 0   # 스스로 물러나 붙잡은 횟수 · 상한으로 푼 횟수 (-281)
         self.zone_stats = dict(wait=0, retargets=0, degraded=0, slots_full=0, swaps=0, occ=[])   # 구현 설계 §4. occ = 틱별 존 안 로봇 수
         self.on_task_completed = on_task_completed
         self.station_cells = frozenset(st_cell.values())
@@ -206,7 +212,7 @@ class FmsKernel(BatteryMixin, MetricsMixin):
                                     turns_idle=0, goal_prev=None, goal_t=0, idle_moves=0, leave_from=None,
                                     yield_peer=None, yield_target=None, yield_until=-1, yield_hold=False,
                                     hd_peer=None, hd_role=None, hd_until=-1, hd_swapped=False, hd_t0=-1, swing_soft=set(),
-                                    turn_pair=None, soc=1.0, charge_n=0, chg=0, soc_empty=0)
+                                    turn_pair=None, soc=1.0, charge_n=0, chg=0, soc_empty=0, backoff=None)
             if self.battery:
                 self.robots[rid]["soc"] = float(cfg.soc_init[rid])
         if self.battery:
@@ -536,6 +542,15 @@ class FmsKernel(BatteryMixin, MetricsMixin):
             calm = {rid for rid in rids if robots[rid]["yield_peer"] is not None}        # legacy: 비켜 주는 쪽만 상승 없음
         if cfg.station_calm:
             calm = set(calm) | self._goal_held()
+        backoff_wish = None
+        if cfg.backoff_hold:
+            held = self._backoff_holds(t)
+            if held:
+                calm = set(calm) | set(held)
+                forbid_axle = {a: set(v) for a, v in (forbid_axle or {}).items()}
+                for rid, cell in held.items():
+                    forbid_axle.setdefault(rid, set()).add(cell)
+            backoff_wish = self._backoff_wishes(states, dists, calm)
         bias = {rid: 0.0 if rid in calm else wait_bias(self._stag.get(rid)) for rid in rids}
         # 정체가 SECTION_RELEASE 틱을 넘은 로봇은 정원에서 푼다. 전면 분할처럼 우회로가
         # 구간 밖에 없을 때 순환 대기를 깨는 마지막 안전판이다 (-193).
@@ -556,6 +571,8 @@ class FmsKernel(BatteryMixin, MetricsMixin):
         snap = {}
         for rid in rids:
             snap[rid] = self._apply_heading_move(robots[rid], states[rid], new[rid], dists[rid])
+        if backoff_wish:
+            self._note_backoffs(t, states, backoff_wish)
         self._trace.append((t, snap))
         if len(self._trace) > cfg.trace_len:
             del self._trace[0]
@@ -871,6 +888,79 @@ class FmsKernel(BatteryMixin, MetricsMixin):
             if rb["hd_role"] == "L":
                 forbid[rid], forbid_axle[rid] = self._constraints_from(rb["hd_peer"], states, dists)
         return forbid, forbid_axle
+
+    def _backoff_wishes(self, states, dists, calm):
+        """스스로 물러날 수 있는 로봇(정체 10틱 넘어 대기 상승이 붙는 NAV)의 {rid: (원하는 칸, 그 칸을 막은 로봇들)} (-281).
+        원하는 칸 = 평소 거리장 최선 수(대기 제외)가 쓰는 칸 − 제 몸.
+
+        왜 붙잡나: 대기 상승으로 약 4초 뒤 물러난 로봇은 다음 틱 전진이 가장 싸서, 길이 안 열렸는데도 비운 칸으로 곧장 돌아왔다
+        — 같은 두 칸 왕복의 주범(12대 6h 되돌림 5,891회 중 스스로 후진 2,613). 후진 자체를 막으면 처리량이 −2~3 % 였다(물러난
+        자리에서 우회를 찾거나 옆 로봇의 회전이 풀리는 몫까지 없어진다). 그래서 물러나는 것은 두고, **돌아오는 것만** 막는다."""
+        robots = self.robots
+        body = {}
+        for o, ob in robots.items():
+            for cell in self._body_cells(ob):
+                body[cell] = o
+        out = {}
+        for rid, rb in robots.items():
+            if rid in calm or rb["state"] not in NAV or rb["busy"] or self._stag.get(rid) <= WAIT_ESC_GRACE:
+                continue
+            s = states[rid]
+            own = set(occupied(s))
+            for st, cells, _ in candidates_h(s, self.dmap_h(rb["goal"]), self.edge_cost, self.wait_cost, self.free, self.turn_cost):
+                if st != s:
+                    want = frozenset(set(cells) - own)
+                    out[rid] = (want, frozenset(body[c] for c in want if body.get(c, rid) != rid))
+                    break
+        return out
+
+    def _note_backoffs(self, t, states, wishes):
+        """이번 틱 스스로 물러난 로봇(뒤로 한 칸, 목표에서 멀어짐, 비운 칸에 아무도 안 들어옴)에 물러남 기록을 단다 (-281)."""
+        robots = self.robots
+        body = {}
+        for o, ob in robots.items():
+            for cell in self._body_cells(ob):
+                body[cell] = o
+        for rid, (want, blockers) in wishes.items():
+            rb = robots[rid]
+            r, c, h = states[rid]
+            if rb["pos"] == (r, c) or rb["h"] != h:
+                continue
+            dr, dc = DIRS[h]
+            if rb["pos"] != (r - dr, c - dc) or body.get((r, c), rid) != rid:
+                continue                                            # 후진이 아니거나, 남이 그 칸으로 들어왔다(밀림)
+            dm = self.dmap_h(rb["goal"])
+            if dm[rb["pos"][0], rb["pos"][1], h] < dm[r, c, h]:
+                continue                                            # 계획된 후진(빠져나오기)
+            rb["backoff"] = dict(cell=(r, c), want=want, blockers=blockers,
+                                 min_t=t + BACKOFF_HOLD_MIN, max_t=t + self.cfg.backoff_hold)
+            self.backoff_holds += 1
+
+    def _backoff_holds(self, t):
+        """물러남 기록이 살아 있는 로봇 {rid: 비운 칸} — 이번 틱 그 칸에 축을 못 들이고 대기 상승 없이 기다린다 (-281).
+        막던 로봇들이 원하던 칸을 다 비웠거나(최소 BACKOFF_HOLD_MIN 틱 뒤) 상한이 지나면 푼다."""
+        robots = self.robots
+        body = None
+        out = {}
+        for rid, rb in robots.items():
+            b = rb["backoff"]
+            if b is None:
+                continue
+            if rb["state"] not in NAV or t >= b["max_t"]:
+                rb["backoff"] = None
+                self.backoff_timeouts += t >= b["max_t"]
+                continue
+            if t >= b["min_t"]:
+                if body is None:
+                    body = {}
+                    for o, ob in robots.items():
+                        for cell in self._body_cells(ob):
+                            body[cell] = o
+                if not any(body.get(c) in b["blockers"] for c in b["want"]):
+                    rb["backoff"] = None
+                    continue
+            out[rid] = b["cell"]
+        return out
 
     def _goal_held(self):
         """서비스·충전 중인(HOLD) 로봇 몸에 막힌 로봇 집합 → 이번 틱 대기 상승 0 (-281). 막힘 = 목표 칸이 그 몸이거나, 평소 거리장의
