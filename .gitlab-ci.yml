@@ -36,6 +36,13 @@ variables:
 
 commit-lint:
   extends: .convention-lint
+  rules:
+    # main 은 제출용이라 develop 전체(1000+ 커밋)를 한 번에 받는다. 그 커밋들은 develop 에 들어올 때
+    # 이미 이 검사를 통과했고, 여기서 다시 보면 옛 커밋 하나 때문에 제출 자체가 막힌다
+    # (S15P21A106-103). release 는 지금까지처럼 그대로 검사한다.
+    - if: '$CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main"'
+      when: never
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
   script:
     - git fetch origin "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
     - . ./.githooks/commit-convention.sh
