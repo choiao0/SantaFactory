@@ -56,6 +56,7 @@ def passing_by():
     k.robots[0].update(state=SVC_DROP, goal=STATION, pos=STATION, h=NORTH)
     k.robots[1].update(state=TO_DROP, goal=(3, 0), pos=(3, 3), h=EAST)     # 목표도 길도 포장대와 무관
     k.robots[2].update(state=TO_PICK, goal=(2, 11), pos=(2, 8), h=EAST)
+    k._stag.stag[2] = 20                                        # 막혀 정체 중 — 대기 상승이 붙을 로봇만 따진다
     return k
 
 
@@ -66,6 +67,12 @@ def test_a_robot_passing_by_whose_next_cell_is_a_servicing_body_is_calm():
 def test_a_robot_whose_way_is_clear_is_not_calm():
     k = passing_by()
     k.robots[0].update(state=TO_PICK, goal=(1, 0))                 # 하역이 끝났다 — 이제 막힌 게 아니다
+    assert k._goal_held() == set()
+
+
+def test_a_robot_not_yet_stuck_is_not_checked():
+    k = passing_by()
+    k._stag.stag[2] = 0                                         # 막힌 지 얼마 안 됐다 — 어차피 대기 상승이 0 이라 안 푼다
     assert k._goal_held() == set()
 
 

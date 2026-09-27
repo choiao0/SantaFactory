@@ -495,6 +495,7 @@ class FmsKernel(BatteryMixin, MetricsMixin):
         """헤딩 모델 한 틱 (설계 2026-09-02 §7). 서비스 중·회전 중 로봇은 stay 고정,
         회전 중 스윙 칸은 extra 점유로 넘긴다. 지표: 회전 틱은 rot에 (wait와 분리)."""
         robots, rids, free, cfg = self.robots, self.rids, self.free, self.cfg
+        self._best_cache = {}                   # 이번 틱 평소 거리장 최선 수 (_best_move_cells, -281)
         self._stamp_goal_changes(t)
         if cfg.dock_prio:
             self._update_dock_leave()
@@ -889,6 +890,24 @@ class FmsKernel(BatteryMixin, MetricsMixin):
                 forbid[rid], forbid_axle[rid] = self._constraints_from(rb["hd_peer"], states, dists)
         return forbid, forbid_axle
 
+    def _best_move_cells(self, rid, s):
+        """평소 거리장 최선 수(대기 제외)가 쓰는 칸 − 제 몸. 대기 말고 둘 수가 없으면 None. 틱마다 로봇당 한 번만 푼다 —
+        _goal_held 와 _backoff_wishes 가 같이 쓴다 (따로 풀면 15대 6h 런이 +17 % 느려졌다, -281)."""
+        cache = getattr(self, "_best_cache", None)
+        if cache is None:
+            cache = self._best_cache = {}
+        got = cache.get(rid)
+        if got is not None and got[0] == s:
+            return got[1]
+        want = None
+        for st, cells, _ in candidates_h(s, self.dmap_h(self.robots[rid]["goal"]), self.edge_cost, self.wait_cost, self.free,
+                                         self.turn_cost):
+            if st != s:
+                want = frozenset(set(cells) - set(occupied(s)))
+                break
+        cache[rid] = (s, want)
+        return want
+
     def _backoff_wishes(self, states, dists, calm):
         """스스로 물러날 수 있는 로봇(정체 10틱 넘어 대기 상승이 붙는 NAV)의 {rid: (원하는 칸, 그 칸을 막은 로봇들)} (-281).
         원하는 칸 = 평소 거리장 최선 수(대기 제외)가 쓰는 칸 − 제 몸.
@@ -897,21 +916,19 @@ class FmsKernel(BatteryMixin, MetricsMixin):
         — 같은 두 칸 왕복의 주범(12대 6h 되돌림 5,891회 중 스스로 후진 2,613). 후진 자체를 막으면 처리량이 −2~3 % 였다(물러난
         자리에서 우회를 찾거나 옆 로봇의 회전이 풀리는 몫까지 없어진다). 그래서 물러나는 것은 두고, **돌아오는 것만** 막는다."""
         robots = self.robots
+        stuck = [rid for rid, rb in robots.items()
+                 if rid not in calm and rb["state"] in NAV and not rb["busy"] and self._stag.get(rid) > WAIT_ESC_GRACE]
+        if not stuck:
+            return {}
         body = {}
         for o, ob in robots.items():
             for cell in self._body_cells(ob):
                 body[cell] = o
         out = {}
-        for rid, rb in robots.items():
-            if rid in calm or rb["state"] not in NAV or rb["busy"] or self._stag.get(rid) <= WAIT_ESC_GRACE:
-                continue
-            s = states[rid]
-            own = set(occupied(s))
-            for st, cells, _ in candidates_h(s, self.dmap_h(rb["goal"]), self.edge_cost, self.wait_cost, self.free, self.turn_cost):
-                if st != s:
-                    want = frozenset(set(cells) - own)
-                    out[rid] = (want, frozenset(body[c] for c in want if body.get(c, rid) != rid))
-                    break
+        for rid in stuck:
+            want = self._best_move_cells(rid, states[rid])
+            if want is not None:
+                out[rid] = (want, frozenset(body[c] for c in want if body.get(c, rid) != rid))
         return out
 
     def _note_backoffs(self, t, states, wishes):
@@ -982,15 +999,13 @@ class FmsKernel(BatteryMixin, MetricsMixin):
             if held.get(rb["goal"], rid) != rid:
                 out.add(rid)
                 continue
-            if rb["h"] is None:
+            # 대기 상승은 정체가 WAIT_ESC_GRACE 틱을 넘어야 붙는다 — 그 전엔 이 집합에 들든 말든 결과가 같아 최선 수를 안 푼다
+            # (매 틱 모든 로봇에 candidates_h 를 부르면 15대 6h 런이 +26 % 느려졌다)
+            if rb["h"] is None or self._stag.get(rid) <= WAIT_ESC_GRACE:
                 continue
-            s = (rb["pos"][0], rb["pos"][1], rb["h"])
-            own = set(self._body_cells(rb))
-            for st, cells, _ in candidates_h(s, self.dmap_h(rb["goal"]), self.edge_cost, self.wait_cost, self.free, self.turn_cost):
-                if st != s:
-                    if any(held.get(c, rid) != rid for c in set(cells) - own):
-                        out.add(rid)
-                    break
+            want = self._best_move_cells(rid, (rb["pos"][0], rb["pos"][1], rb["h"]))
+            if want and any(held.get(c, rid) != rid for c in want):
+                out.add(rid)
         return out
 
     def _patient(self, states, dists, extra, soft_hold):
