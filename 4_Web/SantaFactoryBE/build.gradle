@@ -1,0 +1,79 @@
+plugins {
+    id 'java'
+    id 'org.springframework.boot' version '3.3.5'
+    id 'io.spring.dependency-management' version '1.1.6'
+}
+
+group = 'com.ssafy'
+version = '0.0.1-SNAPSHOT'
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+repositories {
+    mavenCentral()
+}
+
+// Spring Boot 3.3.5 BOM 이 고정하는 1.19.8 은 최신 Docker Engine(API 1.5x)의 /info 를 400 으로 받는다.
+// 1.21.3 도 Docker Engine 29.x 에서 같은 400 이 나서(2026-09-08, S15P21A106-168 작업 중 재발)
+// 1.21.4 로 올렸다. Docker 를 올린 뒤 Testcontainers 가 "Could not find a valid Docker
+// environment" 로 죽으면 이 값을 올리는 게 먼저다.
+ext['testcontainers.version'] = '1.21.4'
+
+dependencies {
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+    implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+    implementation 'org.springframework.boot:spring-boot-starter-validation'
+    implementation 'org.springframework.boot:spring-boot-starter-amqp'
+    implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.6.0'
+
+    // k3s 가 파드의 준비·생존을 묻는 /actuator/health/{readiness,liveness} (S15P21A106-258). health 외 엔드포인트는 열지 않는다.
+    implementation 'org.springframework.boot:spring-boot-starter-actuator'
+
+    compileOnly 'org.projectlombok:lombok'
+    annotationProcessor 'org.projectlombok:lombok'
+
+    runtimeOnly 'org.postgresql:postgresql'
+
+    // 스키마의 주인은 Flyway 다 (ddl-auto=validate). Flyway 10 부터 DB 별 지원이 모듈로
+    // 쪼개져서 flyway-core 만으로는 부팅 때 Postgres 를 못 잡는다 — 두 개가 한 벌이다.
+    implementation 'org.flywaydb:flyway-core'
+    implementation 'org.flywaydb:flyway-database-postgresql'
+
+    implementation 'org.springframework.boot:spring-boot-starter-security'
+
+    // 가입 이메일 인증 코드 발송 (SMTP). spring.mail.host 가 있을 때만 JavaMailSender 가 만들어진다.
+    implementation 'org.springframework.boot:spring-boot-starter-mail'
+
+    // 견적서 PDF 의 HTML 템플릿. 변환은 별도 컨테이너(4_Web/pdf)가 하고 여기서는 HTML 만 만든다 (S15P21A106-236).
+    implementation 'org.springframework.boot:spring-boot-starter-thymeleaf'
+
+    // refresh 토큰 저장소. TTL 로 만료가 자동 정리되고, 회전·폐기가 SET/DEL 두 줄이다.
+    implementation 'org.springframework.boot:spring-boot-starter-data-redis'
+
+    // access 토큰(JWT). api 는 컴파일 대상, impl·jackson 은 런타임 구현체 — jjwt 의 표준 구성이다.
+    implementation 'io.jsonwebtoken:jjwt-api:0.12.7'
+    runtimeOnly 'io.jsonwebtoken:jjwt-impl:0.12.7'
+    runtimeOnly 'io.jsonwebtoken:jjwt-jackson:0.12.7'
+
+    // 검증 영상의 presigned GET URL 발급. 서명만 하고 MinIO 에 요청은 보내지 않는다 (VerifyVideoPresigner).
+    implementation 'io.minio:minio:8.5.17'
+
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    testImplementation 'org.springframework.security:spring-security-test'
+    testCompileOnly 'org.projectlombok:lombok'
+    testAnnotationProcessor 'org.projectlombok:lombok'
+
+    // 컨텍스트 테스트는 운영과 같은 Postgres 로 돌린다. H2 는 엔티티에서 스키마를 만들어버려서
+    // 마이그레이션과 엔티티가 어긋나도 통과한다 — ddl-auto=validate 가 그걸 잡는다.
+    testImplementation 'org.springframework.boot:spring-boot-testcontainers'
+    testImplementation 'org.testcontainers:junit-jupiter'
+    testImplementation 'org.testcontainers:postgresql'
+}
+
+tasks.named('test') {
+    useJUnitPlatform()
+}

@@ -1,0 +1,57 @@
+# ============================================================
+# 견적 워커 배포 스택 (S15P21A106-157)
+#
+# docker-compose.yml(θ 탐색)에서 떼어낸 이유 — 그 파일은 x-storage-url 앵커
+# 때문에 POSTGRES_PASSWORD 가 비면 compose 자체가 멈춘다. EC2 에서 쓰지도
+# 않는 Optuna 자격증명을 채우게 만들 이유가 없다. 여기 필요한 건 브로커뿐이다.
+#
+# 이미지도 태그를 가른다. fms-sim:local 을 공유하면 배포할 때마다 A트랙이
+# 로컬에서 쓰는 θ 탐색 이미지가 같이 갈아엎힌다.
+#
+#   cd 3_FMS/infra
+#   docker compose -f compose.estimate.yml up -d --build
+#   docker compose -f compose.estimate.yml logs -f
+#
+# 먼저 백엔드 스택이 떠 있어야 한다(네트워크가 external):
+#   cd 4_Web && docker compose up -d rabbitmq
+#
+# 병렬 (S15P21A106-182): 워커 컨테이너 여러 개가 큐를 나눠 받는다(prefetch 1 이라 브로커가
+# 1건씩 분배). 견적 1건 = 1~28대 run 이 한꺼번에 발행되므로 N 개면 벽시계 시간이 약 1/N.
+# 컨테이너 하나가 1코어(OMP 1)를 쓰니 워커 수 = 호스트 코어 − 2(백엔드·DB·브로커 몫).
+# 기본 2 = EC2 4코어 기준. 코어가 더 있으면 WORKER_REPLICAS 로 올린다(로컬 실측: 5개 3.3배):
+#   WORKER_REPLICAS=5 docker compose -f compose.estimate.yml up -d
+# 서버를 분리하면 RABBITMQ_URL 만 바꾼다 — 단 브로커가 127.0.0.1 바인딩이라
+# 그쪽을 먼저 열어야 한다(4_Web/docker-compose.yml).
+# ============================================================
+name: fms-estimate
+
+services:
+  # 볼륨도 working_dir 도 없다. 그게 이 스택이 자립한다는 증거다 —
+  # 호스트에 3_FMS 트리가 없어도 돌아야 한다.
+  estimate-worker:
+    build:
+      context: ..
+      dockerfile: infra/estimate.Dockerfile
+    image: fms-estimate-worker:latest
+    environment:
+      # 4_Web/.env 와 같은 값. 기본값을 두지 않는다 — 두면 guest 로 조용히
+      # 붙었다가 인증 실패로 재시도 루프를 도는 편이 진단이 더 어렵다.
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:?infra/.env 에 RABBITMQ_USER 를 설정하세요}:${RABBITMQ_PASSWORD:?infra/.env 에 RABBITMQ_PASSWORD 를 설정하세요}@rabbitmq:5672/
+      # θ 는 중립으로 고정한다 (S15P21A106-277). 대수별 θ 예측(THETA_MODEL, -206)은 끈다 — 금지 조합표 커널 위에서
+      # 중립이 예측과 ±1.3 % 안이고, 대수마다 규칙이 같아야 대수 비교가 흐려지지 않는다(estimate_worker.THETA_PATH 주석).
+      # ★ 세 곳(여기 · compose.estimate.gcp.yml · k8s/sim-worker-deployment.yaml)이 같아야 한다(-253).
+      THETA_MODEL: ""
+      THETA_PATH: ""
+    networks: [santafactory]
+    restart: unless-stopped
+    deploy:
+      replicas: ${WORKER_REPLICAS:-2}
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 2G
+
+networks:
+  santafactory:
+    external: true
+    name: santafactory_default

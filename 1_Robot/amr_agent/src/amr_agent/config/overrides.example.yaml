@@ -1,0 +1,16 @@
+# 외부 프로파일 예시 — BE 견적 요청의 amr 블록(5_Docs/Web/시뮬엔진연동API명세서 §1-1)을 그대로 쓴다.
+# sim-runner 는 scenario.amr 을 profile_overrides:=<JSON> 으로 넘기고, 손으로 돌릴 때는 이 파일을 profile_file:= 로 준다:
+#   ros2 launch amr_agent agent.launch.py serial:=amr01 fake_robot:=true \
+#        profile_file:=$(ros2 pkg prefix amr_agent)/share/amr_agent/config/overrides.example.yaml
+speed_empty: 1.2        # m/s → v_max
+speed_loaded: 1.0       # m/s → v_max_loaded
+consumption: 0.02       # 주행 중 %/s → battery.consumption_pct_per_s  (단위는 명세 미정 — 웹팀 확정 전 가정)
+battery: 100.0          # 초기 SoC % (0<v<1 이면 비율) → battery.soc_init_pct. dict 로 주면 battery 절 오버라이드
+charge_time: 3600       # s → battery.charge_time_s
+charge_threshold: 0.2   # 0<v<1 비율 · 1 이상 % → battery.charge_threshold_pct (20)
+capacity: 6             # 왕복당 토트 → load.capacity_totes
+tote_units: 8           # 토트당 상품 → load.tote_units
+# 프로파일 키도 직접 쓸 수 있다. 같은 값을 BE 키와 프로파일 키로 동시에 주면 거절된다.
+# control: { tol_xy: 0.08 }
+# plant: { a_max: 3.0 }
+# battery: { idle_ratio: 0.5 }     # dict → 절 오버라이드 (숫자 battery: 는 위의 BE 키)

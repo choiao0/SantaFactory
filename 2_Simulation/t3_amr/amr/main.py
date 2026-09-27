@@ -1,0 +1,251 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""AMR 시뮬레이션 단일 진입점.
+
+    python amr/main.py list                       계획기 목록
+    python amr/main.py plan   --planner wppl      계획 (로컬, GPU 불필요)
+    python amr/main.py verify --planner wppl      검증
+    python amr/main.py cmds   --planner wppl      서버에서 칠 명령 출력
+    python amr/main.py run    --planner wppl      서버에서 **실제로 실행**
+
+계획기를 바꾸려면 `--planner` 하나만 바꾼다. 새 계획기는 `amr/path/` 에
+모듈을 추가하면 자동으로 잡힌다 — 이 파일은 손대지 않는다.
+
+[왜 이 파일이 있나]
+계획기가 넷(wppl · astar · pibt_h · fms)인데 각각 CLI 인자와 산출물 위치가 달랐다.
+어느 게 현행인지, 서버에서 무슨 명령을 쳐야 하는지가 파일 이름에 안 드러나서
+매번 문서를 뒤져야 했다. 여기 한 곳만 보면 되게 한다.
+
+[실행]
+`run` 은 서버에서만 쓴다. `paths.sh` 를 먼저 source 해야 하므로 셸 껍데기
+(`v2/server/run.sh`)가 하나 있는데, **그 안에는 계획기 정보가 없다.** 환경만
+잡고 이 파일로 넘긴다 — 계획기 표가 두 곳에 생기면 나눈 의미가 없다.
+
+[계획과 실행의 경계]
+계획은 GPU 가 필요 없어 **로컬에서 끝낸다.** 씬 빌드와 주행은 Isaac Sim 이
+필요해 **서버에서** 한다. 그래서 `cmds` 는 실행하지 않고 명령만 찍는다 —
+로컬에서 서버 명령을 흉내 내면 경로가 어긋난다 (2026-09-06 에 상대경로로
+USD 참조가 깨진 적이 있다).
+"""
+import argparse
+import os
+import sys
+
+# 윈도우 콘솔은 기본 cp949 라 '—' 같은 문자에서 UnicodeEncodeError 로 죽는다.
+# 출력만 UTF-8 로 돌린다 (파이프로 넘겨도 동일하게 나온다).
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from amr import path as P                                  # noqa: E402
+
+
+def cmd_list(args):
+    reg = P.registry()
+    print(f"계획기 {len(reg)}개\n")
+    for name in sorted(reg):
+        m = reg[name]
+        drive = {"time": "시각 추종 (amr_driver_v2)",
+                 "adg": "ADG 순서 (isaac_drive)"}.get(m.DRIVE, m.DRIVE)
+        print(f"  {name:8s} {m.DESC}")
+        print(f"  {'':8s}   실행 {drive}")
+        print(f"  {'':8s}   산출 {m.OUT}")
+        # GOOD_SEEDS 는 one-shot 시절 속성이라 지금은 어떤 계획기에도 없다.
+        # lifelong 은 "전원 동시 도착" 조건이 없어 시드를 안 탄다 (2026-09-08).
+        if hasattr(m, "SEEDS_CHECKED"):
+            print(f"  {'':8s}   확인한 시드 {m.SEEDS_CHECKED}")
+        print()
+    print(f"기본 맵: {P.default_map()}")
+
+
+def cmd_plan(args):
+    m = P.get(args.planner)
+    print(f"== 계획  [{m.NAME}]  {m.DESC}")
+    r = m.plan(n=args.n, seed=args.seed, seconds=args.seconds,
+               map_dir=args.map, extra=args.extra)
+    print(f"\n== 산출물: {r['out']}")
+    if r.get("note"):
+        print(f"   주의: {r['note']}")
+
+
+def cmd_verify(args):
+    m = P.get(args.planner)
+    print(f"== 검증  [{m.NAME}]")
+    if not hasattr(m, "verify"):
+        print("   이 계획기에는 검증기가 없습니다.")
+        return
+    ok = m.verify(n=args.n, map_dir=args.map)
+    print("\n== " + ("통과" if ok else "★ 실패 — 위 항목을 보세요"))
+    if not ok:
+        raise SystemExit(1)
+
+
+def cmd_cmds(args):
+    m = P.get(args.planner)
+    print(f"# {m.NAME} — {m.DESC}")
+    print("# 서버(jupyter04)에서 실행. 경로는 전부 절대경로여야 한다.\n")
+    print("cd <저장소>/2_Simulation/t3_amr")
+    print("source 2_Simulation/t3_amr/paths.sh"
+          "      # W · SCENE · MAP · ROBOT · STAGE · PLAN · LAN_IP · GPU 정의")
+    print()
+    print("# 1) 씬 빌드")
+    for ln in m.scene_cmd(args.n):
+        print(ln)
+    from amr.path._common import _HEADLESS
+    print("\n# 2) 주행 (헤드리스 · 렌더 없음)" if _HEADLESS
+          else "\n# 2) 주행 + WebRTC")
+    print("pkill -f 'kit/kit'; pkill -f isaacsim; sleep 5")
+    for ln in m.run_cmd(args.n):
+        print(ln)
+
+
+def scene_saved(usd, since):
+    """이번 빌드가 씬을 저장했나 — 비어 있지 않고 빌드 시작(`since`, time.time()) 뒤에 쓰였다.
+
+    파일 시각은 커널의 거친 시계라 직전에 잰 time.time() 보다 몇 ms 이를 수 있어 1 초 여유를 둔다.
+    빌드는 Kit 기동에만 수 초가 걸리므로 지난 빌드의 파일과 헷갈릴 일은 없다.
+    """
+    try:
+        st = os.stat(usd)
+    except OSError:
+        return False
+    return st.st_size > 0 and st.st_mtime >= since - 1.0
+
+
+def build_scene(sh, cwd, usd):
+    """씬 빌드 셸 명령을 돌린다. 실패면 SystemExit.
+
+    ★ 종료 코드만 보지 않는다 (-280). 빌드는 USD 를 저장(Export)하고 `[s] DONE` 을 찍은 **뒤**
+      Kit 종료 단계에서 코드 1 로 죽을 수 있다 — est_21 10대(2026-09-27 00:59)가 carb
+      "Destroying busy TaskGroup!" 로 그랬다. 씬 파일이 이번 빌드에서 새로 쓰였으면 일은 끝난 것이라
+      계속 간다. 지난 빌드의 USD 만 남아 있으면 멈춘다(옛 궤적으로 주행하면 안 된다).
+    """
+    import subprocess
+    import time
+    since = time.time()
+    rc = subprocess.run(["bash", "-c", sh], cwd=cwd).returncode
+    if not rc:
+        return
+    if not scene_saved(usd, since):
+        raise SystemExit("  ★ 씬 빌드 실패 — 위 [s] 줄을 보세요")
+    print(f"  ☹ 씬 빌드가 코드 {rc} 로 끝났지만 씬은 저장됐습니다 — 계속합니다 (Kit 종료 단계 오류)")
+
+
+def cmd_run(args):
+    """서버에서 실제로 실행한다. `cmds` 가 찍는 것과 **같은 정의**를 쓴다."""
+    import subprocess
+
+    from amr.path._common import _HEADLESS
+
+    m = P.get(args.planner)
+    n = args.n
+    # LAN_IP 는 WebRTC 용이다 — 헤드리스에는 붙을 곳이 없으므로 요구하지 않는다.
+    need = ["W", "SCENE", "ROBOT", "PLAN", "STAGE", "GPU"]
+    if not _HEADLESS:
+        need.insert(5, "LAN_IP")
+    miss = [k for k in need if not os.environ.get(k)]
+    if miss:
+        raise SystemExit(f"환경변수 없음: {', '.join(miss)}\n"
+                         "  source 2_Simulation/t3_amr/paths.sh 를 먼저 실행하세요.")
+
+    from amr.path._common import expand, server_paths
+    p = {k: expand(v) for k, v in server_paths(m.SUB, m.USD % n, n).items()}
+    print(f"== {m.NAME} · {n}대")
+
+    # 입력 확인. 여기서 막아야 원인이 보인다 — 궤적이 없으면 빌드가 빈 USD 를
+    # 남기고, 다음 단계에서는 "Failed to get crate info" 만 보인다 (2026-09-06).
+    miss = [f for f in (os.environ["SCENE"], os.environ["ROBOT"],
+                        p["traj"], p["starts"]) if not os.path.exists(f)]
+    if miss:
+        for f in miss:
+            print(f"  ★ 없음: {f}")
+        raise SystemExit(f"\n  계획 산출물은 로컬에서 만들어 올린다:\n"
+                         f"    python amr/main.py plan --planner {m.NAME} --n {n}")
+
+    # 씬 빌드 — 궤적이 USD 보다 새것일 때만
+    usd = p["usd"]
+    stale = (args.rebuild or not os.path.exists(usd) or os.path.getsize(usd) == 0
+             or os.path.getmtime(p["traj"]) > os.path.getmtime(usd))
+    if stale:
+        print(f"-- 씬 빌드 -> {usd}")
+        build_scene("\n".join(m.scene_cmd(n)), os.environ["W"], usd)
+    else:
+        kb = os.path.getsize(usd) / 1024
+        print(f"-- 씬 재사용: {usd} ({kb:.1f} KB)   다시 빌드하려면 --rebuild")
+    if not os.path.getsize(usd):
+        raise SystemExit("  ★ 씬이 0바이트입니다")
+
+    # 이전 Kit 정리 — 안 죽이면 NVST_R_BUSY 가 도배된다
+    #
+    # ★ 헤드리스는 **안 죽인다** (2026-09-21). NVST_R_BUSY 는 스트리밍 서버가
+    #   포트를 못 잡아서 나는 것인데, 헤드리스는 Kit CLI 도 스트림도 안 쓴다.
+    #   그리고 여기서 죽이면 **같이 돌리는 다른 판을 죽인다** — 헤드리스는
+    #   포트를 안 물므로 여러 판을 동시에 돌릴 수 있다. GPU 가 하나뿐이어도
+    #   그렇다: 주행 중 GPU 사용률이 **36%** 라 나머지는 CPU 대기이고, 판을
+    #   나란히 돌리면 그 빈 시간이 채워진다. 한 판을 빠르게 하는 것과는
+    #   다른 축이다 (렌더 한 판은 GPU 를 더 준다고 안 빨라진다).
+    if _HEADLESS:
+        print("-- 이전 Kit 정리 건너뜀 (헤드리스는 포트를 안 씁니다 — "
+              "동시 실행을 죽이지 않기 위해)")
+    elif subprocess.run(["pgrep", "-f", "kit/kit|isaacsim"],
+                        capture_output=True).returncode == 0:
+        print("-- 이전 Kit 종료")
+        subprocess.run(["bash", "-c", "pkill -f 'kit/kit'; pkill -f isaacsim; sleep 5"])
+        if subprocess.run(["pgrep", "-f", "kit/kit|isaacsim"],
+                          capture_output=True).returncode == 0:
+            subprocess.run(["bash", "-c", "pkill -9 -f 'kit/kit'; sleep 3"])
+
+    env, argv = m.launch(n).argv()
+    if args.lite:
+        env["LIVE_LITE"] = "1"
+    if _HEADLESS:
+        # 볼 것이 없다 — 화면도, 붙을 곳도 없다. 대신 배속이 로그에 찍힌다.
+        print("-- 실행 (헤드리스 · 렌더 없음).  화면은 없습니다.")
+        print("   진행은 [hl] 줄의 배속으로 봅니다.  종료 Ctrl+C\n")
+    else:
+        print(f"-- 실행.  WebRTC 클라이언트 Server 에 [ {os.environ['LAN_IP']} ] 를 넣고 Connect")
+        print("   (기동 약 12초. 'Streaming server started' 뒤에 붙는다.  종료 Ctrl+C)\n")
+    os.execvpe(argv[0], argv, dict(os.environ, **env))
+
+
+def main():
+    ap = argparse.ArgumentParser(description="AMR 시뮬레이션 진입점")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    def common(p):
+        p.add_argument("--planner", default="pibt_h", help="amr/path/ 의 계획기 이름")
+        p.add_argument("--n", type=int, default=12, help="로봇 대수")
+        p.add_argument("--map", default=None, help="맵 폴더 (기본: upstream v5.9)")
+
+    p = sub.add_parser("list", help="계획기 목록")
+    p.set_defaults(fn=cmd_list)
+
+    p = sub.add_parser("plan", help="계획 (로컬)")
+    common(p)
+    p.add_argument("--seed", type=int, default=None)
+    p.add_argument("--seconds", type=float, default=420)
+    p.add_argument("--extra", nargs=argparse.REMAINDER, default=[],
+                   help="계획기 CLI 에 그대로 넘길 인자")
+    p.set_defaults(fn=cmd_plan)
+
+    p = sub.add_parser("verify", help="산출물 검증")
+    common(p)
+    p.set_defaults(fn=cmd_verify)
+
+    p = sub.add_parser("cmds", help="서버에서 칠 명령 출력")
+    common(p)
+    p.set_defaults(fn=cmd_cmds)
+
+    p = sub.add_parser("run", help="서버에서 실행 (paths.sh 를 먼저 source)")
+    common(p)
+    p.add_argument("--rebuild", action="store_true", help="씬을 강제로 다시 빌드")
+    p.add_argument("--lite", action="store_true",
+                   help="랙 등 시각 전용 지오메트리를 숨긴다 (배속용. 물리 동일)")
+    p.set_defaults(fn=cmd_run)
+
+    args = ap.parse_args()
+    args.fn(args)
+
+
+if __name__ == "__main__":
+    main()

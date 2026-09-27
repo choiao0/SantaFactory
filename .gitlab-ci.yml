@@ -2,19 +2,47 @@
 # 컴포넌트별 build/test/deploy job은 각 파트 개발 시작 후 추가 예정
 # (dashboard: EC2 배포 / infra: infra-deploy 트리거 / integration: RPi+EC2 배포)
 
+# Merge Request에서만 컨벤션 검사와 SonarQube 분석을 실행한다.
+workflow:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - when: never
+
 stages:
   - lint
+  - test
+  - sonar
+  - comment
+
+variables:
+  # EC2 Runner의 Docker executor가 sonar-network에 참여하므로
+  # 외부 포트 개방 없이 서비스 이름으로 접근한다.
+  SONAR_HOST_URL: "http://sonarqube:9000/sonarqube"
+  GMS_API_URL: "https://gms.ssafy.io/gmsapi/api.openai.com/v1/responses"
+  GMS_MODEL: "gpt-5-mini"
+  GMS_TIMEOUT: "60"
 
 .convention-lint:
   stage: lint
+  variables:
+    GIT_DEPTH: 0
   image:
     name: alpine/git:latest
     entrypoint: [""]
+  tags:
+    - sonar-ec2
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
 
 commit-lint:
   extends: .convention-lint
+  rules:
+    # main 은 제출용이라 develop 전체(1000+ 커밋)를 한 번에 받는다. 그 커밋들은 develop 에 들어올 때
+    # 이미 이 검사를 통과했고, 여기서 다시 보면 옛 커밋 하나 때문에 제출 자체가 막힌다
+    # (S15P21A106-103). release 는 지금까지처럼 그대로 검사한다.
+    - if: '$CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main"'
+      when: never
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
   script:
     - git fetch origin "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
     - . ./.githooks/commit-convention.sh
@@ -35,6 +63,29 @@ commit-lint:
         echo "WIP/사소한 커밋은 MR 올리기 전에 rebase -i로 squash 하세요."
         exit 1
       fi
+
+# Flyway 버전 중복 검사 (S15P21A106-213). 브랜치 둘이 각자 V3 를 만들면 파일 이름이 서로 달라
+# git 충돌이 나지 않는다 — 그래서 둘 다 머지되고, 그제서야 백엔드가
+# "Found more than one migration with version 3" 으로 기동을 거부한다. 리뷰어는 자기 MR 의 파일만
+# 보므로 눈으로 잡히지 않는 종류다.
+flyway-lint:
+  extends: .convention-lint
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - 4_Web/SantaFactoryBE/src/main/resources/db/migration/**/*
+  script:
+    - |
+      dir=4_Web/SantaFactoryBE/src/main/resources/db/migration
+      dup=$(ls "$dir" | sed -n 's/^V\([0-9][0-9]*\)__.*\.sql$/\1/p' | sort -n | uniq -d)
+      if [ -n "$dup" ]; then
+        echo "Flyway 버전이 중복됩니다: V$(echo "$dup" | tr '\n' ' ')"
+        ls "$dir"
+        echo "나중에 머지되는 쪽이 번호를 올리세요. 이미 적용된 DB 가 있는 버전은 바꾸면 안 됩니다 —"
+        echo "그 DB 들이 'applied migration not resolved locally' 로 기동하지 못합니다."
+        exit 1
+      fi
+      echo "Flyway 버전 중복 없음"
 
 branch-lint:
   extends: .convention-lint
@@ -57,3 +108,117 @@ branch-lint:
       echo "브랜치명 컨벤션 위반: $BRANCH"
       echo "형식: feature|hotfix/S15P21A106-{이슈번호}-{설명}, release/v{버전} — Docs/GIT_CONVENTION.md 참고"
       exit 1
+
+# 3_FMS 파이썬 테스트 (S15P21A106-185). 이 축이 없어서 sim_engine 계약 v2.6 변경이 fms_core 를 깨뜨린 걸
+# 아무도 MR 단계에서 못 잡았다. 3_FMS 를 건드리는 MR 에서만 돈다 (다른 파트 MR 은 그대로 지나간다).
+# 의존성은 배포 이미지와 같은 고정 버전(infra/requirements.txt)을 쓴다 — 버전이 다르면 float 누적 순서가 달라져
+# 같은 시드가 다른 KPI 를 낸다(파일 머리말 참고). pip 캐시는 러너에 남겨 재설치를 줄인다.
+fms-python-test:
+  stage: test
+  image: python:3.11.9-slim
+  tags:
+    - sonar-ec2
+  variables:
+    PIP_CACHE_DIR: "${CI_PROJECT_DIR}/.cache/pip"
+    MPLBACKEND: "Agg"
+  cache:
+    key: fms-pip-cache
+    paths:
+      - .cache/pip
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - 3_FMS/**/*
+  script:
+    - pip install --no-cache-dir pytest==8.3.4 -r 3_FMS/infra/requirements.txt
+    - cd 3_FMS
+    # fms_core/tests/test_des_parity.py 가 견적 워커·sim_v2 와 커널 조건을 직접 대조한다 — sim_engine 이 바뀌면 여기서 빨개진다.
+    # infra/worker 는 견적·θ 탐색 워커 (S15P21A106-229). 이 축이 없어서 --tote-units 기대값이
+    # 계약 v3.9(토트 8 → 10) 이후 실패인 채 방치됐다. 여기서 308개가 돈다 — 로컬에 optuna 가 없으면
+    # test_run_study.py 28개가 통째로 skip 되어 280개로 보인다.
+    - python -m pytest fms_core/tests host_orch/tests sim_engine/tests infra/worker -q
+
+robot-python-test:
+  stage: test
+  image: python:3.11.9-slim
+  tags:
+    - sonar-ec2
+  variables:
+    PIP_CACHE_DIR: "${CI_PROJECT_DIR}/.cache/pip"
+  cache:
+    key: robot-pip-cache
+    paths:
+      - .cache/pip
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - 1_Robot/**/*
+  script:
+    - pip install --no-cache-dir pytest==8.3.4 pyyaml==6.0.2
+    - cd 1_Robot/amr_agent
+    # 에이전트 순수부만 (ROS 불필요): profile(BE 파라미터 병합) · battery · state · order book · primitives
+    - python -m pytest -q
+
+sonarqube-analysis:
+  stage: sonar
+  image:
+    name: sonarsource/sonar-scanner-cli:12.1.0.3233_8.0.1
+    entrypoint: [""]
+  tags:
+    - sonar-ec2
+  variables:
+    SONAR_USER_HOME: "${CI_PROJECT_DIR}/.sonar"
+    GIT_DEPTH: "0"
+  cache:
+    key: sonar-scanner-cache
+    paths:
+      - .sonar/cache
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+  when: always
+  script:
+    - sonar-scanner
+  artifacts:
+    when: always
+    paths:
+      - .scannerwork/report-task.txt
+    expire_in: 1 hour
+
+sonarqube-mr-comment:
+  stage: comment
+  image: python:3.13-alpine
+  tags:
+    - sonar-ec2
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+  when: always
+  needs:
+    - job: sonarqube-analysis
+      artifacts: true
+  script:
+    - test -f .scannerwork/report-task.txt
+    - python .gitlab/scripts/sonar_mr_comment.py
+
+# 2_Simulation 엣지(t3_amr/edge, S15P21A106-215) 파이썬 테스트 — 브로커·Isaac 없이 상태기계·코덱 사본을 검사한다.
+# 2_Simulation 이나 host_orch 코덱(spb.py·sparkplug_b_pb2.py 사본의 원본)을 건드리는 MR 에서 돈다.
+sim-python-test:
+  stage: test
+  image: python:3.11.9-slim
+  tags:
+    - sonar-ec2
+  variables:
+    PIP_CACHE_DIR: "${CI_PROJECT_DIR}/.cache/pip"
+  cache:
+    key: sim-pip-cache
+    paths:
+      - .cache/pip
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - 2_Simulation/**/*
+        - 3_FMS/host_orch/spb.py
+        - 3_FMS/host_orch/sparkplug_b_pb2.py
+  script:
+    - pip install --no-cache-dir pytest==8.3.4 paho-mqtt==2.1.0 protobuf==7.36.1 psutil==7.2.2
+    - cd 2_Simulation
+    - python -m pytest

@@ -1,0 +1,175 @@
+name: santafactory
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: a106-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USERNAME}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    ports:
+      - "127.0.0.1:5432:5432"
+      # k3s 파드(4_Web/k8s)가 `db` 이름으로 붙는 주소 (S15P21A106-258). 도커 게이트웨이라 서버 안에서만 닿는다(게이트웨이가 다르면 기동 실패로 드러난다)
+      - "172.18.0.1:5432:5432"
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME} -d ${DB_NAME}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    build: ./SantaFactoryBE
+    image: santafactory-be:latest
+    container_name: a106-backend
+    restart: unless-stopped
+    environment:
+      # 엔티티가 LocalDateTime.now() 로 시각을 남기고 오프셋 없이 내려보낸다. 화면은 그걸 브라우저
+      # 지역시로 읽으므로, 서버 JVM 이 UTC 면 한국에서 9시간 어긋나 보인다 (S15P21A106-228).
+      TZ: Asia/Seoul
+      DB_URL: jdbc:postgresql://db:5432/${DB_NAME}
+      DB_USERNAME: ${DB_USERNAME}
+      DB_PASSWORD: ${DB_PASSWORD}
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_USER: ${RABBITMQ_USER}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
+      REDIS_HOST: redis
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      # 영상 presigned URL 서명. 읽기 전용 계정(MINIO_BE_*)이 없으면 root 로 대신 서명한다
+      MINIO_PUBLIC_URL: ${MINIO_PUBLIC_URL:-https://j15a106.p.ssafy.io/media}
+      MINIO_ACCESS_KEY: ${MINIO_BE_ACCESS_KEY:-${MINIO_ROOT_USER}}
+      MINIO_SECRET_KEY: ${MINIO_BE_SECRET_KEY:-${MINIO_ROOT_PASSWORD}}
+      JWT_SECRET: ${JWT_SECRET}
+      # 가입 인증 메일(SMTP). MAIL_ENABLED 가 비면 발송하지 않고 코드를 로그에 찍는다
+      MAIL_ENABLED: ${MAIL_ENABLED:-false}
+      MAIL_USERNAME: ${MAIL_USERNAME:-}
+      MAIL_PASSWORD: ${MAIL_PASSWORD:-}
+      MAIL_FROM: ${MAIL_FROM:-}
+      ADMIN_EMAIL: ${ADMIN_EMAIL}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      DEMO_PASSWORD: ${DEMO_PASSWORD}
+      # 견적서 PDF 변환기(아래 pdf 서비스)와 견적서에 적는 서비스 공개 주소
+      PDF_BASE_URL: http://pdf:3000
+      APP_PUBLIC_URL: ${APP_PUBLIC_URL:-https://j15a106.p.ssafy.io}
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      pdf:
+        condition: service_healthy
+
+  frontend:
+    build: ./SantaFactoryFE
+    image: santafactory-fe:latest
+    container_name: a106-frontend
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:80"
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: a106-rabbitmq
+    # 계정·큐는 노드 이름(rabbit@<hostname>) 폴더에 저장된다. 이름을 고정하지 않으면 컨테이너를 다시 만들 때마다
+    # 빈 폴더로 시작해 손으로 만든 sim-worker 계정이 사라진다(2026-09-23, S15P21A106-258)
+    hostname: rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
+    ports:
+      - "127.0.0.1:5672:5672"
+      - "172.18.0.1:5672:5672"     # k3s 파드용 도커 게이트웨이 (S15P21A106-258)
+      - "127.0.0.1:15672:15672"
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  minio:
+    image: minio/minio:RELEASE.2025-04-08T15-41-24Z
+    container_name: a106-minio
+    restart: unless-stopped
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    command: server /data --console-address ":9001"
+    ports:
+      - "9002:9000"                # GPU(tailnet) 연결용 공인 바인딩
+      - "127.0.0.1:9001:9001"      # 콘솔은 로컬 전용
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # refresh 토큰 저장소. access 토큰은 저장하지 않는다(짧은 만료 + 서명 검증으로 충분).
+  redis:
+    image: redis:7-alpine
+    container_name: a106-redis
+    restart: unless-stopped
+    command:
+      - redis-server
+      - --requirepass
+      - ${REDIS_PASSWORD:?.env 에 REDIS_PASSWORD 를 설정하세요}
+      # 재시작 때 토큰이 다 날아가면 전원 재로그인이다
+      - --appendonly
+      - "yes"
+      # 토큰 저장소다. LRU 로 두면 토큰이 조용히 증발해 랜덤 로그아웃이 난다
+      - --maxmemory-policy
+      - noeviction
+    ports:
+      - "127.0.0.1:6379:6379"
+      - "172.18.0.1:6379:6379"     # k3s 파드용 도커 게이트웨이 (S15P21A106-258)
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "--no-auth-warning", "-a", "$$REDIS_PASSWORD", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+
+  # 견적서 PDF 변환기 (S15P21A106-236). 백엔드가 HTML 을 보내면 크로미움으로 찍어 PDF 를 돌려준다.
+  # 백엔드 JVM 에 브라우저를 넣지 않으려고 분리했다 — 죽어도 견적서 기능만 멈춘다. 외부 포트 없음.
+  # 서버는 t3.xlarge(16 GB) 지만 변환 중 크로미움이 300 MB 안팎을 쓰고 요청이 몰리면 옆 컨테이너를 밀 수 있어 상한을 건다.
+  pdf:
+    build: ./pdf
+    image: santafactory-pdf:latest
+    container_name: a106-pdf
+    restart: unless-stopped
+    command:
+      - gotenberg
+      - --api-timeout=60s
+      - --chromium-max-queue-size=2
+      # 템플릿은 서버에서 전부 채워 보내므로 스크립트가 필요 없다. 끄면 렌더가 결정적이고 가볍다
+      - --chromium-disable-javascript=true
+    mem_limit: 512m
+    ports:
+      - "127.0.0.1:3001:3000"      # 로컬에서 백엔드를 Docker 밖(gradle)에서 띄울 때만 쓴다(3000 은 frontend 가 쓴다). 외부 노출 아님
+    healthcheck:
+      test: ["CMD", "curl", "--silent", "--fail", "http://localhost:3000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+volumes:
+  db-data:
+  rabbitmq-data:
+  minio-data:
+  redis-data:

@@ -1,0 +1,61 @@
+# t3_amr 러너 — GPU 노드 1대에 1개. 상주하며 host-orch 의 NCMD Start 를 기다린다.
+# 전제: 노드에 nvidia-container-toolkit + NVIDIA device plugin(nvidia.com/gpu 리소스), RuntimeClass nvidia.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: t3amr-runner
+  namespace: santa
+spec:
+  replicas: 1
+  strategy: { type: Recreate }          # GPU 하나라 두 개가 겹쳐 뜨면 안 된다
+  selector: { matchLabels: { app: t3amr-runner } }
+  template:
+    metadata:
+      labels: { app: t3amr-runner }
+    spec:
+      runtimeClassName: nvidia
+      nodeSelector:
+        santa.io/gpu: "true"            # GPU 박스 노드에 라벨: kubectl label node <gpu-node> santa.io/gpu=true
+      containers:
+        - name: runner
+          image: t3amr-runner:dev       # 로컬 빌드 → k3s containerd 로 import (deploy/README.md). 레지스트리 생기면 교체
+          imagePullPolicy: IfNotPresent
+          args: ["edge"]
+          env:
+            - { name: NODE_ID, value: "sim-runner-gpu01" }
+            - { name: NVIDIA_DRIVER_CAPABILITIES, value: "all" }
+            - { name: SHOT_STRIDE, value: "10" }     # 5배속 (compose 와 같게, -241)
+          envFrom:
+            - secretRef: { name: t3amr-runner-env }
+          resources:
+            limits: { nvidia.com/gpu: 1, memory: "24Gi" }
+            requests: { nvidia.com/gpu: 1, memory: "12Gi", cpu: "4" }
+          # WebRTC 관전 포트(49100/TCP · 47998/UDP)는 녹화에 필요 없고 캠퍼스망은 UDP 가 막혀 있어 기본으로 열지 않는다.
+          # 원격 관전이 필요할 때만 ports: 에 hostPort 로 연다.
+          volumeMounts:
+            - { name: ov-cache, mountPath: /cache/ov }
+            - { name: kit-cache, mountPath: /opt/venv/lib/python3.12/site-packages/isaacsim/kit/cache }   # Kit 셰이더·DerivedData 캐시(-280)
+            - { name: data, mountPath: /data }
+          livenessProbe:
+            exec: { command: ["sh", "-c", "test -f /data/state/alive && find /data/state/alive -mmin -1 | grep -q ."] }
+            initialDelaySeconds: 60
+            periodSeconds: 30
+      securityContext:
+        runAsUser: 1000                 # 이미지의 runner (Dockerfile USER). hostPath 는 fsGroup 을 안 타서 initContainer 가 소유권을 맞춘다
+        runAsGroup: 1000
+      initContainers:
+        - name: chown-volumes
+          image: busybox:1.36
+          command: ["sh", "-c", "chown -R 1000:1000 /cache/ov /cache/kit /data"]
+          securityContext: { runAsUser: 0 }
+          volumeMounts:
+            - { name: ov-cache, mountPath: /cache/ov }
+            - { name: kit-cache, mountPath: /cache/kit }
+            - { name: data, mountPath: /data }
+      volumes:
+        - name: ov-cache
+          hostPath: { path: /var/lib/t3amr/ov-cache, type: DirectoryOrCreate }
+        - name: kit-cache
+          hostPath: { path: /var/lib/t3amr/kit-cache, type: DirectoryOrCreate }
+        - name: data
+          hostPath: { path: /var/lib/t3amr/data, type: DirectoryOrCreate }

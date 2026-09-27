@@ -1,0 +1,454 @@
+# -*- coding: utf-8 -*-
+# ============================================================
+# 틱 시뮬레이터 v2 — CLI 셸 (커널: fms_kernel.FmsKernel, 주문: order_stream.OrderStream)
+# (설계·라이브러리화: docs/커널_시뮬_구조.md#틱-루프)
+#
+# 매 틱 전 로봇이 PIBT로 한 칸씩 움직인다. 예약 장부/대기슬롯/재시도 알람 없음 — 충돌·대기는 PIBT가 해소.
+# 이 파일은 인자 파싱 → 맵·비용·홈 준비 → 틱 루프(arrivals → dispatch → 종료 판단 → move) → 지표 출력만 한다.
+# simpy_harness.py 가 parse_args/build/report 를 그대로 import 해서 같은 커널을 SimPy 시계로 돌린다.
+#
+# 흐름 모드:
+#   --flow=main     (기본) 입고(inbound_buf→aisle_buf) + 출고(aisle_buf→packing).
+#                   주문 = 상품 k개(1~3), 같은 통로 라인은 토트 1개로 합침,
+#                   packing 주문당 1곳 고정, 주문 완료 = 전 태스크 완료.
+#   --flow=v1compat B-1e 벤치마크 전용. v1과 동일한 3태스크 체인 + rng 소비 순서.
+#
+# 사용: python sim_v2_tasks.py [태그] [로봇수=6] [주문수=40] [시드=42] [통로차단=0|1]
+#                              [--flow=main|v1compat] [--theta=<θ json 경로>] [--cell] [--fixed-homes]
+#                              [--order-gap=<틱>]  (주문·입고 도착 간격 평균, 기본 50 — 고부하 스윕용)
+#                              [--inbound-gap=<틱>] (입고 간격만 따로, 기본 = order-gap)
+#                              [--horizon=<틱>] [--shifts=in,out,out]                     (고정 시간·교대, -145 §1)
+#                              [--battery] [--chargers=6] [--runtime-h=8] [--charge-h=1.5] [--soc=20,80,95]  (배터리, -145 §2)
+#                              [--orders-file=<json>] [--capacity=<토트 수>] [--tote-units=<상품 수>] [--svc-per-tote=<초>]
+#                              [--service-steps=<틱>]  (v3.15, -247: 도킹 틱. 기본 = round(SERVICE_TIME_S/dt) = v1 계보 상수)
+#                              [--rev-ticks=<틱>]     (계약 v3.15, -250: 후진 1칸 틱. 기본 REV_TICKS=12
+#                              = speed 0.9 에서 0.300 m/s = 물리 팀 녹화 후진 p99. v3.14 로 되돌리려면 4)
+#                              [--replan-max-extra=<칸>]  (v3.15, -247: 정체 재계획 우회 추가 비용 상한. 0 = 없음)
+#                              [--max-order-totes=24]  (v3.5: 토트 합계 초과 주문 = 팔레트 흐름 제외, 그 아래 큰 주문은 여러 왕복. 0 = 제한 없음)
+#                              [--speed=<m/s>]   (v3.3, -116: 틱 길이 = CELL_M / speed. 1칸 = 1틱은 그대로, 초 환산만 바뀐다)
+#                              [--footprint=exact,ban|exact|legacy|exact,front|exact,front_2cell|…,ban] [--robot-dims=0.39,1.11,0.80]
+#                              [--ban-release=<틱>]   (v3.4 -203, front 6칸 -79, ban·풀기 v3.17 -277)
+#   --footprint: 회전할 때 차체가 실제로 쓸고 가는 자리. exact,ban(기본, v3.17) = exact + 금지 조합표 거부(이웃이 제어 오차 5 cm
+#              안으로 붙는 회전을 계획하지 않는다; --ban-release 틱 넘게 정체한 로봇만 풀어 교착을 막는다, 기본 160).
+#              exact(v3.15 까지 기본) = 0.1 m 지도로 만든 정적 마스크(랙·벽 침범 금지),
+#              legacy = v3.3 과 비트 동일(뒤 3칸만, 양보 v1), exact,front = + 앞 4칸 soft 축 규칙(물리 팀 안전 규칙, 실험 인자 —
+#              처리량 −2~−15 %, 충전 존 매듭). --robot-dims 는 구동축 앞·뒤·폭 [m](기종 카드). SUMMARY footprint·robot_dims·turn_masked.
+#   --no-standoff: 대치 상태기계 V2(-79)를 끄고 양보 규칙 v1(v3.8 경로). v3.9 부터 헤딩 main exact·exact,front 기본 ON —
+#              6,000건/6h 에서 포장대 앞 회전 매듭을 풀어 완료 23~72 % → 99~100 %. SUMMARY standoff·standoffs·standoff_swaps.
+#   --no-turn-bias: 대기 상승을 대기에만(v3.10 경로). v3.11 부터 헤딩 main(legacy 외)은 '거리가 줄지 않는 제자리 회전'에도 붙여
+#              포장대 앞 헛회전(5틱 왕복)을 끊는다 — 6h 24대 p90 74 → 53분, 회전 36 → 20 %. --turn-bias 는 호환용 no-op.
+#   --no-goal-wait-free: 목표 상태(dist 0)의 대기 점수에 θ wait_cost 를 그대로(v3.11 경로). v3.12 부터 0 — θ wait_cost > 1.25 면
+#              도착한 유휴 로봇이 대기보다 싼 회전을 영원히 골랐다(6h 24대 비임무 회전 57,691회). 중립 θ 기준값은 불변.
+#   --no-turn-floor: 진전 없는 회전의 점수 하한(대기 점수)을 끔(v3.12 경로). v3.13 부터 θ wait_cost − TURN_COST 차(1.49)를 회전에도
+#              더해 d′ − d < 1.49 인 헛회전(포장대 앞 왕복 31 %)을 대기로 바꾼다. 중립 θ 기준값은 불변.
+#   --backoff-hold=<틱>: 스스로 물러난(뒤로 한 칸, 목표에서 멀어짐, 비운 칸에 아무도 안 들어옴) 로봇은 막던 로봇이 비킬 때까지
+#              (최소 24틱, 상한 이 값) 비운 칸에 안 돌아간다. 기본 80(v3.20), 0 = 끔(v3.19 경로). 12대 6h 왕복 −46 %.
+#   --no-station-calm: 서비스·충전 중인 로봇 몸에 막혀도(목표 칸·최선 수) 대기 상승을 붙임(v3.18 경로). v3.19 부터 붙이지 않아,
+#              그 로봇이 떠날 때까지 한 칸 물러났다 돌아오는 헛왕복(12대 6h 포장대 앞 왕복 −64 %)을 대기로 바꾼다.
+#   기본 = 헤딩 모델 (상태 (r,c,h), 자기+뒤 칸 2칸 점유, 90° 회전 = TURN_TICKS 틱, 회전 중 스윙 칸
+#              예약, 라이브니스 장치 5종). docs/이동계층_PIBT.md#라이브니스-장치-5종
+#   --cell:    칸 모델(점로봇) opt-in — 기준선 CSV 재현·A/B 비교축. (--heading 은 호환용, 무시)
+#              v1compat 은 항상 칸 모델 (패리티).
+#   충전 존(main 기본): 초기 배치·복귀 = 3_FMS/map/charge_zone.json 존 안 최근접 빈 칸.
+#              docs/맵_충전존.md#구현-규칙. --fixed-homes 면 기존 charger 12칸 홈
+#              (B-1e pibt_main 재현). v1compat 은 항상 고정 홈(패리티).
+#   --horizon: 고정 시간 실행 — 유한 주문 대신 T 틱까지 돌리고 T 안의 완료 수로 처리량 (Lifelong). 주문수 인자는 무시.
+#              --shifts 로 T 를 등분해 창마다 in(입고)/out(출고) 한 종류만 도착 (기본 in,out,out = 앞 1/3 입고, 뒤 2/3 출고).
+#   --battery: SoC 틱 모델 + 충전 도크(charger[0..k) 칸). 임무 없는 로봇이 soc<low 면 강제, soc<go 면 기회 충전.
+#              main + 존 전용 (--fixed-homes·v1compat 과 함께 못 씀). docs/커널_시뮬_구조.md#배터리와-충전-도크
+#   --orders-file: WMS 명시 주문(큐 명세 §1-1 outbound[]) 을 그대로 흘림. 도착 틱 = ordered_at_s, rack_id → map/rack_buffers.json,
+#              버퍼별 토트 수 = ceil(qty합/tote_units), --capacity 만큼 같은 버퍼 토트를 동승. 주문수 인자·출고 교대 창 무시,
+#              horizon 밖 주문은 제외(SUMMARY orders_skipped). 입고는 기존 규칙. docs/커널_시뮬_구조.md#명시-주문-모드
+# 환경: SIM_NO_PLOT=1 히트맵 생략, SIM_CHECK=1 매 틱 충돌 전수 검사(느림),
+#       SIM_DIRFLOW=1 방향별 이동 카운트 npz 저장 (B-2 검증용), SIM_NO_DOCK_PRIO=1 장치 ⑤ 끄기,
+#       SIM_EXPORT_ISAAC=1 Isaac 리플레이 내보내기 (isaac_export_<태그>/)
+# 출력: 콘솔 지표 + [SUMMARY] JSON + sim_v2_<태그>_r<대수>[_blk]_<flow>[_th][_h][_fh][_hz][_bat]_heat.png
+# 종료 코드: 0 정상 / 1 STALL(stdout [STALL] 덤프, stderr "시뮬 정체 감지") — contracts/SIM_RUN_CONTRACT.md §3
+# ============================================================
+import json
+import os
+import sys
+from types import SimpleNamespace
+
+import numpy as np
+
+from cli.common import DT, OUT, SPEED
+from cli.report import _mean, _p90, report
+from cli.export_isaac import export_isaac
+from cli.plot import plot_heat
+from fms_kernel import FmsKernel, KernelConfig, StallError
+from map_loader import (load_map, make_homes, CELL_M, OFFSET_M, MAP_DIR, ROBOT_DIMS, load_charge_zone,
+                        make_homes_zone, load_rack_map, load_topology_spec, masked_turn_ratio, turn_mask)
+from pibt.geometry import FOOTPRINT_MARGIN_M
+from order_stream import MAX_ORDER_TOTES, OrderStream
+from pibt_core import DEFAULT_FOOTPRINT, DIRS, FOOTPRINTS, MOVE_TICKS, REV_TICKS, TURN_TICKS
+
+SERVICE_TIME_S = 40 / 11            # v1과 동일 (docs/θ_경로_기준선.md#기준선-계보)
+SERVICE_STEPS = round(SERVICE_TIME_S / DT)
+K_LINE_P = [0.5, 0.3, 0.2]          # 주문당 상품 라인 수 {1,2,3} 분포
+
+# ------------------------------------------------------------
+# 0) 인자
+# ------------------------------------------------------------
+def _opt(argv, name, conv=float, default=None):
+    """--name=<값> 옵션 (첫 것). 없으면 default."""
+    return next((conv(f.split("=", 1)[1]) for f in argv if f.startswith(f"--{name}=")), default)
+
+
+def _parse_positional(argv):
+    """위치 인자 [태그] [로봇수] [주문수] [시드] [통로차단] + --flow/--theta → 네임스페이스."""
+    pos = [a for a in argv if not a.startswith("--")]
+    a = SimpleNamespace(
+        variant=pos[0] if len(pos) > 0 else "base",
+        n_robots=int(pos[1]) if len(pos) > 1 else 6,
+        n_orders=int(pos[2]) if len(pos) > 2 else 40,
+        seed=int(pos[3]) if len(pos) > 3 else 42,
+        aisle_block=bool(int(pos[4])) if len(pos) > 4 else False,
+        flow="main", theta_path=None, map_dir=None, warnings=[])
+    for f in argv:
+        if f.startswith("--flow="):
+            a.flow = f.split("=", 1)[1]
+        elif f.startswith("--theta="):
+            a.theta_path = f.split("=", 1)[1]
+        elif f.startswith("--map-dir="):
+            # 맵 세트 폴더 (기본 = 공식 맵 3_FMS/map). 합성 창고를 돌릴 때만 쓴다 (-139).
+            a.map_dir = f.split("=", 1)[1]
+    assert a.flow in ("main", "v1compat"), f"알 수 없는 flow: {a.flow}"
+    # 속도 (-116, 계약 v3.3): 커널은 1칸 = 1틱 그대로, 틱의 길이(초)만 CELL_M / speed 로 잡는다.
+    # 입구(창·서비스·주문 도착 초 → 틱)와 출구(틱 → 초) 환산만 바뀌고, 1.0 이면 비트 동일.
+    a.speed = _opt(argv, "speed", float, SPEED)
+    assert 0.1 <= a.speed <= 5.0, f"--speed 는 0.1~5.0 m/s: {a.speed}"
+    # 틱 길이는 나중에 모델이 정해진 뒤 _parse_model 에서 잡는다 (-194) — 헤딩은 1칸이
+    # MOVE_TICKS 틱이고 칸 모델은 1칸 = 1틱이라 같은 speed 라도 틱 길이가 다르다.
+    if a.map_dir is not None:
+        assert os.path.isdir(a.map_dir), f"--map-dir 폴더가 없다: {a.map_dir}"
+    return a, pos
+
+
+def _parse_model(a, argv):
+    """이동 모델·홈·주문 간격 — v1compat 패리티 규칙 포함."""
+    # 헤딩 모델 = 기본값 (docs/이동계층_PIBT.md#현재-결론, 계약 v2).
+    # 칸 모델(점로봇)은 --cell opt-in. --heading 은 호환용으로 받되 무시. v1compat 은 패리티 때문에 항상 칸.
+    a.heading = "--cell" not in argv
+    if a.flow == "v1compat" and a.heading:
+        if "--heading" in argv:
+            a.warnings.append("[WARN] --heading 은 v1compat 에서 무시 (패리티: 항상 칸 모델)")
+        a.heading = False
+    # 틱 길이 (-116 의 dt 를 -194 가 모델별로 나눈다). speed 는 가감속을 포함한 **실효**
+    # 속도고, 1칸에 걸리는 시간이 CELL_M / speed 가 되도록 잡는다.
+    #   헤딩   1칸 = MOVE_TICKS 틱  →  dt = CELL_M / (speed × MOVE_TICKS)
+    #   칸 모델 1칸 = 1틱            →  dt = CELL_M / speed        (v3.3 과 같은 식)
+    # 칸 모델·v1compat 은 A/B 비교축이라 건드리지 않는다 — 여기서 MOVE_TICKS 로 나누면
+    # 서비스 틱이 4 → 15 가 되어 기준값 2317/186.4 · 2970/127.3 이 깨진다.
+    a.dt = CELL_M / (a.speed * (MOVE_TICKS if a.heading else 1))
+    # 충전 존 복귀 = main 흐름 기본값 (2026-09-03 결정). 기존 고정 홈 12칸은 --fixed-homes opt-in.
+    # v1compat 은 패리티 때문에 항상 고정 홈. (--zone 은 호환용 무시)
+    a.zone = "--fixed-homes" not in argv and a.flow != "v1compat"
+    # v3: 차선·양보는 헤딩 main 전용. 칸 모델(--cell)은 A/B 기준 축이라 건드리지 않는다(기준값 2970/127.3 유지).
+    a.lanes = "--no-lanes" not in argv and a.heading and a.flow != "v1compat"
+    a.yield_rule = "--no-yield" not in argv and a.heading and a.flow != "v1compat"
+    # 구간 대수 제한 (-193). 통행 칸을 k×k 블록으로 자르고 블록당 동시 대수를 N 으로 묶는다.
+    # 기본 0 = 끔 → 이 인자 없이는 v3 와 비트 동일.
+    #
+    # N 은 실질적으로 0/1 스위치다. 소싸움은 밀도가 아니라 방향 문제라, 같은 블록에 2대를
+    # 허용하면 그 2대가 마주보는 걸 못 막는다. 실측(16대·250건·gap 4): N=2 는 8틱 이상
+    # 마주보기가 102→121건으로 **늘었고**, N=4·5 는 진입 차단이 3회·0회로 규칙이 없는 것과
+    # 같았다. N=1 만 블록당 배타 점유가 되어 듣는다 (철도 폐색과 같은 구조).
+    a.section_limit = _opt(argv, "section-limit", int, 0)
+    assert a.section_limit >= 0, f"--section-limit 은 0 이상: {a.section_limit}"
+    # 블록 한 변. 클수록 조이는 게 아니라 **무력해진다** — 6런 실측에서 8×8·N=1 은 64칸에
+    # 1대라 로봇이 계속 정체→면제로 풀려 92건(대가 +29%), 3×3 은 67건(대가 +3.2%)이었다.
+    a.section_grid = _opt(argv, "section-grid", int, 3)
+    assert a.section_grid >= 1, f"--section-grid 는 1 이상: {a.section_grid}"
+    if a.section_limit and not a.heading:
+        a.warnings.append("[WARN] --section-limit 은 헤딩 모델 전용 — 칸 모델에서 무시")
+        a.section_limit = 0
+    # 차선 비용은 θ(A트랙 계약, 11개) 밖의 운영 규칙이다. 기본 2.0 (2·3·5 A/B: 5 는 평가 시드 102 에서 새 STALL, 3·2 완주).
+    a.lane_gain = _opt(argv, "lane-gain", float, 2.0)
+    a.pocket_gain = _opt(argv, "pocket-gain", float, 2.0)
+    # 회전 발자국 (-203, 계약 v3.4 결과 변경). 기본 exact = 정적 마스크. 회전이 없는 칸 모델·v1compat 은 legacy 로 둔다.
+    a.footprint = _opt(argv, "footprint", str, DEFAULT_FOOTPRINT)
+    # -277: 끝에 ",ban"(금지 조합표 거부)을 붙일 수 있다 — exact,ban · exact,front_2cell,ban · exact,front,ban
+    assert a.footprint in FOOTPRINTS, f"--footprint 는 {'|'.join(FOOTPRINTS)}: {a.footprint}"
+    dims = _opt(argv, "robot-dims", str, ",".join(f"{v:g}" for v in ROBOT_DIMS))
+    a.robot_dims = tuple(float(x) for x in dims.split(","))
+    assert len(a.robot_dims) == 3 and all(v > 0 for v in a.robot_dims), f"--robot-dims 는 앞,뒤,폭 양수 셋: {dims}"
+    if not a.heading:
+        a.footprint = "legacy"
+    elif "front" in a.footprint and not a.yield_rule:
+        a.warnings.append(f"[WARN] --footprint={a.footprint} 는 대치 상태기계(-79)가 정면 해소 장치 — --no-yield 무시")
+        a.yield_rule = True
+    assert a.lane_gain >= 1.0 and a.pocket_gain >= 1.0, f"--lane-gain/--pocket-gain 은 1.0 이상: {a.lane_gain}, {a.pocket_gain}"
+    # 주문 도착 간격 평균 [틱] (지수분포). 기본 50 = B-0 이후 전 기준선. --order-gap=<틱> 으로 부하 조절
+    # (고부하 스윕, docs/θ_경로_기준선.md#고부하-l1l2). v1compat 은 패리티 때문에 항상 50.
+    # 대치 상태기계 V2 (-79, 계약 v3.9 기본): 헤딩 main 의 exact·exact,front 는 양보 규칙 v1 대신 상태기계로 정면·회전 매듭을 푼다.
+    # 6,000건/6h 에서 exact 가 포장대 앞 회전 매듭으로 23~72 % 에 그쳤고 상태기계만 켜면 99~100 % (D3, 2026-09-15).
+    # --no-standoff 로 v3.8 경로(양보 v1). legacy 는 v3.3 비트 동일이라 항상 끔. --standoff 는 호환용 no-op.
+    a.standoff = ("--no-standoff" not in argv and a.heading and a.flow != "v1compat" and a.footprint != "legacy")
+    # 진전 없는 제자리 회전에도 대기 상승 (-223, 계약 v3.11 기본): --no-turn-bias 로 v3.10 경로. --turn-bias 는 호환용 no-op.
+    a.turn_bias = ("--no-turn-bias" not in argv and a.heading and a.flow != "v1compat" and a.footprint != "legacy")
+    # 목표 상태 대기 점수 0 (-90, 계약 v3.12 기본): θ wait_cost > TURN_COST 면 도착한 로봇이 영원히 도는 것을 막는다. --no-goal-wait-free 로 v3.11 경로.
+    a.goal_wait_free = "--no-goal-wait-free" not in argv and a.heading
+    # 진전 없는 회전 점수 하한 = 대기 점수 (-160, 계약 v3.13 기본): θ wait_cost − TURN_COST 차(1.49)를 회전에도. --no-turn-floor 로 v3.12 경로.
+    a.turn_floor = ("--no-turn-floor" not in argv and a.heading and a.flow != "v1compat" and a.footprint != "legacy")
+    # 서비스·충전 중인 로봇 몸에 막히면(목표 칸·최선 수) 대기 상승 없이 기다린다 (-281, 계약 v3.19 기본): 포장대 앞 물러났다 돌아오기를 끊는다. --no-station-calm 로 v3.18 경로.
+    a.station_calm = ("--no-station-calm" not in argv and a.heading and a.flow != "v1compat" and a.footprint != "legacy")
+    # 스스로 물러난 로봇은 막던 로봇이 비킬 때까지(상한 80틱) 비운 칸에 안 돌아간다 (-281, 계약 v3.20 기본). --backoff-hold=0 으로 v3.19 경로.
+    a.backoff_hold = (_opt(argv, "backoff-hold", int, 80)
+                      if (a.heading and a.flow != "v1compat" and a.footprint != "legacy") else 0)
+    assert a.backoff_hold >= 0, f"--backoff-hold 는 0 이상: {a.backoff_hold}"
+    a.order_gap_arg = next((float(f.split("=", 1)[1]) for f in argv if f.startswith("--order-gap=")), None)
+    if a.order_gap_arg is not None and a.flow == "v1compat":
+        a.warnings.append("[WARN] --order-gap 은 v1compat 에서 무시 (패리티)")
+        a.order_gap_arg = None
+    a.order_gap = a.order_gap_arg if a.order_gap_arg is not None else 50
+    assert a.order_gap > 0, f"--order-gap 은 양수: {a.order_gap:g}"
+
+
+def _parse_env(a):
+    a.check = bool(os.environ.get("SIM_CHECK"))
+    a.dirflow = bool(os.environ.get("SIM_DIRFLOW"))
+    a.export = bool(os.environ.get("SIM_EXPORT_ISAAC"))
+    a.dock_prio = not os.environ.get("SIM_NO_DOCK_PRIO")
+
+
+def _parse_lifelong(a, argv, pos):
+    """입고 간격·고정 시간·교대 (-145 §1)."""
+    # 입고 간격 (-145 §1-2). 유한 모드에서도 받는다 — 입고 시각표만 바뀌고 rng 순서는 그대로. v1compat 은 입고가 없다.
+    a.inbound_gap_arg = _opt(argv, "inbound-gap")
+    if a.inbound_gap_arg is not None and a.flow == "v1compat":
+        a.warnings.append("[WARN] --inbound-gap 은 v1compat 에서 무시 (입고 없음)")
+        a.inbound_gap_arg = None
+    if a.inbound_gap_arg is not None:
+        assert a.inbound_gap_arg > 0, f"--inbound-gap 은 양수: {a.inbound_gap_arg:g}"
+    # 고정 시간·교대 (-145 §1). --horizon 없이 --shifts 만 주면 무시.
+    a.horizon = _opt(argv, "horizon", int)
+    shifts_arg = _opt(argv, "shifts", str)
+    a.shifts = tuple(s.strip() for s in shifts_arg.split(",")) if shifts_arg else ("in", "out", "out")
+    if a.horizon is not None:
+        assert 0 < a.horizon < 200_000, f"--horizon 은 1~199,999 틱 (커널 틱 상한 200,000): {a.horizon}"
+        assert a.flow == "main", "--horizon 은 main 흐름 전용 (v1compat 은 패리티 전용)"
+        assert all(s in ("in", "out") for s in a.shifts), f"--shifts 토큰은 in|out: {a.shifts}"
+        if len(pos) > 2 and int(pos[2]) != 0:          # 0 은 "자리만 채움" — 경고 없음
+            a.warnings.append(f"[WARN] 고정 시간 모드: 주문수 인자 {pos[2]} 무시 (T 안에서 생기는 만큼)")
+    elif shifts_arg:
+        a.warnings.append("[WARN] --shifts 는 --horizon 없이는 무시")
+
+
+def _parse_battery(a, argv):
+    """배터리 (-145 §2). 도크 = 존 안 charger 칸이라 존 기본값(main, 고정 홈 아님) 전용."""
+    a.battery = "--battery" in argv
+    a.chargers = _opt(argv, "chargers", int, 6)
+    a.runtime_h = _opt(argv, "runtime-h", float, 8.0)
+    a.charge_h = _opt(argv, "charge-h", float, 1.5)
+    soc = _opt(argv, "soc", str, "20,80,95")
+    a.soc = tuple(float(x) / 100 for x in soc.split(","))
+    bat_only = [f.split("=", 1)[0] for f in argv if f.split("=", 1)[0] in ("--chargers", "--runtime-h", "--charge-h", "--soc")]
+    if bat_only and not a.battery:
+        a.warnings.append(f"[WARN] {' '.join(bat_only)} 은 --battery 없이는 무시")
+    if a.battery:
+        assert a.zone, "--battery 는 충전 존 기본값에서만 (v1compat·--fixed-homes 와 함께 못 씀)"
+        assert 1 <= a.chargers <= 6, f"--chargers 는 1~6 (stations.json charger 칸 수): {a.chargers}"
+        assert a.runtime_h > 0 and a.charge_h > 0, "--runtime-h·--charge-h 는 양수"
+        assert len(a.soc) == 3 and 0 < a.soc[0] < a.soc[1] < a.soc[2] <= 1.0, f"--soc 는 low<go<leave (%) : {soc}"
+
+
+def _parse_orders(a, argv):
+    """토트 적재(v2.6): capacity=왕복당 토트, tote_units=토트당 상품, svc_per_tote=양 끝 추가 틱."""
+    a.orders_file = _opt(argv, "orders-file", str)
+    a.capacity = _opt(argv, "capacity", int, 1)
+    a.tote_units = _opt(argv, "tote-units", int)
+    a.svc_per_tote = _opt(argv, "svc-per-tote", int, 0)
+    # 도킹 틱 (-247): 기본은 SERVICE_TIME_S(=40/11 s, v1 기준선 계보) 환산. 물리 팀 대조판은 0 으로 준다
+    # — 「안 적은 인자가 기본값으로 조용히 들어간다」를 막으려고 SUMMARY 에도 낸다 (t3-30 §5-1).
+    a.service_steps = _opt(argv, "service-steps", int)
+    a.rev_ticks = _opt(argv, "rev-ticks", int)
+    a.replan_max_extra = _opt(argv, "replan-max-extra", int, 0)
+    a.ban_release = _opt(argv, "ban-release", int, KernelConfig.ban_release)   # -277: 금지 조합표에서 풀 정체 틱
+    # 주문 단위 경계 (v3.5, 2026-09-14): 토트 합계 초과 주문 = 팔레트 흐름 제외. 그 아래 큰 주문은 여러 왕복. 0 = 제한 없음.
+    a.max_order_totes = _opt(argv, "max-order-totes", int, MAX_ORDER_TOTES)
+    assert a.max_order_totes >= 0, f"--max-order-totes 는 0 이상 (0 = 제한 없음): {a.max_order_totes}"
+    if a.orders_file is not None:
+        assert a.flow == "main", "--orders-file 은 main 흐름만"
+    assert 1 <= a.capacity <= 6, f"--capacity 는 1~6 토트: {a.capacity}"
+    assert a.svc_per_tote >= 0, f"--svc-per-tote 는 0 이상: {a.svc_per_tote}"
+    assert a.service_steps is None or a.service_steps >= 0, f"--service-steps 는 0 이상: {a.service_steps}"
+    assert a.rev_ticks is None or a.rev_ticks >= 1, f"--rev-ticks 는 1 이상: {a.rev_ticks}"
+    assert a.replan_max_extra >= 0, f"--replan-max-extra 는 0 이상 (0 = 없음): {a.replan_max_extra}"
+    assert a.ban_release >= 1, f"--ban-release 는 1 이상: {a.ban_release}"
+    if a.tote_units is not None:
+        assert a.tote_units >= 1, f"--tote-units 는 1 이상: {a.tote_units}"
+        if a.orders_file is None:
+            a.warnings.append("[WARN] --tote-units 는 --orders-file 없이는 무시 (간격 모드는 qty 없음)")
+            a.tote_units = None
+
+
+def parse_args(argv):
+    """sys.argv[1:] → 네임스페이스. 경고 문구는 .warnings 에 (셸이 출력 — 순서 보존)."""
+    a, pos = _parse_positional(argv)
+    _parse_model(a, argv)
+    _parse_env(a)
+    _parse_lifelong(a, argv, pos)
+    _parse_battery(a, argv)
+    _parse_orders(a, argv)
+    return a
+
+
+def block_sections(free, k):
+    """통행 가능 칸을 k×k 블록으로 타일링한 (H, W) int16 격자. 벽·랙은 -1 (-193).
+
+    맵을 안 보고 자른다 — topology.json 이 없어도, 생성기가 안 만든 외부 창고에서도 된다.
+    접속행 두 줄에만 긋는 안을 먼저 만들어 봤는데(git 이력), 6런 실측에서 8틱 이상
+    마주보기 감소가 30% 대 67% 로 이 쪽이 이겨서 지웠다. 대가는 makespan +3.2%.
+    """
+    rr, cc = np.indices(free.shape)
+    sec = ((rr // k) * ((free.shape[1] + k - 1) // k) + cc // k).astype(np.int16)
+    sec[~free] = -1
+    return sec
+
+
+def load_orders_file(path):
+    """--orders-file JSON → outbound 리스트. 생성기 출력({meta, outbound})·요청 메시지({…, outbound})·맨 리스트 모두 허용."""
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+    orders = data["outbound"] if isinstance(data, dict) else data
+    assert isinstance(orders, list), f"--orders-file: outbound 리스트를 찾을 수 없음: {path}"
+    return orders
+
+
+# ------------------------------------------------------------
+# 1) 맵/비용/홈 → 커널 + 주문 스트림
+# ------------------------------------------------------------
+def build(a):
+    """맵·비용·홈을 준비해 (kernel, stream, ctx) 를 만든다. 경고는 a.warnings 에 순서대로 쌓인다."""
+    map_dir = a.map_dir or MAP_DIR                                     # 기본 = 공식 맵 3_FMS/map
+    free, st_cell, stations = load_map(map_dir, aisle_block=a.aisle_block)
+    H, W = free.shape
+    zone_mask, homes = None, None
+    docks = tuple(st_cell[f"charger[{i}]"] for i in range(a.chargers)) if a.battery else ()
+    if a.zone:
+        zm = load_charge_zone(free, map_dir)
+        if zm is None:
+            a.warnings.append(f"[WARN] 충전 존: {map_dir}/charge_zone.json 없음 → 고정 홈 폴백")
+            a.zone = False
+        else:
+            zone_mask = zm & free
+            homes = make_homes_zone(free, zone_mask, a.n_robots, docks=docks)   # 도크 이웃 칸은 커널 복귀 목표와 같이 뺀다 (-281)
+    if homes is None:
+        # 존을 쓸 때는 고정 홈을 만들지 않는다 — 어차피 버리던 값인데, 충전기 수가 6이 아닌
+        # 합성 창고에서는 make_homes 가 여기서 터졌다 (-139). 존 경로 결과는 그대로다.
+        homes = make_homes(free, st_cell, a.n_robots)
+
+    # 통행 비용 — θ(11개, A트랙 계약)로 조립한 뒤 차선 비용(--lane-gain/--pocket-gain, θ 밖)을 곱한다 (-177).
+    # --no-lanes 또는 칸 모델이면 둘 다 1.0 = v2 와 비트 동일.
+    # 토폴로지 좌표는 맵 세트에서 온다 (합성 창고는 topology.json, 공식 맵은 wallA 상수 — -139).
+    topo = None
+    if a.theta_path or a.lanes or a.yield_rule:
+        from from_theta import GuidanceTheta, extract_topology, from_theta, load_theta
+        topo = extract_topology(free, st_cell, spec=load_topology_spec(map_dir))
+    sec_map = block_sections(free, a.section_grid) if a.section_limit else None
+    if a.theta_path or a.lanes:
+        theta = load_theta(a.theta_path) if a.theta_path else GuidanceTheta.neutral()
+        lane_gain, pocket_gain = (a.lane_gain, a.pocket_gain) if a.lanes else (1.0, 1.0)
+        g = from_theta(free, topo, theta, lane_gain=lane_gain, pocket_gain=pocket_gain)
+        edge_cost = g.edge_cost.astype(np.float64)
+        wait_cost = g.wait_cost.astype(np.float64)
+    else:
+        edge_cost = np.ones((H, W, 4), dtype=np.float64)
+        wait_cost = np.ones((H, W), dtype=np.float64)
+
+    rng = np.random.default_rng(a.seed)
+    explicit = {}
+    if a.orders_file is not None:
+        rack_map = load_rack_map(map_dir)
+        assert rack_map, f"{map_dir}/rack_buffers.json 없음 — map/build_rack_map.py 로 생성 " \
+                         "(합성 창고는 WMS 마스터가 없어 명시 주문 모드를 못 쓴다 — -139)"
+        explicit = dict(orders=load_orders_file(a.orders_file), rack_map=rack_map, tote_units=a.tote_units, dt=a.dt,
+                        max_order_totes=a.max_order_totes)
+    stream = OrderStream(rng, a.flow, a.n_orders, a.order_gap, st_cell, stations, inbound_gap=a.inbound_gap_arg,
+                         k_line_p=K_LINE_P, horizon=a.horizon, shifts=a.shifts, **explicit)
+    if a.horizon is not None or explicit:
+        a.n_orders = stream.n_orders                # 고정 시간·명시 모드: 실제 주문 수 (SUMMARY 에코)
+        if explicit and stream.orders_skipped:
+            a.warnings.append(f"[WARN] --orders-file: horizon 밖 주문 {stream.orders_skipped}건 제외")
+    # 배터리 (-145 §2-1): 초기 SoC 는 **별도 rng**(시드 [seed, 0x145])로 뽑는다 — 주문 구성 난수는 도착 틱마다 실행 중에
+    # 소비되므로 스트림 rng 를 건드리면 배터리 on/off 가 같은 시드에서 다른 주문을 받게 된다 (2026-09-06 검토).
+    # 주행 1틱 소모 = 1/(가동 틱 × (0.7 + 0.3×0.25)) : "주행 70 %·유휴 30 % 혼합에서 runtime_h" 정규화, 정지 = 1/4.
+    bat = {}
+    if a.battery:
+        soc_init = tuple(float(x) for x in np.random.default_rng([a.seed, 0x145]).uniform(0.3, 1.0, a.n_robots))
+        drain_drive = 1.0 / (a.runtime_h * 3600 / a.dt * (0.7 + 0.3 * 0.25))
+        bat = dict(battery=True, dock_cells=docks, soc_init=soc_init, drain_drive=drain_drive,
+                   drain_idle=0.25 * drain_drive, charge_rate=1.0 / (a.charge_h * 3600 / a.dt),
+                   soc_low=a.soc[0], soc_go=a.soc[1], soc_leave=a.soc[2], soc_yield=(a.soc[0] + a.soc[1]) / 2)
+    # 회전 발자국 마스크 (-203): 0.1 m 지도 × 기종 치수, 시작 시 1회(< 1 s). legacy 면 없음.
+    mask, turn_masked = None, 0.0
+    if a.footprint != "legacy":
+        mask = turn_mask(map_dir, a.robot_dims, FOOTPRINT_MARGIN_M)
+        turn_masked = masked_turn_ratio(free, mask)
+    import pibt.heading as _hd
+    _hd.NO_PROGRESS_TURN_BIAS = bool(getattr(a, "turn_bias", False))
+    _hd.GOAL_WAIT_FREE = bool(getattr(a, "goal_wait_free", True))
+    _hd.TURN_FLOOR_WAIT = bool(getattr(a, "turn_floor", False))
+    cfg = KernelConfig(heading=a.heading, zone=a.zone, theta=bool(a.theta_path or a.lanes), check=a.check,
+                       dock_prio=a.dock_prio, export=a.export,
+                       service_steps=round(SERVICE_TIME_S / a.dt) if a.service_steps is None else a.service_steps,
+                       capacity=a.capacity, svc_per_tote=a.svc_per_tote,
+                       yield_rule=a.yield_rule, section_limit=a.section_limit, standoff=a.standoff, station_calm=a.station_calm, backoff_hold=a.backoff_hold,
+                       turn_ticks=TURN_TICKS, move_ticks=MOVE_TICKS,
+                       rev_ticks=REV_TICKS if a.rev_ticks is None else a.rev_ticks,
+                       replan_max_extra=a.replan_max_extra, ban_release=a.ban_release,
+                       stall_warn_only=a.horizon is not None,
+                       footprint=a.footprint, robot_dims=a.robot_dims, **bat)
+    kernel = FmsKernel(free, st_cell, edge_cost, wait_cost, homes, a.n_robots, cfg,
+                       zone_mask=zone_mask, on_task_completed=stream.on_completed,
+                       lane_dir=None if topo is None else topo.lane_dir, sec_map=sec_map, turn_mask=mask)
+    a.warnings += kernel.warnings
+    ctx = SimpleNamespace(free=free, st_cell=st_cell, stations=stations, H=H, W=W, turn_masked=turn_masked)
+    return kernel, stream, ctx
+
+
+# ------------------------------------------------------------
+# 2) 틱 루프 (설계 §3 — pos(t) 기준 처리, move 는 pos(t)→pos(t+1))
+# ------------------------------------------------------------
+def run_ticks(kernel, stream, horizon=None):
+    """종료 시각 t 를 반환. StallError 는 호출자가 처리.
+    유한 모드: 주문·입고 전부 완료까지(배차 뒤·이동 전 판단). 고정 시간 모드: t == horizon 까지 (마지막 틱 T−1 의 move 포함)."""
+    t = 0
+    if horizon is not None:
+        while t < horizon:
+            for task in stream.arrivals(t):
+                kernel.submit_task(task)
+            kernel.dispatch(t)
+            kernel.move(t)
+            t += 1
+        return t
+    while stream.outstanding > 0:
+        for task in stream.arrivals(t):          # (1) 주문/입고 도착
+            kernel.submit_task(task)
+        kernel.dispatch(t)                       # (2) 서비스 완료(→ 후속 태스크) (3) 배차
+        if stream.outstanding == 0:
+            break
+        kernel.move(t)                           # (4) PIBT (5) 존 (6) 도착, 워치독
+        t += 1
+    return t
+
+def main(argv=None):
+    a = parse_args(sys.argv[1:] if argv is None else argv)
+    kernel, stream, ctx = build(a)
+    for w in a.warnings:
+        print(w)
+    try:
+        run_ticks(kernel, stream, a.horizon)
+    except StallError as e:
+        print(str(e))
+        raise SystemExit("시뮬 정체 감지")
+    summary, tag, tph = report(a, kernel, stream, ctx)
+    if os.environ.get("SIM_NO_PLOT"):
+        return summary
+    plot_heat(a, kernel, ctx, tag, tph)
+    return summary
+
+
+if __name__ == "__main__":
+    main()

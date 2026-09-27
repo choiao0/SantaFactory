@@ -1,0 +1,199 @@
+spring:
+  application:
+    name: santafactory-be
+  # 롤링 배포에서 옛 파드가 내려갈 때 처리 중인 요청을 이 시간까지 마치게 한다 (S15P21A106-258).
+  # SSE 는 EstimateEventStream·VerifyEventStream 이 종료 시 먼저 닫아 주어 이 시간을 다 채우지 않는다.
+  lifecycle:
+    timeout-per-shutdown-phase: 30s
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/santafactory}
+    username: ${DB_USERNAME:postgres}
+    password: ${DB_PASSWORD:postgres}
+  flyway:
+    # 앱은 스키마(migration) + 데모 시드(seed)를 함께 적용한다. 테스트는 migration 만
+    # 읽는다 (test/resources/application.yml) — 이유는 R__seed_demo.sql 주석 참고.
+    locations: classpath:db/migration,classpath:db/seed
+  jpa:
+    # 요청이 끝날 때까지 영속성 컨텍스트(와 DB 커넥션)를 붙들지 않는다.
+    # 켜져 있으면 SSE 가 커넥션을 삼킨다 — 에미터는 보낼 이벤트가 없으면 쓰기를 하지 않으므로
+    # 브라우저가 닫아도 서버가 끊긴 걸 모르고 35분 타임아웃까지 요청이 살아 있고, 그동안
+    # 커넥션 하나가 묶인다. 풀이 10개라 견적 화면을 열 번만 열면 앱 전체가 멈춘다 (실측).
+    # 끄면 지연 로딩은 트랜잭션 안에서만 가능하다 — 서비스가 DTO 로 바꿔서 내보내므로 문제없다.
+    open-in-view: false
+    hibernate:
+      # 스키마는 Flyway 가 만든다. 여기서는 엔티티가 요구하는 테이블·컬럼이 마이그레이션
+      # 결과에 있는지만 검사한다 — 어긋나면 부팅이 실패한다. 이게 이 설정의 목적이다.
+      ddl-auto: validate
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: 5672
+    username: ${RABBITMQ_USER:guest}
+    password: ${RABBITMQ_PASSWORD:guest}
+  # 가입 인증 코드 발송 SMTP. 기본은 Gmail(587, STARTTLS) — 팀 공용 계정 + 앱 비밀번호 (S15P21A106-198)
+  mail:
+    host: ${MAIL_HOST:smtp.gmail.com}
+    port: ${MAIL_PORT:587}
+    username: ${MAIL_USERNAME:}
+    password: ${MAIL_PASSWORD:}
+    properties:
+      mail.smtp.auth: true
+      mail.smtp.starttls.enable: true
+      mail.smtp.connectiontimeout: 5000
+      mail.smtp.timeout: 10000
+      mail.smtp.writetimeout: 10000
+
+server:
+  port: 8080
+  # 새 요청은 거절하고 진행 중인 요청만 spring.lifecycle.timeout-per-shutdown-phase 까지 마친 뒤 내려간다
+  shutdown: graceful
+  # 리플레이 JSON 이 대수에 비례해 수 MB 다(11대 8.6 MB). 압축하면 약 1/6 (S15P21A106-255).
+  # mime-types 는 기본값 사용 — application/json 은 포함되고 text/event-stream(SSE)은 포함되지 않아 스트림은 압축되지 않는다.
+  compression:
+    enabled: true
+
+# k3s 가 파드 준비·생존을 확인하는 경로 (S15P21A106-258). health 만 열고 세부 항목은 숨긴다.
+# 기본 health 는 DB·Redis·RabbitMQ 에 더해 SMTP 접속까지 검사한다 — 그대로 liveness 에 쓰면 메일 서버 장애로
+# 파드가 재시작되므로 mail 은 빼고, k3s 는 readinessState·livenessState 만 보는 probes 경로를 쓴다.
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: never
+      probes:
+        enabled: true
+  health:
+    mail:
+      enabled: false
+
+sim:
+  request-queue: sim.request
+  result-queue: sim.result
+
+# 검증 영상 저장소. 버킷은 비공개고 영상은 소유권 확인 뒤 발급하는 presigned GET URL 로만 본다 (결정 2026-09-15).
+# public-url 이 비면(로컬) 서명 없이 저장된 값을 그대로 내보낸다.
+# public-url 은 브라우저가 쓰는 주소(nginx /media/)여야 한다 — 서명에 Host 가 들어가서 내부 주소(minio:9000)로 서명하면 거절된다.
+minio:
+  public-url: ${MINIO_PUBLIC_URL:}
+  # 읽기 전용 계정. 읽기 전용 계정이 만들어지기 전까지는 compose 가 root 계정을 넣어 준다 (.env.example)
+  access-key: ${MINIO_ACCESS_KEY:}
+  secret-key: ${MINIO_SECRET_KEY:}
+  bucket: ${MINIO_BUCKET:verify-videos}
+  # 영상을 보는 동안 구간 이동이 되려면 시청 시간을 덮어야 한다. 만료되면 프론트가 상세를 다시 불러 새 URL 을 받는다
+  presign-ttl: 30m
+
+# 견적서 PDF (S15P21A106-236). 변환은 compose 의 pdf 서비스(Gotenberg)가 하고 백엔드는 HTML 만 만든다.
+# base-url 이 비면(로컬 기본) 견적서 API 가 503 을 준다 — 로컬에서 보려면 `docker compose up -d pdf` 뒤 http://localhost:3001.
+pdf:
+  base-url: ${PDF_BASE_URL:}
+  timeout: 30s
+  # 견적서 안에 적는 서비스 주소. 만료되는 영상 서명 URL 대신 "웹에서 견적을 열어 보라"는 링크로 쓴다
+  site-url: ${APP_PUBLIC_URL:http://localhost:5173}
+
+estimate:
+  # amr-price / install-per-unit 은 robots 시드의 price(단가) / cost(구축·설치비)와 같은 값 — 둘 다 대당
+  amr-price: 15000000
+  install-per-unit: 500000
+  # 충전기 단가는 DB·ERD 어디에도 없어 팀 미정 (0이면 비용에 미반영)
+  charger-price: 0
+  # 충전 존 초기 배치 용량. 동쪽 존 106칸이지만 2칸 차체를 간격 2로 세워야 해서 약 1/4 밀도다.
+  # 이 값을 넘겨 발행하면 시뮬이 배치 단계에서 assert 로 죽는다(map_loader.make_homes_zone).
+  # 맵에 존이 추가되면(3_FMS/docs/2026-09-04_고부하_무릎_판정.md §4) 이 값도 같이 올릴 것.
+  # 출처: 3_FMS/contracts/SIM_RUN_CONTRACT.md §1 — "충전 존 초기 배치 상한 28, 견적 제약으로 취급"
+  max-amr-count: 28
+  max-chargers: 6
+  amr-per-charger: 4
+  amr-count-margin: 1
+  # 시뮬 고정 시간 실행 — 성능 제약(견적 1회 90초)으로 정해지는 값.
+  # shifts 는 이 시간을 토큰 수로 등분해 입고(in)를 켤 구간을 정한다. 출고는 백엔드가 만든 주문 목록의
+  # 시각을 그대로 따르므로(명시 주문 모드) 토큰의 영향을 받지 않는다.
+  # 팀 결정(2026-09-11): 견적 부하 = 하루 출고 물량 / 6h, 출고만 — 입고를 켜면 고밀도에서 입고 × 차선·양보
+  # 교착이 나고 견적이 실제보다 나쁘게 나온다 (S15P21A106-214). 나중에 하루 전량으로 바꿀 때 horizon: 24h 로만 고치면 된다.
+  horizon: 6h
+  shifts: out
+  # 출고 주문 한 줄(상품 하나)의 수량 상한 — 개인 온라인몰 1회 구매 기준 (결정 2026-09-15, S15P21A106-146).
+  # 참조 통계표(신발 물류센터 피킹 로그)는 수량 1~11 까지 매끈하게 줄다가 12 에서 다시 튀고 24·36·48·72 에
+  # 봉우리가 선다 — 다스·케이스로 사는 도매 흔적. 10 은 첫 다스 봉우리 아래이자 온라인몰 1회 최대 구매 수량 관행.
+  # 10 이면 줄의 5 %, 물량의 42 % 가 빠지고 평균 수량 3.52 → 2.13. 한 줄 최대 2토트라 24토트 상한은 안전핀만 된다.
+  max-line-qty: 10
+  # 주문 하나의 수량 합 상한 — 넘으면 그 주문을 통째로 버리고 다시 뽑는다 (시나리오 결정 2026-09-15:
+  # "개인 주문은 수량 합 10개 이하, 토트는 10개들이 → 주문 1건 = 토트 1개", S15P21A106-232).
+  # FMS 가 six 기준선·θ 를 뽑을 때 쓴 주문 규칙과 같은 값이라야 견적이 같은 분포 위에서 나온다 —
+  # 다르면 같은 시뮬 코드인데도 처리량·리드타임이 기준선과 어긋난다.
+  max-order-qty: 10
+  # 로봇이 한 왕복에 싣는 토트 수(1~6) → 시뮬 --capacity. 시뮬 엔진 연동 API 명세 v0.4 "백엔드 기본 로봇은 capacity 6".
+  # 안 보내면 시뮬 기본 1 로 돌아 처리율이 3~4배 비관적으로 나온다 (S15P21A106-218). 로봇 시드의 capacity 200 은 단위가 다르다.
+  amr-capacity: 6
+  # 주문 리드타임 p90 상한 — 넘는 대수는 권장에서 제외한다. 명세 v0.4 "결과 판정에는 주문
+  # lead_time_p90_s 상한이 필요하다" (S15P21A106-97).
+  # 값이 없으면(아래를 주석인 채로 두면) 리드타임을 보지 않아 기존 동작과 같다 — 지금이 그 상태다.
+  #
+  # 켤 때 쓸 값은 2h 로 정해 뒀다: 출고창 5시간의 40 % 이고 "접수 후 2시간 안에 출고"는 설명 가능한
+  # 약속이다. 실측(6,000건/6h, θ v36)에서 12대 8,352 s · 13대 7,417 s · 14대 6,262 s 라 이 값을 켜면
+  # 권장이 12대 → 14대로 오른다(+3,100만원). 상한 하나가 견적 금액을 그만큼 움직이므로, 운영 쪽에서
+  # "주문 90 % 는 N 분 안에"를 실제로 약속할 때까지는 켜지 않는다.
+  #
+  # 대신 p90 측정값은 견적 응답에 실어 화면에 보여준다 — 무릎을 넘어서도 리드타임은 계속 짧아지는데
+  # (13대 124분 → 20대 58분) 처리율·가동률만으로는 그 구간의 값을 표현할 방법이 없다.
+  # lead-time-p90-limit: 2h
+  # 발행 후 결과가 이 시간 안에 안 오면 TIMEOUT (명세 §1-4 는 30분 — 시연 때는 줄여도 된다)
+  run-timeout: 30m
+  timeout-sweep-interval: 60   # 스윕 주기(초)
+  # 물리 검증 결과를 권장 대수의 계산 결과와 견줄 때 "나빠졌다"고 볼 기준 (S15P21A106-236, 2026-09-17 임시값).
+  # 검증은 피크 10분 창만 돌리므로 처리율 % 는 견주지 않고 주문 처리 시간(p90)·통로 혼잡만 본다.
+  # 결과가 이상하면 여기서 조정한다. 저장하지 않고 조회할 때 계산하므로 과거 견적에도 바로 적용된다.
+  # verify-compare:
+  #   lead-time-p90-tolerance: 0.10   # 계산보다 10 % 이상 길면 SLOWER_AT_PEAK
+  #   conflict-wait-tolerance: 0.01   # 계산보다 1 %p 이상 높으면 SLOWER_AT_PEAK
+
+# 이메일 인증. enabled 가 false 면(로컬 기본) 메일을 보내지 않고 코드를 백엔드 로그에 찍는다.
+mail:
+  enabled: ${MAIL_ENABLED:false}
+  from: ${MAIL_FROM:${MAIL_USERNAME:no-reply@santafactory.test}}
+  code-ttl: 5m
+  verified-ttl: 30m
+  resend-cooldown: 60s
+  max-attempts: 5
+
+auth:
+  # HS256 이라 32바이트(256비트) 이상 필요하다 — openssl rand -base64 48
+  secret: ${JWT_SECRET:}
+  # access 는 짧게 두고 refresh 로 갱신한다. 탈취돼도 유효 창이 좁다 (RFC 9700 예시가 15분)
+  access-ttl: 15m
+  refresh-ttl: 7d
+  # Secure 쿠키는 HTTPS 에서만 전달된다. 평문 HTTP 로 뜨는 환경에서는 꺼야 로그인이 동작한다
+  secure-cookie: ${AUTH_SECURE_COOKIE:false}
+
+account:
+  # 관리자는 가입 API 로 만들 수 없다 (가입은 항상 USER). 비밀번호가 비면 만들지 않는다.
+  admin:
+    email: ${ADMIN_EMAIL:admin@santafactory.test}
+    password: ${ADMIN_PASSWORD:}
+    name: 관리자
+    company: Santa Factory
+    phone: "0200000000"
+  # 데모 회원 — 창고 등록 화면이 없는 동안 시드 창고의 주인 역할을 한다. 화면이 생기면 비워 끈다.
+  user:
+    email: ${DEMO_EMAIL:demo@santafactory.test}
+    password: ${DEMO_PASSWORD:}
+    name: 김담당
+    company: 품고물류
+    phone: "01012345678"
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+    operations-sorter: method
+  api-docs:
+    path: /v3/api-docs

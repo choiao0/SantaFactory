@@ -1,0 +1,45 @@
+spring:
+  # datasource 는 PostgresSupport 가 Testcontainers 로 주입한다 (운영과 같은 Postgres).
+  flyway:
+    # 데모 시드(db/seed)를 뺀다. EstimateFlowIT 가 DELETE FROM warehouses 로 자기 창고를
+    # 심는데, 시드가 들어와 있으면 zones 의 FK 때문에 실패한다.
+    locations: classpath:db/migration
+  jpa:
+    hibernate:
+      # 엔티티가 요구하는 테이블·컬럼이 마이그레이션 결과에 있는지 검사한다.
+      # 어긋나면 컨텍스트 로딩이 실패한다 — 이게 이 설정의 목적이다.
+      ddl-auto: validate
+  rabbitmq:
+    listener:
+      simple:
+        auto-startup: false
+  # JavaMailSender 빈을 만들어 두어 운영과 같은 빈 구성이 되게 한다. 보내지는 않는다(mail.enabled 기본 false)
+  mail:
+    host: localhost
+
+# 이 파일이 main 의 application.yml 을 클래스패스에서 가려버리므로, 테스트에서 필요한 값은
+# 여기 다시 적어야 한다. 단가가 비면 perUnitCost() 가 0 이 되어 예산 기반 대수 산정을 건너뛰고
+# 상한을 그대로 반환한다 — 예산 경로가 검증되지 않는다.
+estimate:
+  amr-price: 15000000
+  install-per-unit: 500000
+
+# 테스트에서도 컨텍스트가 뜨려면 서명 키가 있어야 한다 (JwtProvider 가 32바이트 미만이면 거부).
+# 계정 주입은 비밀번호를 비워 끈다 — 테스트가 스스로 회원을 만든다.
+auth:
+  secret: test-only-signing-key-do-not-use-in-any-real-environment
+
+# 이 파일이 main 의 application.yml 을 통째로 가리므로 k3s probe 설정을 같이 둔다 (HealthProbeIT, S15P21A106-258)
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: never
+      probes:
+        enabled: true
+  health:
+    mail:
+      enabled: false

@@ -1,0 +1,18 @@
+{
+ "charge_zone": [
+  {
+   "id": "east",
+   "x0": 77.6,
+   "y0": 48.0,
+   "x1": 83.6,
+   "y1": 67.0
+  }
+ ],
+ "meta": {
+  "unit": "m",
+  "frame": "원본 0.1 m 맵 좌표계 (stations.json과 동일)",
+  "grid_1m": "FMS 1 m 격자로 c=78~83, r=48~66",
+  "semantics": "존 안에 로봇 몸이 있으면 충전. 슬롯·레인 없음",
+  "source": "map/synth_warehouse.py — 합성 창고 'r6p7l21' (S15P21A106-139)"
+ }
+}

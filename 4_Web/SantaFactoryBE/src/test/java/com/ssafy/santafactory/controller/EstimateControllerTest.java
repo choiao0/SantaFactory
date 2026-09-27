@@ -1,0 +1,201 @@
+package com.ssafy.santafactory.controller;
+
+import static com.ssafy.santafactory.support.TestPrincipals.ADMIN;
+import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.startsWith;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.request;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+import com.ssafy.santafactory.dto.estimate.EstimateDetailResponse;
+import com.ssafy.santafactory.entity.estimate.EstimateStatus;
+import com.ssafy.santafactory.global.exception.ErrorCode;
+import com.ssafy.santafactory.global.exception.GlobalException;
+import com.ssafy.santafactory.service.estimate.EstimateEventStream;
+import com.ssafy.santafactory.service.estimate.EstimateService;
+import com.ssafy.santafactory.service.estimate.VerifyEventStream;
+import com.ssafy.santafactory.service.estimate.quote.QuoteMailService;
+import com.ssafy.santafactory.service.estimate.quote.QuotePdfService;
+import com.ssafy.santafactory.service.estimate.quote.QuoteSource;
+import com.ssafy.santafactory.support.WebMvcSecuritySupport;
+import java.time.LocalDateTime;
+import java.util.List;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
+import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.context.annotation.Import;
+import org.springframework.http.MediaType;
+import com.ssafy.santafactory.support.WithMockMember;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+
+/** 같은 URL 이 Accept 헤더로 JSON 스냅샷과 SSE 를 가른다. */
+@WebMvcTest(EstimateController.class)
+// @WebMvcTest 는 SecurityFilterChain 을 포함시키므로 그게 참조하는 빈을 채워줘야 한다 (S15P21A106-186)
+@Import(WebMvcSecuritySupport.class)
+// 견적 API 는 인증이 필요하다. 이 테스트의 관심사는 Accept 헤더 분기라 주체만 심어 준다.
+// @WithMockUser 가 아니라 이걸 써야 @AuthenticationPrincipal 이 우리 타입으로 바인딩된다
+@WithMockMember(role = "ADMIN")
+class EstimateControllerTest {
+
+    @Autowired
+    MockMvc mvc;
+
+    @MockBean
+    EstimateService estimateService;
+
+    @MockBean
+    EstimateEventStream eventStream;
+
+    @MockBean
+    VerifyEventStream verifyEventStream;
+
+    @MockBean
+    QuotePdfService quotePdfService;
+
+    @MockBean
+    QuoteMailService quoteMailService;
+
+    private static final EstimateDetailResponse DETAIL = new EstimateDetailResponse(
+            77L, EstimateStatus.RUNNING, "iw.hub", 95.0, 80.0, 300_000_000L,
+            null, null, null, null, LocalDateTime.of(2026, 9, 8, 10, 0), null, null, null, null, List.of(), null,
+            List.of(), null);
+
+    // ── 견적서 PDF (S15P21A106-236) ──────────────────────────────────────────
+
+    @Test
+    void quote_pdf_downloads_as_an_attachment() throws Exception {
+        when(quotePdfService.render(77L, ADMIN))
+                .thenReturn(new QuotePdfService.QuotePdf("견적서_EST-20260908-0077.pdf", "%PDF-1.7".getBytes()));
+
+        mvc.perform(get("/api/estimates/77/quote.pdf"))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Content-Type", MediaType.APPLICATION_PDF_VALUE))
+                .andExpect(header().string("Content-Disposition", startsWith("attachment; filename")))
+                .andExpect(header().string("Content-Disposition", containsString("EST-20260908-0077.pdf")));
+    }
+
+    @Test
+    void quote_pdf_is_409_before_the_estimate_finishes() throws Exception {
+        when(quotePdfService.render(77L, ADMIN)).thenThrow(new GlobalException(ErrorCode.ESTIMATE_NOT_FINISHED));
+
+        mvc.perform(get("/api/estimates/77/quote.pdf"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("EST409_2"));
+    }
+
+    @Test
+    void quote_email_is_accepted_after_the_check_and_sent_in_the_background() throws Exception {
+        QuoteSource source = new QuoteSource(DETAIL, null);
+        when(quotePdfService.checkRenderable(77L, ADMIN)).thenReturn(source);
+
+        mvc.perform(post("/api/estimates/77/quote/email"))
+                .andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.isSuccess").value(true));
+
+        verify(quoteMailService).sendToRequester(source, ADMIN);
+    }
+
+    @Test
+    void quote_email_is_503_when_the_converter_is_missing_and_nothing_is_sent() throws Exception {
+        when(quotePdfService.checkRenderable(77L, ADMIN)).thenThrow(new GlobalException(ErrorCode.QUOTE_PDF_UNAVAILABLE));
+
+        mvc.perform(post("/api/estimates/77/quote/email"))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.code").value("PDF503"));
+
+        verify(quoteMailService, never()).sendToRequester(any(), any());
+    }
+
+    @Test
+    void json_by_default() throws Exception {
+        when(estimateService.detail(77L, ADMIN)).thenReturn(DETAIL);
+
+        mvc.perform(get("/api/estimates/77"))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Content-Type", startsWith(MediaType.APPLICATION_JSON_VALUE)))
+                .andExpect(jsonPath("$.isSuccess").value(true))
+                .andExpect(jsonPath("$.result.estimate_id").value(77))
+                .andExpect(jsonPath("$.result.status").value("RUNNING"));
+
+        verify(eventStream, never()).subscribe(anyLong());
+    }
+
+    @Test
+    void wildcard_accept_is_still_json() throws Exception {
+        when(estimateService.detail(77L, ADMIN)).thenReturn(DETAIL);
+
+        mvc.perform(get("/api/estimates/77").accept(MediaType.ALL))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Content-Type", startsWith(MediaType.APPLICATION_JSON_VALUE)));
+
+        verify(eventStream, never()).subscribe(anyLong());
+    }
+
+    @Test
+    void event_stream_when_the_client_asks_for_it() throws Exception {
+        // 헤더는 첫 이벤트를 flush 할 때 함께 써지므로, 스냅샷을 이미 보낸 emitter 를 흉내낸다
+        SseEmitter emitter = new SseEmitter();
+        emitter.send(SseEmitter.event().name("snapshot").data("{}"));
+        when(eventStream.subscribe(77L)).thenReturn(emitter);
+
+        mvc.perform(get("/api/estimates/77").accept(MediaType.TEXT_EVENT_STREAM))
+                .andExpect(status().isOk())
+                .andExpect(request().asyncStarted())
+                .andExpect(header().string("Content-Type", startsWith(MediaType.TEXT_EVENT_STREAM_VALUE)))
+                .andExpect(header().string("X-Accel-Buffering", "no"));
+
+        verify(eventStream).subscribe(77L);
+        verify(estimateService, never()).detail(anyLong(), any());
+    }
+
+    /** SSE 라우트에서도 예외가 JSON 협상 실패로 500 이 되지 않고 깔끔한 상태 코드로 나가야 한다. */
+    @Test
+    void unknown_estimate_gets_a_clean_404_even_over_the_verify_sse_route() throws Exception {
+        when(verifyEventStream.subscribe(999L)).thenThrow(new GlobalException(ErrorCode.ESTIMATE_NOT_FOUND));
+
+        mvc.perform(get("/api/estimates/999/verify").accept(MediaType.TEXT_EVENT_STREAM))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value(ErrorCode.ESTIMATE_NOT_FOUND.getCode()));
+    }
+
+    @Test
+    void verification_request_is_accepted() throws Exception {
+        mvc.perform(post("/api/estimates/77/verify"))
+                .andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.isSuccess").value(true));
+
+        verify(estimateService).requestVerification(77L, ADMIN, null);
+    }
+
+    /** 본문으로 후보 대수를 직접 고르면 그 목록이 그대로 서비스에 전달된다 (S15P21A106-244). */
+    @Test
+    void verification_request_with_a_counts_body_passes_them_through() throws Exception {
+        mvc.perform(post("/api/estimates/77/verify")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"counts\":[9,10,11]}"))
+                .andExpect(status().isAccepted());
+
+        verify(estimateService).requestVerification(77L, ADMIN, List.of(9, 10, 11));
+    }
+
+    @Test
+    void verification_request_is_rejected_without_a_recommended_count() throws Exception {
+        doThrow(new GlobalException(ErrorCode.ESTIMATE_NOT_VERIFIABLE))
+                .when(estimateService).requestVerification(77L, ADMIN, null);
+
+        mvc.perform(post("/api/estimates/77/verify"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value(ErrorCode.ESTIMATE_NOT_VERIFIABLE.getCode()));
+    }
+}

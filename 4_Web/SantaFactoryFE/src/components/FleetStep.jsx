@@ -1,0 +1,207 @@
+import { useRef, useState } from 'react'
+import { formatWon } from '../utils/format.js'
+
+const MIN = 1
+const MAX = 28
+const TICKS = [1, 4, 8, 12, 16, 20, 24, 28]
+
+const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v))
+
+export default function FleetStep({ fleet, onChange, model, requesting, error, missing = [], onRequest }) {
+  const trackRef = useRef(null)
+  const dragging = useRef(null)
+  /**
+   * 입력 중인 글자. 한 글자마다 범위로 자르면 칸을 비울 수가 없다 — "1" 을 지우면 빈 칸이 0 으로
+   * 읽혀 다시 1 로 돌아오고, 15 를 넣으려면 1 뒤에 5 를 붙였다가 앞의 1 을 지우는 수밖에 없었다.
+   * 그래서 치는 동안에는 글자 그대로 두고, 칸을 벗어날 때 한 번만 범위로 자른다.
+   */
+  const [draft, setDraft] = useState({ min: null, max: null })
+
+  const pct = (n) => ((n - MIN) / (MAX - MIN)) * 100
+  const counts = []
+  for (let n = fleet.min; n <= fleet.max; n += 1) counts.push(n)
+
+  const perUnit = model ? model.price + model.cost : null
+  const cost = (n) => (perUnit == null ? null : perUnit * n)
+
+  const valueAt = (clientX) => {
+    const rect = trackRef.current.getBoundingClientRect()
+    const ratio = clamp((clientX - rect.left) / rect.width, 0, 1)
+    return Math.round(MIN + ratio * (MAX - MIN))
+  }
+
+  /** 칸을 벗어나면 친 글자를 범위로 자르고, 비워 뒀으면 원래 값으로 되돌린다. */
+  const commit = (which) => () => {
+    const raw = draft[which]
+    setDraft((d) => ({ ...d, [which]: null }))
+    if (raw == null || raw.trim() === '') return
+    move(which, Number(raw))
+  }
+
+  const move = (which, n) => {
+    if (Number.isNaN(n)) return
+    onChange(
+      which === 'min'
+        ? { ...fleet, min: clamp(n, MIN, fleet.max - 1) }
+        : { ...fleet, max: clamp(n, fleet.min + 1, MAX) },
+    )
+  }
+
+  // 점을 직접 누르면 그 점을 잡는다. 두 점이 붙어 있을 때 위치로만 고르면 왼쪽 점의 오른쪽 절반이
+  // 오른쪽 점으로 판정돼 왼쪽 점을 잡을 수 없다
+  // 한 대 차이면 두 점이 겹쳐 어느 쪽을 눌렀는지 구분이 안 된다. 그때는 처음 끄는 방향으로 정한다 —
+  // 왼쪽으로 끌면 왼쪽 점, 오른쪽으로 끌면 오른쪽 점
+  const grab = (which) => (e) => {
+    e.stopPropagation()
+    dragging.current = fleet.max - fleet.min === 1 ? { startX: e.clientX } : which
+    trackRef.current.setPointerCapture(e.pointerId)
+  }
+
+  // 빈 트랙을 누르면 픽셀 거리로 가까운 점을 옮긴다
+  const onPointerDown = (e) => {
+    const rect = trackRef.current.getBoundingClientRect()
+    const x = clamp(e.clientX - rect.left, 0, rect.width)
+    const xMin = (pct(fleet.min) / 100) * rect.width
+    const xMax = (pct(fleet.max) / 100) * rect.width
+    const which = Math.abs(x - xMin) <= Math.abs(x - xMax) ? 'min' : 'max'
+    dragging.current = which
+    move(which, valueAt(e.clientX))
+    e.currentTarget.setPointerCapture(e.pointerId)
+  }
+  const onPointerMove = (e) => {
+    if (!dragging.current) return
+    if (typeof dragging.current === 'object') {
+      const dx = e.clientX - dragging.current.startX
+      if (Math.abs(dx) < 4) return
+      dragging.current = dx < 0 ? 'min' : 'max'
+    }
+    move(dragging.current, valueAt(e.clientX))
+  }
+  const onPointerUp = () => {
+    dragging.current = null
+  }
+
+  // 안 채운 칸이 있으면 눌러도 서버 검증에서 막힌다. 다만 disabled 로 잠그면 클릭 자체가 안 와서
+  // 왜 못 누르는지 말해 줄 기회가 없다 — 보기에만 잠그고(aria-disabled) 눌렀을 때 이유를 띄운다
+  const [blockedNotice, setBlockedNotice] = useState(false)
+  const blocked = !model || counts.length === 0 || missing.length > 0
+
+  const handleRequest = () => {
+    if (blocked) {
+      setBlockedNotice(true)
+      return
+    }
+    onRequest()
+  }
+
+  return (
+    <section className="step section-dark reveal" id="s2">
+      <div className="eyebrow red">
+        <span className="live-dot" />
+        02 · 대수 범위
+      </div>
+      <h2>Pick the range.</h2>
+      <p className="desc">비교할 AMR 대수 범위를 정합니다.</p>
+
+      <div className="fleetbox">
+        <div className="mono dim">비교 대수 · 최대 {MAX}대</div>
+        <div
+          className="range"
+          ref={trackRef}
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={onPointerUp}
+          onPointerCancel={onPointerUp}
+        >
+          <div className="track" />
+          <div className="fill" style={{ left: `${pct(fleet.min)}%`, width: `${pct(fleet.max) - pct(fleet.min)}%` }} />
+          {/* 겹치면 움직일 여지가 있는 쪽을 위에 둔다 — 오른쪽 끝에 몰리면 왼쪽 점을, 왼쪽 끝에 몰리면 오른쪽 점을 */}
+          <div
+            className="knob"
+            style={{ left: `${pct(fleet.min)}%`, zIndex: pct(fleet.min) > 50 ? 3 : 2 }}
+            onPointerDown={grab('min')}
+            role="slider"
+            aria-label="최소 대수"
+            aria-valuemin={MIN}
+            aria-valuemax={fleet.max - 1}
+            aria-valuenow={fleet.min}
+          />
+          <div
+            className="knob"
+            style={{ left: `${pct(fleet.max)}%`, zIndex: pct(fleet.min) > 50 ? 2 : 3 }}
+            onPointerDown={grab('max')}
+            role="slider"
+            aria-label="최대 대수"
+            aria-valuemin={fleet.min + 1}
+            aria-valuemax={MAX}
+            aria-valuenow={fleet.max}
+          />
+          {TICKS.map((n) => (
+            <span key={n} className={`tick${n >= fleet.min && n <= fleet.max ? ' on' : ''}`} style={{ left: `${pct(n)}%` }}>
+              {n}
+            </span>
+          ))}
+        </div>
+
+        <div className="fleetrow">
+          <div>
+            <label htmlFor="fleet-min">최소 대수</label>
+            <input
+              id="fleet-min"
+              type="number"
+              min={MIN}
+              max={fleet.max - 1}
+              value={draft.min ?? fleet.min}
+              onFocus={(e) => e.target.select()}
+              onChange={(e) => setDraft((d) => ({ ...d, min: e.target.value }))}
+              onBlur={commit('min')}
+              onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
+            />
+          </div>
+          <div>
+            <label htmlFor="fleet-max">최대 대수</label>
+            <input
+              id="fleet-max"
+              type="number"
+              min={fleet.min + 1}
+              max={MAX}
+              value={draft.max ?? fleet.max}
+              onFocus={(e) => e.target.select()}
+              onChange={(e) => setDraft((d) => ({ ...d, max: e.target.value }))}
+              onBlur={commit('max')}
+              onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
+            />
+          </div>
+        </div>
+
+        <p className="fleetnote">
+          {fleet.min}대 ~ {fleet.max}대 · 대수별 시뮬레이션 <b>{counts.length}회</b>
+          <br />
+          {model ? (
+            <>
+              구축 비용 <b>{formatWon(cost(fleet.min))}</b> ~ <b>{formatWon(cost(fleet.max))}</b>
+            </>
+          ) : (
+            '01 단계에서 AMR 모델을 먼저 선택해 주세요.'
+          )}
+        </p>
+
+        <div className="runcta">
+          <button
+            type="button"
+            className="button"
+            aria-disabled={blocked}
+            disabled={requesting}
+            onClick={handleRequest}
+          >
+            {requesting ? '요청 중…' : `${counts.length}개 구성으로 견적 요청`}
+          </button>
+          {blockedNotice && blocked && (
+            <span className="form-hint">운영 조건에 입력하지 않은 항목이 있습니다. 01 단계에서 모두 입력해 주세요.</span>
+          )}
+          {error && <span className="form-error">견적을 요청하지 못했습니다. 잠시 후 다시 시도해 주세요.</span>}
+        </div>
+      </div>
+    </section>
+  )
+}

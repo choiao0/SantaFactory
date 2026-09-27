@@ -4,10 +4,8 @@
 - [ ] 1_Robot
 - [ ] 2_Simulation
 - [ ] 3_FMS
-- [ ] 4_WEB_3PL
-- [ ] 5_WEB_Store
-- [ ] 6_Infra
-- [ ] 7_Docs
+- [ ] 4_Web
+- [ ] 5_Docs
 
 
 ## 1. 이슈 유형

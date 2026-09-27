@@ -1,0 +1,54 @@
+# ============================================================
+# host-orch 배포 스택 (S15P21A106-86) — EC2, k3s 이전까지 compose
+#
+# 두 브로커에 붙는다: RabbitMQ 는 4_Web 스택의 santafactory_default, EMQX 는 ~/emqx compose 의 backbone_default.
+# 두 네트워크에 같이 들어가므로 서비스 이름(rabbitmq · emqx)으로 바로 닿는다. 공인 포트는 하나도 안 쓴다.
+#
+#   cd 3_FMS/infra
+#   docker compose -f compose.host-orch.yml up -d --build
+#   docker compose -f compose.host-orch.yml logs -f
+#
+# 자격증명은 파일 둘: infra/.env (RABBITMQ_USER · RABBITMQ_PASSWORD — 4_Web/.env 와 같은 값),
+# infra/emqx/.env (MQTT_PW_HOST_ORCH). 둘 다 gitignored. MQTT_HOST 는 아래서 emqx 로 덮는다(파일의 localhost 는 호스트용).
+# ============================================================
+name: fms-host-orch
+
+services:
+  host-orch:
+    build:
+      context: ..
+      dockerfile: infra/host_orch.Dockerfile
+    image: fms-host-orch:latest
+    container_name: a106-host-orch
+    env_file:
+      - .env
+      - emqx/.env
+    environment:
+      MQTT_HOST: emqx
+      MQTT_PORT: "1883"
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:?infra/.env 에 RABBITMQ_USER 를 설정하세요}:${RABBITMQ_PASSWORD:?infra/.env 에 RABBITMQ_PASSWORD 를 설정하세요}@rabbitmq:5672/
+      # 러너 노드 목록(쉼표로 여러 개, spec244 §E) — host_orch/app.py 의 --node 기본값이 이 값을 읽는다.
+      # GPU 서버가 실제로 띄운 sim-runner-gpuNN 컨테이너 수·이름과 맞아야 한다(emqx/bootstrap_users.sh 의
+      # 계정도 그만큼 있어야 한다). 2~3개로 늘리려면 infra/.env 에 다음을 적는다(command 는 그대로 둔다):
+      #   HOST_ORCH_NODES=sim-runner-gpu01,sim-runner-gpu02,sim-runner-gpu03
+      # prefetch(amqp.py) 도 노드 수를 그대로 따라간다 — 여기서 따로 손댈 것은 없다.
+      HOST_ORCH_NODES: ${HOST_ORCH_NODES:-sim-runner-gpu01}
+    # -215: 러너(t3_amr 엣지)가 자체 계획으로 돌아 fms-core 는 RUNNING 이 될 일이 없다 → --fms-node 를 빼야 창이 열린다.
+    # start 420 = 러너 준비 상한(Isaac 부팅·계획·첫 프레임), stop 300 = Kit 정리 + mp4 조립 + MinIO 업로드.
+    # 옛 값: --fms-node fms-core (compose.fms-core.yml 필요) — sim_runner(ROS 2 에이전트) 시절.
+    command: ["--start-timeout-s", "420", "--stop-timeout-s", "300"]
+    networks: [santafactory, backbone]
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+
+networks:
+  santafactory:
+    external: true
+    name: santafactory_default
+  backbone:
+    external: true
+    name: backbone_default

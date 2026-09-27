@@ -1,0 +1,162 @@
+<title>견적 API 응답 스키마</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  :root {
+    --bg: #f7f8fa;
+    --surface: #ffffff;
+    --edge: #dde3ea;
+    --text: #1d2733;
+    --muted: #5c6b7d;
+    --accent: #2f6db3;
+    --accent-soft: #e8f0f9;
+    --mono-bg: #f0f3f7;
+    --badge-todo: #b3661f;
+    --badge-todo-bg: #faf0e4;
+    --sans: "IBM Plex Sans KR", "Malgun Gothic", sans-serif;
+    --mono: "IBM Plex Mono", Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #12161c; --surface: #1a2029; --edge: #2a3340;
+      --text: #dde4ed; --muted: #8b99ab;
+      --accent: #6aa5e3; --accent-soft: #1e2c3e;
+      --mono-bg: #161c25;
+      --badge-todo: #e0a865; --badge-todo-bg: #322618;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #12161c; --surface: #1a2029; --edge: #2a3340;
+    --text: #dde4ed; --muted: #8b99ab;
+    --accent: #6aa5e3; --accent-soft: #1e2c3e;
+    --mono-bg: #161c25;
+    --badge-todo: #e0a865; --badge-todo-bg: #322618;
+  }
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: var(--sans); font-size: 15px; line-height: 1.65;
+    margin: 0; padding: 40px 20px 80px;
+  }
+  main { max-width: 860px; margin: 0 auto; }
+  h1 { font-size: 26px; font-weight: 700; letter-spacing: -0.02em; margin: 0 0 6px; text-wrap: balance; }
+  .sub { color: var(--muted); margin: 0 0 36px; font-size: 14px; }
+  h2 {
+    font-size: 13px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.08em; color: var(--accent);
+    margin: 44px 0 14px; padding-bottom: 6px; border-bottom: 1px solid var(--edge);
+  }
+  p { max-width: 68ch; }
+  pre {
+    background: var(--mono-bg); border: 1px solid var(--edge); border-radius: 8px;
+    padding: 18px 20px; overflow-x: auto;
+    font: 13px/1.7 var(--mono); color: var(--text); margin: 0;
+  }
+  .c { color: var(--muted); }
+  .k { color: var(--accent); }
+  .tbl-wrap { overflow-x: auto; border: 1px solid var(--edge); border-radius: 8px; background: var(--surface); }
+  table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+  th {
+    text-align: left; font-weight: 500; color: var(--muted);
+    font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em;
+    padding: 10px 14px; border-bottom: 1px solid var(--edge);
+    background: var(--bg);
+  }
+  td { padding: 9px 14px; border-bottom: 1px solid var(--edge); vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  td:first-child { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
+  td.num { font-variant-numeric: tabular-nums; }
+  .group td {
+    background: var(--accent-soft); color: var(--accent);
+    font-family: var(--sans); font-weight: 700; font-size: 12.5px;
+  }
+  .badge {
+    display: inline-block; font-size: 11px; font-weight: 500;
+    padding: 1px 8px; border-radius: 10px; white-space: nowrap;
+    background: var(--badge-todo-bg); color: var(--badge-todo);
+  }
+  ul { padding-left: 20px; max-width: 70ch; }
+  li { margin-bottom: 8px; }
+  li::marker { color: var(--accent); }
+  strong { font-weight: 700; }
+  .note {
+    background: var(--surface); border: 1px solid var(--edge);
+    border-left: 3px solid var(--accent); border-radius: 6px;
+    padding: 12px 16px; margin: 16px 0; font-size: 14px; max-width: 72ch;
+  }
+</style>
+<main>
+  <h1>견적 API 응답 스키마</h1>
+  <p class="sub">AI(시뮬레이션) → 백엔드 · v1 초안 2026-08-31 · FMS B트랙 작성</p>
+
+  <p>백엔드가 <code style="font-family:var(--mono);font-size:13px">run_id</code>별로
+  요청한 시뮬레이션 1회에 대해 AI가 돌려주는 응답입니다. 백엔드는 AMR 대수(n)를
+  바꿔가며 반복 호출하고, 이 응답의 KPI를 비교해 최적 대수를 산출합니다.</p>
+
+  <h2>응답 예시</h2>
+  <pre>{
+  <span class="k">"run_id"</span>: <span class="k">"est_77_n3"</span>,          <span class="c">// 요청의 run_id 그대로 에코</span>
+  <span class="k">"status"</span>: <span class="k">"done"</span>,               <span class="c">// done | failed</span>
+  <span class="k">"error"</span>: null,                  <span class="c">// failed일 때만 사유 문자열</span>
+
+  <span class="k">"kpi"</span>: {
+    <span class="c">// ── 완료도 ──</span>
+    <span class="k">"orders_total"</span>: 50,
+    <span class="k">"orders_completed"</span>: 50,
+    <span class="k">"inbound_total"</span>: 48,
+    <span class="k">"inbound_completed"</span>: 48,
+
+    <span class="c">// ── 시간 ──</span>
+    <span class="k">"makespan_s"</span>: 1740,
+    <span class="k">"lead_time_mean_s"</span>: 210.5,
+    <span class="k">"lead_time_p90_s"</span>: 402.0,
+    <span class="k">"queue_time_mean_s"</span>: 87.3,
+
+    <span class="c">// ── 처리량 ──</span>
+    <span class="k">"throughput_orders_per_h"</span>: 96.4,
+    <span class="k">"throughput_tasks_per_h"</span>: 182.0,
+
+    <span class="c">// ── 로봇 ──</span>
+    <span class="k">"amr_utilization"</span>: 0.63,
+    <span class="k">"conflict_wait_ratio"</span>: 0.004,
+    <span class="k">"distance_total_m"</span>: 12480,
+    <span class="k">"charge_downtime_s"</span>: 0         <span class="c">// 배터리 모델 구현 전엔 항상 0</span>
+  }
+}</pre>
+
+  <h2>필드 정의</h2>
+  <div class="tbl-wrap"><table>
+    <thead><tr><th>필드</th><th>타입</th><th>의미 · 계산</th><th>비고</th></tr></thead>
+    <tbody>
+      <tr><td>run_id</td><td>string</td><td>요청의 run_id 그대로 에코 — 백엔드가 회차 매칭에 사용</td><td></td></tr>
+      <tr><td>status</td><td>string</td><td><b>done</b>: 정상 완료 / <b>failed</b>: 시뮬 실패(교착 감지, 입력 오류 등)</td><td></td></tr>
+      <tr><td>error</td><td>string?</td><td>failed일 때 사유. done이면 null</td><td></td></tr>
+      <tr class="group"><td colspan="4">kpi — 완료도</td></tr>
+      <tr><td>orders_total</td><td>int</td><td>요청에 포함된 출고 주문 수</td><td></td></tr>
+      <tr><td>orders_completed</td><td>int</td><td>시나리오 시간 내 전 라인 배송이 끝난 주문 수</td><td>total과 다르면 시간 내 처리 실패</td></tr>
+      <tr><td>inbound_total / inbound_completed</td><td>int</td><td>입고 건수 / 시간 내 완료 건수</td><td></td></tr>
+      <tr class="group"><td colspan="4">kpi — 시간 (단위: 초)</td></tr>
+      <tr><td>makespan_s</td><td>int</td><td>시나리오 시작 → 마지막 태스크 완료까지 걸린 시간</td><td></td></tr>
+      <tr><td>lead_time_mean_s</td><td>float</td><td>주문 생성 → 주문 완료(전 라인 배송)의 평균</td><td></td></tr>
+      <tr><td>lead_time_p90_s</td><td>float</td><td>리드타임 90퍼센타일 — "10건 중 9건은 이 안에 처리"</td><td>SLA 지표로 평균보다 유용</td></tr>
+      <tr><td>queue_time_mean_s</td><td>float</td><td>주문 생성 → 로봇 배차까지 평균 대기 (로봇 부족 신호)</td><td></td></tr>
+      <tr class="group"><td colspan="4">kpi — 처리량</td></tr>
+      <tr><td>throughput_orders_per_h</td><td>float</td><td>완료 주문 수 ÷ makespan, 시간당 환산</td><td></td></tr>
+      <tr><td>throughput_tasks_per_h</td><td>float</td><td>완료 태스크(운반 단위) 기준 처리량. 주문당 라인 수가 가변이라 별도 제공</td><td></td></tr>
+      <tr class="group"><td colspan="4">kpi — 로봇</td></tr>
+      <tr><td>amr_utilization</td><td>float</td><td>0~1. 로봇이 임무 수행(이동·대기) 중인 시간 비율</td><td></td></tr>
+      <tr><td>conflict_wait_ratio</td><td>float</td><td>0~1. 임무 중 다른 로봇에 막혀 서 있던 시간 비율 (혼잡 신호 — 높으면 대수 추가 효율 하락)</td><td></td></tr>
+      <tr><td>distance_total_m</td><td>int</td><td>전 로봇 총 주행 거리(m). 배터리 소모 = 이 값 × consumption으로 백엔드에서도 검산 가능</td><td></td></tr>
+      <tr><td>charge_downtime_s</td><td>int</td><td>충전으로 임무를 못 한 총 시간</td><td><span class="badge">배터리 모델 구현 후 유효</span> 그 전엔 0 고정</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2>규약</h2>
+  <ul>
+    <li><strong>명명·단위</strong>: snake_case. 단위는 필드명 접미사로 명시 — <code style="font-family:var(--mono);font-size:12.5px">_s</code>(초) · <code style="font-family:var(--mono);font-size:12.5px">_m</code>(미터) · <code style="font-family:var(--mono);font-size:12.5px">_per_h</code>(시간당) · ratio는 0~1 실수. 문자열로 감싼 숫자 금지.</li>
+    <li><strong>결정론</strong>: 같은 요청(같은 seed 포함)이면 항상 같은 응답. 재호출로 결과가 달라지지 않습니다.</li>
+    <li><strong>실패 처리</strong>: 시뮬 정체(교착)·입력 검증 실패 시 status=failed + error 사유. 부분 KPI는 주지 않습니다 (완주한 시뮬의 수치만 신뢰 가능).</li>
+    <li><strong>확장 예약</strong>: 주문별 상세(리드타임 목록), Isaac 재생용 궤적 파일 참조는 시연 연동 확정 시 옵션 필드로 추가 예정.</li>
+  </ul>
+
+  <div class="note"><strong>전제:</strong> 이 응답을 내는 시뮬은 모든 실험(알고리즘 벤치마크 + AI 통행규칙 θ 튜닝)이 끝난 <strong>최종 파라미터 적용판</strong>입니다. 시나리오는 하루 단위가 아니라 <strong>분 단위 축소 시나리오</strong>(입고 N분 + 출고 M분)로 돕니다 — 요청 스키마의 시간 필드 재정의는 별도 협의 항목.</div>
+</main>

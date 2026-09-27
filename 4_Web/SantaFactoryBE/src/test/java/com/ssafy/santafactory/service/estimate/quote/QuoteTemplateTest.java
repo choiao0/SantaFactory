@@ -1,0 +1,84 @@
+package com.ssafy.santafactory.service.estimate.quote;
+
+import com.ssafy.santafactory.dto.estimate.VerifyNoticeCode;
+import org.junit.jupiter.api.Test;
+import org.thymeleaf.TemplateEngine;
+import org.thymeleaf.spring6.SpringTemplateEngine;
+import org.thymeleaf.templatemode.TemplateMode;
+import org.thymeleaf.templateresolver.ClassLoaderTemplateResolver;
+
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
+
+/**
+ * 템플릿이 스프링 없이도 렌더되는지, 두 쪽이 나오는지. 결과 HTML 을 {@code build/quote-preview.html} 에 남겨
+ * 브라우저로 모양을 확인할 수 있게 한다.
+ */
+class QuoteTemplateTest {
+
+    private static TemplateEngine engine() {
+        ClassLoaderTemplateResolver resolver = new ClassLoaderTemplateResolver();
+        resolver.setPrefix("templates/");
+        resolver.setSuffix(".html");
+        resolver.setTemplateMode(TemplateMode.HTML);
+        resolver.setCharacterEncoding(StandardCharsets.UTF_8.name());
+        TemplateEngine engine = new SpringTemplateEngine();   // 운영과 같이 SpEL 로 식을 푼다(OGNL 미포함)
+        engine.setTemplateResolver(resolver);
+        return engine;
+    }
+
+    private final QuoteDocumentFactory factory = new QuoteDocumentFactory(QuoteFixtures.PROPS, QuoteFixtures.PDF);
+    private final QuotePdfService service = new QuotePdfService(null, factory, engine(), mock(GotenbergClient.class), QuoteFixtures.PDF);
+
+    @Test
+    void renders_the_quote_and_the_report_pages() throws Exception {
+        QuoteDocument q = factory.build(new QuoteSource(QuoteFixtures.detailWithPhysics(142L), QuoteFixtures.warehouse()));
+
+        String html = service.html(q);
+        Path out = Path.of("build", "quote-preview.html");
+        Files.createDirectories(out.getParent());
+        Files.writeString(out, html, StandardCharsets.UTF_8);
+
+        assertThat(html).contains("EST-20260917-0142").contains("id=\"p1\"").contains("id=\"p2\"");
+        for (String block : new String[]{"발행 정보", "권장 구성", "목표 달성 여부 (14대 기준)", "예상 구축 비용",
+                "권장 구성 3D 주행 검증 결과", "로봇 대수별 비교", "운영 효율과 구축 비용 그래프", "주문 처리율과 구축 비용 그래프", "권장 구성(14대)의 운영 예상", "유의 사항"}) {
+            assertThat(html).contains(block);
+        }
+        assertThat(html).contains(">06</span>").contains(">10</span>");
+        // 3~5쪽 도입 검토 보고서 (S15P21A106-280) — 쪽 번호는 전체 5쪽 기준
+        assertThat(html).contains("id=\"p3\"").contains("id=\"p4\"").contains("id=\"p5\"")
+                .contains("1 / 5 쪽").contains("EST-20260917-0142 · 5 / 5").doesNotContain("/ 2 쪽");
+        for (String block : new String[]{"판단 근거 · 권장 14대", "산정 방법", "이 보고서의 지표", "대수별 서비스 수준",
+                "주문이 기다리는 곳", "한 대를 더할 때 얻는 것", "3D 주행 검증 · 피크 작업 10분", "위험과 가정",
+                "한 대 더 두는 경우 (15대)", "15:47–15:57"}) {
+            assertThat(html).contains(block);
+        }
+        assertThat(html).doesNotContain("주문 집중").doesNotContain("DES").doesNotContain("리드타임").doesNotContain("STEP")
+                .contains("1단계");
+        // 고객 문서에는 내부 용어·소요 시간을 싣지 않는다
+        assertThat(html).doesNotContain("계산 소요 시간").doesNotContain("물리 검증").doesNotContain("웹 리포트")
+                .doesNotContain("효율 점수").doesNotContain(" %");
+        assertThat(html).doesNotContain("Isaac");
+        assertThat(html.split("유지보수 · 소프트웨어 · 자재 관리 · 부가세", -1)).hasSize(3);
+        assertThat(html).doesNotContain(" th:").doesNotContain("${");
+        assertThat(html).contains("data:image/png;base64,");
+    }
+
+    @Test
+    void renders_without_a_recommendation_and_renumbers_the_appendix() {
+        var d = QuoteFixtures.detail(9L, null, null, null);
+        var noRec = new com.ssafy.santafactory.dto.estimate.EstimateDetailResponse(d.estimateId(), d.status(), d.amrModel(),
+                d.targetThroughput(), d.targetUtilization(), d.budgetLimit(), null, null, null,
+                com.ssafy.santafactory.entity.estimate.ReasonCode.THROUGHPUT_SHORT, d.createdAt(), d.completedAt(), d.elapsedSeconds(),
+                null, null, d.runs(), null, java.util.List.of(), null);
+
+        String html = service.html(factory.build(new QuoteSource(noRec, QuoteFixtures.warehouse())));
+
+        assertThat(html).contains("목표 주문 처리율을 달성할 수 없습니다").doesNotContain("금액 (원)").doesNotContain("목표 달성 여부").contains(">03</span>").contains(">07</span>");
+        assertThat(html).doesNotContain("id=\"p3\"").contains("1 / 2 쪽");
+    }
+}
