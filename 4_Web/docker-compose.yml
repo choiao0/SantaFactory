@@ -54,6 +54,9 @@ services:
       # 견적서 PDF 변환기(아래 pdf 서비스)와 견적서에 적는 서비스 공개 주소
       PDF_BASE_URL: http://pdf:3000
       APP_PUBLIC_URL: ${APP_PUBLIC_URL:-https://j15a106.p.ssafy.io}
+      # 체험 모드 (S15P21A106-283) — 본선 뒤 공개 링크는 켜 둔다: 새 견적·3D 검증을 받지 않아 GCP 워커·GPU 서버를 쓰지 않고,
+      # 데모 회원의 견적을 가입한 누구나 읽는다. 다시 받으려면 .env 에 TRIAL_MODE=false
+      TRIAL_MODE: ${TRIAL_MODE:-true}
     ports:
       - "127.0.0.1:8080:8080"
     depends_on:

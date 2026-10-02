@@ -21,6 +21,10 @@ public interface EstimateRepository extends JpaRepository<Estimate, Long> {
      */
     Page<Estimate> findByWarehouseMemberIdOrderByCreatedAtDesc(Long memberId, Pageable pageable);
 
+    /** 체험 모드 목록 — 내 견적과 데모 회원의 견적, 최근순 (S15P21A106-283). */
+    Page<Estimate> findByWarehouseMemberIdOrWarehouseMemberEmailOrderByCreatedAtDesc(
+            Long memberId, String showcaseEmail, Pageable pageable);
+
     /** 관리자 목록용 집계. 회원마다 count 쿼리를 날리지 않게 한 번에 묶는다(N+1 방지). */
     @Query("select new com.ssafy.santafactory.repository.MemberCount(e.warehouse.member.id, count(e)) "
             + "from Estimate e where e.warehouse.member is not null group by e.warehouse.member.id")

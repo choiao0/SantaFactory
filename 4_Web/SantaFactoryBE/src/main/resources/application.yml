@@ -191,6 +191,12 @@ account:
     company: 품고물류
     phone: "01012345678"
 
+# 체험 모드 (S15P21A106-283) — 본선 뒤 공개 체험 링크. 켜면 새 견적·3D 주행 검증·창고 등록을 403 으로 거절해
+# GCP DES 워커와 GPU 서버를 쓰지 않고, 위 데모 회원(account.user) 창고의 견적을 가입한 누구나 읽기만 한다.
+# 화면은 GET /api/config 로 이 값을 읽어 안내 배너를 띄우고 요청 버튼을 숨긴다.
+trial:
+  enabled: ${TRIAL_MODE:false}
+
 springdoc:
   swagger-ui:
     path: /swagger-ui.html

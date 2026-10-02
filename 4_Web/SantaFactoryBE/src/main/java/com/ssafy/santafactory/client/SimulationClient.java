@@ -2,6 +2,7 @@ package com.ssafy.santafactory.client;
 
 import com.ssafy.santafactory.dto.simulation.SimulationRequest;
 import com.ssafy.santafactory.dto.simulation.VerifyRequest;
+import com.ssafy.santafactory.global.auth.TrialMode;
 import com.ssafy.santafactory.global.config.SimProperties;
 import com.ssafy.santafactory.global.exception.ErrorCode;
 import com.ssafy.santafactory.global.exception.GlobalException;
@@ -18,8 +19,11 @@ public class SimulationClient {
 
     private final RabbitTemplate rabbitTemplate;
     private final SimProperties simProperties;
+    private final TrialMode trialMode;
 
     public void publish(SimulationRequest request) {
+        // 서비스 입구에서 이미 막지만, 어떤 경로로 와도 워커 큐에는 넣지 않는 마지막 둑 (S15P21A106-283)
+        trialMode.rejectNewRequests();
         try {
             rabbitTemplate.convertAndSend(simProperties.requestQueue(), request);
         } catch (AmqpException e) {
@@ -29,6 +33,7 @@ public class SimulationClient {
     }
 
     public void publishVerify(VerifyRequest request) {
+        trialMode.rejectNewRequests();
         try {
             rabbitTemplate.convertAndSend(simProperties.verifyRequestQueue(), request);
         } catch (AmqpException e) {
