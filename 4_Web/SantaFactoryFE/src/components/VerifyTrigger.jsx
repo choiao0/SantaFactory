@@ -1,12 +1,17 @@
 import { useState } from 'react'
 import { requestVerify } from '../api/estimates.js'
+import { useTrialMode } from '../trial/trialContext.js'
 
 const BUTTON_LABEL = { idle: '3D 주행 검증 시작', loading: '요청 중…', done: '검증 요청 완료', error: '다시 시도' }
+
+/** 체험판은 GPU 서버를 쓰지 않는다 (S15P21A106-283) — 버튼 자리에 이유를 둔다 */
+const TRIAL_TEXT = '체험판에서는 3D 주행 검증을 새로 요청할 수 없습니다. 저장된 검증 결과를 확인해 주세요.'
 
 /** 서버 오류 코드별 안내 문구. 서버가 준 문장을 그대로 띄우지 않는다 — 모르는 코드는 공통 문구로 */
 const ERROR_TEXT = {
   EST409_1: '권장 대수가 없어 3D 주행 검증을 시작할 수 없습니다.',
   EST409_3: '3D 주행 검증이 이미 진행 중입니다. 완료된 뒤 다시 요청해 주세요.',
+  TRIAL403_1: TRIAL_TEXT,
 }
 const ERROR_FALLBACK = '3D 주행 검증을 요청하지 못했습니다. 잠시 후 다시 시도해 주세요.'
 
@@ -17,10 +22,12 @@ const ERROR_FALLBACK = '3D 주행 검증을 요청하지 못했습니다. 잠시
  * 자동으로 걸면 큐가 그대로 쌓여 뒤 요청이 몇십 분씩 밀린다. 언제 돌릴지는 사람이 정한다.
  */
 export default function VerifyTrigger({ estimateId, recommendedCount, onStarted, counts, idleLabel }) {
+  const trialMode = useTrialMode()
   const [state, setState] = useState('idle') // idle | loading | done | error
   const [error, setError] = useState(null)
 
   if (recommendedCount == null) return null
+  if (trialMode) return <p className="mono dim">{TRIAL_TEXT}</p>
 
   const onClick = async () => {
     setState('loading')

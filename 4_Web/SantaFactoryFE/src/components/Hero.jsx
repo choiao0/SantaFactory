@@ -1,7 +1,9 @@
 import { Link } from 'react-router-dom'
 import { FIRST_STEP_PATH } from '../data/steps.js'
+import { useTrialMode } from '../trial/trialContext.js'
 
 export default function Hero() {
+  const trialMode = useTrialMode()
   return (
     <section className="hero section-dark" id="top">
       <div className="eyebrow red">
@@ -24,8 +26,15 @@ export default function Hero() {
       </div>
       {/* 다섯 단계 안내는 아래 제 구역이 맡는다 — 같은 내용을 두 번 늘어놓지 않는다 */}
       <div className="herocta">
-        <Link className="button" to={FIRST_STEP_PATH}>견적 시작하기</Link>
-        <Link className="ghost" to="/estimates">지난 견적 보기</Link>
+        {trialMode ? (
+          // 체험판은 새 견적을 받지 않는다 — 미리 계산해 둔 견적으로 보낸다 (S15P21A106-283)
+          <Link className="button" to="/estimates">데모 견적 보기</Link>
+        ) : (
+          <>
+            <Link className="button" to={FIRST_STEP_PATH}>견적 시작하기</Link>
+            <Link className="ghost" to="/estimates">지난 견적 보기</Link>
+          </>
+        )}
       </div>
     </section>
   )
