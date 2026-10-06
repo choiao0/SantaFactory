@@ -28,6 +28,7 @@ import com.ssafy.santafactory.entity.simulation.SimScenarioVerifySlice;
 import com.ssafy.santafactory.entity.warehouse.Warehouse;
 import com.ssafy.santafactory.global.auth.AuthenticatedMember;
 import com.ssafy.santafactory.global.auth.OwnershipGuard;
+import com.ssafy.santafactory.global.auth.TrialMode;
 import com.ssafy.santafactory.global.exception.ErrorCode;
 import com.ssafy.santafactory.global.exception.GlobalException;
 import com.ssafy.santafactory.repository.EstimateRepository;
@@ -110,6 +111,7 @@ public class EstimateService {
     private final VerifyComparator verifyComparator;
     private final SimScenarioVerifySliceRepository sliceRepository;
     private final EstimateVerificationRepository verificationRepository;
+    private final TrialMode trialMode;
 
     // ── 생성 ─────────────────────────────────────────────────────────────────
 
@@ -121,6 +123,7 @@ public class EstimateService {
      */
     @Transactional
     public EstimateCreateResponse create(EstimateCreateRequest request, AuthenticatedMember me) {
+        trialMode.rejectNewRequests();   // 체험 모드는 견적 행도 만들지 않는다 — 워커에 갈 일이 없다 (S15P21A106-283)
         Warehouse warehouse = warehouseRepository.findById(request.warehouseId())
                 .orElseThrow(() -> new GlobalException(ErrorCode.WAREHOUSE_NOT_FOUND));
         // 남의 창고로 견적을 만들지 못하게. 견적의 주인은 창고의 주인이다
@@ -282,7 +285,7 @@ public class EstimateService {
     public EstimateDetailResponse detail(Long estimateId, AuthenticatedMember me) {
         Estimate estimate = estimateRepository.findById(estimateId)
                 .orElseThrow(() -> new GlobalException(ErrorCode.ESTIMATE_NOT_FOUND));
-        ownershipGuard.checkEstimate(estimate, me);
+        ownershipGuard.checkEstimateReadable(estimate, me);
         return toDetail(estimate);
     }
 
@@ -291,7 +294,7 @@ public class EstimateService {
     public QuoteSource quoteSource(Long estimateId, AuthenticatedMember me) {
         Estimate estimate = estimateRepository.findById(estimateId)
                 .orElseThrow(() -> new GlobalException(ErrorCode.ESTIMATE_NOT_FOUND));
-        ownershipGuard.checkEstimate(estimate, me);
+        ownershipGuard.checkEstimateReadable(estimate, me);
         return new QuoteSource(toDetail(estimate), WarehouseResponse.from(estimate.getWarehouse()));
     }
 
@@ -391,7 +394,7 @@ public class EstimateService {
     public String replay(Long estimateId, int amrCount, AuthenticatedMember me) {
         Estimate estimate = estimateRepository.findById(estimateId)
                 .orElseThrow(() -> new GlobalException(ErrorCode.ESTIMATE_NOT_FOUND));
-        ownershipGuard.checkEstimate(estimate, me);
+        ownershipGuard.checkEstimateReadable(estimate, me);
 
         SimScenario run = scenarioRepository.findByEstimateIdAndAmrCount(estimateId, amrCount)
                 .orElseThrow(() -> new GlobalException(ErrorCode.ENTITY_NOT_FOUND));
@@ -432,8 +435,16 @@ public class EstimateService {
     public Page<EstimateSummaryResponse> list(Pageable pageable, AuthenticatedMember me) {
         Page<Estimate> page = me.isAdmin()
                 ? estimateRepository.findAllByOrderByCreatedAtDesc(pageable)
-                : estimateRepository.findByWarehouseMemberIdOrderByCreatedAtDesc(me.id(), pageable);
+                : visibleTo(me, pageable);
         return page.map(EstimateSummaryResponse::from);
+    }
+
+    /** 내 견적. 체험 모드면 데모 회원의 견적도 함께 — 새로 가입한 사람은 자기 견적이 없다 (S15P21A106-283). */
+    private Page<Estimate> visibleTo(AuthenticatedMember me, Pageable pageable) {
+        return trialMode.showcaseOwnerEmail()
+                .map(demoEmail -> estimateRepository.findByWarehouseMemberIdOrWarehouseMemberEmailOrderByCreatedAtDesc(
+                        me.id(), demoEmail, pageable))
+                .orElseGet(() -> estimateRepository.findByWarehouseMemberIdOrderByCreatedAtDesc(me.id(), pageable));
     }
 
     /** 견적 취소. 이미 큐에 들어간 run 의 결과가 와도 판정은 확정되지 않는다. */
@@ -488,6 +499,7 @@ public class EstimateService {
      */
     @Transactional
     public void requestVerification(Long estimateId, AuthenticatedMember me, List<Integer> counts) {
+        trialMode.rejectNewRequests();   // GPU 서버를 쓰지 않는다 (S15P21A106-283)
         Estimate estimate = estimateRepository.findById(estimateId)
                 .orElseThrow(() -> new GlobalException(ErrorCode.ESTIMATE_NOT_FOUND));
         ownershipGuard.checkEstimate(estimate, me);
@@ -961,7 +973,7 @@ public class EstimateService {
     public void checkAccess(Long estimateId, AuthenticatedMember me) {
         Estimate estimate = estimateRepository.findById(estimateId)
                 .orElseThrow(() -> new GlobalException(ErrorCode.ESTIMATE_NOT_FOUND));
-        ownershipGuard.checkEstimate(estimate, me);
+        ownershipGuard.checkEstimateReadable(estimate, me);
     }
 
     /** 미완료 run 이 없으면 판정을 확정한다. 하나라도 남아 있으면 아무것도 하지 않는다. */

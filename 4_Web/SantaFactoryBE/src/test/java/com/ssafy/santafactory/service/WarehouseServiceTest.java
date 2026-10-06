@@ -4,6 +4,8 @@ import static com.ssafy.santafactory.support.TestPrincipals.ADMIN;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.ssafy.santafactory.dto.warehouse.WarehouseCreateRequest;
@@ -14,6 +16,8 @@ import com.ssafy.santafactory.entity.warehouse.WarehouseStatus;
 import com.ssafy.santafactory.global.exception.ErrorCode;
 import com.ssafy.santafactory.global.exception.GlobalException;
 import com.ssafy.santafactory.global.auth.OwnershipGuard;
+import com.ssafy.santafactory.global.auth.TrialMode;
+import com.ssafy.santafactory.support.TrialFixtures;
 import com.ssafy.santafactory.repository.MemberRepository;
 import com.ssafy.santafactory.repository.WarehouseRepository;
 import java.time.LocalTime;
@@ -36,6 +40,10 @@ class WarehouseServiceTest {
 
     @Mock
     OwnershipGuard ownershipGuard;
+
+    /** 목은 아무것도 막지 않는다 — 체험 모드 테스트는 진짜 스위치로 따로 만든다 */
+    @Mock
+    TrialMode trialMode;
 
     @InjectMocks
     WarehouseService service;
@@ -95,6 +103,23 @@ class WarehouseServiceTest {
         assertThat(response.inboundEnd()).isNull();
         assertThat(response.outboundRate()).isEqualTo(95.0);
         assertThat(response.targetUtilization()).isEqualTo(60.0);
+    }
+
+    /** 새 견적 흐름의 첫 단계라 여기서부터 막는다 — 견적만 막으면 빈 창고가 쌓인다 (S15P21A106-283). */
+    @Test
+    void trial_mode_rejects_a_new_warehouse_before_saving() {
+        WarehouseService trial = new WarehouseService(
+                warehouseRepository, memberRepository, ownershipGuard, TrialFixtures.on());
+
+        assertThatThrownBy(() -> trial.create(new WarehouseCreateRequest(
+                null, null, null, 4,
+                LocalTime.of(1, 0), LocalTime.of(9, 0),
+                LocalTime.of(13, 0), LocalTime.of(18, 0),
+                480L, 500L, null, 90.0, null, 600_000_000L), ADMIN))
+                .isInstanceOf(GlobalException.class)
+                .extracting(e -> ((GlobalException) e).getErrorCode())
+                .isEqualTo(ErrorCode.TRIAL_READ_ONLY);
+        verify(warehouseRepository, never()).save(any());
     }
 
     @Test

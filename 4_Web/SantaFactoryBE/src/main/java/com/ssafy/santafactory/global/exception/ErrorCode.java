@@ -25,6 +25,10 @@ public enum ErrorCode {
     VERIFY_ALREADY_DONE(HttpStatus.CONFLICT, "EST409_4", "이미 3D 주행 검증을 마친 견적입니다."),
     QUOTE_PDF_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "PDF503", "견적서를 만들지 못했습니다. 잠시 후 다시 시도해 주세요."),
 
+    // Trial — 공개 체험 링크는 워커를 쓰지 않는다 (S15P21A106-283)
+    TRIAL_READ_ONLY(HttpStatus.FORBIDDEN, "TRIAL403_1",
+            "체험판에서는 새 견적과 3D 주행 검증을 요청할 수 없습니다. 저장된 데모 견적을 둘러봐 주세요."),
+
     // Auth
     UNAUTHORIZED(HttpStatus.UNAUTHORIZED, "AUTH401_1", "로그인이 필요합니다."),
     INVALID_CREDENTIALS(HttpStatus.UNAUTHORIZED, "AUTH401_2", "이메일 또는 비밀번호가 올바르지 않습니다."),
