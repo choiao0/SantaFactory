@@ -6,6 +6,7 @@ import { ESTIMATE_PAGE_SIZE, deleteEstimate, getMyEstimates } from '../api/estim
 import { FIRST_STEP_PATH } from '../data/steps.js'
 import { ESTIMATE_STATUS_LABEL } from '../data/replay.js'
 import { formatDateTime } from '../utils/format.js'
+import { useTrialMode } from '../trial/trialContext.js'
 
 /**
  * 내가 요청한 견적 목록 (S15P21A106-205).
@@ -27,6 +28,7 @@ const REASON_LABEL = {
 
 export default function MyEstimatesPage() {
   const navigate = useNavigate()
+  const trialMode = useTrialMode()
   const [page, setPage] = useState(0)
   const [result, setResult] = useState(null)
   const [loadedPage, setLoadedPage] = useState(null)
@@ -89,18 +91,24 @@ export default function MyEstimatesPage() {
         <section className="step section-dark">
           <div className="eyebrow red">
             <span className="live-dot" />
-            <span>내 견적</span>
+            <span>{trialMode ? '체험판' : '내 견적'}</span>
           </div>
-          <h2>지난 견적</h2>
-          <p className="desc">요청한 견적을 다시 확인할 수 있습니다. 대수별 결과와 주행 재생도 그대로 볼 수 있습니다.</p>
+          <h2>{trialMode ? '데모 견적' : '지난 견적'}</h2>
+          <p className="desc">
+            {trialMode
+              ? '미리 계산해 둔 데모 견적입니다. 대수별 결과와 주행 재생, 3D 주행 검증 영상, 견적서를 그대로 볼 수 있습니다.'
+              : '요청한 견적을 다시 확인할 수 있습니다. 대수별 결과와 주행 재생도 그대로 볼 수 있습니다.'}
+          </p>
 
           {error && <p className="form-error">{error}</p>}
           {!error && loading && <p className="mono dim">불러오는 중…</p>}
 
           {!error && !loading && total === 0 && (
             <div className="runs-empty">
-              아직 요청한 견적이 없습니다.{' '}
-              <button type="button" className="ghost sm" onClick={() => navigate(FIRST_STEP_PATH)}>견적 요청하러 가기</button>
+              {trialMode ? '보여 드릴 데모 견적이 없습니다.' : '아직 요청한 견적이 없습니다.'}{' '}
+              {!trialMode && (
+                <button type="button" className="ghost sm" onClick={() => navigate(FIRST_STEP_PATH)}>견적 요청하러 가기</button>
+              )}
             </div>
           )}
 
@@ -138,15 +146,18 @@ export default function MyEstimatesPage() {
                       </dd>
                     </dl>
                   </button>
-                  <button
-                    type="button"
-                    className="card-del"
-                    aria-label={`견적 #${e.estimate_id} 삭제`}
-                    title="삭제"
-                    onClick={() => setPendingDelete(e)}
-                  >
-                    ×
-                  </button>
+                  {/* 체험판 목록은 데모 회원의 견적이라 지울 수 없다 — 서버도 주인만 지우게 막는다 (S15P21A106-283) */}
+                  {!trialMode && (
+                    <button
+                      type="button"
+                      className="card-del"
+                      aria-label={`견적 #${e.estimate_id} 삭제`}
+                      title="삭제"
+                      onClick={() => setPendingDelete(e)}
+                    >
+                      ×
+                    </button>
+                  )}
                   </div>
                 ))}
               </div>

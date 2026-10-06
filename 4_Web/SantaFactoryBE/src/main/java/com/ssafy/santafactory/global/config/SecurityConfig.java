@@ -48,6 +48,7 @@ public class SecurityConfig {
     private static final String[] PUBLIC = {
             "/api/auth/signup", "/api/auth/login", "/api/auth/refresh", "/api/auth/logout",
             "/api/auth/email/**",   // 가입 전 이메일 인증 — 아직 회원이 아니다
+            "/api/config",          // 체험 모드 배너 — 로그인·가입 화면에도 뜬다 (S15P21A106-283)
             "/swagger-ui/**", "/v3/api-docs/**",
             "/", "/index.html", "/assets/**", "/favicon.ico",
             "/actuator/health/**",  // k3s 준비·생존 확인 — 토큰 없이 호출된다. 세부 항목은 show-details: never 로 숨김

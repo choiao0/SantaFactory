@@ -6,6 +6,7 @@ import com.ssafy.santafactory.entity.member.Member;
 import com.ssafy.santafactory.entity.warehouse.Warehouse;
 import com.ssafy.santafactory.global.auth.AuthenticatedMember;
 import com.ssafy.santafactory.global.auth.OwnershipGuard;
+import com.ssafy.santafactory.global.auth.TrialMode;
 import com.ssafy.santafactory.global.exception.ErrorCode;
 import com.ssafy.santafactory.global.exception.GlobalException;
 import com.ssafy.santafactory.repository.MemberRepository;
@@ -24,6 +25,7 @@ public class WarehouseService {
     private final WarehouseRepository warehouseRepository;
     private final MemberRepository memberRepository;
     private final OwnershipGuard ownershipGuard;
+    private final TrialMode trialMode;
 
     /**
      * 운영 조건을 새 창고 행으로 저장한다. 견적 요청은 이 id 를 들고 온다.
@@ -32,6 +34,8 @@ public class WarehouseService {
      */
     @Transactional
     public WarehouseResponse create(WarehouseCreateRequest request, AuthenticatedMember me) {
+        // 체험 모드는 새 견적 흐름의 첫 단계인 여기서부터 막는다 — 견적만 막으면 빈 창고가 쌓인다 (S15P21A106-283)
+        trialMode.rejectNewRequests();
         Member owner = memberRepository.findById(me.id())
                 .orElseThrow(() -> new GlobalException(ErrorCode.UNAUTHORIZED));
         Warehouse saved = warehouseRepository.save(Warehouse.create(

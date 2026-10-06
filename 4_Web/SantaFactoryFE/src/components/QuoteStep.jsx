@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { FIRST_STEP_PATH } from '../data/steps.js'
 import { downloadQuotePdf, emailQuote } from '../api/estimates.js'
 import { formatDateTime, formatEok, formatPercent, formatWon } from '../utils/format.js'
+import { useTrialMode } from '../trial/trialContext.js'
 
 const MONO = 'DM Mono, Pretendard Variable, Pretendard, monospace'
 const GRID_LINE = '#e0ded9'
@@ -450,6 +451,7 @@ function Placeholder({ estimateId, estimate }) {
  * 메일은 로그인 계정 이메일로 간다. 계산이 끝나기 전엔 서버가 409 를 주므로 버튼을 막아 둔다.
  */
 function QuoteActions({ estimateId, finished }) {
+  const trialMode = useTrialMode()
   const [busy, setBusy] = useState(null) // null | 'pdf' | 'mail'
   const [message, setMessage] = useState(null)
 
@@ -487,7 +489,8 @@ function QuoteActions({ estimateId, finished }) {
       >
         {busy === 'mail' ? '보내는 중…' : '메일로 받기'}
       </button>
-      <Link className="ghost" to={FIRST_STEP_PATH}>조건 변경 후 재요청</Link>
+      {/* 체험판은 새 견적을 받지 않는다 (S15P21A106-283) */}
+      {!trialMode && <Link className="ghost" to={FIRST_STEP_PATH}>조건 변경 후 재요청</Link>}
       {message && (
         <span className="mono" style={{ fontSize: 13, color: message.ok ? '#1c7c4f' : '#b51616' }}>{message.text}</span>
       )}

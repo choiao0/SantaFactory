@@ -10,6 +10,7 @@ import StepGuide from '../components/landing/StepGuide.jsx'
 import WarehousePicker from '../components/landing/WarehousePicker.jsx'
 import { useAuth } from '../auth/authContext.js'
 import { useLandingData } from '../hooks/useLandingData.js'
+import { useTrialMode } from '../trial/trialContext.js'
 
 /**
  * 로그인 뒤 첫 화면 (S15P21A106-274).
@@ -26,6 +27,7 @@ import { useLandingData } from '../hooks/useLandingData.js'
  */
 export default function LandingPage() {
   const { isAdmin } = useAuth()
+  const trialMode = useTrialMode()
   const { recent, warehouses, robots } = useLandingData({ mine: !isAdmin })
   const hasMine = recent.total > 0 || warehouses.items.length > 0
 
@@ -42,11 +44,12 @@ export default function LandingPage() {
           <section className="step section-dark mywork" id="mine">
             <div className="eyebrow red">
               <span className="live-dot" />
-              내 작업
+              {trialMode ? '체험판' : '내 작업'}
             </div>
-            <h2>이어서 하기</h2>
+            <h2>{trialMode ? '데모 견적 둘러보기' : '이어서 하기'}</h2>
             <MyStats recent={recent} warehouses={warehouses} />
-            {warehouses.items.length > 0 && <WarehousePicker warehouses={warehouses} robots={robots} />}
+            {/* 체험판은 새 견적을 받지 않아 저장된 조건으로 다시 요청하는 칸을 감춘다 (S15P21A106-283) */}
+            {!trialMode && warehouses.items.length > 0 && <WarehousePicker warehouses={warehouses} robots={robots} />}
             <RecentEstimates recent={recent} />
           </section>
         )}

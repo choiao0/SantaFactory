@@ -123,6 +123,23 @@ button { font-family: inherit; }
 .resume b { color: #fff; }
 .resume .ghost { margin-left: auto; }
 
+/* 체험판 안내 (S15P21A106-283) — 모든 화면 맨 위. 문서 흐름에 두어 스크롤하면 지나가고 헤더만 붙는다.
+   알림 색(빨강)과 겹치지 않게 주의 색(--warn)으로 칠한다 — 오류가 아니라 사정을 알리는 글이다 */
+.trial-banner {
+  display: flex; align-items: flex-start; gap: 14px;
+  padding: 12px 4.5vw;
+  background: rgba(224, 160, 30, .13);
+  border-bottom: 1px solid rgba(224, 160, 30, .45);
+  font: 400 14.5px/1.65 var(--font-sans); color: #e9e7e1;
+}
+.trial-banner p { margin: 0; max-width: 980px; word-break: keep-all; }   /* "양 / 해" 처럼 낱말 가운데서 끊지 않는다 */
+.trial-banner b { color: #fff; font-weight: 700; }
+.trial-tag {
+  flex: none; margin-top: 2px; padding: 1px 8px;
+  border: 1px solid var(--warn); color: var(--warn);
+  font: 500 12px var(--font-mono); letter-spacing: .14em;
+}
+
 /* 다섯 단계 — 거기서 무엇을 하고 무엇을 보는지 */
 .guide { margin: 8px 0 0; padding: 0; list-style: none; max-width: 980px; }
 .guide li { display: flex; gap: 22px; padding: 20px 0; border-top: 1px solid var(--line); }

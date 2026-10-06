@@ -21,7 +21,10 @@ import com.ssafy.santafactory.entity.simulation.RunReplay;
 import com.ssafy.santafactory.entity.simulation.SimScenario;
 import com.ssafy.santafactory.entity.simulation.SimScenarioVerifySlice;
 import com.ssafy.santafactory.entity.warehouse.Warehouse;
+import com.ssafy.santafactory.entity.member.Member;
 import com.ssafy.santafactory.global.auth.OwnershipGuard;
+import com.ssafy.santafactory.global.auth.TrialMode;
+import com.ssafy.santafactory.support.TrialFixtures;
 import com.ssafy.santafactory.global.exception.ErrorCode;
 import com.ssafy.santafactory.global.exception.GlobalException;
 import com.ssafy.santafactory.repository.EstimateRepository;
@@ -43,6 +46,9 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.springframework.context.ApplicationEventPublisher;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.Duration;
@@ -54,6 +60,7 @@ import java.util.Optional;
 import java.util.stream.IntStream;
 
 import static com.ssafy.santafactory.support.TestPrincipals.ADMIN;
+import static com.ssafy.santafactory.support.TestPrincipals.user;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -101,6 +108,8 @@ class EstimateServiceTest {
     private final CostCalculator costCalculator = new CostCalculator(PROPS);
     private final ObjectMapper objectMapper = new ObjectMapper();
     private EstimateService service;
+    /** 체험 모드 테스트만 service() 전에 켠다 (S15P21A106-283) */
+    private TrialMode trialMode = TrialFixtures.off();
 
  private EstimateService service() {
     if (service == null) {
@@ -113,14 +122,15 @@ class EstimateServiceTest {
                 costCalculator,
                 new EstimateEvaluator(),
                 PROPS,
-                new OwnershipGuard(),
+                new OwnershipGuard(trialMode),
                 eventPublisher,
                 outboundOrderGenerator,
                 objectMapper,
                 videoPresigner,
                 new VerifyComparator(new VerifyCompareProperties(0.10, 0.01)),
                 sliceRepository,
-                verificationRepository
+                verificationRepository,
+                trialMode
         );
     }
     return service;
@@ -1069,7 +1079,90 @@ class EstimateServiceTest {
         assertThat(estimate.getStatus()).isEqualTo(EstimateStatus.PARTIAL);
     }
 
+    // ── 체험 모드 (S15P21A106-283) ──────────────────────────────────────────
+    // 공개 체험 링크에서는 GCP 워커·GPU 서버를 쓰지 않는다 — 새 요청은 막고, 데모 회원의 견적은 누구나 읽는다.
+
+    private static final long STRANGER = 3L;
+
+    @Test
+    void trial_mode_rejects_a_new_estimate_before_writing_anything() {
+        trialMode = TrialFixtures.on();
+
+        assertThatThrownBy(() -> service().create(
+                new EstimateCreateRequest(1L, null, null, null, null, null, null), ADMIN))
+                .isInstanceOf(GlobalException.class)
+                .hasFieldOrPropertyWithValue("errorCode", ErrorCode.TRIAL_READ_ONLY);
+        verify(estimateRepository, never()).save(any());
+        verify(scenarioRepository, never()).save(any());
+        verify(eventPublisher, never()).publishEvent(any());
+    }
+
+    @Test
+    void trial_mode_rejects_a_verification_before_looking_anything_up() {
+        trialMode = TrialFixtures.on();
+
+        assertThatThrownBy(() -> service().requestVerification(77L, ADMIN, null))
+                .isInstanceOf(GlobalException.class)
+                .hasFieldOrPropertyWithValue("errorCode", ErrorCode.TRIAL_READ_ONLY);
+        verify(estimateRepository, never()).findById(any());
+        verify(simulationService, never()).publishVerify(any());
+    }
+
+    @Test
+    void trial_mode_lists_my_estimates_together_with_the_demo_members() {
+        trialMode = TrialFixtures.on();
+        Pageable page = PageRequest.of(0, 20);
+        when(estimateRepository.findByWarehouseMemberIdOrWarehouseMemberEmailOrderByCreatedAtDesc(
+                STRANGER, TrialFixtures.DEMO_EMAIL, page)).thenReturn(Page.empty(page));
+
+        service().list(page, user(STRANGER));
+
+        verify(estimateRepository, never()).findByWarehouseMemberIdOrderByCreatedAtDesc(anyLong(), any());
+    }
+
+    @Test
+    void outside_trial_mode_the_list_is_still_mine_only() {
+        Pageable page = PageRequest.of(0, 20);
+        when(estimateRepository.findByWarehouseMemberIdOrderByCreatedAtDesc(STRANGER, page)).thenReturn(Page.empty(page));
+
+        service().list(page, user(STRANGER));
+
+        verify(estimateRepository, never())
+                .findByWarehouseMemberIdOrWarehouseMemberEmailOrderByCreatedAtDesc(anyLong(), any(), any());
+    }
+
+    @Test
+    void trial_mode_shows_a_demo_estimate_to_anyone_signed_in() {
+        trialMode = TrialFixtures.on();
+        Estimate demo = withId(Estimate.open(demoWarehouse(), "iw.hub", 85.0, 90.0, 1_000_000_000L), 77L);
+        when(estimateRepository.findById(77L)).thenReturn(Optional.of(demo));
+        when(scenarioRepository.findByEstimateIdOrderByAmrCountAsc(77L)).thenReturn(List.of(run(demo, 4)));
+
+        assertThat(service().detail(77L, user(STRANGER)).estimateId()).isEqualTo(77L);
+        assertThatCode(() -> service().checkAccess(77L, user(STRANGER))).doesNotThrowAnyException();
+    }
+
+    @Test
+    void trial_mode_does_not_let_anyone_else_delete_a_demo_estimate() {
+        trialMode = TrialFixtures.on();
+        Estimate demo = withId(Estimate.open(demoWarehouse(), "iw.hub", 85.0, 90.0, 1_000_000_000L), 77L);
+        when(estimateRepository.findById(77L)).thenReturn(Optional.of(demo));
+
+        assertThatThrownBy(() -> service().delete(77L, user(STRANGER)))
+                .isInstanceOf(GlobalException.class)
+                .hasFieldOrPropertyWithValue("errorCode", ErrorCode.ESTIMATE_NOT_FOUND);
+        verify(estimateRepository, never()).delete(any());
+    }
+
     // ── 픽스처 ────────────────────────────────────────────────────────────────
+
+    /** 데모 회원(account.user) 의 창고 — 체험 모드에서 누구나 읽는 견적이 여기 달린다. */
+    private Warehouse demoWarehouse() {
+        Warehouse warehouse = mock(Warehouse.class);
+        lenient().when(warehouse.getMember())
+                .thenReturn(Member.signUp(TrialFixtures.DEMO_EMAIL, "x", "김담당", "품고물류", "01012345678"));
+        return warehouse;
+    }
 
     /** 창고 시드 값(품고): 작업자 12명, 목표 처리율 95 %, 가동률 80 %, 예산 3억. */
     private void givenWarehouse(long warehouseId) {

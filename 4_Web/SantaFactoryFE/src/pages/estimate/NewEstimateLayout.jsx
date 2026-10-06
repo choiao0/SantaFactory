@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
-import { Outlet, useNavigate } from 'react-router-dom'
+import { Navigate, Outlet, useNavigate } from 'react-router-dom'
 import Header from '../../components/Header.jsx'
 import Footer from '../../components/Footer.jsx'
 import { reusableWarehouseId, useEstimateDraft } from '../../hooks/useEstimateDraft.js'
 import { createEstimate, createWarehouse, getRobots } from '../../api/estimates.js'
+import { useTrialMode } from '../../trial/trialContext.js'
 
 /**
  * 새 견적을 만드는 두 단계(01 운영 조건 · 02 대수 범위)를 감싼다 (S15P21A106-274).
@@ -14,6 +15,7 @@ import { createEstimate, createWarehouse, getRobots } from '../../api/estimates.
  */
 export default function NewEstimateLayout() {
   const navigate = useNavigate()
+  const trialMode = useTrialMode()
   const draft = useEstimateDraft()
   const [models, setModels] = useState([])
   const [modelsError, setModelsError] = useState(null)
@@ -60,6 +62,9 @@ export default function NewEstimateLayout() {
       setRequesting(false)
     }
   }
+
+  // 체험판은 새 견적을 받지 않는다 — 주소로 바로 들어와도 데모 견적 목록으로 보낸다 (S15P21A106-283)
+  if (trialMode) return <Navigate to="/estimates" replace />
 
   return (
     <>

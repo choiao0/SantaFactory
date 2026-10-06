@@ -2,6 +2,7 @@ import { Link } from 'react-router-dom'
 import { MODEL_PHOTO } from '../../data/models.js'
 import { FIRST_STEP_PATH } from '../../data/steps.js'
 import { formatWon } from '../../utils/format.js'
+import { useTrialMode } from '../../trial/trialContext.js'
 
 /**
  * 고를 수 있는 AMR 과 그 단가 (S15P21A106-274).
@@ -10,6 +11,7 @@ import { formatWon } from '../../utils/format.js'
  * 어디서 나왔는지가 설명된다.
  */
 export default function ModelShowcase({ robots }) {
+  const trialMode = useTrialMode()
   return (
     <section className="step section-light" id="models">
       <div className="eyebrow red">
@@ -43,7 +45,9 @@ export default function ModelShowcase({ robots }) {
       </div>
 
       <div className="herocta">
-        <Link className="button" to={FIRST_STEP_PATH}>견적 시작하기</Link>
+        {trialMode
+          ? <Link className="button" to="/estimates">데모 견적 보기</Link>
+          : <Link className="button" to={FIRST_STEP_PATH}>견적 시작하기</Link>}
       </div>
     </section>
   )

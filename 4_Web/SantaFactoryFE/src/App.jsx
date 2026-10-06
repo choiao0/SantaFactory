@@ -2,6 +2,8 @@ import { useEffect } from 'react'
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { AuthProvider } from './auth/AuthProvider.jsx'
 import RequireAuth from './auth/RequireAuth.jsx'
+import TrialBanner from './components/TrialBanner.jsx'
+import { TrialProvider } from './trial/TrialProvider.jsx'
 import AdminPage from './pages/AdminPage.jsx'
 import LandingPage from './pages/LandingPage.jsx'
 import LoginPage from './pages/LoginPage.jsx'
@@ -42,64 +44,68 @@ function ScrollToTop() {
 
 export default function App() {
   return (
-    <AuthProvider>
-      <ScrollToTop />
-      <Routes>
-        <Route path="/" element={<LoginPage />} />
-        <Route path="/signup" element={<SignupPage />} />
-        <Route
-          path="/admin"
-          element={(
-            <RequireAuth role="ADMIN">
-              <AdminPage />
-            </RequireAuth>
-          )}
-        />
-        <Route
-          path="/estimates"
-          element={(
-            <RequireAuth>
-              <MyEstimatesPage />
-            </RequireAuth>
-          )}
-        />
-        <Route
-          path="/estimate"
-          element={(
-            <RequireAuth>
-              <LandingPage />
-            </RequireAuth>
-          )}
-        />
-        <Route
-          path="/estimate/new"
-          element={(
-            <RequireAuth>
-              <NewEstimateLayout />
-            </RequireAuth>
-          )}
-        >
-          <Route index element={<Navigate to="warehouse" replace />} />
-          <Route path="warehouse" element={<WarehousePage />} />
-          <Route path="fleet" element={<FleetPage />} />
-        </Route>
-        <Route
-          path="/estimate/:estimateId"
-          element={(
-            <RequireAuth>
-              <EstimateLayout />
-            </RequireAuth>
-          )}
-        >
-          {/* 번호만 주고 들어오면 결론을 연다 — 지난 견적을 여는 길이 이쪽이다 */}
-          <Route index element={<Navigate to="quote" replace />} />
-          <Route path="runs" element={<RunsPage />} />
-          <Route path="verify" element={<VerifyPage />} />
-          <Route path="quote" element={<QuotePage />} />
-        </Route>
-        {/* 없는 주소는 첫 화면으로 — 로그인 전이면 RequireAuth 가 다시 로그인으로 보낸다 */}
-        <Route path="*" element={<Navigate to="/estimate" replace />} />
-      </Routes>
-    </AuthProvider>
+    <TrialProvider>
+      <AuthProvider>
+        <ScrollToTop />
+        {/* 체험판 안내 — 로그인·가입 화면에도 떠야 해서 라우트 바깥, 각 화면 헤더보다 위 (S15P21A106-283) */}
+        <TrialBanner />
+        <Routes>
+          <Route path="/" element={<LoginPage />} />
+          <Route path="/signup" element={<SignupPage />} />
+          <Route
+            path="/admin"
+            element={(
+              <RequireAuth role="ADMIN">
+                <AdminPage />
+              </RequireAuth>
+            )}
+          />
+          <Route
+            path="/estimates"
+            element={(
+              <RequireAuth>
+                <MyEstimatesPage />
+              </RequireAuth>
+            )}
+          />
+          <Route
+            path="/estimate"
+            element={(
+              <RequireAuth>
+                <LandingPage />
+              </RequireAuth>
+            )}
+          />
+          <Route
+            path="/estimate/new"
+            element={(
+              <RequireAuth>
+                <NewEstimateLayout />
+              </RequireAuth>
+            )}
+          >
+            <Route index element={<Navigate to="warehouse" replace />} />
+            <Route path="warehouse" element={<WarehousePage />} />
+            <Route path="fleet" element={<FleetPage />} />
+          </Route>
+          <Route
+            path="/estimate/:estimateId"
+            element={(
+              <RequireAuth>
+                <EstimateLayout />
+              </RequireAuth>
+            )}
+          >
+            {/* 번호만 주고 들어오면 결론을 연다 — 지난 견적을 여는 길이 이쪽이다 */}
+            <Route index element={<Navigate to="quote" replace />} />
+            <Route path="runs" element={<RunsPage />} />
+            <Route path="verify" element={<VerifyPage />} />
+            <Route path="quote" element={<QuotePage />} />
+          </Route>
+          {/* 없는 주소는 첫 화면으로 — 로그인 전이면 RequireAuth 가 다시 로그인으로 보낸다 */}
+          <Route path="*" element={<Navigate to="/estimate" replace />} />
+        </Routes>
+      </AuthProvider>
+    </TrialProvider>
   )
 }
